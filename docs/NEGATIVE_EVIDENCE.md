@@ -6,6 +6,40 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 12.2x self): interp1d linear eval_many specialized loop + O(1) uniform finder on the unsorted batch path
+
+- Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`.
+- Probed 1D interp same-box (uniform grid n=10000, nq=500k). `Interp1d::eval_many`
+  for kind=Linear had two genuine same-box losses vs numpy: the SORTED path used
+  an O(N+M) cursor (fine, ~parity) but the UNSORTED path was
+  `x_new.iter().map(|&xi| self.eval(xi)).collect()` — serial binary-search-per-point
+  through a per-point `match kind` + `Result`. fsci unsorted linear was **37809 us
+  vs np.interp 38609 us** (~parity but paying O(log n) on a uniform grid).
+- Lever shipped (byte-identical): added `eval_many_linear` that hoists the per-point
+  `kind` match + `Result` out of the inner loop, and on the UNSORTED path uses the
+  O(1) `find_interval_uniform_helper` (bit-equivalent to `find_interval_helper`,
+  locked by `interp1d_uniform_finder_matches_helper`) when `x` is uniform
+  (`detect_uniform_axis` cached in `new()`), else binary search. Sorted branch keeps
+  the O(N+M) cursor. Bit-identical to the generic path (same interval index + same
+  lerp `y[i] + t*(y[i+1]-y[i])`, same order); confirmed by identical eval_many
+  checksums BEFORE/AFTER on every probed case.
+- MEASURED same-machine local (min-of-40,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cobaltcove`):
+  | Workload | Before | After | Self | np.interp | After vs np.interp |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | interp1d linear UNSORTED nq=500k | 37809 us | 3097 us | **12.2x** | 38609 us | **12.5x faster** |
+  | interp1d linear SORTED nq=500k   | 2360 us  | 2270 us | ~1.0x (neutral) | 1627 us | 1.4x slower |
+- The unsorted win is the headline: a uniform grid never needs the per-point binary
+  search; the cursor already handled sorted (left neutral, NOT a regression). The
+  sorted path stays ~1.4x behind np.interp's from-last-index C scan — not addressed
+  here (would need killing the `is_sorted` prescan + tighter output writes).
+- Conformance GREEN: `interp1d_uniform_finder_matches_helper` 1/0, interp1d lib
+  tests 8/0, SciPy-backed `diff_interpolate` 4/0 + `e2e_interpolate` 20/0 (local,
+  scipy 1.17.1). Only `crates/fsci-interpolate/src/lib.rs` shipped.
+- INFRA NOTE: shared `frankenscipy-cc` target dir hit cross-toolchain E0514 churn
+  (worker rustc vs local ce9954c0c) mid-cycle; recovered by switching to a clean
+  role dir `frankenscipy-cobaltcove` + `RCH_ENABLED=false` local builds.
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.72-2.49x self): interpolate RGI linear uses O(1) uniform-axis interval finder instead of O(log n) binary search
 
 - Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`.

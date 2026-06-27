@@ -111,6 +111,9 @@ pub struct Interp1d {
     options: Interp1dOptions,
     /// Cubic spline coefficients (a, b, c, d) for each interval, if applicable.
     spline_coeffs: Option<Vec<[f64; 4]>>,
+    /// `Some((x0, inv_dx))` when `x` is evenly spaced — enables the O(1)
+    /// direct-address interval lookup on the unsorted batch path.
+    uniform: Option<(f64, f64)>,
 }
 
 impl Interp1d {
@@ -151,11 +154,13 @@ impl Interp1d {
             None
         };
 
+        let uniform = detect_uniform_axis(x);
         Ok(Self {
             x: x.to_vec(),
             y: y.to_vec(),
             options,
             spline_coeffs,
+            uniform,
         })
     }
 
@@ -189,6 +194,14 @@ impl Interp1d {
             return Ok(Vec::new());
         }
 
+        // Linear is the hot, cheap-per-point kind: route it through a specialized
+        // loop that hoists the per-point `kind` match + `Result` out of the inner
+        // loop and uses the O(1) uniform finder on the unsorted path. Bit-identical
+        // to the generic path below (same interval index + same lerp formula/order).
+        if self.options.kind == InterpKind::Linear {
+            return self.eval_many_linear(x_new);
+        }
+
         // Check if x_new is sorted to enable linear sweep optimization
         let is_sorted = x_new.windows(2).all(|w| w[0] <= w[1]);
 
@@ -218,6 +231,66 @@ impl Interp1d {
         } else {
             x_new.iter().map(|&xi| self.eval(xi)).collect()
         }
+    }
+
+    /// Specialized linear `eval_many`. Bit-identical to the generic path: the
+    /// sorted branch mirrors the O(N+M) cursor sweep, the unsorted branch mirrors
+    /// the per-point `eval` (NaN -> NaN, bounds -> error/fill/NaN, else lerp), but
+    /// the inner loops are free of the per-point `kind` match and `Result`, and the
+    /// unsorted finder is O(1) on uniform grids (`find_interval_uniform_helper` is
+    /// bit-equivalent to `find_interval_helper`).
+    fn eval_many_linear(&self, x_new: &[f64]) -> Result<Vec<f64>, InterpError> {
+        let n = self.x.len();
+        let x0 = self.x[0];
+        let xn = self.x[n - 1];
+        let x = &self.x;
+        let y = &self.y;
+        let fill = self.options.fill_value;
+        let mut out = Vec::with_capacity(x_new.len());
+
+        let is_sorted = x_new.windows(2).all(|w| w[0] <= w[1]);
+        if is_sorted {
+            let mut i = 0usize;
+            for &xi in x_new {
+                if xi < x0 || xi > xn {
+                    if self.options.bounds_error {
+                        return Err(InterpError::OutOfBounds {
+                            value: format!("{xi}"),
+                        });
+                    }
+                    out.push(fill.unwrap_or(f64::NAN));
+                    continue;
+                }
+                while i < n - 2 && xi >= x[i + 1] {
+                    i += 1;
+                }
+                let t = (xi - x[i]) / (x[i + 1] - x[i]);
+                out.push(y[i] + t * (y[i + 1] - y[i]));
+            }
+        } else {
+            for &xi in x_new {
+                if xi.is_nan() {
+                    out.push(f64::NAN);
+                    continue;
+                }
+                if xi < x0 || xi > xn {
+                    if self.options.bounds_error {
+                        return Err(InterpError::OutOfBounds {
+                            value: format!("{xi}"),
+                        });
+                    }
+                    out.push(fill.unwrap_or(f64::NAN));
+                    continue;
+                }
+                let i = match self.uniform {
+                    Some(meta) => find_interval_uniform_helper(meta, x, xi),
+                    None => find_interval_helper(x, xi),
+                };
+                let t = (xi - x[i]) / (x[i + 1] - x[i]);
+                out.push(y[i] + t * (y[i + 1] - y[i]));
+            }
+        }
+        Ok(out)
     }
 
     fn eval_at_interval(&self, i: usize, x_new: f64) -> Result<f64, InterpError> {
@@ -271,6 +344,34 @@ fn find_interval_helper(array: &[f64], x_new: f64) -> usize {
         }
     }
     lo
+}
+
+/// O(1) direct-address interval lookup for an evenly-spaced array, BIT-IDENTICAL to
+/// `find_interval_helper` (both return the largest `i` with `array[i] <= x`, clamped
+/// to `[0, n-2]`, with `x <= array[0] -> 0` and `x >= array[n-1] -> n-2`). `meta`
+/// is `(x0, inv_dx)` from `detect_uniform_axis`. The correction loops reproduce the
+/// boundary clamps without explicit endpoint branches and run ≤ once or twice on a
+/// genuinely uniform axis. (Locked by `interp1d_uniform_finder_matches_helper`.)
+fn find_interval_uniform_helper(meta: (f64, f64), array: &[f64], x_new: f64) -> usize {
+    let n = array.len();
+    if x_new <= array[0] {
+        return 0;
+    }
+    if x_new >= array[n - 1] {
+        return n - 2;
+    }
+    let (x0, inv_dx) = meta;
+    let mut i = ((x_new - x0) * inv_dx) as usize; // negative -> 0, oversized -> clamped next
+    if i > n - 2 {
+        i = n - 2;
+    }
+    while i + 1 < n - 1 && array[i + 1] <= x_new {
+        i += 1;
+    }
+    while i > 0 && array[i] > x_new {
+        i -= 1;
+    }
+    i
 }
 
 /// Classify an axis as uniform (evenly spaced) and return `(x0, inv_dx)` for
@@ -9058,6 +9159,44 @@ fn smooth_bivariate_solve_coefficients(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The O(1) `find_interval_uniform_helper` must return the EXACT same interval
+    /// index as the binary-search `find_interval_helper` for every probe — this
+    /// locks the byte-identity of the linear `eval_many` unsorted fast path.
+    #[test]
+    fn interp1d_uniform_finder_matches_helper() {
+        let axes: Vec<Vec<f64>> = vec![
+            (0..10000).map(|i| i as f64 * 0.01).collect(),
+            (0..16).map(|i| i as f64 / 15.0).collect(),
+            (0..7).map(|i| -3.0 + i as f64 * 1.25).collect(),
+            (0..5).map(|i| 2.0 + i as f64 * 1e6).collect(),
+        ];
+        for axis in &axes {
+            let meta = detect_uniform_axis(axis).expect("uniform");
+            let n = axis.len();
+            let lo = axis[0];
+            let hi = axis[n - 1];
+            let span = hi - lo;
+            let mut probes: Vec<f64> = vec![lo - span, hi + span, lo, hi];
+            for i in 0..n {
+                probes.push(axis[i]);
+                if i + 1 < n {
+                    probes.push(0.5 * (axis[i] + axis[i + 1]));
+                    probes.push(axis[i] + 0.25 * (axis[i + 1] - axis[i]));
+                }
+            }
+            for k in 0..=3000 {
+                probes.push(lo - 0.1 * span + (k as f64 / 3000.0) * 1.2 * span);
+            }
+            for &x in &probes {
+                assert_eq!(
+                    find_interval_uniform_helper(meta, axis, x),
+                    find_interval_helper(axis, x),
+                    "axis n={n} x={x}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn ndbspline_matches_scipy() {
