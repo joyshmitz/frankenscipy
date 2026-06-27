@@ -8362,3 +8362,56 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   constant factor and ordering/pivot machinery versus the generic packed-band LU; next viable dig is a
   true sparse scatter/Gilbert-Peierls factorization or a specialized SPD band Cholesky, not more ordering
   knob work.
+
+## 2026-06-27 - FINDING (measurement artifact): dense `eigh`/`svd` "27-65x slower" is OpenBLAS thread-oversubscription, NOT the real gap; true single-thread ratio is the ~3x LAPACK divide-and-conquer wall
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- Land-or-dig audit: no measured bench-worktree win was landable for me before digging
+  (the uncommitted `crates/fsci-sparse/src/linalg.rs` change was a debug toggle
+  `if true || !candidate` that *disables* the just-landed SPD-CG fast path — A/B
+  leftover, not a win; cod-a owns and was actively editing that file, so I stayed out).
+  Next-biggest measured gap after sparse `spsolve` is the dense `eigh`/`svd` family
+  (the leftover `perf_eig_tmp` probe targeted it). Dug it; it is a wall, but the
+  *apparent* size of the wall on this shared box is a measurement artifact worth recording.
+- THE ARTIFACT: the shared host is a 64-core box that routinely runs at load 30-45
+  (dozens of concurrent agent `cargo bench`/build jobs). SciPy's `eigh` calls
+  OpenBLAS, which by default spawns one thread per core (64) and oversubscribes
+  catastrophically against that load. Same SciPy call, same matrix, only the BLAS
+  thread cap changed:
+
+  | Workload | default threads (64) | `OPENBLAS_NUM_THREADS=1` | inflation |
+  | --- | ---: | ---: | ---: |
+  | scipy `eigh` n=300 | 516.62 ms | 7.98 ms | 64.7x |
+  | scipy `eigh` n=600 | 1219.26 ms | 44.94 ms | 27.1x |
+
+  A naive "fsci vs local SciPy" head-to-head on this box reads the dense-LAPACK
+  losses as 27-65x when they are 27-65x BLAS oversubscription, not algorithm gap.
+- TRUE single-thread ratio (both sides pinned to 1 thread; `cargo bench -p fsci-linalg
+  --bench linalg_bench -- eigh_dense`, RAYON/OPENBLAS/OMP=1; SciPy `eigh`,
+  OPENBLAS/OMP/MKL=1):
+
+  | Workload | fsci `eigh` | scipy `eigh` (1thr) | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: |
+  | n=256 | 21.86 ms (20.65-22.58, tight) | 7.13 ms | 3.07x slower |
+  | n=512 | ~179 ms fast-sample (median 354 ms load-contaminated, 2 high-severe outliers) | 39.61 ms | ~4.5x slower (load-noisy) |
+
+  The clean n=256 number is ~3x: nalgebra's symmetric implicit-QR (Householder
+  tridiagonalization + shifted QR) vs LAPACK `dsyevd` divide-and-conquer. That is a
+  constant-factor algorithmic wall, not a tractable byte-identical lever.
+- Already-harvested adjacent paths (verified by reading the impls, no re-bench needed):
+  `eigvalsh` routes to nalgebra `symmetric_eigenvalues()` (skips eigenvector
+  accumulation — confirmed SciPy `eigh(eigvals_only=True)` is itself ~3x faster than
+  full, n=256 2.38 ms / n=512 12.90 ms, so the values-only branch matters and fsci
+  already takes it); `svdvals` routes to `safe_svd(_, false, false)` (no U/V).
+  `eigh` already has a custom `symmetric_eigh_native` path above
+  `PUBLIC_NATIVE_EIGH_MIN_DIM` plus `randomized_eigh` for low-rank.
+- METHOD / lever for the swarm: before treating ANY dense-LAPACK ("eigh", "svd",
+  "eig", "qr", "cholesky") "Nx slower vs SciPy" scorecard entry as real, pin
+  `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1` on the SciPy side (or run on an idle
+  box). On this host the multi-threaded reading over-states the loss by 1-2 orders
+  of magnitude. Confirms and quantifies the prior `perf_equal_hardware_artifact`
+  note with concrete eigh numbers.
+- CONCLUSION: no code change. The genuine dense-symmetric-eigen gap is ~3x and is a
+  divide-and-conquer tridiagonal-eigensolver (`dsyevd`/MRRR) port, not a micro-lever;
+  filed here as negative evidence so the gap is not re-chased as a phantom 27-65x loss.
+  ~0-gain code reverted; only this ledger entry lands.
