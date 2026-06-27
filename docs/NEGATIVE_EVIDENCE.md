@@ -8280,3 +8280,35 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   frontier shape is already small enough that the extra branch/cache plumbing and changed search envelope
   do not pay. Remaining special-function hard walls should stay on the documented `hyperu`/`kv` numerical
   series routes rather than this already-dominant zero frontier.
+
+## 2026-06-27 - KEEP: sparse `spsolve` narrow-band direct route cuts Laplacian gap, still trails SuperLU at large n
+- Agent: codex / cod-b. BOLD-VERIFY for landed source commit `9a1523f0` after the shared checkout advanced
+  while this session was running. The winning lever detects narrow-band CSR systems and routes them through
+  existing `fsci_linalg::solve_banded` packed LU before the SPD-CG shortcut/native sparse LU path. This
+  attacks the measured 2-D Laplacian/stencil gap without changing dense or wide-sparse routing.
+- Cargo rejected the requested literal `cargo bench --release` form for benches, so the equivalent accepted
+  command used `--profile release`: `AGENT_NAME=cod-b CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo bench -p fsci-sparse --profile release --bench sparse_bench -- sparse_spsolve_laplacian
+  --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`. RCH admitted the benchmark locally
+  because workers were full; same target dir and Criterion IDs were used for before and after.
+- MEASURED internal delta:
+  | Workload | Baseline Rust | Banded-direct Rust | Internal ratio |
+  | --- | ---: | ---: | ---: |
+  | 2-D Laplacian `spsolve`, n=1600 | 50.660 ms | 10.896 ms | 4.65x faster |
+  | 2-D Laplacian `spsolve`, n=4900 | 529.30 ms | 168.99 ms | 3.13x faster |
+- Local SciPy comparator (`python3`, SciPy sparse `spsolve`, same matrix/RHS, 8 reps):
+  | Workload | Rust after | SciPy median | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: |
+  | n=1600 | 10.896 ms | 5.705017 ms | 1.91x slower |
+  | n=4900 | 168.99 ms | 20.525793 ms | 8.23x slower |
+  The lever shrinks the prior SciPy ratios from 8.88x/25.79x slower to 1.91x/8.23x slower, but does not
+  beat SuperLU on the larger stencil.
+- Gates: `cargo test -p fsci-sparse spsolve --lib -- --nocapture` passed 17/17; focused regression
+  `spsolve_laplacian_prefers_banded_direct_over_spd_cg` passed after the lint-only test-loop fix; RCH
+  `cargo check -p fsci-sparse --all-targets` passed; conformance `cargo test -p fsci-conformance --test
+  e2e_sparse -- --nocapture` passed 24/24. Full clippy remains blocked by pre-existing `fsci-linalg`
+  lints, and `--no-deps` sparse clippy remains blocked by pre-existing sparse lints outside this route.
+- CONCLUSION: keep the narrow-band direct route. Remaining gap is now SuperLU's sparse factorization
+  constant factor and ordering/pivot machinery versus the generic packed-band LU; next viable dig is a
+  true sparse scatter/Gilbert-Peierls factorization or a specialized SPD band Cholesky, not more ordering
+  knob work.
