@@ -3318,6 +3318,9 @@ impl RegularGridInterpolator {
 
     fn eval_linear(&self, xi: &[f64]) -> Result<f64, InterpError> {
         let ndim = self.ndim();
+        if ndim == 2 {
+            return Ok(self.eval_linear_2d(xi));
+        }
         if ndim == 3 {
             return Ok(self.eval_linear_3d(xi));
         }
@@ -3350,6 +3353,47 @@ impl RegularGridInterpolator {
             result += weight * self.values[flat_idx];
         }
         Ok(result)
+    }
+
+    /// Bilinear fast path (ndim == 2). Bit-identical to the generic `eval_linear`
+    /// for two dimensions (same corner order 0..4, same dim loop, same weight /
+    /// flat-index accumulation), but uses stack arrays instead of two
+    /// `Vec::with_capacity` heap allocations per query — the same idiom as
+    /// `eval_linear_3d`. The win compounds across a parallel `eval_many` batch.
+    fn eval_linear_2d(&self, xi: &[f64]) -> f64 {
+        debug_assert_eq!(xi.len(), 2);
+
+        let mut indices = [0usize; 2];
+        let mut fracs = [0.0; 2];
+        for dim in 0..2 {
+            let axis = &self.points[dim];
+            let x = xi[dim];
+            let i = Self::find_interval(axis, x);
+            let denom = axis[i + 1] - axis[i];
+            indices[dim] = i;
+            fracs[dim] = if denom == 0.0 {
+                0.0
+            } else {
+                (x - axis[i]) / denom
+            };
+        }
+
+        let mut result = 0.0;
+        for corner in 0..4usize {
+            let mut weight = 1.0;
+            let mut flat_idx = 0;
+            for dim in 0..2 {
+                let bit = (corner >> dim) & 1;
+                flat_idx += (indices[dim] + bit) * self.strides[dim];
+                weight *= if bit == 0 {
+                    1.0 - fracs[dim]
+                } else {
+                    fracs[dim]
+                };
+            }
+            result += weight * self.values[flat_idx];
+        }
+        result
     }
 
     fn eval_linear_3d(&self, xi: &[f64]) -> f64 {

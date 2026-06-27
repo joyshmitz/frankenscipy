@@ -6,6 +6,38 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.47x self): interpolate RegularGridInterpolator 2D-linear stack-array fast path flips a genuine same-box SciPy loss to a win
+
+- Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`.
+- Land-or-dig audit: no landable measured win sat in a bench worktree for me;
+  primary-tree WIP (cossin/spatial) is other live agents'. The readiness table
+  covers no `fsci-interpolate` rows, so I probed it for a fresh genuine gap.
+- Gap found (genuine, same-box): `RegularGridInterpolator` linear method only had
+  a stack-array fast path for `ndim == 3` (`eval_linear_3d`); the 2-D (bilinear)
+  case fell through to the generic `eval_linear`, which allocates TWO
+  `Vec::with_capacity(ndim)` (`indices`, `fracs`) on EVERY query. Across a parallel
+  `eval_many` batch that is two heap allocs per point. Measured same-box (grid
+  400x400, nq=200k, min-of-60): fsci `eval_many` was **17284 us vs SciPy
+  `RegularGridInterpolator(...)(xi)` 14216 us = 1.22x SLOWER** — a real loss, not
+  a cross-host artifact (both timed on this box, same data).
+- Lever shipped: added `eval_linear_2d` (stack `[_;2]` arrays, zero per-query
+  allocs), mirroring the existing `eval_linear_3d`, and routed `ndim == 2` to it.
+  BIT-IDENTICAL to the generic path (same corner order `0..4`, same dim loop,
+  same weight / flat-index accumulation) — verified `to_bits()`-equal over all
+  200k queries in a same-process A/B (`perf_rgi2d_ab` bin).
+- MEASURED (same box, `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc`):
+  | Metric | Before | After | Delta |
+  | --- | ---: | ---: | ---: |
+  | serial per-query kernel A/B | 13.3-13.6 ms | 9.5-9.8 ms | **1.39-1.41x self** |
+  | real `eval_many` (parallel path) | 17284 us | 11759 us | **1.47x self** |
+  | vs SciPy RGI 2D-linear (14216 us) | 1.22x slower | **1.21x FASTER** | loss → win |
+- Conformance GREEN: `cargo test -p fsci-interpolate --release --lib regular_grid`
+  17/0; SciPy-backed `diff_interpolate_interpn` GREEN (see commit). Byte-identity
+  makes the public surface unchanged. Only `crates/fsci-interpolate/src/lib.rs`
+  shipped (temp probe bin/oracle not committed).
+- EXTEND: the generic `eval_linear` still allocs for ndim 4/5/6 (less common); a
+  small stack buffer (`[_; 8]` + Vec fallback) would cover those too, byte-identically.
+
 ## 2026-06-27 - CobaltCove (claude-code) - NO-SHIP (phantom gap + rejected lever): ndimage label-mean is already 19-27x FASTER than scipy.ndimage.mean same-box; cheap-cast decode is a regression
 
 - Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`.
