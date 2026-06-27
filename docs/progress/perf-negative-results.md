@@ -4,6 +4,41 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-kmeans2-flat-recompute - KEEP (byte-identical 1.09x self): cluster.kmeans2 centroid recompute from flat buffer
+
+Follow-up to the kmeans2 thread-cap. The Lloyd centroid recompute accumulated
+`sums[lab][c] += data[i][c]` where `data` is `Vec<Vec<f64>>` — n=20k scattered
+heap rows, so the per-row gather cache-misses. Switched to the contiguous
+`data_flat` buffer that `kmeans2` already builds once per call (used by the
+assign step). Same-session best-of-7 A/B: **77.3 → 70.7 ms = 1.09x self**
+(stacks on the thread-cap; gap now ~1.84x slower vs scipy). Byte-identical: same
+`+=` over `c∈0..d` in the same order; 142/0 cluster lib GREEN. The dominant
+residual is still `nearest_centroid` per-op cost in the O(n·k·d) assign (filed).
+
+## 2026-06-26 - frankenscipy-greenfalcon-spmm-count-pass-elim - REJECT (~0-gain) + spmm is NOT a gap (single-shot noise correction)
+
+Probed fsci-sparse vs scipy. `dijkstra` n=5000 is **1.48x FASTER** (0.67 vs 0.99
+ms). `spmm` (CSR×CSR) a FIRST single-shot probe read 38 ms vs scipy 26 ms at
+n=2000 (1.46x slower) — looked like a gap. The parallel SpGEMM path
+(`spmm_rows_parallel_exact`) runs a symbolic `spmm_row_counts_chunk` pass to size
+buffers exactly, THEN the numeric `spmm_row_chunk` pass — apparently 2× the
+Gustavson work, since the numeric pass already returns per-row counts. Removed the
+count pass, sizing the single numeric pass from the cheap work upper bound
+(`a_nnz·avg_b`). Result: **~0-gain** — a clean best-of-7 A/B (HEAD vs patched)
+was 27.2/73.1/147.0 ms vs 29.2/79.1/148.5 ms at n=2000/3000/4000, i.e. the patch
+is within noise / marginally SLOWER. WHY: the symbolic pass WARMS THE CACHE
+(loads A, B, the dense accumulator) so the numeric pass then hits cache, and it
+yields the EXACT cap so the numeric pass never reallocates; dropping it trades the
+saved passes for cold misses + estimate-driven Vec growth. Net wash. REVERTED to
+HEAD (no commit of code).
+
+CORRECTION: `spmm` is NOT a gap. The first 38 ms / 1.46x-slower reading was
+single-shot box-load noise. Best-of-7 shows fsci at **parity at n=2000 (27.2 vs
+27.4 ms) and 1.76x / 2.03x FASTER at n=3000 / n=4000** — it scales better than
+scipy's serial C Gustavson because the rows fan out across cores. Promoted to a
+Measured Keep. LESSON (re-confirmed): never trust a single-shot timing on this
+shared box; best-of-N A/B is mandatory before calling something a gap.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-kmeans2-assign-thread-cap - KEEP (byte-identical 1.51x self): cluster.kmeans2 work-per-thread cap; + signal IIR/resample walls (REJECT)
 
 Probed fsci-cluster vs scipy: `vq` 3.7x FASTER, `kmeans` 25.7x (different

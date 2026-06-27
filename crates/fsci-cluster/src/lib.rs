@@ -3308,10 +3308,15 @@ pub fn kmeans2(
             row.iter_mut().for_each(|x| *x = 0.0);
         }
         counts.iter_mut().for_each(|x| *x = 0);
+        // Accumulate from the contiguous `data_flat` (built once above) rather than
+        // the `Vec<Vec<f64>>` rows, whose n scattered heap allocations make the
+        // per-row gather cache-hostile. Byte-identical: same `+=` over c in 0..d.
         for (i, &lab) in label.iter().enumerate() {
             counts[lab] += 1;
+            let row = &data_flat[i * d..i * d + d];
+            let dst = &mut sums[lab];
             for c in 0..d {
-                sums[lab][c] += data[i][c];
+                dst[c] += row[c];
             }
         }
         for j in 0..nc {
