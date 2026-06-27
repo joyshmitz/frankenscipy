@@ -6,6 +6,47 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - GreenFalcon (codex) - NO-SHIP (reverted): FFT mixed-radix inner butterfly lane parallelism is not a reliable gap-close
+
+- Worktree scan: `.scratch/.worktrees` had no landable measured win absent from
+  `origin/main`. The only not-on-main bench worktree tip found was
+  `e3b744f4 perf(linalg): lower GEMM flat-workspace threshold`; main already
+  carries the stronger 256 threshold, so that worktree is superseded.
+- Dig route used the existing FFT residual gap plus the alien-graveyard
+  communication-avoiding / independent-lane parallelism pattern: split the
+  serial `mixed_radix_combine_stage` butterfly loop over `r` lanes for the
+  outer p=3/p=5 combine stage. The attempted code wrote disjoint `out0..out4`
+  chunks with unchanged per-lane arithmetic, so it was behavior-preserving in
+  structure, but not a measured performance keep.
+- Bench command note: the requested literal `cargo bench --release` form was
+  tried via `rch exec` and Cargo rejected it (`unexpected argument '--release'`).
+  The per-crate release bench runs therefore used Cargo's accepted spelling:
+  `rch exec -- cargo bench -p fsci-fft --profile release --bench fft_bench ...`.
+- Best exact-code isolated local A/B (separate target dirs to avoid cross-worktree
+  Cargo artifact reuse; `RCH_ENABLED=false ... rch exec` fell back local):
+  - ORIG `fft_mixed_radix_large/fft/983040` 17.628 ms; candidate 17.123 ms =
+    1.03x. Too small/noisy.
+  - ORIG `1179648` 27.553 ms; candidate 27.647 ms = 0.997x. No gain.
+  - ORIG `1474560` 35.734 ms; candidate 32.692 ms = 1.09x. One modest win.
+  - Control rows that the final gate left serial also moved (`1310720` 43.193 ms
+    -> 34.755 ms = 1.24x; `1572864` 53.432 ms -> 49.337 ms = 1.08x), proving the
+    window was noisy enough that the affected-size deltas were not commit-grade.
+- Retunes were worse:
+  - max 8 inner threads: 983040 0.83x, 1179648 0.90x, 1474560 1.00x vs ORIG.
+  - max 16 inner threads: 983040 0.66x, 1179648 0.59x, 1474560 1.09x vs ORIG.
+- Cross-environment runs were discarded: one RCH worker (`vmi1264463`) produced
+  238-394 ms timings for the same cases, far outside the local 17-69 ms scale;
+  another shared-target rerun reused the wrong bench binary across worktrees.
+- Validation while the candidate was present: `cargo check -p fsci-fft
+  --all-targets`, `cargo clippy -p fsci-fft --all-targets -- -D warnings`, and
+  `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_fft
+  -- --nocapture` were green. The performance code and temporary bench were then
+  reverted because the measured ratio was not robust enough to land.
+- Next lever: do not repeat thread fanout over the combine `r` loop. The remaining
+  FFT gap likely needs a non-threading kernel lever: SIMD/deinterleaved radix-3/5
+  butterflies, twiddle layout reduction, or a pocketfft-style cache-local stage
+  schedule with proof against ORIG on same-machine benches.
+
 ## 2026-06-27 - cod-a (codex-cli) - NO-SHIP: Cholesky SYRK 8-dot register tile regresses the current 4-dot row update
 
 - Land-or-dig audit: all live `.scratch` / `.worktrees` FrankenSciPy bench
@@ -111,7 +152,6 @@ ledger above so the project has one source of truth.
 - Conformance GREEN: fsci-fft 54/0 lib; diff_fft scipy-diff 34/0 (byte-identical => parity).
 - NOTE rfft non-pow2 (probed 1.5-1.7x slower) is the SAME low-leaf non-pow2 complex FFT residual
   (recombination is negligible — the packed FFT is ~all the time); not separately addressed here.
-
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.4-2.1x self, flips/narrows the marquee FFT gap): fft 1-D 5-smooth iterative odd-power-tail parallel over leaves + combine groups
 
 - Agent CobaltCove. CLOSES the lever I filed in the prior blocker (fac71529). The 1-D
