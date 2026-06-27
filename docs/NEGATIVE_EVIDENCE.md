@@ -6,6 +6,57 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - GreenFalcon (codex-cli) - NO-SHIP: Cholesky NB=64 panel retune is zero-gain on the biggest current cho_factor row
+
+- Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.
+- Land-or-dig audit: before digging, live bench worktrees were checked again.
+  The only ahead worktree remains
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, older GEMM flat-workspace threshold 768), which current `main`
+  already supersedes with threshold 256. While this run was active, `main`
+  advanced to `a4ed38ef`, landing the measured `chndtr` recurrence win and
+  mirroring it to `master`; no further measured worktree win was landable.
+- Gap attacked: after the `chndtr`/Skellam closeout, the biggest current
+  measured loss with a bounded probe was dense `cho_factor` at 1000x1000
+  (current Rust 53.411 ms vs SciPy 7.5275 ms on this run, 7.10x slower).
+- Lever tested and reverted: changed the blocked Cholesky panel size from
+  `NB=128` to `NB=64` for the factor/solve blocked kernels. This tests whether
+  smaller panels improve cache residency below the existing panel/TRSM rewrite
+  horizon. The code change was fully reverted after the A/B result below.
+- The required literal bench form is still rejected by this Cargo:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  rch exec -- cargo bench --release -p fsci-linalg --bench linalg_bench --
+  cho_factor_gauntlet_scipy ...` failed with `unexpected argument '--release'`.
+  The accepted per-crate release-profile bench was:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  rch exec -- cargo bench -p fsci-linalg --profile release --bench
+  linalg_bench -- cho_factor_gauntlet_scipy --sample-size 10 --warm-up-time 1
+  --measurement-time 2 --noplot`. RCH failed open to local because no workers
+  were admissible, so the comparison is same-target/local Criterion evidence.
+- MEASURED same-target result:
+  | Workload | Current Rust | NB=64 candidate | Candidate vs current | Candidate SciPy row | Candidate ratio vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | 1000x1000 `cho_factor` | 53.411 ms | 53.872 ms | 1.01x slower, no change (`p=0.59`) | 9.1725 ms | 5.87x slower |
+  | 1000x1000 `cho_factor+cho_solve` | 87.681 ms noisy | 55.416 ms | no change (`p=0.13`) | 11.621 ms | 4.77x slower |
+  The 500x500 factor-only row reported a small apparent improvement even though
+  this route is below the large-factor threshold and should not exercise the
+  changed blocked factor; it is treated as noise, not keep proof.
+- Correctness / conformance: source reverted to `HEAD` for this no-ship, so no
+  code change is retained. `git diff --check` passed. RCH `vmi1264463`
+  `cargo test -p fsci-linalg
+  cholesky_lower_blocked_matches_unblocked_factorization --lib -- --nocapture`
+  passed 1/1. The SciPy-backed conformance test passed locally with SciPy 1.17.1
+  using the requested target dir:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo test -p fsci-conformance --test diff_linalg_inv_pinv_cholesky --
+  --nocapture` passed 1/1. The same conformance command through `rch exec` on
+  worker `hz2` failed only because that worker lacks `scipy`
+  (`ModuleNotFoundError: No module named 'scipy'`), so it was not behavior
+  evidence.
+- CONCLUSION: revert the NB=64 retune. The remaining Cholesky gap is not a
+  simple block-size constant; the next valid lever still needs a deeper panel
+  solve / packed update rewrite or direct LAPACK-class kernel work.
+
 ## 2026-06-27 - GreenFalcon (codex-cli) - KEEP: linalg.cho_factor reuses the blocked Cholesky factor at large n
 
 - Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.
