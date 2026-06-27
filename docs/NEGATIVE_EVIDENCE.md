@@ -9062,3 +9062,32 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 
   Byte-identical self-speedup that widens the existing SciPy lead (SciPy's seuclidean is slow — a
   per-element V-broadcast divide). Extends the cdist small-d SoA family to the weighted metric.
+
+## 2026-06-27 - WIN: cdist Correlation SoA-across-pairs (small d) — 1.22x (d3) / 1.71x (d7) self, up to 4.05x vs SciPy
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- The Correlation arm of `cdist_metric` already precomputed each row's centered vector + ss
+  (O((na+nb)·d)), but still computed the per-pair cross term `ssab = Σ ci·cj` as a SCALAR dot
+  pointer-chasing `pb[j]`'s centered `Vec` — i.e. Cosine-on-centered-vectors left on the slow
+  per-pair path while Cosine itself was already SoA'd. Added `cdist_row_correlation_soa`: SoA-
+  transpose the centered xb columns (+ per-column ssb), then per output row vectorize the cross
+  dot across xb columns (lane = a different pair), `1 - ssab/sqrt(ssa·ssb)` with the denom==0⇒NaN
+  guard. Routed for `2 ≤ dim < 8`; dim≥8 keeps the existing precompute-scalar arm.
+- BIT-IDENTICAL: the precompute path already equals the scalar `correlation` helper (same centered
+  vectors, same `Σci²`/`Σci·cj` left-fold order, `denom=(ssa·ssb).sqrt()`); the per-lane SoA dot
+  reduces `k=0..d` in the same order. Locked by extending `cdist_euclidean_small_d_soa_matches_
+  scalar_bitwise` to Correlation — bitwise `to_bits()` equality across d∈{2,3,5,6,7} (d=1 returns
+  0.0 via the generic arm). 16/16 cdist tests green.
+- MEASURED same-window A/B (`cargo bench -p fsci-spatial -- cdist_small_metrics/Correlation/{d3,d7}`,
+  1000×800, stash to toggle SoA vs precompute; non-overlapping criterion intervals). SciPy same shape.
+
+  | Correlation (1000×800) | OLD precompute | NEW SoA | self | SciPy | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | d=3 | 1.298 ms | 1.064 ms | 1.22x | 1.620 ms | 1.25x → 1.52x FASTER |
+  | d=7 | 0.936 ms | 0.548 ms | 1.71x | 2.221 ms | 2.37x → 4.05x FASTER |
+
+  Win grows with d (longer cross dot to vectorize across pairs). Byte-identical self-speedup that
+  widens the existing SciPy lead. **cdist small-d SoA family now covers EVERY real-vector metric in
+  the enum: euclidean/sqeuclidean/cityblock/chebyshev/cosine/correlation/canberra/braycurtis +
+  seuclidean.** Remaining generic-arm metrics: Hamming/Jaccard (binary/categorical, usually high-d
+  where the per-pair path already vectorizes — not the SoA regime) + Minkowski (SciPy itself slow).

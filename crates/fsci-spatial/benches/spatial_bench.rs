@@ -96,6 +96,7 @@ fn bench_cdist_small_metrics(c: &mut Criterion) {
             DistanceMetric::Chebyshev,
             DistanceMetric::Canberra,
             DistanceMetric::Braycurtis,
+            DistanceMetric::Correlation,
         ] {
             group.bench_function(
                 BenchmarkId::new(format!("{metric:?}"), format!("d{d}")),

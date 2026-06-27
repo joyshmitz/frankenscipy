@@ -1564,17 +1564,32 @@ pub fn cdist_metric(
             };
             let pa: Vec<(Vec<f64>, f64)> = xa.iter().map(|v| prep(v)).collect();
             let pb: Vec<(Vec<f64>, f64)> = xb.iter().map(|v| prep(v)).collect();
-            cdist_fill(na, nb, nthreads, |i, j| {
-                let (ci, ssa) = &pa[i];
-                let (cj, ssb) = &pb[j];
-                let ssab: f64 = ci.iter().zip(cj.iter()).map(|(&p, &q)| p * q).sum();
-                let denom = (ssa * ssb).sqrt();
-                if denom == 0.0 {
-                    f64::NAN
-                } else {
-                    1.0 - ssab / denom
-                }
-            })
+            // Small d: SoA-across-pairs the centered cross term (like Cosine) — the per-pair
+            // dot otherwise pointer-chases pb[j]'s centered Vec. Transpose the centered xb
+            // columns + collect ssb; per output row vectorize the dot over xb columns. The
+            // per-lane reduction matches the scalar dot (`.sum()` left-fold) bit-for-bit, and
+            // `denom=(ssa*ssb).sqrt()` is computed identically. Bandwidth-bound ⇒ cap at 16.
+            if dim < 8 {
+                let cb_soa: Vec<Vec<f64>> =
+                    (0..dim).map(|k| pb.iter().map(|(c, _)| c[k]).collect()).collect();
+                let ssb: Vec<f64> = pb.iter().map(|(_, ss)| *ss).collect();
+                cdist_fill_rows(na, nthreads.min(16), |i| {
+                    let (ci, ssa) = &pa[i];
+                    cdist_row_correlation_soa(ci, *ssa, &cb_soa, &ssb, nb)
+                })
+            } else {
+                cdist_fill(na, nb, nthreads, |i, j| {
+                    let (ci, ssa) = &pa[i];
+                    let (cj, ssb) = &pb[j];
+                    let ssab: f64 = ci.iter().zip(cj.iter()).map(|(&p, &q)| p * q).sum();
+                    let denom = (ssa * ssb).sqrt();
+                    if denom == 0.0 {
+                        f64::NAN
+                    } else {
+                        1.0 - ssab / denom
+                    }
+                })
+            }
         }
         // Canberra / Bray-Curtis at small d hit the generic per-pair arm below,
         // which pointer-chases xa[i]/xb[j] through the Vec<Vec> and loses to SciPy's
@@ -2013,6 +2028,56 @@ fn cdist_row_cosine_soa(
             let mut dot = 0.0_f64;
             for k in 0..d {
                 dot += ai[k] * b[k][j];
+            }
+            1.0 - dot / denom
+        };
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs Correlation cdist row (small `d`) with precomputed centered xa row
+/// `ci` (+ its `ssa`) and SoA-transposed centered xb columns `cb` (+ per-column `ssb`):
+/// per-lane `1 - ssab/sqrt(ssa·ssb)` with the `denom==0 ⇒ NaN` guard, the cross term
+/// `ssab = Σ_k ci[k]·cb[k][lane]` a left-fold over dimensions. Bit-identical to the scalar
+/// precompute arm (same centered vectors/ss, same dot order, `denom=(ssa·ssb).sqrt()`).
+fn cdist_row_correlation_soa(
+    ci: &[f64],
+    ssa: f64,
+    cb: &[Vec<f64>],
+    ssb: &[f64],
+    nb: usize,
+) -> Vec<f64> {
+    use std::simd::{Select, Simd, StdFloat, cmp::SimdPartialEq};
+    const L: usize = 8;
+    let d = ci.len();
+    let ssav = Simd::<f64, L>::splat(ssa);
+    let one = Simd::<f64, L>::splat(1.0);
+    let zero = Simd::<f64, L>::splat(0.0);
+    let nan = Simd::<f64, L>::splat(f64::NAN);
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut dot = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            dot += Simd::<f64, L>::splat(ci[k]) * Simd::<f64, L>::from_slice(&cb[k][j..j + L]);
+        }
+        let denom = (ssav * Simd::<f64, L>::from_slice(&ssb[j..j + L])).sqrt();
+        let val = one - dot / denom;
+        denom
+            .simd_eq(zero)
+            .select(nan, val)
+            .copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let denom = (ssa * ssb[j]).sqrt();
+        row[j] = if denom == 0.0 {
+            f64::NAN
+        } else {
+            let mut dot = 0.0_f64;
+            for k in 0..d {
+                dot += ci[k] * cb[k][j];
             }
             1.0 - dot / denom
         };
@@ -8438,6 +8503,7 @@ mod tests {
                     DistanceMetric::Cosine,
                     DistanceMetric::Canberra,
                     DistanceMetric::Braycurtis,
+                    DistanceMetric::Correlation,
                 ] {
                     let got = cdist_metric(&xa, &xb, metric).expect("cdist");
                     for (i, gr) in got.iter().enumerate() {
