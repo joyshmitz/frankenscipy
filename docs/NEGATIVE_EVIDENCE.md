@@ -6,6 +6,34 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - NO-SHIP (2 rejects): uniform-finder vein EXHAUSTED — cubic-family ~0-gain; interp1d sorted prescan-skip REGRESSES
+
+- Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`. No code
+  shipped (lib.rs restored to origin/main); this closes the interpolate uniform-finder
+  vein with measured negative evidence so it is not re-chased. All A/B same-machine
+  local (`CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cobaltcove`,
+  RCH_ENABLED=false, uniform grid n=10000, nq=500k, min-of-40, checksums bit-identical).
+- REJECT 1 — cubic-family (`PchipInterpolator`, and by extension CubicSpline/Akima/
+  CubicHermite) O(1) uniform finder in `eval`: the prior RGI/interp1d-linear win does
+  NOT carry over. `eval_many` is PARALLEL (`par_query_map`) and the per-point cubic
+  Horner + coeff gather dominates; the binary search on a cache-resident x[] (80KB,
+  fits L2) is not the bottleneck. Pchip unsorted **4459→4374 us (1.02x), sorted
+  4441→4602 us (0.96x)** — within noise / slightly worse. Did NOT retrofit the other
+  three after measuring Pchip. The uniform-finder lever only pays when the find is the
+  bottleneck: SERIAL + trivially-cheap eval (interp1d linear unsorted, 12.2x) or a
+  large grid with O(log n) depth (RGI 2D/3D). Parallel + heavy-eval kills it.
+- REJECT 2 — interp1d linear SORTED: skip the O(M) `is_sorted` prescan on uniform
+  grids by using the O(1) finder for every point instead of the cursor. REGRESSED:
+  **sorted 2137→2832 us (0.75x SLOWER)**, unsorted unchanged (3070 vs 3109). WHY: the
+  forward cursor is ~1 comparison/point for sorted input, cheaper than
+  `find_interval_uniform_helper`'s ~5-6 ops (est mul/sub + cast + 2 clamp branches + 2
+  correction checks); the prescan was NOT the dominant cost. The cursor is already
+  optimal for sorted; the residual ~1.3x vs np.interp (2137 vs 1627 us) is the
+  Rust-vs-C overhead floor (prescan + per-point bounds + Vec::push), not closeable
+  byte-identically without unsafe. Do NOT re-attempt the prescan-skip.
+- NET: interp1d linear unsorted (shipped ea4e68e7, 12.2x) + RGI linear (9ff2e909/
+  e7142f96) are the harvest; the uniform-finder vein is now exhausted in fsci-interpolate.
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 12.2x self): interp1d linear eval_many specialized loop + O(1) uniform finder on the unsorted batch path
 
 - Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`.
