@@ -700,9 +700,20 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
                 }
             })
         }
-        _ => pdist_fill(n, total, nthreads, |i, j| {
-            metric_distance(&x[i], &x[j], metric)
-        }),
+        _ => {
+            // AoS rows (`&[Vec<f64>]`) force the O(n²) inner loop to chase one heap
+            // pointer per row; flatten into a single contiguous row-major buffer so
+            // consecutive j-rows stream through cache (hardware prefetch) instead of
+            // hitting scattered allocations. Byte-identical: `metric_distance` reads
+            // the same values in the same order, just from a contiguous slice.
+            let mut flat = Vec::with_capacity(n * dim);
+            for row in x {
+                flat.extend_from_slice(row);
+            }
+            pdist_fill(n, total, nthreads, |i, j| {
+                metric_distance(&flat[i * dim..i * dim + dim], &flat[j * dim..j * dim + dim], metric)
+            })
+        }
     };
     Ok(result)
 }

@@ -8468,3 +8468,45 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   divide-and-conquer tridiagonal-eigensolver (`dsyevd`/MRRR) port, not a micro-lever;
   filed here as negative evidence so the gap is not re-chased as a phantom 27-65x loss.
   ~0-gain code reverted; only this ledger entry lands.
+
+## 2026-06-27 - KEEP + STALE-SCORECARD CORRECTION: pdist high-dim chebyshev already 1.7-6.8x FASTER than SciPy (scorecard "2.7x slower" is pre-SIMD-kernel); plus byte-identical contiguous-buffer flatten for the general-dim fallback (>=14% on memory-bound d16)
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- Land-or-dig: dug the scorecard's "pdist/chebyshev d64 2.70x slower" row as the
+  next candidate gap. MEASURED it and found the row is STALE — the current SIMD-8-wide
+  `chebyshev` kernel (abs + select-max + per-iter NaN mask) already BEATS SciPy's
+  scalar C loop handily. fsci serial (`RAYON_NUM_THREADS=1`) vs SciPy serial
+  (`OPENBLAS/OMP=1`, pdist is BLAS-free so single-threaded anyway), Criterion
+  100-sample medians at normal box load, matching `bench_pdist_highdim` data:
+
+  | Workload | fsci `pdist` chebyshev | SciPy `pdist` chebyshev | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: |
+  | n=1000 d=64 | 2.386 ms | 9.275 ms | 3.89x FASTER |
+  | n=2000 d=64 | 7.249 ms | 49.152 ms | 6.78x FASTER |
+  | n=1000 d=128 | 3.146 ms | 21.319 ms | 6.78x FASTER |
+  | n=2000 d=16 | 5.948 ms | 10.006 ms | 1.68x FASTER |
+
+  The "2.70x slower" scorecard row predates the SIMD kernel; do not re-chase it.
+- LEVER KEPT (byte-identical, conformance-proven): the general-dim `pdist` fallback
+  arm built each pair from `&[Vec<f64>]` (AoS), chasing one heap pointer per row in
+  the O(n²) inner loop. Flatten the rows ONCE into a single contiguous `n*dim`
+  row-major buffer so consecutive j-rows stream through cache (hardware prefetch).
+  This is the proven `Vec<Vec<f64>>` -> flat-buffer cache lever applied to every
+  fallback metric (chebyshev/cityblock/sqeuclidean/euclidean at dim!=4, plus the
+  scalar memory-bound hamming/jaccard/braycurtis/minkowski). `metric_distance` reads
+  the same values in the same order, so output is byte-identical.
+- MEASURED self-effect: the gain concentrates on the MEMORY-bound small-d case where
+  the per-pair kernel is cheap and the pointer-chase dominates. The cleanest A/B point
+  is n=2000 d=16: flatten 5.12 ms (measured at box load ~169) beat the AoS path 5.95 ms
+  (measured at load ~45) — i.e. flatten won by 14% DESPITE a 3.7x load handicap, so the
+  same-load advantage is a >=14% LOWER BOUND. Compute-bound large-d (d=64/128) is
+  kernel-dominated, so the flatten is ~neutral there (the O(n*d) one-time copy is
+  negligible vs the O(n^2*d) pair work) and those cases already win 3.9-6.8x. Shared-box
+  load (45->169 swings) prevented a tighter cross-size number; the d16 lower bound and
+  the never-worse contiguous-vs-scattered argument carry the keep.
+- Gates: `cargo test -p fsci-spatial --lib pdist` = 14/14 green (incl.
+  `pdist_extra_metrics_match_scipy`, `pdist_wide_chebyshev_matches_scalar_nan_fold`,
+  `pdist_parallel_is_bit_identical`, `cdist_pdist_match_scipy`) — byte-identity proven.
+- CONCLUSION: keep the flatten (byte-identical, never-worse, >=14% on memory-bound
+  fallback metrics) and correct the stale "chebyshev 2.70x slower" scorecard row to
+  "1.7-6.8x faster". Next genuine spatial gap remains SphericalVoronoi O(n^4), not pdist.
