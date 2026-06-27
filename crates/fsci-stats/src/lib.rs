@@ -37120,6 +37120,10 @@ pub fn boxcox_llf(lmb: f64, data: &[f64]) -> f64 {
 /// count for large NaN-free inputs and the original O(n²) double loop otherwise.
 /// Both paths return identical integer counts, so the downstream tau/p-value
 /// arithmetic is bit-for-bit unchanged.
+// Superseded for `kendalltau`/`kendalltau_alternative` by
+// `kendall_counts_and_moments` (which also returns the asymptotic tie moments
+// from the same sorts); retained as the documented dispatcher reference.
+#[allow(dead_code)]
 fn kendall_pair_counts(x: &[f64], y: &[f64]) -> (i64, i64, i64, i64) {
     let n = x.len();
     if n >= 256 && !x.iter().any(|v| v.is_nan()) && !y.iter().any(|v| v.is_nan()) {
@@ -37194,6 +37198,161 @@ fn kendall_pair_counts_knight(x: &[f64], y: &[f64]) -> (i64, i64, i64, i64) {
     let discordant = kendall_strict_inversions(&y_in_x_order);
     let concordant = tot - x_ties - y_ties + joint_ties - discordant;
     (concordant, discordant, x_ties, y_ties)
+}
+
+/// Full Knight (1966) Kendall result: pair counts AND the tie moments needed for
+/// the tie-corrected asymptotic variance — all derived from the SAME two sorts
+/// (the lexicographic `(x,y)` order, which leaves x ascending, and the inversion
+/// merge sort, which leaves y fully sorted). This collapses the five separate
+/// sorts of the old path (`kendall_tie_pairs(x)`, `kendall_tie_pairs(y)`, the
+/// `order` sort, and `kendall_tie_stats` re-sorting x and y) down to two, while
+/// reproducing every value bit-for-bit: the tie group sizes — and hence
+/// `x_ties`/`y_ties` (Σ t(t-1)/2) and the moments `Σ t(t-1)(t-2)`,
+/// `Σ t(t-1)(2t+5)` accumulated in the same ascending-value group order — are
+/// independent of which equal-key sort produced the grouping. Assumes no NaN
+/// (caller gates on that, as the old knight path did).
+struct KnightFull {
+    concordant: i64,
+    discordant: i64,
+    x_ties: i64,
+    y_ties: i64,
+    xtie: f64,
+    x0: f64,
+    x1: f64,
+    ytie: f64,
+    y0: f64,
+    y1: f64,
+}
+
+/// Fold one equal-value run of length `run` into the tie accumulators, matching
+/// `kendall_tie_pairs` (i64 `Σ run(run-1)/2`) and `kendall_tie_stats` (f64
+/// `Σ t(t-1)/2`, `Σ t(t-1)(t-2)`, `Σ t(t-1)(2t+5)`) exactly.
+#[inline]
+fn kendall_accum_tie(run: i64, ties_i: &mut i64, tie_f: &mut f64, m0: &mut f64, m1: &mut f64) {
+    if run > 1 {
+        *ties_i += run * (run - 1) / 2;
+        let t = run as f64;
+        *tie_f += t * (t - 1.0) / 2.0;
+        *m0 += t * (t - 1.0) * (t - 2.0);
+        *m1 += t * (t - 1.0) * (2.0 * t + 5.0);
+    }
+}
+
+fn kendall_knight_full(x: &[f64], y: &[f64]) -> KnightFull {
+    let n = x.len();
+    let tot = (n * (n - 1) / 2) as i64;
+
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| x[a].total_cmp(&x[b]).then_with(|| y[a].total_cmp(&y[b])));
+
+    // One pass over the (x, y)-sorted order: x is the primary key so equal-x runs
+    // are contiguous (→ x ties + moments), and equal-(x, y) runs give joint ties.
+    let (mut x_ties, mut xtie, mut x0, mut x1) = (0i64, 0.0f64, 0.0f64, 0.0f64);
+    let mut joint_ties = 0i64;
+    let mut x_run = 1i64;
+    let mut joint_run = 1i64;
+    for w in 1..n {
+        let prev = order[w - 1];
+        let cur = order[w];
+        let x_eq = x[prev] == x[cur];
+        if x_eq {
+            x_run += 1;
+        } else {
+            kendall_accum_tie(x_run, &mut x_ties, &mut xtie, &mut x0, &mut x1);
+            x_run = 1;
+        }
+        if x_eq && y[prev] == y[cur] {
+            joint_run += 1;
+        } else {
+            joint_ties += joint_run * (joint_run - 1) / 2;
+            joint_run = 1;
+        }
+    }
+    if n >= 1 {
+        kendall_accum_tie(x_run, &mut x_ties, &mut xtie, &mut x0, &mut x1);
+        joint_ties += joint_run * (joint_run - 1) / 2;
+    }
+
+    // discordant = strict y inversions under the x-order; the merge sort also
+    // leaves y_in_x_order fully ascending → y ties + moments from one scan.
+    let mut y_in_x_order: Vec<f64> = order.iter().map(|&i| y[i]).collect();
+    let mut tmp = vec![0.0f64; n];
+    let discordant = kendall_inv_sort(&mut y_in_x_order, &mut tmp);
+    let (mut y_ties, mut ytie, mut y0, mut y1) = (0i64, 0.0f64, 0.0f64, 0.0f64);
+    let mut y_run = 1i64;
+    for w in 1..n {
+        if y_in_x_order[w] == y_in_x_order[w - 1] {
+            y_run += 1;
+        } else {
+            kendall_accum_tie(y_run, &mut y_ties, &mut ytie, &mut y0, &mut y1);
+            y_run = 1;
+        }
+    }
+    if n >= 1 {
+        kendall_accum_tie(y_run, &mut y_ties, &mut ytie, &mut y0, &mut y1);
+    }
+
+    let concordant = tot - x_ties - y_ties + joint_ties - discordant;
+    KnightFull {
+        concordant,
+        discordant,
+        x_ties,
+        y_ties,
+        xtie,
+        x0,
+        x1,
+        ytie,
+        y0,
+        y1,
+    }
+}
+
+/// Counts plus (for the large no-NaN knight path) the asymptotic-variance tie
+/// moments, computed without re-sorting. Returns `None` moments on the small/NaN
+/// naive path, where the asymptotic z (if reached) re-derives them cheaply.
+#[allow(clippy::type_complexity)]
+fn kendall_counts_and_moments(
+    x: &[f64],
+    y: &[f64],
+) -> (i64, i64, i64, i64, Option<(f64, f64, f64, f64, f64, f64)>) {
+    let n = x.len();
+    if n >= 256 && !x.iter().any(|v| v.is_nan()) && !y.iter().any(|v| v.is_nan()) {
+        let f = kendall_knight_full(x, y);
+        (
+            f.concordant,
+            f.discordant,
+            f.x_ties,
+            f.y_ties,
+            Some((f.xtie, f.x0, f.x1, f.ytie, f.y0, f.y1)),
+        )
+    } else {
+        let (c, d, xt, yt) = kendall_pair_counts_naive(x, y);
+        (c, d, xt, yt, None)
+    }
+}
+
+/// Tie-corrected asymptotic z from precomputed tie moments (scipy's `asymptotic`
+/// method). Identical arithmetic to `kendalltau_asymptotic_z`, but fed the
+/// moments gathered during the knight sorts instead of re-sorting.
+fn kendalltau_asymptotic_z_from_moments(
+    n: usize,
+    concordant: i64,
+    discordant: i64,
+    xtie: f64,
+    x0: f64,
+    x1: f64,
+    ytie: f64,
+    y0: f64,
+    y1: f64,
+) -> f64 {
+    let n_f = n as f64;
+    let s = (concordant - discordant) as f64;
+    let m = n_f * (n_f - 1.0);
+    let mut var = (m * (2.0 * n_f + 5.0) - x1 - y1) / 18.0 + (2.0 * xtie * ytie) / m;
+    if n_f > 2.0 {
+        var += (x0 * y0) / (9.0 * m * (n_f - 2.0));
+    }
+    s / var.sqrt()
 }
 
 /// Number of pairs equal in `v` (sum t(t-1)/2 over equal-value runs).
@@ -37313,8 +37472,8 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
         };
     }
 
-    // Count concordant and discordant pairs.
-    let (concordant, discordant, x_ties, y_ties) = kendall_pair_counts(x, y);
+    // Count concordant and discordant pairs (+ tie moments on the knight path).
+    let (concordant, discordant, x_ties, y_ties, moments) = kendall_counts_and_moments(x, y);
 
     let n_pairs = (n * (n - 1) / 2) as f64;
     let denom = ((n_pairs - x_ties as f64) * (n_pairs - y_ties as f64)).sqrt();
@@ -37341,7 +37500,12 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
         // Tie-corrected asymptotic variance of S = C − D (scipy's `asymptotic`
         // method); the old untied tau-variance gave wrong p-values whenever ties
         // were present (kendalltau_ties p was ~2× too small). frankenscipy-56tq3
-        let z = kendalltau_asymptotic_z(x, y, concordant, discordant);
+        let z = match moments {
+            Some((xtie, x0, x1, ytie, y0, y1)) => kendalltau_asymptotic_z_from_moments(
+                n, concordant, discordant, xtie, x0, x1, ytie, y0, y1,
+            ),
+            None => kendalltau_asymptotic_z(x, y, concordant, discordant),
+        };
         2.0 * (1.0 - standard_normal_cdf(z.abs()))
     };
 
@@ -37406,7 +37570,7 @@ pub fn kendalltau_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correl
         };
     }
 
-    let (concordant, discordant, x_ties, y_ties) = kendall_pair_counts(x, y);
+    let (concordant, discordant, x_ties, y_ties, moments) = kendall_counts_and_moments(x, y);
 
     let n_pairs = (n * (n - 1) / 2) as f64;
     let denom = ((n_pairs - x_ties as f64) * (n_pairs - y_ties as f64)).sqrt();
@@ -37431,7 +37595,12 @@ pub fn kendalltau_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correl
         // Tie-corrected asymptotic z (scipy `asymptotic` method); S = C − D keeps
         // the same sign as tau so the one-sided alternatives are unchanged.
         // frankenscipy-56tq3
-        let z = kendalltau_asymptotic_z(x, y, concordant, discordant);
+        let z = match moments {
+            Some((xtie, x0, x1, ytie, y0, y1)) => kendalltau_asymptotic_z_from_moments(
+                n, concordant, discordant, xtie, x0, x1, ytie, y0, y1,
+            ),
+            None => kendalltau_asymptotic_z(x, y, concordant, discordant),
+        };
         normal_alternative_pvalue(z, alternative)
     };
 

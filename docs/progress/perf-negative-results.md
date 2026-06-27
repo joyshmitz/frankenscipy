@@ -4,6 +4,34 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-kendalltau-sort-dedup - KEEP (byte-identical 1.90x self): stats.kendalltau collapse 5 sorts to 2
+
+`stats.kendalltau` large-n (n≥256, no-NaN) Knight path was **1.50x SLOWER** than
+scipy (n=100k untied: 23.88 ms vs 15.87 ms). Root cause was redundant sorting:
+the path did **FIVE full O(n log n) sorts** of the data — `kendall_tie_pairs(x)`,
+`kendall_tie_pairs(y)`, the lexicographic `(x,y)` `order`, and then
+`kendalltau_asymptotic_z` re-sorted x and y AGAIN via `kendall_tie_stats` to get
+the tie moments for the p-value variance. But every tie statistic is derivable
+from sorts the algorithm ALREADY performs: the `order` sort leaves x ascending
+(→ x ties + moments + joint ties in one scan), and the inversion merge-sort
+leaves `y_in_x_order` fully ascending (→ y ties + moments in one scan). New
+`kendall_knight_full` computes con/dis AND all six tie moments from those two
+sorts; `kendall_counts_and_moments` plumbs them into a moment-based asymptotic z
+(`kendalltau_asymptotic_z_from_moments`) so nothing re-sorts. **23.88 → 12.56 ms
+= 1.90x self; flips 1.50x SLOWER → 1.26x FASTER** than scipy. BYTE-IDENTICAL:
+tie-group sizes are independent of which equal-key sort produces the grouping, so
+`x_ties`/`y_ties` (i64 Σ t(t-1)/2) and the moments (`Σ t(t-1)(t-2)`,
+`Σ t(t-1)(2t+5)` accumulated in the same ascending-value order) reproduce exactly;
+tau and the variance arithmetic are unchanged. 1989/0 stats lib GREEN incl.
+kendall scipy-ref; oracle diff (untied n=500 + tied n=600, two-sided + greater)
+matches SciPy to 13-16 sig digits (pre-existing reassociation, not from this
+change). Small-n (<256) / NaN path keeps the naive counts + re-sorting asymptotic
+z (cheap there). LEVER (generalizable): when an estimator runs multiple sorts of
+the same vector for different summaries (tie pairs, tie moments, rank order,
+inversion count), fold them into the sorts already required — the sorted order
+carries every grouping statistic. RETRY: spearmanr / weightedtau / somersd for
+the same multi-sort redundancy.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-entropy-parallel-hsum - KEEP (byte-tolerant 4.30x self): stats.entropy parallel h-sum + capped threads
 
 `stats.entropy` (= `Σ -prob·ln(prob)`, `prob = pₖ/total`) ran the `ln`-per-element
