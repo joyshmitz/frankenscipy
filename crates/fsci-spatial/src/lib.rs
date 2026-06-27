@@ -1566,6 +1566,23 @@ pub fn cdist_metric(
                 }
             })
         }
+        // Canberra / Bray-Curtis at small d hit the generic per-pair arm below,
+        // which pointer-chases xa[i]/xb[j] through the Vec<Vec> and loses to SciPy's
+        // contiguous C loop (same loss the Euclidean/Cityblock SoA paths flipped).
+        // Both are scalar left-folds over dimensions for d<8 ⇒ the per-lane SoA
+        // reduction is bit-identical. Bandwidth-bound ⇒ cap workers at 16.
+        DistanceMetric::Canberra if dim < 8 => {
+            let b_soa = cdist_soa(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_canberra_soa(&xa[i], &b_soa, nb)
+            })
+        }
+        DistanceMetric::Braycurtis if dim < 8 => {
+            let b_soa = cdist_soa(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_braycurtis_soa(&xa[i], &b_soa, nb)
+            })
+        }
         _ => cdist_fill(na, nb, nthreads, |i, j| {
             metric_distance(&xa[i], &xb[j], metric)
         }),
@@ -1825,6 +1842,81 @@ fn cdist_row_chebyshev_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
             s = s.max(dk);
         }
         row[j] = s;
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs Canberra cdist row (small `d`): per-lane
+/// `Σ_k |ai[k]-b[k][lane]| / (|ai[k]|+|b[k][lane]|)` with the `denom==0 ⇒ term 0`
+/// mask, exactly mirroring the scalar `canberra` helper (whose per-dim SIMD does
+/// not engage for `d < 8`, so it left-folds `k=0..d` skipping denom==0 — and
+/// `s + 0.0 == s`, so the masked add is bit-identical).
+fn cdist_row_canberra_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
+    use std::simd::{Select, Simd, cmp::SimdPartialEq, num::SimdFloat};
+    const L: usize = 8;
+    let d = ai.len();
+    let zero = Simd::<f64, L>::splat(0.0);
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut acc = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            let av = Simd::<f64, L>::splat(ai[k]);
+            let bv = Simd::<f64, L>::from_slice(&b[k][j..j + L]);
+            let denom = av.abs() + bv.abs();
+            let term = (av - bv).abs() / denom;
+            acc += denom.simd_eq(zero).select(zero, term);
+        }
+        acc.copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let mut s = 0.0_f64;
+        for k in 0..d {
+            let denom = ai[k].abs() + b[k][j].abs();
+            if denom != 0.0 {
+                s += (ai[k] - b[k][j]).abs() / denom;
+            }
+        }
+        row[j] = s;
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs Bray-Curtis cdist row (small `d`): per-lane
+/// `Σ|ai[k]-b[k][lane]| / Σ|ai[k]+b[k][lane]|` with the `den==0 ⇒ 0` guard. The
+/// numerator/denominator left-folds over `k=0..d` match the scalar `braycurtis`
+/// helper's two `.sum()` passes (same accumulation order), so this is bit-identical
+/// for `d < 8`.
+fn cdist_row_braycurtis_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
+    use std::simd::{Select, Simd, cmp::SimdPartialEq, num::SimdFloat};
+    const L: usize = 8;
+    let d = ai.len();
+    let zero = Simd::<f64, L>::splat(0.0);
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut num = Simd::<f64, L>::splat(0.0);
+        let mut den = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            let av = Simd::<f64, L>::splat(ai[k]);
+            let bv = Simd::<f64, L>::from_slice(&b[k][j..j + L]);
+            num += (av - bv).abs();
+            den += (av + bv).abs();
+        }
+        let res = den.simd_eq(zero).select(zero, num / den);
+        res.copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let (mut num, mut den) = (0.0_f64, 0.0_f64);
+        for k in 0..d {
+            num += (ai[k] - b[k][j]).abs();
+            den += (ai[k] + b[k][j]).abs();
+        }
+        row[j] = if den == 0.0 { 0.0 } else { num / den };
         j += 1;
     }
     row
@@ -8295,6 +8387,8 @@ mod tests {
                     DistanceMetric::Cityblock,
                     DistanceMetric::Chebyshev,
                     DistanceMetric::Cosine,
+                    DistanceMetric::Canberra,
+                    DistanceMetric::Braycurtis,
                 ] {
                     let got = cdist_metric(&xa, &xb, metric).expect("cdist");
                     for (i, gr) in got.iter().enumerate() {

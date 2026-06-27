@@ -9007,3 +9007,31 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   iterate the full O(λ) range; (b) the mode-anchored I_x recurrence underflows `u0 = x^a0` for small
   x (small t) + large nc (the deep-tail failure from the earlier abandon). Net: no clear speedup and
   real fragility. Leave nctdtr as-is.
+
+## 2026-06-27 - WIN: cdist Canberra + Bray-Curtis SoA-across-pairs (small d) — 1.27x / 2.56x self, widens SciPy lead to 1.44x / 3.9x
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- `cdist` for Canberra & Bray-Curtis at small d fell through to the generic per-pair arm
+  (`metric_distance(&xa[i], &xb[j])`), which pointer-chases the `Vec<Vec>` — the same small-d
+  loss the Euclidean/Cityblock/Cosine/Chebyshev SoA kernels already flipped (greenfalcon). Added
+  `cdist_row_canberra_soa` + `cdist_row_braycurtis_soa` (dim<8): vectorize a whole output row
+  across xb columns (SoA), each lane a different pair, left-folding the per-dim terms.
+- BIT-IDENTICAL: for d<8 the scalar `canberra`/`braycurtis` helpers are scalar left-folds (their
+  own per-dim SIMD needs d≥8), and the per-lane reduction sums `k=0..d` in the same order with the
+  same denom==0 guards (`s + 0.0 == s` for canberra's skip; braycurtis's two `.sum()` passes equal
+  the fused num/den left-fold). Locked by extending `cdist_euclidean_small_d_soa_matches_scalar_bitwise`
+  to both metrics — 15/15 cdist tests green, bitwise `to_bits()` equality for d∈{1,2,3,5,6,7}.
+- MEASURED same-window A/B (`cargo bench -p fsci-spatial -- cdist_small_metrics/.../d3`, 1000×800
+  d=3, stash lib.rs to toggle SoA vs generic; non-overlapping criterion intervals). SciPy timed
+  at the same shape. (Box was loaded — an earlier run showed 20-30 ms pure-contention noise;
+  these are the post-load clean numbers.)
+
+  | Metric (1000×800, d=3) | OLD generic arm | NEW SoA | self | SciPy | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Canberra    | 1.951 ms | 1.539 ms | 1.27x | 2.222 ms | 1.14x → 1.44x FASTER |
+  | Bray-Curtis | 1.067 ms | 0.416 ms | 2.56x | 1.627 ms | 1.53x → 3.9x FASTER |
+
+  Not a flipped loss (fsci's generic arm already edged SciPy here), but a byte-identical
+  self-speedup that widens the lead. Completes the cdist small-d SoA family (eucl/sqeucl/cityblock/
+  chebyshev/cosine/canberra/braycurtis). Minkowski left to the generic arm — SciPy's own minkowski
+  is ~17x SLOWER (37 ms, per-element powf), so fsci already dominates there; no action.
