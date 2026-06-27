@@ -8393,12 +8393,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   | n=4900 | 50.847 ms | 12.647216 ms | 4.02x slower |
   Versus the same-session current baseline, the SciPy ratios improved from 2.13x/6.99x slower to
   1.44x/4.02x slower.
+- `AGENT_NAME=GreenFalcon` follow-up on the requested cod-b target dir:
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p
+  fsci-sparse --bench sparse_bench --profile release -- sparse_spsolve_laplacian --sample-size 10
+  --warm-up-time 1 --measurement-time 2 --noplot`. RCH admitted this locally because no workers were
+  available. Criterion means on the landed route were 3.9155 ms (n=1600) and 35.101 ms (n=4900), with
+  stored-baseline changes of -29.116% and -40.040%. A fresh local SciPy 1.17.1 comparator on the same
+  fixture gave medians 3.101178 ms and 10.767599 ms, so the landed route is now 1.26x and 3.26x slower
+  than SciPy on this host.
 - Gates: `cargo check -p fsci-sparse --all-targets` passed via RCH worker `hz2`; focused
   `cargo test -p fsci-sparse spsolve --lib -- --nocapture` passed 17/17; sparse conformance
   `cargo test -p fsci-conformance --test e2e_sparse -- --nocapture` passed 24/24; `git diff --check`
   for `crates/fsci-sparse/src/linalg.rs` passed. Full `cargo fmt --check` remains blocked by pre-existing
   formatting drift across unrelated crates and untracked perf bins. Clippy remains blocked by pre-existing
   `fsci-linalg` and sparse lint debt outside this route.
+- Cod-b conformance recheck: `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec
+  -- cargo test -p fsci-conformance --test e2e_sparse -- --nocapture` passed 24/24, and
+  `... --test diff_sparse -- --nocapture` passed 34/34. RCH admitted both locally because worker slots were
+  unavailable.
 - CONCLUSION: keep the SPD banded-Cholesky route. It is the next documented lever after the generic banded
   LU keep, gives a same-session measured win, and narrows but does not close the SuperLU gap. Remaining
   work should move to true sparse scatter/Gilbert-Peierls or supernodal factorization rather than another
