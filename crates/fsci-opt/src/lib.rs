@@ -3857,19 +3857,20 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
     }
 
     for _ in 0..3 * n {
-        // Compute gradient: w = A^T (b - Ax)
-        let mut ax = vec![0.0; m];
-        for i in 0..m {
-            for j in 0..n {
-                ax[i] += a[i][j] * x[j];
-            }
-        }
-
+        // Gradient w = Aᵀ(b − Ax) = Aᵀb − (AᵀA)x = atb − gram·x. Using the
+        // precomputed Gram/Aᵀb makes this O(n²) per outer step and never re-touches
+        // the (cache-unfriendly `Vec<Vec>`) `A`, vs the old O(2·m·n) re-form of
+        // `Ax` then `Aᵀ(·)`. ~1e-15 reassociation only; NNLS is strictly convex so
+        // the unique minimizer is unchanged (the gradient only ranks which variable
+        // enters the passive set).
         let mut w = vec![0.0; n];
         for j in 0..n {
-            for i in 0..m {
-                w[j] += a[i][j] * (b[i] - ax[i]);
+            let mut acc = atb[j];
+            let grow = &gram[j];
+            for k in 0..n {
+                acc -= grow[k] * x[k];
             }
+            w[j] = acc;
         }
 
         // Find max w[j] among active (non-passive) variables
@@ -3909,8 +3910,13 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
                 atb_sub[pi] = atb[ji];
             }
 
-            // Solve ata * s = atb_sub
-            let s_p = solve_small_system(&ata, &atb_sub);
+            // Solve ata · s = atb_sub. `ata` is a principal submatrix of AᵀA, so
+            // SPD whenever the passive columns are independent — Cholesky solves it
+            // in ~⅓ the flops of the Gauss-Jordan `solve_small_system` and skips
+            // pivoting. Fall back to the pivoting solver on the rare rank-deficient
+            // passive set (Cholesky hits a non-positive pivot and returns None).
+            let s_p = cholesky_solve_spd(&ata, &atb_sub)
+                .unwrap_or_else(|| solve_small_system(&ata, &atb_sub));
 
             // Check for negative elements
             let mut all_positive = true;
@@ -3961,6 +3967,54 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
     }
 
     Ok((x, residual.sqrt()))
+}
+
+/// Solve a symmetric positive-definite system `M z = rhs` via Cholesky
+/// (`M = L Lᵀ`, forward/back substitution). ~⅓ the flops of Gauss-Jordan and no
+/// pivoting. Returns `None` if `M` is not positive-definite (a non-positive pivot
+/// is hit), so callers can fall back to a pivoting solver on rank-deficient input.
+fn cholesky_solve_spd(m: &[Vec<f64>], rhs: &[f64]) -> Option<Vec<f64>> {
+    let n = rhs.len();
+    if n == 0 {
+        return Some(Vec::new());
+    }
+    // Lower-triangular Cholesky factor (row-major, only j ≤ i used).
+    let mut l = vec![vec![0.0f64; n]; n];
+    for i in 0..n {
+        for j in 0..=i {
+            let mut sum = m[i][j];
+            for k in 0..j {
+                sum -= l[i][k] * l[j][k];
+            }
+            if i == j {
+                if !(sum > 0.0) {
+                    return None;
+                }
+                l[i][i] = sum.sqrt();
+            } else {
+                l[i][j] = sum / l[j][j];
+            }
+        }
+    }
+    // Forward solve L y = rhs.
+    let mut y = vec![0.0f64; n];
+    for i in 0..n {
+        let mut s = rhs[i];
+        for k in 0..i {
+            s -= l[i][k] * y[k];
+        }
+        y[i] = s / l[i][i];
+    }
+    // Back solve Lᵀ x = y.
+    let mut x = vec![0.0f64; n];
+    for i in (0..n).rev() {
+        let mut s = y[i];
+        for (k, xk) in x.iter().enumerate().skip(i + 1) {
+            s -= l[k][i] * xk;
+        }
+        x[i] = s / l[i][i];
+    }
+    Some(x)
 }
 
 /// Solve a small symmetric positive-definite system `M z = rhs` by Gaussian

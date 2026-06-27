@@ -4,6 +4,28 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-nnls-cholesky-gram-gradient - KEEP (2-3x self, conformance-exact): opt.nnls Cholesky inner solve + gram gradient
+
+Probed fsci-opt: `lsq_linear` WINS (2.75-7.9x) but **`nnls` was a 16-19x GAP**
+(m=500 n=100: 18.05 ms vs scipy 1.09 ms; m=1000 n=200: 113.6 vs 5.82 ms) — the
+biggest uncontested same-box gap found this campaign. fsci already uses Bro-De
+Jong fnnls (precomputed Gram = AᵀA and Aᵀb), but (1) the inner passive
+least-squares solve was Gauss-Jordan full elimination (ignores that the passive
+Gram submatrix is SPD), and (2) the gradient re-formed `Ax` then `Aᵀ(b−Ax)` each
+outer step (O(2·m·n), re-touching the cache-unfriendly `Vec<Vec>` A). Fixes:
+inner solve → Cholesky (`cholesky_solve_spd`, ~⅓ the flops, no pivoting) with the
+Gauss-Jordan kept as a fallback when the passive set is rank-deficient (Cholesky
+returns None on a non-positive pivot); gradient → `atb − gram·x` (O(n²), reuses
+the precompute). **18.05 → 6.10 ms = 2.96x; 113.6 → 54.2 ms = 2.10x self**
+(narrows 16.6x → 5.6x and 19.5x → 9.3x slower). CONFORMANCE-EXACT: NNLS is
+strictly convex so the minimizer is unique — oracle diff matches scipy's x /
+residual / nnz to 12 sig digits; 313/0 opt lib GREEN. RESIDUAL gap: fsci
+re-solves the passive system FROM SCRATCH each iteration (O(p³) → O(n⁴) total)
+whereas scipy's Lawson-Hanson updates a QR factor incrementally (O(p²)/step →
+O(n³)). FOLLOW-UP (filed): maintain the Cholesky factor of the passive Gram in
+INSERTION order and update it on append (the common outer-loop case, O(p²)),
+re-factoring only on the rarer variable removals — closes the rest of the gap.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-nearest-centroid-smallk-fullscan - KEEP (byte-identical 2.64x self): cluster nearest_centroid small-k full-scan flips kmeans2 to a WIN
 
 The deeper kmeans2 lever (filed last two entries as "residual = nearest_centroid
