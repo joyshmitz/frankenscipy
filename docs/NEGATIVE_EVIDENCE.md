@@ -6,6 +6,50 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - NO-SHIP (phantom gap + rejected lever): ndimage label-mean is already 19-27x FASTER than scipy.ndimage.mean same-box; cheap-cast decode is a regression
+
+- Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`.
+- Land-or-dig audit: no landable measured win sat in a bench worktree for me
+  (the uncommitted `cossin.rs` + spatial `Hamming/Jaccard` cdist changes in the
+  primary tree are active WIP by other live agents — left untouched). So I dug
+  the largest cluster of OPEN scorecard losses: `ndimage.mean(labels, index)`
+  rows `.125/.126/.143/fa62u`, all tagged "1.5-4.7x slower than SciPy, route
+  deeper for SciPy dominance".
+- Lever tested and REVERTED: the one-based-contiguous hot path decodes each f64
+  label via `measurement_exact_positive_integer_label` (~30 lines of per-element
+  exponent/significand bit-twiddling). Replaced it with a cheap range-clamp +
+  saturating `as usize` cast + round-trip verify (the technique the dense path
+  already uses). Proven BIT-IDENTICAL across a wide f64 sweep (integers in/out of
+  range, non-integers, 0/negatives/subnormals, large magnitudes, NaN/±inf), but
+  same-process A/B (one binary, identical scatter kernel, min-of-400) showed it is
+  **0.73-0.79x — i.e. ~25% SLOWER** at all four sizes. Rust's saturating
+  float→int cast + reconversion costs more than the integer bit-decode, which the
+  compiler turns into well-predicted branchless integer ops. REVERTED; do not
+  retry the cast approach.
+- ARTIFACT DEBUNK (the real finding): the scorecard "loss" is the
+  RCH-Rust-vs-foreign-SciPy hazard. Measured BOTH on this box, min-of-N, identical
+  data (the criterion `label_mean` fixture: `labels[i]=((i*1664525+1013904223)
+  %k)+1` as f64, one-based contiguous `index=1..=k`):
+
+  | Workload | fsci `mean()` | `scipy.ndimage.mean` | fsci vs scipy.ndimage.mean | `np.bincount` floor | fsci vs bincount |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | n=65536 k=512   | 130.3 us | 3008 us  | **23.1x FASTER** | 131 us  | parity (1.01x) |
+  | n=262144 k=1024 | 518.6 us | 14036 us | **27.1x FASTER** | 503 us  | 1.03x slower |
+  | n=262144 k=2048 | 524.8 us | 10145 us | **19.3x FASTER** | 510 us  | 1.03x slower |
+  | n=589824 k=4096 | 1327.7 us| 30166 us | **22.7x FASTER** | 1320 us | parity (1.01x) |
+
+- Conclusion: fsci's `ndimage.mean(labels,index)` already DOMINATES the real
+  `scipy.ndimage.mean` API by ~20-27x on this box and sits at the `np.bincount`
+  single-pass-scatter floor (the theoretical best for this op). The scorecard's
+  "SciPy 168 us" does not reproduce here (`scipy.ndimage.mean` = 3008 us at
+  n=65536); the apparent loss was foreign-host SciPy timing, exactly the
+  documented equal-hardware artifact. There is no single-thread win to add — only
+  parallel sharded reduction could beat the bincount floor, and that breaks
+  byte-identity (float reassociation) for marginal gain over an already-23x win.
+  DO NOT re-chase scorecard rows `.125/.126/.143/fa62u`; they are artifacts.
+- No code shipped (lib.rs restored to `origin/main`); ndimage conformance/tests
+  unaffected. Repro: `python3 oracle_labelmean.py` + `perf_labelmean_ab` bin in
+  the CobaltCove worktree.
 ## 2026-06-27 - GreenFalcon (codex-cli) - KEEP: linalg Cholesky SYRK four-dot row update cuts the remaining cho_factor tail
 
 - Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.
