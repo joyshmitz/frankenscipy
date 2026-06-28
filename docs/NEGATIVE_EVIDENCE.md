@@ -6,6 +6,44 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-28 - GreenFalcon (codex) - KEEP: watershed_ift default 2D cross bucket queue avoids generic coordinate loop
+
+- Land-or-dig audit: after fetch, the only `.scratch` / `.worktrees`
+  non-ancestor bench tip was the old lower-GEMM-threshold linalg worktree, which
+  current main already supersedes with a stronger flat-workspace threshold and
+  existing ledger coverage. No measured unlanded bench-worktree win was landable.
+- Gap routing: skipped covered or rejected Cholesky, sparse `spsolve`,
+  dense eig/SVD, rfft, clustering OLO, and current `hyperu` identity lanes. The
+  remaining feasible ndimage gap was `watershed_ift`, where the integer-cost
+  bucket queue still rebuilt a coordinate vector and looped over axes for every
+  popped pixel on the default 2-D cross structure.
+- Lever: for `structure == None` and 2-D input, preserve SciPy-compatible
+  default neighbor order (up, left, right, down) and the existing bucket
+  front/back tie behavior, but use direct row/column boundary checks and flat
+  neighbor indices. Custom structures and non-2D inputs stay on the generic
+  bucket path.
+- Per-crate bench command used the accepted release-profile spelling because
+  this workspace rejects literal `cargo bench --release`:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-greenfalcon-ndimage rch exec -- cargo bench -p fsci-ndimage --profile release --bench ndimage_bench -- watershed_ift --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- RCH had no admissible workers for the ORIG/candidate bench pair and failed
+  open locally for both, so the comparison is same-host and same target dir.
+- ORIG `watershed_ift/uint8_512x512_m50`: `13.992 ms` mean
+  (`[13.471, 14.416]`).
+- Candidate `watershed_ift/uint8_512x512_m50`: `9.8274 ms` mean
+  (`[8.9860, 10.675]`), Criterion change `[-40.496%, -29.824%, -18.687%]`,
+  `p=0.00`.
+- Ratio vs ORIG: `13.992 / 9.8274 = 1.42x` faster.
+- Correctness: `rch exec -- cargo test -p fsci-ndimage watershed_ift --lib --
+  --nocapture` passed 4/0 on worker `vmi1264463`, including the new regression
+  comparing the specialized default path against the generic explicit-structure
+  path. Fail-closed local conformance with
+  `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_ndimage
+  -- --nocapture` passed 5/0. A duplicate queued RCH conformance run was stopped
+  after local conformance went green.
+- Decision: KEEP. This narrows the watershed residual without changing
+  custom-structure behavior; deeper gains need a queue-policy or image-forest
+  lever rather than more generic coordinate-loop cleanup.
+
 ## 2026-06-28 - GreenFalcon (codex) - KEEP: hyperu a=1 incomplete-gamma vector identity uses gated parallel map
 
 - Land-or-dig audit: after fetch, no live `.scratch` / `.worktrees`

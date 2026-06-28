@@ -10309,14 +10309,18 @@ pub fn watershed_ift(
     let signed_shape: Vec<i64> = input.shape.iter().map(|&s| s as i64).collect();
 
     let output = if let Some(max_cost) = watershed_bucket_max(input, markers) {
-        watershed_ift_bucketed_output(
-            input,
-            markers,
-            &struct_offsets,
-            &flat_offsets,
-            &signed_shape,
-            max_cost,
-        )
+        if structure.is_none() && input.shape.len() == 2 {
+            watershed_ift_bucketed_output_2d_cross(input, markers, max_cost)
+        } else {
+            watershed_ift_bucketed_output(
+                input,
+                markers,
+                &struct_offsets,
+                &flat_offsets,
+                &signed_shape,
+                max_cost,
+            )
+        }
     } else {
         watershed_ift_heap_output(
             input,
@@ -10425,6 +10429,122 @@ fn watershed_ift_bucketed_output(
     }
 
     output
+}
+
+fn watershed_ift_bucketed_output_2d_cross(
+    input: &NdArray,
+    markers: &NdArray,
+    max_cost: usize,
+) -> Vec<f64> {
+    let rows = input.shape[0];
+    let cols = input.shape[1];
+    let mut output = markers.data.clone();
+    let queued_cost = max_cost + 1;
+    let mut costs = vec![queued_cost; input.size()];
+    let mut done = vec![false; input.size()];
+    let mut buckets = (0..=max_cost)
+        .map(|_| std::collections::VecDeque::new())
+        .collect::<Vec<_>>();
+
+    for (idx, &marker) in markers.data.iter().enumerate() {
+        if marker != 0.0 {
+            costs[idx] = 0;
+            if marker < 0.0 {
+                buckets[0].push_back(idx);
+            } else {
+                buckets[0].push_front(idx);
+            }
+        }
+    }
+
+    for cost in 0..=max_cost {
+        while let Some(idx) = buckets[cost].pop_front() {
+            if done[idx] || costs[idx] != cost {
+                continue;
+            }
+            done[idx] = true;
+
+            let row = idx / cols;
+            let col = idx - row * cols;
+            if row > 0 {
+                watershed_bucket_relax(
+                    idx,
+                    idx - cols,
+                    cost,
+                    input,
+                    &mut output,
+                    &mut costs,
+                    &mut buckets,
+                    &done,
+                );
+            }
+            if col > 0 {
+                watershed_bucket_relax(
+                    idx,
+                    idx - 1,
+                    cost,
+                    input,
+                    &mut output,
+                    &mut costs,
+                    &mut buckets,
+                    &done,
+                );
+            }
+            if col + 1 < cols {
+                watershed_bucket_relax(
+                    idx,
+                    idx + 1,
+                    cost,
+                    input,
+                    &mut output,
+                    &mut costs,
+                    &mut buckets,
+                    &done,
+                );
+            }
+            if row + 1 < rows {
+                watershed_bucket_relax(
+                    idx,
+                    idx + cols,
+                    cost,
+                    input,
+                    &mut output,
+                    &mut costs,
+                    &mut buckets,
+                    &done,
+                );
+            }
+        }
+    }
+
+    output
+}
+
+fn watershed_bucket_relax(
+    idx: usize,
+    neighbor_idx: usize,
+    cost: usize,
+    input: &NdArray,
+    output: &mut [f64],
+    costs: &mut [usize],
+    buckets: &mut [std::collections::VecDeque<usize>],
+    done: &[bool],
+) {
+    if done[neighbor_idx] {
+        return;
+    }
+
+    let edge_cost = (input.data[neighbor_idx] - input.data[idx]).abs() as usize;
+    let new_cost = cost.max(edge_cost);
+    if new_cost < costs[neighbor_idx] {
+        costs[neighbor_idx] = new_cost;
+        output[neighbor_idx] = output[idx];
+        if output[idx] < 0.0 {
+            buckets[new_cost].push_back(neighbor_idx);
+        } else {
+            buckets[new_cost].push_front(neighbor_idx);
+        }
+    }
 }
 
 fn watershed_ift_heap_output(
@@ -15629,6 +15749,36 @@ mod tests {
                 2.0, 2.0, 2.0, 1.0,
             ]
         );
+    }
+
+    #[test]
+    fn watershed_ift_2d_cross_fast_path_matches_generic_structure() {
+        let rows = 9usize;
+        let cols = 11usize;
+        let input = NdArray::new(
+            (0..rows * cols)
+                .map(|idx| {
+                    let row = idx / cols;
+                    let col = idx % cols;
+                    ((row * 17 + col * 31 + idx * 7) & 255) as f64
+                })
+                .collect(),
+            vec![rows, cols],
+        )
+        .unwrap();
+        let mut marker_data = vec![0.0; rows * cols];
+        marker_data[0] = 1.0;
+        marker_data[cols - 1] = 2.0;
+        marker_data[(rows - 1) * cols] = -3.0;
+        marker_data[rows * cols - 1] = 4.0;
+        marker_data[(rows / 2) * cols + cols / 2] = 5.0;
+        let markers = NdArray::new(marker_data, vec![rows, cols]).unwrap();
+        let structure = generate_binary_structure(2, 1);
+
+        let fast = watershed_ift(&input, &markers, None).unwrap();
+        let generic = watershed_ift(&input, &markers, Some(&structure)).unwrap();
+
+        assert_eq!(fast.data, generic.data);
     }
 
     #[test]
