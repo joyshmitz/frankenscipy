@@ -11172,3 +11172,28 @@ n due to the per-call chirp rebuild.
   scipy.ndimage.mean here (132/560/566/1395 vs 208/784/746/2201 µs). Third stale scorecard "loss" found at
   parity/win this session (with `nnls` ~parity-to-1.5x-faster and `SphericalVoronoi` near-parity). The
   scorecard's loss pointers are systematically stale post-greenfalcon; trust same-box measurement.
+
+## 2026-06-28 - LANDED WIN (AmberForge): sosfilt_axis_2d — multi-channel SOS filtering parallel-across-channels, 11.7-20.2x FASTER than scipy
+
+- Agent: AmberForge. fsci had `lfilter_axis_2d` (2-D, parallel across rows) but NO 2-D `sosfilt` — only the
+  1-D `sosfilt(sos, x)`. scipy.signal.sosfilt(sos, x, axis) handles N-D and is PREFERRED over lfilter for
+  high-order filters (the second-order-section form is numerically stable where a single high-order a/b is
+  not), so the missing 2-D sibling is a real capability+perf gap. Added `sosfilt_axis_2d(sos, x, axis)`
+  (axis -1/1 rows, axis 0 columns) mirroring `lfilter_axis_2d`: each line is an INDEPENDENT cascade →
+  contiguous line-chunks fan out across cores via `thread::scope`. scipy vectorises the cascade across the
+  channel axis but runs SERIALLY; fanning whole lines across 64 cores wins big with many channels (the same
+  parallel-across-independent-units lever as the csgraph all-pairs ships).
+- **MEASURED vs scipy.signal.sosfilt (axis=-1, identical 4-section sos, best-of-5):**
+
+  | channels × length | fsci sosfilt_axis_2d | scipy sosfilt 2D | speedup |
+  | ---: | ---: | ---: | ---: |
+  | 1000 × 10000 | 7.93 ms | 92.89 ms | **11.7x** |
+  | 4000 × 10000 | 22.61 ms | 457.44 ms | **20.2x** |
+  | 256 × 100000 | 16.94 ms | 288.35 ms | **17.0x** |
+
+  BYTE-IDENTICAL to per-line 1-D `sosfilt` (lines independent, the 1-D cascade is deterministic) — test
+  `sosfilt_axis_2d_matches_per_line_sosfilt` asserts bit-equality for axis=-1 AND axis=0 at 64×4096 (past
+  the parallel gate). Numerical oracle vs scipy's own 2-D output: max abs diff **4.9e-16** (machine
+  precision). fsci-signal 655/0. Gated by `lfilter_axis_thread_count` (work ≥ 1<<20, ≥8 lines) so small
+  inputs stay serial. NOTE the residual: per-channel fsci 1-D sosfilt is ~near-parity with scipy's
+  vectorised-per-channel throughput; the 11-20x is entirely the 64-core fan-out beating scipy's serial loop.
