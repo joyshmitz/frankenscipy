@@ -10661,3 +10661,38 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - CORRECTNESS: Rader yields the same DFT (only roundoff) — matches a naive O(p²) DFT to maxerr <1e-7
   for p∈{67,71,101,103,1031}, both directions (test `rader_prime_dft_matches_naive`); end-to-end maxerr
   <3e-12. fsci-fft lib 179 passed / 0 failed; fsci-signal 654 passed (resample/hilbert downstream green).
+
+## 2026-06-28 - LANDED WIN (AmberForge): mixed-radix split-factor peels 2/4 before a LARGE odd prime — up to 16.7x self-speedup, flips 2510/1010/202/502 from 13x SLOWER to FASTER than scipy
+
+- Agent: AmberForge. Closes the "pre-existing mixed-radix combine overhead" I surfaced last turn
+  (6cb307b0 ledger note). `mixed_radix_split_factor` peeled the SMALLEST ODD prime factor first —
+  including a large one. For n = 2^k·(large prime), that meant a radix-(large-prime) combine, and the
+  general-`p` branch of the combine (transforms.rs ~896) is a DIRECT O(p²) DFT across blocks. So
+  502 = 2·251 did a radix-251 O(251²) combine instead of peeling the 2 and sending 251 through Rader;
+  nested under a radix-5 level it COMPOUNDED (2510 = 2·5·251 → five O(251²) combines).
+- FIX (4 lines): when `smallest_odd_prime_factor(n) > MIXED_RADIX_DIRECT_MAX_PRIME` (61) AND n is even,
+  peel the 2/4 first so the large prime is reached as a STANDALONE prime length → Rader (p-1 5-smooth)
+  or Bluestein, both O(p log p), instead of the O(p²) radix-p combine. Cooley-Tukey is correct for any
+  factorization order, so only roundoff changes.
+- **MEASURED same-box `fsci_fft::fft` (complex), last-turn baseline → now, + scipy.fft:**
+
+  | n | factorization | baseline (us) | now (us) | self | scipy (us) | now vs scipy |
+  | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+  | 2510 | 2·5·251 | 899 | 53.7 | **16.7x** | 69.6 | **1.30x FASTER** (was ~13x slower) |
+  | 1010 | 2·5·101 | 150 | 18.7 | **8.0x** | 29.1 | **1.56x FASTER** |
+  | 502 | 2·251 | — | 11.0 | — | 19.8 | **1.80x FASTER** |
+  | 202 | 2·101 | — | 4.7 | — | 10.4 | **2.23x FASTER** |
+  | 1030 | 2·5·103 | 156 | 40.9 | **3.8x** | 22.3 | 1.83x slower (was 7.0x) |
+  | 2060 | 2²·5·103 | 309 | 82.3 | **3.8x** | 40.9 | 2.01x slower (was 7.5x) |
+  | 4120 | 2³·5·103 | 617 | 167.6 | **3.7x** | 79.6 | 2.11x slower (was 7.8x) |
+  | 1016 | 2³·127 | — | 34.0 | — | 25.7 | 1.32x slower |
+
+  Lengths whose large prime has a 5-smooth p-1 (101/251 → Rader) now BEAT scipy; the 103-lengths
+  (p-1=102=2·3·17 → Bluestein) still gain 3.7-3.8x by dropping the O(103²) combine, closing the scipy
+  gap from ~7-8x to ~2x. Applies to every n = 2^k·m where m's smallest prime factor > 61.
+- CORRECTNESS: factorization-order change → only roundoff; maxerr <4e-11 vs naive O(n²) DFT for all
+  measured lengths. New test `mixed_radix_2k_large_prime_matches_naive` (202/502/1010/2510/1030/1016).
+  fsci-fft lib 180 passed / 0 failed; fsci-signal 654 passed (resample/hilbert downstream green).
+- This is the 3rd FFT ship this session (Bluestein 5-smooth e5f03456, Rader 6cb307b0, this) — together
+  they take the whole non-pow2 / prime-factor family from 2-13x SLOWER than scipy to parity-or-faster
+  across primes (101/193/251), large primes (1031/4099/9001), and 2^k·large-prime composites.

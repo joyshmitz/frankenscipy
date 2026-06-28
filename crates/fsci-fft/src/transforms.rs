@@ -735,7 +735,18 @@ fn smallest_odd_prime_factor(n: usize) -> Option<usize> {
 
 fn mixed_radix_split_factor(n: usize) -> usize {
     if let Some(p) = smallest_odd_prime_factor(n) {
-        p
+        // A large odd prime is far cheaper transformed *whole* (Rader/Bluestein,
+        // O(p log p)) than used as a radix-`p` combine — the general-`p` branch of
+        // the combine is a direct O(p²) DFT across blocks. When the smallest odd
+        // prime factor is large but `n` still has a power-of-two part, peel the
+        // 2/4 first so the large prime is reached as a standalone prime length
+        // (e.g. 502 = 2·251 → peel 2 → 251 via Rader, not a radix-251 O(251²)
+        // combine; this compounds badly when nested, e.g. 2510 = 2·5·251).
+        if p > MIXED_RADIX_DIRECT_MAX_PRIME && n % 2 == 0 {
+            if n % 4 == 0 { 4 } else { 2 }
+        } else {
+            p
+        }
     } else if n.is_multiple_of(4) {
         4
     } else {
@@ -5633,6 +5644,42 @@ mod tests {
         let recovered = ifft(&spectrum, &FftOptions::default()).expect("ifft n=7");
         for (&a, &b) in recovered.iter().zip(&input) {
             assert_close_complex(a, b, 1e-9);
+        }
+    }
+
+    #[test]
+    fn mixed_radix_2k_large_prime_matches_naive() {
+        // n = 2^k · large-prime lengths: the split-factor fix peels the 2/4 first
+        // so the large prime is transformed whole (Rader/Bluestein) instead of via
+        // an O(p²) radix-p combine. Verify the result still equals the naive DFT.
+        let naive_dft = |x: &[Complex64]| -> Vec<Complex64> {
+            let n = x.len();
+            (0..n)
+                .map(|k| {
+                    let mut acc = (0.0, 0.0);
+                    for (j, &(re, im)) in x.iter().enumerate() {
+                        let a = -2.0 * std::f64::consts::PI * (k * j % n) as f64 / n as f64;
+                        let (c, s) = (a.cos(), a.sin());
+                        acc.0 += re * c - im * s;
+                        acc.1 += re * s + im * c;
+                    }
+                    acc
+                })
+                .collect()
+        };
+        // 202=2·101, 502=2·251, 1010=2·5·101, 2510=2·5·251, 1030=2·5·103, 1016=2³·127
+        for &n in &[202usize, 502, 1010, 2510, 1030, 1016] {
+            let x: Vec<Complex64> = (0..n)
+                .map(|i| ((i as f64 * 0.3).sin(), (i as f64 * 0.11).cos()))
+                .collect();
+            let got = fft(&x, &FftOptions::default()).expect("fft");
+            let want = naive_dft(&x);
+            let maxerr = got
+                .iter()
+                .zip(&want)
+                .map(|(&(a, b), &(c, d))| ((a - c).powi(2) + (b - d).powi(2)).sqrt())
+                .fold(0.0_f64, f64::max);
+            assert!(maxerr < 1e-7, "n={n} fft maxerr {maxerr} vs naive DFT");
         }
     }
 
