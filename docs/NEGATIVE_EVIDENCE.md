@@ -6,6 +6,25 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): cwt parallelized over widths — 1.53-3.31x byte-identical
+
+- `cwt` (fsci-signal) ran a SERIAL loop over `widths`, each scale doing 2 FFTs (wavelet forward + inverse)
+  of length `fft_len`; the scales are independent (the shared data FFT was already cached, [zq5xy]) so the
+  per-width FFT convolution fans out across threads.
+- Lever detail (avoids an API break): split into Phase A (serial) — validate widths, call the user wavelet
+  closure to generate every wavelet, and precompute the shared data FFT per distinct `fft_len` — then Phase
+  B (parallel) computes each width's `Same`-mode convolution row from the IMMUTABLE data-FFT cache. Because
+  the closure is only called in Phase A, `F` keeps its `Fn` bound (NO `+ Sync` tightening). Gated to serial
+  for `widths < 4` or `na*widths < 8192` (small CWTs unaffected).
+- BYTE-IDENTICAL: FNV digest of the full coefficient matrix matches the serial path exactly across
+  na∈{512,2048,4096} × widths∈{4..64}. Same-process A/B (min-of-7, stash toggle): na=2048 w=16 1.53x,
+  w=32 1.55x; na=4096 w=32 3.10x, w=64 3.31x (win grows with na·widths = more independent FFT work to
+  spread); na=512 w=4 stays serial (gate), 94 vs 101us = noise. fsci-signal 711 tests / 0 fail; peak
+  conformance (find_peaks_cwt path) green.
+- LESSON: "parallel-closure" perf needn't tighten the public bound to `+ Sync` — if the user closure's
+  output is cheap, call it in a serial pre-pass and parallelize only the closure-free heavy work (here the
+  FFTs). Generalizes to any transform-over-a-list-of-user-kernels.
+
 ## 2026-06-28 - CobaltCove (claude-code) - FRONTIER MAP (exhaustive scan) + stale-scorecard correction
 
 After landing the ODR solve win, an exhaustive cross-crate sweep confirms the *accessible* perf frontier

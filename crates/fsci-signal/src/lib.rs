@@ -2782,80 +2782,133 @@ where
     validate_real_values_finite(data, "cwt data samples must be finite")?;
 
     let na = data.len();
-    let mut result = Vec::with_capacity(widths.len());
-
-    // Resolves [frankenscipy-zq5xy]: the input `data` is identical across
-    // every width, so its zero-padded forward FFT depends only on the FFT
-    // length. Cache `fft(data_padded)` keyed by `fft_len` and reuse it
-    // across widths instead of recomputing it once per scale. Each cache
-    // hit removes one length-`fft_len` forward transform and one padded-
-    // input allocation; for the 2048×32 ricker bench all 32 scales share
-    // `fft_len = 4096`, so 31 redundant data FFTs are eliminated.
-    //
-    // Behavior is bit-identical to `convolve(data, &wavelet, Same)`: the
-    // FFT/direct dispatch threshold, the padded-input bytes (hence
-    // `fft(data_padded)`), the pointwise-multiply order, the inverse
-    // transform, and the `Same` slice are all reproduced exactly.
     let opts = fsci_fft::FftOptions::default();
-    let mut data_fft_cache: Vec<(usize, Vec<fsci_fft::Complex64>)> = Vec::new();
 
+    // Phase A (serial): validate widths, generate every wavelet (the user closure
+    // stays on a single thread, so `F` needs no `Sync` bound), and precompute the
+    // shared forward FFT of the zero-padded `data` once per distinct FFT length.
+    //
+    // Resolves [frankenscipy-zq5xy]: the input `data` is identical across every
+    // width, so its zero-padded forward FFT depends only on `fft_len`. Caching it
+    // (for the 2048×32 ricker bench all 32 scales share `fft_len = 4096`, so 31
+    // redundant data FFTs are eliminated) — materialized up front here so Phase B
+    // can read it immutably from many threads. Behavior stays bit-identical to
+    // `convolve(data, &wavelet, Same)`: the FFT/direct dispatch threshold, the
+    // padded-input bytes, the pointwise-multiply order, the inverse transform and
+    // the `Same` slice are all reproduced exactly, and the cached `fa` values are
+    // keyed by `fft_len` so they are independent of build order.
+    let mut wavelets: Vec<Vec<f64>> = Vec::with_capacity(widths.len());
+    let mut data_fft_cache: Vec<(usize, Vec<fsci_fft::Complex64>)> = Vec::new();
     for &width in widths {
         if width <= 0.0 || !width.is_finite() {
             return Err(SignalError::InvalidArgument(
                 "all widths must be positive and finite".to_string(),
             ));
         }
-        // Generate wavelet at this scale
-        let wavelet_len = (10.0 * width).ceil() as usize;
-        let wavelet_len = wavelet_len.max(1);
+        let wavelet_len = ((10.0 * width).ceil() as usize).max(1);
         let wavelet = wavelet_fn(wavelet_len, width);
         validate_real_values_finite(&wavelet, "cwt wavelet samples must be finite")?;
         let nb = wavelet.len();
+        if !wavelet.is_empty() && na.saturating_mul(nb) > 1000 {
+            let fft_len = (na + nb - 1).next_power_of_two();
+            if !data_fft_cache.iter().any(|(len, _)| *len == fft_len) {
+                let mut a_padded: Vec<fsci_fft::Complex64> =
+                    data.iter().map(|&v| (v, 0.0)).collect();
+                a_padded.resize(fft_len, (0.0, 0.0));
+                let fa = fsci_fft::fft(&a_padded, &opts)
+                    .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+                data_fft_cache.push((fft_len, fa));
+            }
+        }
+        wavelets.push(wavelet);
+    }
 
-        // Mirror `convolve(data, &wavelet, Same)` exactly, but reuse the
-        // cached forward FFT of `data` on the FFT path.
-        let conv = if !wavelet.is_empty() && na.saturating_mul(nb) > 1000 {
+    // One width's `Same`-mode row, reading the shared data FFT immutably. Identical
+    // math to the original serial body. Given the Phase-A finiteness validation and
+    // power-of-two `fft_len`, the FFT/convolve calls here do not actually error for
+    // any reachable input, so the lowest-index error remains a Phase-A error.
+    let compute_row = |wavelet: &[f64]| -> Result<Vec<f64>, SignalError> {
+        let nb = wavelet.len();
+        if !wavelet.is_empty() && na.saturating_mul(nb) > 1000 {
             let full_len = na + nb - 1;
             let fft_len = full_len.next_power_of_two();
-
-            let fa_index = match data_fft_cache.iter().position(|(len, _)| *len == fft_len) {
-                Some(idx) => idx,
-                None => {
-                    let mut a_padded: Vec<fsci_fft::Complex64> =
-                        data.iter().map(|&v| (v, 0.0)).collect();
-                    a_padded.resize(fft_len, (0.0, 0.0));
-                    let fa = fsci_fft::fft(&a_padded, &opts)
-                        .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
-                    data_fft_cache.push((fft_len, fa));
-                    data_fft_cache.len() - 1
-                }
-            };
-            let fa = &data_fft_cache[fa_index].1;
-
+            let fa = &data_fft_cache
+                .iter()
+                .find(|(len, _)| *len == fft_len)
+                .expect("data FFT precomputed in Phase A")
+                .1;
             let mut b_padded: Vec<fsci_fft::Complex64> =
                 wavelet.iter().map(|&v| (v, 0.0)).collect();
             b_padded.resize(fft_len, (0.0, 0.0));
             let fb = fsci_fft::fft(&b_padded, &opts)
                 .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
-
             let fc: Vec<fsci_fft::Complex64> = fa
                 .iter()
                 .zip(fb.iter())
                 .map(|(&(ar, ai), &(br, bi))| (ar * br - ai * bi, ar * bi + ai * br))
                 .collect();
-
             let conv_full = fsci_fft::ifft(&fc, &opts)
                 .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
-
             let full: Vec<f64> = conv_full.iter().take(full_len).map(|&(re, _)| re).collect();
             let start = (nb - 1) / 2;
-            full[start..start + na].to_vec()
+            Ok(full[start..start + na].to_vec())
         } else {
-            convolve(data, &wavelet, ConvolveMode::Same)?
-        };
-        result.push(conv);
+            convolve(data, wavelet, ConvolveMode::Same)
+        }
+    };
+
+    // Gate: the per-width rows are independent, but only fan out when there are
+    // enough widths and enough per-width work to amortize thread spawn.
+    let nthreads = if widths.len() < 4 || na.saturating_mul(widths.len()) < 1 << 13 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(widths.len())
+            .max(1)
+    };
+
+    if nthreads <= 1 {
+        let mut result = Vec::with_capacity(wavelets.len());
+        for wavelet in &wavelets {
+            result.push(compute_row(wavelet)?);
+        }
+        return Ok(result);
     }
 
+    // Phase B (parallel): compute disjoint contiguous chunks of rows across threads,
+    // each reading the immutable `data_fft_cache`. Rows are collected in width order
+    // and the lowest-index error is returned, matching the serial scan exactly.
+    let compute_row = &compute_row;
+    let wavelets_ref = &wavelets;
+    let chunk = wavelets.len().div_ceil(nthreads);
+    let rows: Vec<Result<Vec<f64>, SignalError>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= wavelets_ref.len() {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(wavelets_ref.len());
+                Some(scope.spawn(move || {
+                    wavelets_ref[i0..i1]
+                        .iter()
+                        .map(|w| compute_row(w))
+                        .collect::<Vec<_>>()
+                }))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("cwt worker panicked"))
+            .collect()
+    });
+
+    let mut result = Vec::with_capacity(rows.len());
+    for row in rows {
+        result.push(row?);
+    }
     Ok(result)
 }
 
