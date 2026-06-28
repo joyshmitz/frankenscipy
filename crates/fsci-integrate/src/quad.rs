@@ -2103,18 +2103,51 @@ pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateVal
     let mut result = Vec::with_capacity(n - 1);
     let mut interval_integrals = vec![0.0; n - 1];
 
-    for i in (0..(n - 2)).step_by(2) {
-        let h0 = dx[i];
-        let h1 = dx[i + 1];
-        interval_integrals[i] = cumulative_simpson_left_interval(y[i], y[i + 1], y[i + 2], h0, h1);
-        interval_integrals[i + 1] =
-            cumulative_simpson_right_interval(y[i], y[i + 1], y[i + 2], h0, h1);
-    }
+    // The per-interval Simpson coefficients are division-heavy (3-4 divisions each,
+    // see the *_interval helpers) and each even index `i` writes the disjoint pair
+    // (i, i+1) independently — a COMPUTE-bound embarrassingly-parallel loop. Fan it
+    // across cores for large n; the cheap cumulative scan below stays serial.
+    // BYTE-IDENTICAL: same per-interval formulas, same pair order, same scan order.
+    let main_len = if n.is_multiple_of(2) { n - 2 } else { n - 1 };
+    let nthreads = if main_len < (1 << 19) {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(main_len / 2)
+    };
 
-    if n.is_multiple_of(2) {
-        let i = n - 3;
-        interval_integrals[n - 2] =
-            cumulative_simpson_right_interval(y[i], y[i + 1], y[i + 2], dx[i], dx[i + 1]);
+    {
+        let (main_part, tail_part) = interval_integrals.split_at_mut(main_len);
+        let fill_pairs = |seg: &mut [f64], base_pair: usize| {
+            for (cl, chunk) in seg.chunks_mut(2).enumerate() {
+                let i = 2 * (base_pair + cl);
+                let (h0, h1) = (dx[i], dx[i + 1]);
+                chunk[0] = cumulative_simpson_left_interval(y[i], y[i + 1], y[i + 2], h0, h1);
+                chunk[1] = cumulative_simpson_right_interval(y[i], y[i + 1], y[i + 2], h0, h1);
+            }
+        };
+        if nthreads <= 1 {
+            fill_pairs(main_part, 0);
+        } else {
+            let npairs = main_len / 2;
+            let pairs_per_thread = npairs.div_ceil(nthreads);
+            let chunk_len = pairs_per_thread * 2;
+            let fill_pairs = &fill_pairs;
+            std::thread::scope(|scope| {
+                for (t, seg) in main_part.chunks_mut(chunk_len).enumerate() {
+                    scope.spawn(move || fill_pairs(seg, t * pairs_per_thread));
+                }
+            });
+        }
+
+        // Even n leaves a trailing half-interval handled by the right rule.
+        if n.is_multiple_of(2) {
+            let i = n - 3;
+            tail_part[0] =
+                cumulative_simpson_right_interval(y[i], y[i + 1], y[i + 2], dx[i], dx[i + 1]);
+        }
     }
 
     let mut cumsum = 0.0;

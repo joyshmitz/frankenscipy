@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.4-2.9x self): cumulative_simpson interval loop parallelized
+
+- fsci-integrate is the least-contested crate (1 recent commit vs 15-17 for hot crates). Its array
+  integrators ALL already beat SciPy (simpson 9-10x, cumulative_trapezoid 2.3-4.5x, cumulative_simpson
+  3-9x — SciPy's numpy-Python overhead is slow), so there is NO gap there; but fsci's own
+  cumulative_simpson was 6.5x slower than its own cumulative_trapezoid (29ms vs 4.5ms @1M) because the
+  per-interval Simpson coefficients are DIVISION-heavy (3-4 divisions per interval in the *_interval
+  helpers). The even-index loop writes the disjoint pair (i, i+1) independently → embarrassingly parallel.
+- LEVER: split interval_integrals at main_len (n-2 even / n-1 odd, both even ⇒ clean pairs), fan the
+  pair-fill across cores via chunks_mut(pairs_per_thread*2) + thread::scope, handle the even-n trailing
+  half-interval serially, keep the cheap cumulative scan serial. forbid(unsafe)-safe.
+- BYTE-IDENTICAL: same per-interval formulas, same pair order, same scan order. FNV digest of the full
+  output BEFORE(serial)==AFTER(parallel) across 7 sizes (100001/1000000/1000001/4000000/10000000/400000/
+  600000) — all match.
+- Gate main_len >= 1<<19 (≈524k): below it serial (the division work doesn't amortize thread spawn —
+  measured 100k REGRESSED 0.75x at a 1<<15 gate; raised to 1<<19). Same-box A/B (min-of-40, clean):
+  - n=400000 (serial):  7503 vs 8088  — unchanged (no regression)
+  - n=600000:          11868 -> 5171  = 2.30x self
+  - n=1048576:        ~21381 -> ~7467 = ~2.4-2.9x self (cache-resident sizes scale best)
+  - n=4194304:        ~94000 -> ~65000 = ~1.4x self (memory-bandwidth-bound above L3)
+  The interval pass is partly bandwidth-bound, so scaling caps ~1.4x once data exceeds L3 and peaks
+  ~2.9x while cache-resident. fsci already beats SciPy 3-9x, so this is a lead-widener (now ~7-25x).
+- Conformance GREEN: fsci-integrate 56/0 + 11/0 + 1/0 lib (byte-identical => parity preserved).
+
 ## 2026-06-27 - GreenFalcon (codex) - NO-SHIP (reverted/stashed): Cholesky panel TRSM row parallelism lacks stable proof
 
 - Land-or-dig audit: `.scratch/.worktrees` non-ancestor bench tips were covered
