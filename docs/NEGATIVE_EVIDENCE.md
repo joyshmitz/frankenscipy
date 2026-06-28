@@ -11045,3 +11045,29 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   `spsolve_symmetric_banded_non_m_matrix_route_is_accurate` (positive-off-diagonal SPD, ‖Ax−b‖<1e-9);
   fsci-sparse lib 353/0. The bw≈√N (2D-grid-like, non-uniform) case remains the lone spsolve loss vs
   scipy and needs nested dissection — a separate wall-class effort.
+
+## 2026-06-28 - LANDED WIN (AmberForge): CZT / ZoomFFT Bluestein padding next_fast_len → even-5-smooth — up to 5.9x faster FFT at 7-smooth lengths
+
+- Agent: AmberForge. `CZT::new` / `ZoomFFT::new` (scipy.signal.CZT / czt / zoom_fft) padded the Bluestein
+  linear-convolution to `fsci_fft::next_fast_len(n+m-1)`, which searches scipy's {2,3,5,7,11}-smooth set —
+  but fsci's mixed-radix FFT only has fast radix-2/3/4/5 butterflies, so a 7- or 11-factor length hits the
+  slow large-prime path (worst case 3·7³=1029). Switched to the even-5-smooth `next_regular_fft_len`
+  (same helper fftconvolve already uses). Correctness-preserving: any L ≥ n+m-1 gives the identical DFT.
+- **MEASURED same-process A/B at the FFT level (the reliable signal — CZT wall-time at these tiny sizes is
+  box-noise-dominated; cross-run CZT varied 24→85µs for identical code), best-of-5×200:**
+
+  | length | factorization | fsci FFT | 5-smooth length | fsci FFT | speedup |
+  | ---: | --- | ---: | ---: | ---: | ---: |
+  | 1029 | 3·7³ | 41.1 µs | 1080 | 7.4 µs | **5.56x** |
+  | 2058 | 2·3·7³ | 89.9 µs | 2160 | 16.3 µs | **5.53x** |
+  | 686 | 2·7³ | 29.1 µs | 720 | 4.9 µs | **5.90x** |
+  | 1372 | 2²·7³ | 53.5 µs | 1440 | 12.8 µs | **4.19x** |
+  | 1400 | 2³·5²·7 | 25.4 µs | 1440 | 12.8 µs | **1.99x** (single 7) |
+
+  CZT/ZoomFFT do 2 FFTs of length nfft per transform, so both inherit this whenever n+m-1 lands on a
+  7/11-smooth length; flips fsci CZT from ~3.8x slower than scipy.signal.czt (at 7³ lengths) toward
+  parity/faster. Strict improvement — no change when n+m-1's next_fast_len was already 5-smooth or pow2
+  (e.g. 1999→2000, 4095→4096). Conformance: czt 12/0, fsci-signal lib 654/0.
+- This closes a follow-on flagged in memory [[perf_signal_fft_even_5smooth_padding]]. NOTE remaining
+  pow2-padded FFT-conv sites: `cwt` (lines ~2861/2882, `.next_power_of_two()`) — smaller win (pow2 is
+  fast for fsci, just larger than 5-smooth) but the same lever; follow-on candidate.

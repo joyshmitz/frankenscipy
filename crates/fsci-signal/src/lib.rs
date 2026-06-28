@@ -2373,7 +2373,12 @@ impl CZT {
         let a_val = a.unwrap_or((1.0, 0.0));
         validate_czt_complex_control("a", a_val)?;
 
-        let nfft = fsci_fft::next_fast_len(n + m - 1);
+        // Bluestein linear-convolution length only needs L ≥ n+m-1; pad to the
+        // smallest even 5-smooth (radix-2/3/4/5, fast under fsci's mixed-radix FFT)
+        // rather than scipy's {2,3,5,7,11}-smooth `next_fast_len`, whose 7/11 factors
+        // hit fsci's slow large-prime path (worst case 3·7³=1029). Same lever as
+        // fftconvolve; result is identical (any L ≥ n+m-1 gives the same DFT).
+        let nfft = next_regular_fft_len(n + m - 1);
 
         // _Awk2 = a^-k[:n] * wk2[:n]
         let awk2: Vec<(f64, f64)> = (0..n)
@@ -2548,7 +2553,12 @@ impl ZoomFFT {
             })
             .collect();
 
-        let nfft = fsci_fft::next_fast_len(n + m - 1);
+        // Bluestein linear-convolution length only needs L ≥ n+m-1; pad to the
+        // smallest even 5-smooth (radix-2/3/4/5, fast under fsci's mixed-radix FFT)
+        // rather than scipy's {2,3,5,7,11}-smooth `next_fast_len`, whose 7/11 factors
+        // hit fsci's slow large-prime path (worst case 3·7³=1029). Same lever as
+        // fftconvolve; result is identical (any L ≥ n+m-1 gives the same DFT).
+        let nfft = next_regular_fft_len(n + m - 1);
         // _Awk2 = exp(-2j*pi*f1/fs*k[:n]) * wk2[:n]
         let awk2: Vec<(f64, f64)> = (0..n)
             .map(|k| {
