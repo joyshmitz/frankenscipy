@@ -10349,3 +10349,32 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   vein): probe SCIPY's per-k timing scaling — a flat-vs-k curve means scipy has a closed
   special-fn form; if fsci sums, that's a real gap. Discrete cdfs that sum a generalized
   harmonic / ζ-series → Hurwitz-zeta closed form.
+
+## 2026-06-28 - DIG AUDIT (AmberForge): scorecard #1 loss jnjnp_zeros is STALE-FIXED (now a WIN); remaining frontier = SIMD/ARPACK walls
+
+- Agent: AmberForge (claude-code / claude-opus-4-8), `AGENT_NAME=AmberForge`. Land-or-dig:
+  no unlanded worktree win → dug the largest documented gap. The scorecard's headline loss
+  `frankenscipy-acoco` `jnjnp_zeros` ("163.53x slower nt=64 / 443.57x nt=128") is STALE — those
+  rows time the `rust_legacy_duplicate` comparison bench, not the shipped path.
+- **MEASURED same-box (`cargo bench -p fsci-special -- acoco_gauntlet_jnjnp_zeros`):** the current
+  cutoff-driven `jnjnp_zeros` is **383.0 µs (nt=64) / 716.6 µs (nt=128)** vs scipy.special.jnjnp_zeros
+  **454.0 µs / 766.6 µs** → **1.07–1.18x FASTER than scipy** (scipy = Fortran `specfun.jdzo`).
+  Conformance GREEN: `jnyn_and_jnjnp_zeros_match_scipy` + 2 frontier tests pass (3/3). The
+  `rust_legacy_duplicate` path is 83–442 ms (217–617x slower) — that O(nt²)-envelope version is what
+  the scorecard rows captured; the cutoff generator already superseded it. DO NOT re-chase jnjnp_zeros.
+- OTHER non-gaps confirmed this turn (don't re-chase):
+  - `NoncentralT::cdf` — name `nct_cdf_integrate` is a MISNOMER; it already uses the Lenth (1989)
+    incomplete-beta series (frankenscipy-9i8vd), not the old 2000-panel Simpson. Fast.
+  - Continuous `entropy`/`raw_moment` via `simpson_integrate_adaptive` (NoncentralT/NoncentralChiSquared/
+    NoncentralF/GeneralizedExponential) — scipy ALSO numerically integrates these (no closed form);
+    fsci's Rust integration wins, not a gap.
+  - FFT mixed-radix already has hardcoded radix-2/3/4/5 butterflies (transforms.rs:587-686); only
+    primes ≥7 fall to the generic O(p²) DFT. The 5-smooth 1.37-2.54x loss (line 107) is a
+    SIMD/memory-access wall vs pocketfft, not a missing-butterfly gap.
+- GENUINE remaining frontier (all hard walls, no Score≥2 algorithmic lever): FFT 5-smooth mixed-radix
+  SIMD butterfly throughput (1.37-2.54x), `eigsh` restarted symmetric Lanczos vs ARPACK (1.3-1.9x),
+  pow2-FFT SIMD. RUNNING TALLY of stale scorecard "biggest gaps" debunked across recent AmberForge
+  turns: make_interp_spline (now 1.04-2.10x faster), kmeans2 (4.17x faster), vq-largek (2.9x faster),
+  jnjnp_zeros (1.07-1.18x faster). The scorecard's loss section is largely stale — VERIFY same-box
+  before chasing any row. NET this turn: no fresh tractable algorithmic win exists; the port is
+  mature and the real losses need SIMD/numerical-library depth, not a new algorithmic identity.
