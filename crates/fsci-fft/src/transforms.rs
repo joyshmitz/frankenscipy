@@ -243,6 +243,57 @@ fn get_bluestein_cache() -> &'static RwLock<HashMap<BluesteinKey, BluesteinPlan>
     BLUESTEIN_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+/// Smallest even 5-smooth number (2^a·3^b·5^c with a ≥ 1) ≥ `n`.
+///
+/// Bluestein converts a length-`n` DFT into a circular convolution of length
+/// `m ≥ 2n-1`; any such `m` is valid. The previous choice `next_power_of_two`
+/// is the smallest *power of two* ≥ 2n-1, but fsci's mixed-radix engine has fast
+/// radix-2/3/4/5 butterflies, so an even 5-smooth `m` — always ≤ next_pow2 and
+/// computed on the optimized `{3,5}·2^k` iterative path — does strictly fewer
+/// points (up to ~1.9× when 2n-1 sits just above a power of two). `next_fast_len`
+/// is the wrong helper: it admits factor 7 (e.g. 3·7³), which hits a slow
+/// large-prime stage. Even length (a ≥ 1) keeps it off the pure-odd recursive path.
+fn next_regular_even(n: usize) -> usize {
+    if n <= 2 {
+        return 2;
+    }
+    let mut best = usize::MAX;
+    let mut p5 = 1usize;
+    while p5 < n.saturating_mul(2) {
+        let mut p35 = p5;
+        while p35 < n.saturating_mul(2) {
+            let mut q = p35.saturating_mul(2);
+            while q < n {
+                q = q.saturating_mul(2);
+            }
+            best = best.min(q);
+            if p35 > n {
+                break;
+            }
+            p35 = p35.saturating_mul(3);
+        }
+        if p5 > n {
+            break;
+        }
+        p5 = p5.saturating_mul(5);
+    }
+    best
+}
+
+/// Unscaled in-place transform used inside Bluestein for the convolution length
+/// `m`. For a power-of-two `m` this stays on the original flat radix-2 kernel (no
+/// parallel-fan-out overhead, which matters for the small `m` Bluestein hits);
+/// for the even 5-smooth shapes it uses the mixed-radix backend. `m` is always
+/// 5-smooth so the backend never recurses back into Bluestein.
+#[inline]
+fn bluestein_transform_inplace(data: &mut [Complex64], inverse: bool) {
+    if data.len().is_power_of_two() {
+        cooley_tukey_radix2_inplace(data, inverse);
+    } else {
+        COOLEY_TUKEY_BACKEND.transform_1d_inplace(data, inverse);
+    }
+}
+
 fn get_or_compute_bluestein_plan(n: usize, inverse: bool) -> BluesteinPlan {
     let cache = get_bluestein_cache();
     let key = (n, inverse);
@@ -251,7 +302,19 @@ fn get_or_compute_bluestein_plan(n: usize, inverse: bool) -> BluesteinPlan {
         return plan;
     }
 
-    let m = (2 * n - 1).next_power_of_two();
+    // Bluestein needs any m >= 2n-1. The even 5-smooth length is <= next_pow2 and
+    // does fewer points, but the mixed-radix transform has a higher per-point
+    // constant + a scratch alloc, so it only wins when it's SUBSTANTIALLY smaller
+    // (it is exactly when 2n-1 sits just above a power of two — m_pow2 nearly
+    // doubles). When the two are close (2n-1 just below a pow2, or a small prime
+    // factor), keep the pow2 length on the fast flat radix-2 path. Gate at <=60%.
+    let m_pow2 = (2 * n - 1).next_power_of_two();
+    let m_5smooth = next_regular_even(2 * n - 1);
+    let m = if m_5smooth * 5 <= m_pow2 * 3 {
+        m_5smooth
+    } else {
+        m_pow2
+    };
     let sign = if inverse { 1.0 } else { -1.0 };
 
     let mut chirp = Vec::with_capacity(n);
@@ -266,7 +329,11 @@ fn get_or_compute_bluestein_plan(n: usize, inverse: bool) -> BluesteinPlan {
         b[k] = complex_conj(chirp[k]);
         b[m - k] = complex_conj(chirp[k]);
     }
-    cooley_tukey_radix2_inplace(&mut b, false);
+    // m is now even 5-smooth (not necessarily a power of two), so route through
+    // the general unscaled transform: radix-4 for pow2 m (bit-identical to the
+    // old radix-2), mixed-radix for the 5-smooth shapes. Convention is unchanged
+    // (unscaled forward + inverse), so the manual 1/m scaling below still holds.
+    bluestein_transform_inplace(&mut b, false);
 
     let plan = BluesteinPlan { chirp, b_fft: b, m };
 
@@ -479,11 +546,11 @@ fn bluestein_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
         *slot = complex_mul(sample, chirp);
     }
 
-    cooley_tukey_radix2_inplace(&mut a, false);
+    bluestein_transform_inplace(&mut a, false);
     for (value, &b_fft) in a.iter_mut().zip(&plan.b_fft) {
         *value = complex_mul(*value, b_fft);
     }
-    cooley_tukey_radix2_inplace(&mut a, true);
+    bluestein_transform_inplace(&mut a, true);
 
     let inv_m = 1.0 / m as f64;
     a.iter()
@@ -5408,6 +5475,43 @@ mod tests {
         let recovered = ifft(&spectrum, &FftOptions::default()).expect("ifft n=7");
         for (&a, &b) in recovered.iter().zip(&input) {
             assert_close_complex(a, b, 1e-9);
+        }
+    }
+
+    #[test]
+    fn bluestein_5smooth_lengths_match_naive_dft() {
+        // Lengths whose largest prime factor > 61 take the Bluestein route, and
+        // for large-prime n the convolution length is now an even 5-smooth (e.g.
+        // n=1031 → m=2160, not pow2 4096). Verify the spectrum still equals the
+        // naive O(n²) DFT to FFT tolerance for both gate branches (n=1031 picks
+        // 5-smooth m; n=1030 = 2·5·103 keeps pow2 m via the gate).
+        let naive_dft = |x: &[Complex64]| -> Vec<Complex64> {
+            let n = x.len();
+            (0..n)
+                .map(|k| {
+                    let mut acc = (0.0, 0.0);
+                    for (j, &(re, im)) in x.iter().enumerate() {
+                        let a = -2.0 * std::f64::consts::PI * (k * j % n) as f64 / n as f64;
+                        let (c, s) = (a.cos(), a.sin());
+                        acc.0 += re * c - im * s;
+                        acc.1 += re * s + im * c;
+                    }
+                    acc
+                })
+                .collect()
+        };
+        for &n in &[1031usize, 1030] {
+            let x: Vec<Complex64> = (0..n)
+                .map(|i| ((i as f64 * 0.3).sin(), (i as f64 * 0.11).cos()))
+                .collect();
+            let got = fft(&x, &FftOptions::default()).expect("fft");
+            let want = naive_dft(&x);
+            let maxerr = got
+                .iter()
+                .zip(&want)
+                .map(|(&(a, b), &(c, d))| ((a - c).powi(2) + (b - d).powi(2)).sqrt())
+                .fold(0.0_f64, f64::max);
+            assert!(maxerr < 1e-7, "n={n} Bluestein fft maxerr {maxerr} vs naive DFT");
         }
     }
 

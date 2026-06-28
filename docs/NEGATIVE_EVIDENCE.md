@@ -10588,3 +10588,37 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   path stays for the (common) case where 5-smooth m IS a pow2 (e.g. n=8191 → m unchanged at 16384).
 - NOT a gap (verified this turn, no action): `oaconvolve` already beats SciPy 1.96-2.17x at scale;
   `signal.cwt` REMOVED from SciPy 1.17 (no head-to-head); `czt` chirp-bound (fft not the bottleneck).
+
+## 2026-06-28 - LANDED WIN (AmberForge): Bluestein FFT convolution length pow2 → gated even-5-smooth — 2.0-2.2x faster at large-prime FFT lengths (lands the gap surfaced 9a35bc07)
+
+- Agent: AmberForge. Lands the systemic gap surfaced last turn. `get_or_compute_bluestein_plan`
+  (transforms.rs) padded the Bluestein convolution length to `(2n-1).next_power_of_two()`; Bluestein
+  is the fallback for every FFT whose length has a prime factor > 61. Switched `m` to the even
+  5-smooth length (≤ next_pow2, fast under fsci's radix-2/3/4/5 engine), routing the three transforms
+  through `bluestein_transform_inplace` (flat radix-2 for pow2 m, mixed-radix for 5-smooth m; m is
+  always 5-smooth so no Bluestein recursion). Convention unchanged (unscaled fwd+inv, manual 1/m).
+- GATED to avoid a regression: the first cut REGRESSED n=1030 (=2·5·103, Bluestein invoked on the
+  small prime 103: m only shrinks 256→216, and the mixed-radix per-point constant + scratch alloc
+  outweigh the tiny saving) 156→232us. Fix: use 5-smooth m ONLY when it is ≤60% of next_pow2
+  (`m_5smooth*5 <= m_pow2*3`) — true exactly when 2n-1 sits just above a power of two (m_pow2 nearly
+  doubles); otherwise keep pow2 on the flat radix-2 path. Eliminates the regression entirely.
+- **MEASURED same-box `fsci_fft::fft` (complex), pow2 baseline (last turn) → gated 5-smooth (now):**
+
+  | n | factorization | pow2 (us) | 5-smooth (us) | self | scipy (us) | now vs scipy |
+  | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+  | 1031 | prime | 78 | 38.8 | **2.01x** | 31 | 1.25x slower (was 2.5x) |
+  | 4099 | prime | 388 | 193 | **2.01x** | 126 | 1.53x slower (was 3.1x) |
+  | 9001 | prime | 911 | 419 | **2.18x** | 523 | **1.25x FASTER** (was 1.7x slower) |
+  | 2003 | prime | 82 | 80 | 1.0x (gate→pow2; 2n-1 just below pow2) | 54 | — |
+  | 8191 | prime | 409 | 414 | 1.0x (gate→pow2; m unchanged) | 298 | — |
+  | 1030 | 2·5·103 | 156 | 156 | **1.0x — NO regression** | 22 | unchanged |
+
+  Wins 2.0-2.2x wherever 2n-1 lands just above a pow2 (the worst case for pow2 padding); zero
+  regressions; lifts EVERY `fsci_fft::fft` caller at large-prime lengths (resample/hilbert/czt at
+  prime N). The residual 1030/2060/4120 7-8x scipy gap is the Bluestein-vs-Rader wall for the prime
+  FACTOR 103 — a separate lever (Rader's algorithm), correctly untouched here.
+- CORRECTNESS: any m ≥ 2n-1 yields the same DFT, so only roundoff changes — maxerr 1e-12..7e-9 vs a
+  naive O(n²) DFT (unchanged from pow2). New test `bluestein_5smooth_lengths_match_naive_dft` (both
+  gate branches). fsci-fft lib 178 passed / 0 failed; fsci-signal 654 passed (resample/hilbert/czt
+  downstream all green). Coordination: git showed no active fft-engine committer (agent-mail DB was
+  corrupt); change is additive + gated + tolerance-preserving.
