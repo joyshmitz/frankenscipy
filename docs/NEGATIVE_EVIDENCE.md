@@ -11144,3 +11144,31 @@ n due to the per-call chirp rebuild.
   dense-tableau-vs-HiGHS-sparse, `resample` FFT-non-pow2 SIMD, `nnls` O(n⁴)-resolve-vs-O(n³)-QR-update
   (now only ~1.1x after greenfalcon's SYRK/Cholesky fixes). The clean parallel/algorithmic perf frontier
   is genuinely harvested across all 13 crates.
+
+## 2026-06-28 - REVERTED REGRESSION + STALE-SCORECARD NON-GAP (AmberForge): label `mean` parallel per-thread accumulators
+
+- Agent: AmberForge. The scorecard's biggest documented loss is `ndimage` label `mean` ("1.81-2.25x
+  slower"). Hypothesis: `measurement_label_mean`'s serial scatter-add (`sums[pos]+=v; counts[pos]+=1`) is
+  latency-bound → parallelize with per-thread accumulators (the `binned_statistic` lever). IMPLEMENTED
+  `parallel_label_sum_count` (contiguous chunks, per-thread sum/count buffers, thread-order merge; ~1e-15
+  sum reassoc, exact counts; gated n≥65536, num_pos≤16384). Conformance GREEN (248/0).
+- **MEASURED same-build A/B (forced-serial env toggle vs parallel) — PARALLEL REGRESSED at EVERY size:**
+
+  | N | K | serial | parallel | scipy.ndimage.mean |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 65536 | 512 | 132 µs | 257 µs (**1.94x slower**) | 208 µs |
+  | 262144 | 1024 | 560 µs | 593 µs (1.06x slower) | 784 µs |
+  | 262144 | 2048 | 566 µs | 642 µs (1.13x slower) | 746 µs |
+  | 589824 | 4096 | 1395 µs | 1536 µs (1.10x slower) | 2201 µs |
+
+  REVERTED (clean, empty diff, 248/0). WHY it lost (vs `binned_statistic` which WON with the same lever):
+  the label scatter-add per-element work is TOO CHEAP (one f64→pos check + two array bumps) — the serial
+  loop is already near memory bandwidth (132 µs reads ~1 MB ≈ 8 GB/s), so thread-spawn + per-thread buffer
+  alloc + the `num_pos*nthreads` merge + closure-through-`&F` indirection exceed the bandwidth gain.
+  `binned_statistic` won because its per-element work (multi-dim floor-divides + a fused min/max prescan)
+  is HEAVY enough to amortize the coordination. LEVER REFINEMENT: per-thread-accumulator parallelism needs
+  HEAVY per-element work; a cheap scatter-add that's already bandwidth-bound serially does NOT benefit.
+- ALSO: the scorecard's "label mean 1.81-2.25x slower" is STALE — fsci SERIAL is **1.4-1.6x FASTER** than
+  scipy.ndimage.mean here (132/560/566/1395 vs 208/784/746/2201 µs). Third stale scorecard "loss" found at
+  parity/win this session (with `nnls` ~parity-to-1.5x-faster and `SphericalVoronoi` near-parity). The
+  scorecard's loss pointers are systematically stale post-greenfalcon; trust same-box measurement.
