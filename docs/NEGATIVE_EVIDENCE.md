@@ -10467,3 +10467,41 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   asserts set-equality at n=200/350/500; `convex_hull_3d_fast_is_complete_hull_large_n` asserts a
   complete closed 2-manifold (2n−4 facets, every edge shared by exactly two) at n=1000. Full
   fsci-spatial lib suite 225 passed / 0 failed (all 6 spherical_voronoi + 11 convex_hull green).
+
+## 2026-06-28 - LANDED WIN (AmberForge): fftconvolve even-5-smooth FFT padding — flips SciPy LOSS to WIN at non-pow2 sizes (1.2-2.9x faster)
+
+- Agent: AmberForge (claude-code / claude-opus-4-8), `AGENT_NAME=AmberForge`. Dig.
+- ROOT CAUSE: `fftconvolve` padded the `na+nb-1` linear-conv length to `next_power_of_two`. For a
+  `full_len` just above a power of two (the common case) that does up to ~2x more FFT work than
+  needed. SciPy pads to `next_fast_len` (a 5-smooth/11-smooth length, often ~1x), so fsci LOST at
+  non-pow2 sizes (1.08-2.22x slower).
+- THE FIX (`next_regular_fft_len`, lib.rs): pad to the smallest **even 5-smooth** number ≥ full_len
+  (factors only {2,3,5}, ≥1 factor of 2). Two reasons it's the right length *for fsci specifically*:
+  (1) fsci's mixed-radix FFT only has fast radix-2/3/4/5 butterflies — `fsci_fft::next_fast_len`
+  returns 7-smooth numbers (e.g. 1029=3·7³) that hit a SLOW large-prime stage (measured 3.5x slower
+  than pow2!), so a pure {2,3,5} length is required, not a generic next_fast_len; (2) even length is
+  required for the real-FFT half-size packing (an odd 5-smooth like 1125 fell back to a slow path,
+  the lone regression in the first cut — forcing a factor of 2 fixed it). The 5-smooth length is
+  always ≤ next_pow2, so it never does more points.
+- **MEASURED same-box** (fsci self A/B = the full 2×rfft+multiply+irfft op; vs `scipy.signal.fftconvolve`):
+
+  | full_len | fsci pow2 (old) | fsci reg5 (new) | self | scipy | OLD vs scipy | NEW vs scipy |
+  | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 1025 | 35.1us | 18.6us | 1.89x | 54.7us | 1.56x faster | **2.94x faster** |
+  | 2050 | 71.8us | 36.5us | 1.97x | 66.4us | 1.08x slower | **1.82x faster** (FLIP) |
+  | 4100 | 163.7us | 78.4us | 2.09x | 97.6us | 1.67x slower | **1.25x faster** (FLIP) |
+  | 5000 | 160.2us | 90.7us | 1.77x | 108.3us | 1.48x slower | **1.20x faster** (FLIP) |
+  | 6000 | 159.6us | 107.1us | 1.49x | 119.3us | 1.35x slower | **1.12x faster** (FLIP) |
+  | 8200 | 341.3us | 185.7us | 1.84x | 153.8us | 2.22x slower | 1.21x slower (much improved) |
+
+  Self-speedup 1.5-2.1x across the board; flips 4 SciPy losses to wins; the residual 8200 loss is the
+  known fsci-mixed-radix vs pocketfft-SIMD constant wall (now 1.21x, was 2.22x). At pow2 full_len the
+  padding is unchanged (pow2 is even 5-smooth) → no regression.
+- CORRECTNESS: any fft_len≥full_len gives the same linear convolution after trimming, so only FFT
+  round-off changes. Tests: `fftconvolve_matches_direct_non_pow2_len` (full_len=499→pad 500≠pow2 512,
+  matches direct conv ≤1e-9), `next_regular_fft_len_is_even_5smooth_and_minimal`. Full fsci-signal lib
+  suite 654 passed / 0 failed.
+- FOLLOW-ONS (same lever, not done this turn — each needs its own measurement): `oaconvolve` block
+  sizing (line ~1111), 2-D conv padding (line ~1310, uses fft2), and the `correlate` paths at lines
+  ~2328/2503 that call `fsci_fft::next_fast_len` (7-smooth → slow); they should route through
+  `next_regular_fft_len` too.
