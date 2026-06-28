@@ -10432,3 +10432,38 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   sphere points → fsci's fast 2-D `Delaunay` (subquadratic) → lift triangles to facets + recover the
   pole-nearest point's facets from the 2-D `ConvexHull` of the projection. Gate either behind the
   existing SphericalVoronoi structural conformance tests (spherical_voronoi_* in lib.rs tests).
+
+## 2026-06-28 - LANDED WIN (AmberForge): SphericalVoronoi O(n²)→O(n log n) conflict-graph hull — flips 2.53x SciPy LOSS to 1.33x WIN at n=4000 (gap CLOSED)
+
+- Agent: AmberForge (claude-code / claude-opus-4-8), `AGENT_NAME=AmberForge`. Lands the gap surfaced
+  in the prior entry (was: O(n²) incremental hull, 2.53x slower than scipy at n=4000 and growing).
+- **THE FIX** (`convex_hull_3d_facets_fast`, lib.rs): replace the per-insert *all-faces* visibility
+  scan (O(n) per insert → O(n²)) with a Clarkson–Shor **conflict-graph** incremental hull. The
+  visible region of an external point is connected on a convex polytope, so it's found by an
+  adjacency walk (DFS over directed-edge→face twins) from a maintained per-point *seed* face —
+  O(visible) not O(faces). Points stranded when their seed face is retired are redistributed onto the
+  freshly coned faces. `convex_hull_3d_facets` dispatches to it for n≥512 (small n keeps the simpler
+  O(n²), which is already faster there).
+- **TWO LEVERS were both required** to actually beat scipy (each alone was a wash/regression):
+  1. **Random insertion order** (deterministic Fisher–Yates shuffle). Clarkson–Shor is O(n log n)
+     *only in expectation over a random order*; the golden-spiral bench feeds spatially-coherent
+     points, the near-worst case — index-order insertion stayed ~O(n^1.4) (n=1000 *regressed* to
+     7.1ms). Shuffling restored O(n log n) scaling (4× n → 4.6× time).
+  2. **FxHash-style edge map** (`EdgeHasher`, u64-encoded directed-edge keys, no new deps). std's
+     byte-wise SipHash on the millions of edge insert/lookup/remove ops was pure overhead; the
+     multiplicative one-word hash cut n=4000 from 24.6ms → 18.2ms.
+- **MEASURED same-box** (`cargo bench -p fsci-spatial -- spherical_voronoi`, golden-spiral unit-sphere)
+  vs `scipy.spatial.SphericalVoronoi` (+sort_vertices_of_regions):
+
+  | n | fsci BEFORE (O(n²)) | fsci AFTER | scipy | AFTER vs scipy |
+  | --- | ---: | ---: | ---: | ---: |
+  | 200  | 0.563 ms | 0.578 ms (simple path) | 1.113 ms | **1.92x FASTER** |
+  | 1000 | 5.83 ms  | **3.94 ms** | 5.32 ms | **1.35x FASTER** |
+  | 4000 | 61.6 ms  | **18.2 ms** | 24.3 ms | **1.33x FASTER** (was 2.53x SLOWER) |
+
+  fsci now beats scipy at every size; the loss that grew with n is gone (3.4x self-speedup at n=4000).
+- CORRECTNESS: the fast path inserts with the SAME centroid orientation + SAME visibility test, so
+  its facet *set* is identical to the O(n²) oracle — `convex_hull_3d_fast_matches_simple_facet_set`
+  asserts set-equality at n=200/350/500; `convex_hull_3d_fast_is_complete_hull_large_n` asserts a
+  complete closed 2-manifold (2n−4 facets, every edge shared by exactly two) at n=1000. Full
+  fsci-spatial lib suite 225 passed / 0 failed (all 6 spherical_voronoi + 11 convex_hull green).

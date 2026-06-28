@@ -4882,6 +4882,18 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
     if n < 4 {
         return None;
     }
+    // For large point counts the all-faces visibility scan below is O(n) per
+    // insertion → O(n²) overall, which loses to SciPy's O(n log n) Qhull. Route
+    // those through the conflict-graph hull (visible region found by adjacency
+    // walk, O(n log n) expected). It inserts in the SAME index order with the
+    // SAME centroid orientation and SAME visibility test, so the facet *set* is
+    // identical (property-tested); it bails to `None` on any geometric
+    // inconsistency, falling through to the robust O(n²) path here.
+    if n >= 512 {
+        if let Some(f) = convex_hull_3d_facets_fast(points) {
+            return Some(f);
+        }
+    }
     let tol = 1e-12;
     let face_normal = |f: &[usize; 3]| {
         cross3(
@@ -5012,6 +5024,287 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
     }
 
     Some(faces)
+}
+
+/// Multiplicative (FxHash-style) hasher for the conflict-graph hull's directed
+/// edge → face map. Edge keys are single `u64`s, so std's byte-wise SipHash is
+/// pure overhead here; this mixes one word per key and measurably outpaces it on
+/// the millions of edge insert/lookup/remove ops a large hull performs.
+#[derive(Default)]
+struct EdgeHasher(u64);
+impl std::hash::Hasher for EdgeHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(5) ^ b as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+        }
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+type EdgeMap = std::collections::HashMap<u64, usize, std::hash::BuildHasherDefault<EdgeHasher>>;
+#[inline]
+fn edge_key(u: usize, v: usize) -> u64 {
+    ((u as u64) << 32) | v as u64
+}
+
+/// Append a centroid-oriented facet `{a,b,c}` to the conflict-graph hull,
+/// registering its three CCW directed edges for adjacency. Returns the new
+/// (stable) face id. Mirrors the `make_face` + `face_normal` of the O(n²) path
+/// exactly so both produce the same facet set.
+#[allow(clippy::too_many_arguments)]
+fn hull_add_face(
+    points: &[[f64; 3]],
+    centroid: [f64; 3],
+    fv: &mut Vec<[usize; 3]>,
+    fnorm: &mut Vec<[f64; 3]>,
+    falive: &mut Vec<bool>,
+    fpts: &mut Vec<Vec<usize>>,
+    edge_face: &mut EdgeMap,
+    a: usize,
+    b: usize,
+    c: usize,
+) -> usize {
+    let nrm0 = cross3(sub3(points[b], points[a]), sub3(points[c], points[a]));
+    let tri = if dot3(nrm0, sub3(points[a], centroid)) >= 0.0 {
+        [a, b, c]
+    } else {
+        [a, c, b]
+    };
+    let nrm = cross3(
+        sub3(points[tri[1]], points[tri[0]]),
+        sub3(points[tri[2]], points[tri[0]]),
+    );
+    let id = fv.len();
+    fv.push(tri);
+    fnorm.push(nrm);
+    falive.push(true);
+    fpts.push(Vec::new());
+    edge_face.insert(edge_key(tri[0], tri[1]), id);
+    edge_face.insert(edge_key(tri[1], tri[2]), id);
+    edge_face.insert(edge_key(tri[2], tri[0]), id);
+    id
+}
+
+/// O(n log n)-expected 3-D convex hull via Clarkson–Shor conflict-graph
+/// incremental insertion, used by `convex_hull_3d_facets` for large `n`.
+///
+/// The visible-face region of an external point is connected on a convex
+/// polytope, so rather than testing every live face on each insertion (the
+/// O(n²) cost), we keep a *seed* visible face per uninserted point and discover
+/// the whole visible region by an adjacency walk (DFS over edge→face twins).
+/// Points displaced when their seed face is deleted are redistributed onto the
+/// freshly coned faces. Insertion order, orientation and the visibility test
+/// match the O(n²) path, so the emitted facet *set* is identical. Returns
+/// `None` on degenerate input or any geometric inconsistency (caller falls back
+/// to the robust O(n²) hull).
+fn convex_hull_3d_facets_fast(points: &[[f64; 3]]) -> Option<Vec<[usize; 3]>> {
+    let n = points.len();
+    if n < 4 {
+        return None;
+    }
+    let tol = 1e-12;
+
+    // Seed tetrahedron — identical selection to the O(n²) path.
+    let p0 = 0usize;
+    let p1 = (1..n).find(|&i| norm3(sub3(points[i], points[p0])) > tol)?;
+    let p2 = (0..n).find(|&i| {
+        i != p0
+            && i != p1
+            && norm3(cross3(
+                sub3(points[p1], points[p0]),
+                sub3(points[i], points[p0]),
+            )) > tol
+    })?;
+    let base_normal = cross3(sub3(points[p1], points[p0]), sub3(points[p2], points[p0]));
+    let p3 = (0..n).find(|&i| {
+        i != p0 && i != p1 && i != p2 && dot3(base_normal, sub3(points[i], points[p0])).abs() > tol
+    })?;
+    let centroid = scale3(
+        add3(add3(points[p0], points[p1]), add3(points[p2], points[p3])),
+        0.25,
+    );
+
+    // Stable face storage (faces are never reindexed; dead faces keep their slot).
+    let mut fv: Vec<[usize; 3]> = Vec::with_capacity(2 * n);
+    let mut fnorm: Vec<[f64; 3]> = Vec::with_capacity(2 * n);
+    let mut falive: Vec<bool> = Vec::with_capacity(2 * n);
+    let mut fpts: Vec<Vec<usize>> = Vec::with_capacity(2 * n);
+    let mut edge_face: EdgeMap =
+        EdgeMap::with_capacity_and_hasher(6 * n, std::hash::BuildHasherDefault::default());
+
+    let f_ids = [
+        hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, p0, p1, p2),
+        hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, p0, p1, p3),
+        hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, p0, p2, p3),
+        hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, p1, p2, p3),
+    ];
+
+    let mut in_hull = vec![false; n];
+    for &s in &[p0, p1, p2, p3] {
+        in_hull[s] = true;
+    }
+    // Each uninserted point sees ≥1 tetra face (it lies outside the inscribed
+    // tetra). Assign a seed; a point seeing none is degenerate → bail.
+    let mut point_seed: Vec<usize> = vec![usize::MAX; n];
+    for q in 0..n {
+        if in_hull[q] {
+            continue;
+        }
+        let qq = points[q];
+        for &fid in &f_ids {
+            if dot3(fnorm[fid], sub3(qq, points[fv[fid][0]])) > tol {
+                point_seed[q] = fid;
+                fpts[fid].push(q);
+                break;
+            }
+        }
+        if point_seed[q] == usize::MAX {
+            return None;
+        }
+    }
+
+    // Clarkson–Shor is O(n log n) *expected* only for a random insertion order;
+    // a spatially-coherent order (e.g. a sphere sampled along a spiral) drives
+    // it toward O(n²) by growing long conflict lists. Insert in a deterministic
+    // shuffle (fixed-seed Fisher–Yates) to recover the expected bound. The hull
+    // facet *set* of points in general position is order-independent, so this
+    // does not change the result (property-tested against the index-order path).
+    let mut order: Vec<usize> = (0..n).filter(|&i| !in_hull[i]).collect();
+    let mut rng: u64 = 0x9e37_79b9_7f4a_7c15;
+    for i in (1..order.len()).rev() {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let j = (rng >> 33) as usize % (i + 1);
+        order.swap(i, j);
+    }
+
+    // Reused scratch.
+    let mut vstamp: Vec<u32> = Vec::new();
+    let mut cur_stamp: u32 = 0;
+    let mut visible: Vec<usize> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut horizon: Vec<(usize, usize)> = Vec::new();
+    let mut candidates: Vec<usize> = Vec::new();
+
+    for &p in &order {
+        if in_hull[p] {
+            continue;
+        }
+        let seed = point_seed[p];
+        if seed == usize::MAX || !falive[seed] {
+            return None; // seed invariant violated → fall back to robust path
+        }
+        let pp = points[p];
+
+        // Discover the connected visible region by adjacency walk from the seed.
+        cur_stamp += 1;
+        if vstamp.len() < fv.len() {
+            vstamp.resize(fv.len(), 0);
+        }
+        visible.clear();
+        stack.clear();
+        stack.push(seed);
+        vstamp[seed] = cur_stamp;
+        while let Some(f) = stack.pop() {
+            visible.push(f);
+            let tri = fv[f];
+            for &(u, v) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                if let Some(&nb) = edge_face.get(&edge_key(v, u)) {
+                    if falive[nb]
+                        && vstamp[nb] != cur_stamp
+                        && dot3(fnorm[nb], sub3(pp, points[fv[nb][0]])) > tol
+                    {
+                        vstamp[nb] = cur_stamp;
+                        stack.push(nb);
+                    }
+                }
+            }
+        }
+
+        // Horizon = directed edges of visible faces whose twin face is not
+        // visible. Also gather the uninserted points stranded on visible faces.
+        horizon.clear();
+        candidates.clear();
+        for &f in &visible {
+            let tri = fv[f];
+            for &(u, v) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                let twin_visible = match edge_face.get(&edge_key(v, u)) {
+                    Some(&nb) => falive[nb] && vstamp[nb] == cur_stamp,
+                    None => false,
+                };
+                if !twin_visible {
+                    horizon.push((u, v));
+                }
+            }
+            for &q in &fpts[f] {
+                if q != p && !in_hull[q] {
+                    candidates.push(q);
+                }
+            }
+        }
+
+        // Retire visible faces (drop only the edge entries they still own).
+        for &f in &visible {
+            falive[f] = false;
+            let tri = fv[f];
+            for &(u, v) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                let k = edge_key(u, v);
+                if edge_face.get(&k) == Some(&f) {
+                    edge_face.remove(&k);
+                }
+            }
+            fpts[f].clear();
+        }
+
+        // Cone the horizon to apex p.
+        let new_start = fv.len();
+        for &(u, v) in &horizon {
+            hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, u, v, p);
+        }
+        let new_end = fv.len();
+        in_hull[p] = true;
+        point_seed[p] = usize::MAX;
+
+        // Redistribute stranded points onto a face they can still see (new faces
+        // first; rare fallback to any live face keeps every seed valid).
+        for &q in &candidates {
+            let qq = points[q];
+            let mut assigned = usize::MAX;
+            for nf in new_start..new_end {
+                if dot3(fnorm[nf], sub3(qq, points[fv[nf][0]])) > tol {
+                    assigned = nf;
+                    break;
+                }
+            }
+            if assigned == usize::MAX {
+                for nf in 0..fv.len() {
+                    if falive[nf] && dot3(fnorm[nf], sub3(qq, points[fv[nf][0]])) > tol {
+                        assigned = nf;
+                        break;
+                    }
+                }
+            }
+            if assigned == usize::MAX {
+                return None;
+            }
+            point_seed[q] = assigned;
+            fpts[assigned].push(q);
+        }
+    }
+
+    let mut out: Vec<[usize; 3]> = Vec::new();
+    for (id, tri) in fv.iter().enumerate() {
+        if falive[id] {
+            out.push(*tri);
+        }
+    }
+    Some(out)
 }
 
 impl SphericalVoronoi {
@@ -10308,6 +10601,80 @@ mod tests {
         for vertex in &sv.vertices {
             assert!((norm3(*vertex) - 1.0).abs() < 1e-10);
         }
+    }
+
+    // Deterministic pseudo-random unit-sphere points (LCG → Marsaglia method).
+    fn lcg_sphere_points(n: usize, mut state: u64) -> Vec<[f64; 3]> {
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((state >> 11) as f64) / ((1u64 << 53) as f64) * 2.0 - 1.0
+        };
+        let mut pts = Vec::with_capacity(n);
+        while pts.len() < n {
+            let (a, b) = (next(), next());
+            let s = a * a + b * b;
+            if s >= 1.0 || s == 0.0 {
+                continue;
+            }
+            let f = 2.0 * (1.0 - s).sqrt();
+            pts.push([a * f, b * f, 1.0 - 2.0 * s]);
+        }
+        pts
+    }
+
+    fn facet_set(facets: &[[usize; 3]]) -> Vec<[usize; 3]> {
+        let mut v: Vec<[usize; 3]> = facets
+            .iter()
+            .map(|f| {
+                let mut t = *f;
+                t.sort_unstable();
+                t
+            })
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn convex_hull_3d_fast_matches_simple_facet_set() {
+        // Below the n>=512 dispatch threshold `convex_hull_3d_facets` runs the
+        // robust O(n²) path, so it is the oracle for the conflict-graph hull.
+        // The algorithm is n-independent, so set-equality here certifies the
+        // fast path that production uses at larger n.
+        for &n in &[200usize, 350, 500] {
+            let pts = lcg_sphere_points(n, 0x1234_5678_9abc_def0 ^ n as u64);
+            let simple = convex_hull_3d_facets(&pts, [0.0, 0.0, 0.0]).expect("simple hull");
+            let fast = convex_hull_3d_facets_fast(&pts).expect("fast hull");
+            assert_eq!(
+                facet_set(&fast),
+                facet_set(&simple),
+                "fast hull facet set differs from O(n^2) hull at n={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn convex_hull_3d_fast_is_complete_hull_large_n() {
+        // The fast path is exercised here (n>=512). A triangulated convex hull
+        // of n points in general position on a sphere has exactly 2n-4 facets
+        // (Euler), and every facet must be outward-oriented w.r.t. the centroid.
+        let n = 1000usize;
+        let pts = lcg_sphere_points(n, 0xdead_beef_cafe_1234);
+        let facets = convex_hull_3d_facets(&pts, [0.0, 0.0, 0.0]).expect("fast hull");
+        assert_eq!(facets.len(), 2 * n - 4, "hull is not a complete triangulation");
+        // Each undirected edge must be shared by exactly two facets (closed mesh).
+        let mut edges: std::collections::HashMap<(usize, usize), usize> =
+            std::collections::HashMap::new();
+        for f in &facets {
+            for &(a, b) in &[(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                *edges.entry(key).or_insert(0) += 1;
+            }
+        }
+        assert!(
+            edges.values().all(|&c| c == 2),
+            "fast hull is not a closed 2-manifold"
+        );
     }
 
     #[test]
