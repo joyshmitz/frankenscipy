@@ -10727,3 +10727,37 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - CONCLUSION: no clean fresh perf lever remains under the current `forbid(unsafe)` + AVX2 constraints;
   the FFT family (complex + real) is now parity-or-faster across the full non-pow2 / prime-factor range,
   which was the session's biggest measured frontier. Recording so future turns don't re-dig these.
+
+## 2026-06-28 - DIG (AmberForge): different-primitive (jax-style) lever search — associative-scan IIR REJECTED (memory-bound, sosfilt near-parity); exact-conformance is the binding limit, frontier harvested
+
+- Agent: AmberForge. Directive nudged toward a DIFFERENT PRIMITIVE (jax-style), NOT the safe-Rust SIMD
+  ceiling. Dug `/alien-graveyard` + `/alien-artifact-coding` and the canonical corpora
+  (`/data/projects/alien_cs_graveyard/*`). Finding: the graveyard is SYSTEMS CS (S3-FIFO caches,
+  EBR/seqlocks lock-free, Swiss Tables, Leapfrog Triejoin, RaptorQ erasure) — little maps to dense
+  numerical kernels. The relevant jax-style EXACT primitive for scipy is the **associative/parallel
+  scan** for linear recurrences (lfilter/sosfilt) — parallelizes what scipy runs serially in C.
+- **REJECTED — associative-scan IIR is memory-bound, not compute-bound:**
+  - MEASURED `sosfilt` (fsci vs scipy.signal.sosfilt, best-of-15): n=2²⁰ k=4 6.89 vs 5.97ms (1.15x),
+    k=8 11.2 vs 10.5ms (1.07x), n=2¹⁸ k=4 1.47 vs 1.43ms (1.03x), n=2²² k=4 42.1 vs 39.0ms (1.08x).
+    Near-parity — the fused sample-major recurrence is already ~6ns/sample = DRAM-bandwidth-bound.
+  - A parallel scan turns each order-p step into a p×p affine-map composition (O(p³)/node: order-8
+    breaks even on the scan overhead, order-2 needs ~16 cores just to recoup it) AND materializes O(n)
+    2×2 state-transition pairs (≈3× the memory traffic of the serial pass). On a SHARED memory bus the
+    extra traffic erases the multicore parallelism → net ~0-gain or loss. Not implemented (REVERT
+    ~0-gain before writing it). This is the CPU dual of why scan wins on GPU (compute-bound) but not here.
+- **Not gaps (already fsci wins via parallelism scipy lacks):** `gaussian_kde.evaluate_many` is the same
+  exact O(m·n) direct sum as scipy but THREAD-PARALLEL across query points (scipy serial C) → fsci wins;
+  `lombscargle` likewise parallel across frequencies. The only sub-O(mn) KDE/Lomb-Scargle primitives
+  (FFT-gridding / Press-Rybicki extirpolation) are APPROXIMATE and would diverge from scipy's exact
+  output → blocked by conformance.
+- **Binding constraint identified:** EXACT-conformance (must match scipy's output to roundoff) rules out
+  the high-leverage APPROXIMATE different-primitives (FFT-KDE, FMM/Barnes-Hut for RBF/N-body,
+  FFT-Lomb-Scargle). The EXACT different-primitives that DO match scipy (FFT convolution/correlation,
+  circulant-embedding Toeplitz/Hankel matmul, sort/merge-based rank stats incl. Knight kendall,
+  special-fn term recurrences, randomized SVD) are already SHIPPED across prior campaigns. Remaining
+  gaps are constant-factor walls: DRAM-bandwidth (sosfilt/lfilter/label f64-output), AVX-512-only SIMD
+  (cholesky/dense-LAPACK, FFT mid-pow2 butterflies under forbid(unsafe)), C-library quality (HiGHS).
+- CONCLUSION: no readily-available high-EV different-primitive win remains under exact-conformance +
+  CPU-memory-bandwidth + forbid(unsafe)/AVX2. Recorded so future turns skip re-deriving this. The live
+  frontier needs either an unsafe-SIMD/AVX-512 budget, or a NEW scipy surface not yet ported (capability
+  gap), not another primitive swap on the existing dense/recurrence kernels.
