@@ -91,6 +91,7 @@ pub use linalg::{
     dijkstra,
     dijkstra_all_pairs,
     eccentricity,
+    johnson,
     // Eigensolvers
     eigs,
     eigsh,

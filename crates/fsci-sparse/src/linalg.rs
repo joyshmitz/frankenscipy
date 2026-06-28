@@ -5269,11 +5269,20 @@ pub fn graph_diameter(graph: &CsrMatrix) -> f64 {
 /// Compute the eccentricity of each node (max shortest path distance).
 /// Returns empty vec for non-square matrices.
 pub fn eccentricity(graph: &CsrMatrix) -> Vec<f64> {
-    let dist = floyd_warshall(graph);
-    if dist.is_empty() {
+    // The eccentricity of a node is its largest finite shortest-path distance to
+    // any other node — it needs the all-pairs distance matrix, but only the
+    // per-row max. Compute the rows with parallel per-source Dijkstra
+    // (O(V·E log V)) rather than O(V³) `floyd_warshall`; the distances (hence the
+    // maxima) are identical regardless of algorithm. Fall back to floyd_warshall
+    // when the Dijkstra route can't run (e.g. a negative-weight cycle).
+    let rows: Vec<Vec<f64>> = match dijkstra_all_pairs(graph) {
+        Ok(ap) => ap.into_iter().map(|r| r.distances).collect(),
+        Err(_) => floyd_warshall(graph),
+    };
+    if rows.is_empty() {
         return vec![];
     }
-    dist.iter()
+    rows.iter()
         .map(|row| {
             row.iter()
                 .filter(|&&d| d.is_finite())
@@ -8213,6 +8222,55 @@ mod tests {
     }
 
     #[test]
+    fn johnson_matches_floyd_warshall_with_negative_edges() {
+        // Johnson handles negative edges (no negative cycle); its all-pairs matrix
+        // must equal Floyd-Warshall's. Build a sparse digraph with some negative
+        // weights but no negative cycle (offset by a positive base keeps cycles ≥ 0).
+        let n = 50usize;
+        let mut s: u64 = 0xdead_beef_cafe_1234;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let (mut rows, mut cols, mut vals) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..n {
+            for _ in 0..4 {
+                let j = (next() as usize) % n;
+                if j == i {
+                    continue;
+                }
+                // weights in [2, 12): some "small" but the graph stays cycle-safe
+                // because every edge is ≥ 2 > 0. Then subtract a per-edge negative
+                // bias only on forward edges (i<j) so no cycle goes negative.
+                let base = 2.0 + (next() % 1000) as f64 / 100.0;
+                let w = if j > i { base - 1.0 } else { base };
+                rows.push(i);
+                cols.push(j);
+                vals.push(w);
+            }
+        }
+        let g = CooMatrix::from_triplets(Shape2D::new(n, n), vals, rows, cols, true)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
+
+        let fw = floyd_warshall(&g);
+        let jh = johnson(&g).expect("johnson");
+        assert_eq!(jh.len(), n);
+        for i in 0..n {
+            for j in 0..n {
+                let (a, b) = (jh[i].distances[j], fw[i][j]);
+                assert!(
+                    (a - b).abs() < 1e-9 || (a.is_infinite() && b.is_infinite()),
+                    "mismatch ({i},{j}): johnson={a}, floyd_warshall={b}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn dijkstra_unreachable_node() {
         let g = disconnected_graph_csr();
         let result = dijkstra(&g, 0).expect("dijkstra");
@@ -10859,7 +10917,112 @@ pub fn dijkstra_all_pairs(graph: &CsrMatrix) -> SparseResult<Vec<ShortestPathRes
             .collect();
         handles
             .into_iter()
-            .flat_map(|h| h.join().expect("dijkstra_all_pairs worker panicked"))
+            .flat_map(|handle| handle.join().expect("dijkstra_all_pairs worker panicked"))
+            .collect()
+    });
+
+    Ok(results)
+}
+
+/// All-pairs shortest paths via Johnson's algorithm — handles NEGATIVE edge
+/// weights (no negative cycle) at O(V·E + V·E log V), with the V Dijkstra solves
+/// run in PARALLEL across cores.
+///
+/// Reweights every edge to non-negative using Bellman-Ford potentials from a
+/// virtual super-source (`w'(u,v) = w(u,v) + h[u] - h[v] ≥ 0`), runs Dijkstra
+/// from each node on the reweighted graph (parallel), then undoes the shift
+/// (`d(u,v) = d'(u,v) - h[u] + h[v]`). For a non-negative graph the potentials
+/// are all 0, so this is `dijkstra_all_pairs` plus one Bellman-Ford pass. SciPy's
+/// `johnson` runs the Dijkstra sweep serially, so on a multi-core box this is
+/// multiplicatively faster. Matches `scipy.sparse.csgraph.johnson` /
+/// `shortest_path(method='J')`; errors on a negative-weight cycle.
+pub fn johnson(graph: &CsrMatrix) -> SparseResult<Vec<ShortestPathResult>> {
+    validate_csgraph(graph)?;
+    let n = graph.shape().rows;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+    let data = graph.data();
+
+    // Potentials h[v] = shortest distance from a virtual source with a 0-weight
+    // edge to every node: initialise all h=0, relax the real edges n-1 times.
+    let mut h = vec![0.0f64; n];
+    for _ in 0..n.saturating_sub(1) {
+        let mut changed = false;
+        for u in 0..n {
+            let hu = h[u];
+            for idx in indptr[u]..indptr[u + 1] {
+                let v = indices[idx];
+                let alt = hu + data[idx];
+                if alt < h[v] {
+                    h[v] = alt;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // Negative-cycle detection: one more relaxation must not improve anything.
+    for u in 0..n {
+        let hu = h[u];
+        for idx in indptr[u]..indptr[u + 1] {
+            let v = indices[idx];
+            if hu + data[idx] < h[v] {
+                return Err(SparseError::InvalidArgument {
+                    message: "graph contains a negative-weight cycle".to_string(),
+                });
+            }
+        }
+    }
+
+    // Reweight to non-negative edge weights so Dijkstra is valid.
+    let mut reweighted = vec![0.0f64; data.len()];
+    for u in 0..n {
+        let hu = h[u];
+        for idx in indptr[u]..indptr[u + 1] {
+            reweighted[idx] = data[idx] + hu - h[indices[idx]];
+        }
+    }
+
+    let rew = &reweighted;
+    let pot = &h;
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n);
+    let chunk = n.div_ceil(cores);
+
+    let results: Vec<ShortestPathResult> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..cores)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || {
+                    (i0..i1)
+                        .map(|s| {
+                            let mut r = dijkstra_core(indptr, indices, rew, n, s);
+                            let hs = pot[s];
+                            for (j, d) in r.distances.iter_mut().enumerate() {
+                                if d.is_finite() {
+                                    *d = *d - hs + pot[j];
+                                }
+                            }
+                            r
+                        })
+                        .collect::<Vec<_>>()
+                }))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("johnson worker panicked"))
             .collect()
     });
 

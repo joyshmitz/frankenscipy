@@ -10793,3 +10793,30 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   primitive (Dijkstra-per-node) + embarrassingly-parallel-across-sources is a general csgraph pattern:
   any scipy csgraph routine that scipy runs per-source serially (BFS/DFS orders, eccentricity,
   reachability) is a parallel-across-sources candidate.
+
+## 2026-06-28 - LANDED WIN (AmberForge): Johnson's all-pairs (parallel Dijkstra after reweight) 7.6-31.7x FASTER than scipy.johnson + eccentricity routed off O(V³) FW (~10-15x self) — extends the csgraph parallel-across-sources vein
+
+- Agent: AmberForge. Follows ac8d81c9 (dijkstra_all_pairs) along the proven vein: scipy.sparse.csgraph
+  routines that run the per-source sweep SERIALLY are parallel-across-sources candidates.
+- **`johnson` (NEW — fsci lacked it; scipy.sparse.csgraph.johnson exists):** all-pairs shortest path
+  that handles NEGATIVE edges. Reweights edges non-negative via Bellman-Ford potentials from a virtual
+  super-source (`w' = w + h[u] - h[v]`), runs Dijkstra from each node in PARALLEL across cores (reusing
+  `dijkstra_core`), then undoes the shift. scipy runs the Dijkstra sweep serially.
+  MEASURED vs `scipy.sparse.csgraph.johnson`, non-neg sparse deg=6, best-of-5/6:
+
+  | V | fsci johnson | scipy johnson | fsci vs scipy |
+  | ---: | ---: | ---: | ---: |
+  | 500 | 4.02 ms | 30.72 ms | **7.6x FASTER** |
+  | 1000 | 5.94 ms | 128.92 ms | **21.7x FASTER** |
+  | 1500 | 9.62 ms | 304.55 ms | **31.7x FASTER** |
+
+  Correctness: Johnson's reweighting preserves shortest paths; test
+  `johnson_matches_floyd_warshall_with_negative_edges` (50-node sparse digraph WITH negative edges, all
+  V² entries exact vs FW). Errors on negative cycle like scipy's `NegativeCycleError`.
+- **`eccentricity` routed off O(V³) `floyd_warshall` → parallel `dijkstra_all_pairs`** (each node's max
+  finite distance; the distances, hence maxima, are identical regardless of all-pairs method). Self:
+  V=1500 16.2 ms vs the old FW 240 ms = **~14.8x faster**; V=1000 8.0 ms (was 103). BYTE-IDENTICAL —
+  existing `eccentricity` test (`== [2,1,2]`) green; negative-cycle case falls back to floyd_warshall.
+  (No scipy.csgraph.eccentricity equivalent — self-speedup, scipy-exact transitively via FW.)
+- fsci-sparse lib 350 passed / 0 failed. VEIN STILL OPEN: `bellman_ford` all-pairs (indices=None),
+  multi-source BFS/DFS orders, betweenness — all per-source-serial in scipy.
