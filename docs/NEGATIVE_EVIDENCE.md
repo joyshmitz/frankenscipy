@@ -6,6 +6,25 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): ODR LM-step solves directly instead of inverting then multiplying — 1.8-2.05x
+
+- `solve_lm_step` (fsci-odr) computed the FULL inverse of the (n_params + n_free_delta)x(n_params + n_free_delta)
+  damped normal-equations matrix via Gauss-Jordan, then did `inverse · rhs` — the classic "never invert to
+  solve" anti-pattern. The LM step needs only the one solution vector. Replaced with a direct Gauss-Jordan
+  solve (`gaussian_solve`, same pivot selection + 1e-14 singularity guard) that transforms the single RHS
+  column instead of an n-column identity ⇒ skips one of the two O(n^3) loops + the final O(n^2) matmul.
+- WHY this is the right target: ODR's optimization variable is [beta, delta] with one delta per data point,
+  so the solve dimension n = n_params + n_data and this solve is the per-iteration bottleneck (O(n^3),
+  dominates the O(n^2) FD Jacobian). It runs once per LM iteration AND per damping retry.
+- MEASURED (same-process A/B, min-of-7, CARGO_TARGET_DIR=.rch-targets/frankenscipy-cobaltcove):
+  n=64 1.82x, n=128 1.92x, n=256 2.01x, n=512 2.05x (ratio grows with n as the skipped inverse-build is the
+  larger O(n^3) term). Agreement old-vs-new worst rel diff 3.3e-16.
+- CORRECTNESS: result agrees with invert-then-multiply to ~1e-16; fsci-odr lib tests 15/0; scipy.odr parity
+  (diff_odr, 15% rel tol) passes; end-to-end odr() converges to beta≈[1.0000, 2.0000]. invert_matrix is
+  retained for the covariance path (which genuinely needs the full inverse). LESSON: grep for
+  `invert_matrix(...)` / explicit-inverse-then-matmul in iterative solvers — replace with a direct solve
+  (2x + better conditioning) wherever only a solution vector (not the inverse) is consumed.
+
 ## 2026-06-28 - CobaltCove (claude-code) - NO-SHIP (reverted, ~0-gain): RK solver per-step y_old/f_old clone-elimination
 
 - Tried to extend the scratch-Vec lever to the RK ODE solvers (rk.rs): each accepted step does

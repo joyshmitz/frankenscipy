@@ -1034,13 +1034,59 @@ fn solve_lm_step(
     for (idx, row) in normal.iter_mut().enumerate() {
         row[idx] += damping;
     }
-    let inverse = invert_matrix(normal).ok_or_else(|| OdrError::SolverFailure {
+    // Solve `normal · step = rhs` directly instead of forming the full inverse
+    // and multiplying: the LM step needs only the one solution vector, and a
+    // direct Gauss-Jordan solve does ~half the O(n^3) work (it transforms the
+    // single RHS column, not an n-column identity) while being the numerically
+    // preferable route. For ODR the solve dimension is n_params + n_free_delta
+    // (one delta per data point), so this is the per-iteration bottleneck.
+    gaussian_solve(normal, rhs).ok_or_else(|| OdrError::SolverFailure {
         detail: String::from("normal equations are singular"),
-    })?;
-    Ok(inverse
-        .iter()
-        .map(|row| row.iter().zip(rhs.iter()).map(|(lhs, rhs)| lhs * rhs).sum())
-        .collect())
+    })
+}
+
+/// Solve `matrix · x = rhs` via Gauss-Jordan elimination with partial pivoting.
+///
+/// Uses the same pivot selection and singularity guard as [`invert_matrix`], but
+/// transforms only the single RHS column rather than an n-column identity, so it
+/// costs ~half the arithmetic of inverting then multiplying. Result agrees with
+/// `invert_matrix(matrix)` applied to `rhs` to within floating-point roundoff.
+fn gaussian_solve(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Option<Vec<f64>> {
+    let n = matrix.len();
+    if n == 0 || rhs.len() != n || matrix.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    for pivot in 0..n {
+        let best = (pivot..n).max_by(|&lhs, &rhs_row| {
+            matrix[lhs][pivot]
+                .abs()
+                .total_cmp(&matrix[rhs_row][pivot].abs())
+        })?;
+        if matrix[best][pivot].abs() <= 1.0e-14 {
+            return None;
+        }
+        matrix.swap(pivot, best);
+        rhs.swap(pivot, best);
+        let scale = matrix[pivot][pivot];
+        for col in 0..n {
+            matrix[pivot][col] /= scale;
+        }
+        rhs[pivot] /= scale;
+        for row in 0..n {
+            if row == pivot {
+                continue;
+            }
+            let factor = matrix[row][pivot];
+            if factor == 0.0 {
+                continue;
+            }
+            for col in 0..n {
+                matrix[row][col] -= factor * matrix[pivot][col];
+            }
+            rhs[row] -= factor * rhs[pivot];
+        }
+    }
+    Some(rhs)
 }
 
 fn jt_residual(jacobian: &[Vec<f64>], residuals: &[f64]) -> Vec<f64> {
