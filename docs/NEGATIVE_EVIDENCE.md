@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (3.6-8.3x): monte_carlo_integrate drops the per-sample buffer (per-thread partial reduction)
+
+- Same scratch-Vec lesson as cumulative_simpson, far bigger payoff. The parallel path allocated
+  `out = vec![0.0; n_samples]` (the FULL per-sample buffer), filled it across threads, then did a
+  SERIAL reduction `for fval in &fvals { sum += fval; sum_sq += fval*fval }`. For Monte Carlo
+  n_samples is routinely millions–billions: at 16M samples `out` is 128MB ⇒ a giant alloc + first-
+  touch PAGE FAULTS + a 128MB serial read pass — all overhead, since the integral only needs Σf, Σf².
+- LEVER: each thread accumulates its chunk's (Σf, Σf²) DIRECTLY into a tiny per-thread slot (no
+  per-sample storage); main sums the ≤nthreads partials. The per-chunk RNG start states (lcg_jump)
+  reproduce EXACTLY the same samples in the same order, so only the cross-chunk combine reassociates.
+- NOT bit-identical (the flat serial sum vs per-chunk-then-combine reassociate ~1e-15) but the MC
+  estimate is statistically identical: measured val matched the old code to all 10 printed decimals
+  (0.6666283778 / 1.0001314464 / 1.3332991416) and the true integral within MC error. No exact-output
+  or serial==parallel test pins it (only an error-bounds test + tolerance metamorphic tests).
+- Same-box A/B (cheap sum-of-squares integrand, min-of-8):
+  - d=2 n= 4,000,000:  8899 -> 2469 us = 3.60x
+  - d=3 n= 8,000,000: 19373 -> 3458 us = 5.60x
+  - d=4 n=16,000,000: 36291 -> 4385 us = 8.28x
+  Win GROWS with n_samples (the eliminated `out` Vec grows 32MB->128MB ⇒ more alloc/page-fault/serial-
+  reduction removed). scipy.integrate has no monte_carlo_integrate equivalent (this is a self-speedup).
+- Conformance GREEN: fsci-integrate 56/0 + 11/0 + 1/0 lib (mr_monte_carlo_* + qmc metamorphic, error test).
+- LESSON (reinforced): the scratch-Vec-in-parallel-fn lesson is BIGGEST when the eliminated buffer is the
+  full O(n) sample/work array of a many-sample routine — kill it with per-thread partial reduction
+  (accept ~1e-15 reassoc where the result is statistical/no exact test). Check resampling/bootstrap/MC
+  reductions elsewhere for the same "materialize all then reduce" anti-pattern.
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.6-2.4x more): cumulative_simpson drops two O(n) scratch Vecs (alloc/page-fault elimination)
 
 - Follow-on to the cumulative_simpson parallel commit (7f1c4eff). That version still allocated TWO

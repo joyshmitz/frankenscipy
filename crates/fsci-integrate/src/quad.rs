@@ -3394,40 +3394,49 @@ where
         return (mean * volume, std_err);
     }
 
-    let fvals: Vec<f64> = {
+    // Each thread reduces its own chunk directly into (Σf, Σf²) — no per-sample
+    // buffer. The chunk RNG start states (via lcg_jump) reproduce EXACTLY the same
+    // samples in the same order as the serial path, so the only difference is that
+    // the cross-chunk combine reassociates the sums (~1e-15) — irrelevant for a
+    // Monte Carlo estimate. This drops the O(n_samples) `out` Vec (alloc + first-
+    // touch page faults at large n) and its serial reduction pass.
+    let (sum, sum_sq) = {
         let chunk = n_samples.div_ceil(nthreads);
         let (jump_a, jump_c) = lcg_jump(MC_LCG_A, 1, chunk * d);
-        let mut starts = Vec::new();
+        let mut starts: Vec<(u64, usize)> = Vec::new();
         let mut cs = seed;
-        let mut t = 0;
-        while t * chunk < n_samples {
-            starts.push(cs);
+        let mut base = 0;
+        while base < n_samples {
+            starts.push((cs, chunk.min(n_samples - base)));
             cs = jump_a.wrapping_mul(cs).wrapping_add(jump_c);
-            t += 1;
+            base += chunk;
         }
-        let mut out = vec![0.0; n_samples];
-        let chunks: Vec<&mut [f64]> = out.chunks_mut(chunk).collect();
         let eval_sample = &eval_sample;
+        let mut partials = vec![(0.0_f64, 0.0_f64); starts.len()];
         std::thread::scope(|scope| {
-            for (state0, slot) in starts.into_iter().zip(chunks) {
+            for ((state0, count), slot) in starts.into_iter().zip(partials.iter_mut()) {
                 scope.spawn(move || {
                     let mut rng = state0;
                     let mut point = vec![0.0; d];
-                    for o in slot.iter_mut() {
-                        *o = eval_sample(&mut rng, &mut point);
+                    let mut s = 0.0;
+                    let mut sq = 0.0;
+                    for _ in 0..count {
+                        let fval = eval_sample(&mut rng, &mut point);
+                        s += fval;
+                        sq += fval * fval;
                     }
+                    *slot = (s, sq);
                 });
             }
         });
-        out
+        let mut sum = 0.0;
+        let mut sum_sq = 0.0;
+        for (s, sq) in partials {
+            sum += s;
+            sum_sq += sq;
+        }
+        (sum, sum_sq)
     };
-
-    let mut sum = 0.0;
-    let mut sum_sq = 0.0;
-    for &fval in &fvals {
-        sum += fval;
-        sum_sq += fval * fval;
-    }
 
     let nf = n_samples as f64;
     let mean = sum / nf;
