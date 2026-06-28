@@ -80,6 +80,29 @@ ledger above so the project has one source of truth.
   Next Cholesky attempt should skip per-row panel packing/threading and move to
   a true internal flat GEMM/SYRK micro-kernel or an explicitly scoped LAPACK
   boundary.
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical, modest 1.04-1.12x lead-widener + dead-code removal): N-D FFT per-line kernel unified on fused radix-4
+
+- The N-D transform (fft2/fftn/ifftn + their real variants) transformed each pow2 line with
+  the FLAT radix-2 (cooley_tukey_radix2_inplace_with_plan); only the 1-D direct path had been
+  switched to the fused radix-2² (radix-4) kernel (6bbc73c6, 1.35-1.47x, BIT-IDENTICAL). Routed
+  all three N-D per-line sites (apply_axis0_transpose_transform, the axis>0 threaded block, the
+  serial fallback) through cooley_tukey_radix4_inplace_with_twiddles. The plan now carries only
+  the twiddle table (radix-4 does its own bit-reverse), so the now-dead cooley_tukey_radix2_inplace
+  _with_plan + bit_reverse_swaps fns were DELETED (also drops a per-axis swap-list Vec alloc).
+- BIT-IDENTICAL: verified by FNV digest of the full fft2 complex output BEFORE(radix-2)==
+  AFTER(radix-4) across 1024², 2048², 512×4096, 4096×512 — all 4 match exactly
+  (1bcdab416fbd0eea / 3923317a4be61768 / f9d8efb91ea63912 / 5680683652ef8d46). The radix-4 fusion
+  is structurally bit-identical to flat radix-2 (proven for 1-D); both bit-reversals are the
+  standard i↔reverse(i) permutation.
+- PERF is modest — the N-D path is gather/scatter (transpose) BANDWIDTH-bound, so the radix-4's
+  fewer butterfly passes give a small net wall-clock win, unlike the compute-bound 1-D case.
+  Clean-conditions same-box A/B (min-of-25, before contention): 1024² 18420->16446 (1.12x), 2048²
+  72016->66490 (1.08x), 512×4096 37271->35739 (1.04x), 4096×512 ~parity — sign-consistent positive.
+  Under heavy concurrent shared-box load the gain falls within noise (re-runs swung ±parity), so
+  this is a SMALL win, not a big one. fft2 ALREADY beats SciPy 1.37-1.46x, so this is a
+  lead-widener; the durable value is the bit-identical kernel unification + dead-code removal.
+- Conformance GREEN: fsci-fft 54/0 lib; diff_fft 34/0; diff_fft_audit_variants_nd_equivalence 1/0;
+  diff_fft_fft2_ifft2_numpy_parity 1/0 (bit-identical => parity preserved).
 
 ## 2026-06-27 - GreenFalcon (codex) - NO-SHIP (reverted): FFT mixed-radix inner butterfly lane parallelism is not a reliable gap-close
 

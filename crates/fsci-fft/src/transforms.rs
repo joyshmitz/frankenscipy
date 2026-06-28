@@ -448,40 +448,6 @@ fn cooley_tukey_radix4_inplace_with_twiddles_par(data: &mut [Complex64], twiddle
     }
 }
 
-fn cooley_tukey_radix2_inplace_with_plan(
-    data: &mut [Complex64],
-    twiddles: &[Complex64],
-    bit_reverse_swaps: &[(usize, usize)],
-) {
-    let n = data.len();
-    debug_assert!(n.is_power_of_two());
-    debug_assert!(twiddles.len() >= n);
-    for &(i, j) in bit_reverse_swaps {
-        data.swap(i, j);
-    }
-
-    let mut stage_len = 2;
-    while stage_len <= n {
-        let half = stage_len / 2;
-        let stride = n / stage_len;
-
-        let mut base = 0;
-        while base < n {
-            for k in 0..half {
-                let even_idx = base + k;
-                let odd_idx = base + k + half;
-                let twiddle = twiddles[k * stride];
-                let odd_val = complex_mul(data[odd_idx], twiddle);
-                let even_val = data[even_idx];
-                data[even_idx] = complex_add(even_val, odd_val);
-                data[odd_idx] = complex_sub(even_val, odd_val);
-            }
-            base += stage_len;
-        }
-        stage_len *= 2;
-    }
-}
-
 fn apply_bit_reverse_permutation_incremental(data: &mut [Complex64]) {
     let n = data.len();
     debug_assert!(n.is_power_of_two());
@@ -497,18 +463,6 @@ fn apply_bit_reverse_permutation_incremental(data: &mut [Complex64]) {
             data.swap(i, j);
         }
     }
-}
-
-fn bit_reverse_swaps(n: usize) -> Vec<(usize, usize)> {
-    let log_n = n.trailing_zeros() as usize;
-    let mut swaps = Vec::with_capacity(n / 2);
-    for i in 0..n {
-        let j = bit_reverse(i, log_n);
-        if i < j {
-            swaps.push((i, j));
-        }
-    }
-    swaps
 }
 
 /// Bluestein's algorithm for arbitrary-length FFT.
@@ -3548,7 +3502,6 @@ fn apply_axis0_transpose_transform(
     stride: usize,
     nthreads: usize,
     twiddles: &TwiddleTable,
-    bit_reverse_swaps: &[(usize, usize)],
 ) {
     let mut transposed = vec![(0.0, 0.0); axis_len * stride];
 
@@ -3566,7 +3519,7 @@ fn apply_axis0_transpose_transform(
                         for (index, slot) in lane.iter_mut().enumerate() {
                             *slot = data_ref[index * stride + offset];
                         }
-                        cooley_tukey_radix2_inplace_with_plan(lane, twiddles, bit_reverse_swaps);
+                        cooley_tukey_radix4_inplace_with_twiddles(lane, twiddles);
                     }
                 });
             }
@@ -3606,12 +3559,12 @@ fn apply_axis_transform(
     let stride = shape[axis + 1..].iter().product::<usize>().max(1);
     let repeats = shape[..axis].iter().product::<usize>().max(1);
     let block = axis_len * stride;
+    // Pow2 axes use the fused radix-2² (radix-4) per-line kernel — bit-identical to
+    // the flat radix-2 (proven for the 1-D path, 6bbc73c6) but ~1.35-1.47x fewer
+    // passes. It does its own bit-reverse, so the plan carries only the twiddles.
     let cooley_tukey_axis_plan =
         if backend.kind() == BackendKind::CooleyTukey && axis_len.is_power_of_two() {
-            Some((
-                get_or_compute_twiddles(axis_len, inverse),
-                bit_reverse_swaps(axis_len),
-            ))
+            Some(get_or_compute_twiddles(axis_len, inverse))
         } else {
             None
         };
@@ -3621,18 +3574,11 @@ fn apply_axis_transform(
     // otherwise the direct strided loop below is cheaper.
     if axis == 0
         && repeats == 1
-        && let Some((twiddles, bit_reverse_swaps)) = &cooley_tukey_axis_plan
+        && let Some(twiddles) = &cooley_tukey_axis_plan
     {
         let nthreads = nd_axis_thread_count(stride, axis_len);
         if nthreads > 1 {
-            apply_axis0_transpose_transform(
-                data,
-                axis_len,
-                stride,
-                nthreads,
-                twiddles,
-                bit_reverse_swaps,
-            );
+            apply_axis0_transpose_transform(data, axis_len, stride, nthreads, twiddles);
             return;
         }
     }
@@ -3657,12 +3603,8 @@ fn apply_axis_transform(
                             for (index, slot) in local.iter_mut().enumerate() {
                                 *slot = block_slice[index * stride + offset];
                             }
-                            if let Some((twiddles, bit_reverse_swaps)) = plan {
-                                cooley_tukey_radix2_inplace_with_plan(
-                                    &mut local,
-                                    twiddles,
-                                    bit_reverse_swaps,
-                                );
+                            if let Some(twiddles) = plan {
+                                cooley_tukey_radix4_inplace_with_twiddles(&mut local, twiddles);
                             } else {
                                 backend.transform_1d_inplace(&mut local, inverse);
                             }
@@ -3684,8 +3626,8 @@ fn apply_axis_transform(
             for (index, slot) in axis_scratch.iter_mut().enumerate() {
                 *slot = data[outer_base + index * stride + offset];
             }
-            if let Some((twiddles, bit_reverse_swaps)) = &cooley_tukey_axis_plan {
-                cooley_tukey_radix2_inplace_with_plan(axis_scratch, twiddles, bit_reverse_swaps);
+            if let Some(twiddles) = &cooley_tukey_axis_plan {
+                cooley_tukey_radix4_inplace_with_twiddles(axis_scratch, twiddles);
             } else {
                 backend.transform_1d_inplace(axis_scratch, inverse);
             }
