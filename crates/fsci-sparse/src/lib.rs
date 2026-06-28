@@ -90,6 +90,7 @@ pub use linalg::{
     depth_first_order,
     dijkstra,
     dijkstra_all_pairs,
+    dijkstra_multi_source,
     eccentricity,
     johnson,
     // Eigensolvers

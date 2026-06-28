@@ -10845,3 +10845,25 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   as the scattered Vecs, plus added index-multiply + bounds-check. The inline-Vec-header layout is
   actually better here. Lesson: the flat-buffer cache lever needs SEQUENTIAL or cache-resident access;
   a random gather by a permuted index gains nothing and costs the arithmetic.
+
+## 2026-06-28 - LANDED WIN (AmberForge): multi-source Dijkstra (parallel) 17-24x FASTER than scipy.dijkstra(indices=subset) — 4th csgraph parallel-across-sources ship
+
+- Agent: AmberForge. `dijkstra_multi_source(graph, sources)` = single-source Dijkstra from each given
+  source, run in PARALLEL across cores (reuses `dijkstra_core`). Matches
+  `scipy.sparse.csgraph.dijkstra(graph, indices=sources)` — the common "distances from k landmarks"
+  query — which SciPy runs SERIALLY per source. Computes only the requested sources (vs
+  `dijkstra_all_pairs` doing all V). Negative edges fall back to per-source Bellman-Ford.
+- **MEASURED same-box vs `scipy.sparse.csgraph.dijkstra(indices=subset)`, sparse deg=6, best-of-6:**
+
+  | V | k sources | fsci | scipy | fsci vs scipy |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 5000 | 200 | 10.06 ms | 170.61 ms | **16.96x FASTER** |
+  | 5000 | 500 | 17.73 ms | 422.96 ms | **23.86x FASTER** |
+  | 10000 | 200 | 19.34 ms | 364.73 ms | **18.86x FASTER** |
+
+  Correctness: test `dijkstra_multi_source_matches_all_pairs_subset` (subset rows exact vs
+  floyd_warshall). fsci-sparse lib 351 passed / 0 failed.
+- This is the 4th csgraph parallel-across-sources ship (dijkstra_all_pairs 35x, johnson 31.7x,
+  eccentricity ~14x, now multi-source 24x). NEGATIVE evidence this session for context: cdist already
+  SIMD+parallel+SoA (no gap), solve_banded already packed-banded-LU O(n·b²) (no gap), KDTree flat-coords
+  cache lever reverted (random gather). The vein's edge is scipy running per-source SWEEPS serially.

@@ -8222,6 +8222,50 @@ mod tests {
     }
 
     #[test]
+    fn dijkstra_multi_source_matches_all_pairs_subset() {
+        // Multi-source Dijkstra over a subset of sources must equal the
+        // corresponding rows of the all-pairs solve (and of Floyd-Warshall).
+        let n = 60usize;
+        let mut s: u64 = 0x0f0f_1234_abcd_5678;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let (mut rows, mut cols, mut vals) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..n {
+            for _ in 0..5 {
+                let j = (next() as usize) % n;
+                if j == i {
+                    continue;
+                }
+                rows.push(i);
+                cols.push(j);
+                vals.push(1.0 + (next() % 1000) as f64 / 100.0);
+            }
+        }
+        let g = CooMatrix::from_triplets(Shape2D::new(n, n), vals, rows, cols, true)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
+
+        let fw = floyd_warshall(&g);
+        let sources = [3usize, 17, 42, 0, 59];
+        let ms = dijkstra_multi_source(&g, &sources).expect("multi-source");
+        assert_eq!(ms.len(), sources.len());
+        for (si, &src) in sources.iter().enumerate() {
+            for j in 0..n {
+                let (a, b) = (ms[si].distances[j], fw[src][j]);
+                assert!(
+                    (a - b).abs() < 1e-9 || (a.is_infinite() && b.is_infinite()),
+                    "mismatch src={src} j={j}: multi_source={a}, floyd_warshall={b}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn johnson_matches_floyd_warshall_with_negative_edges() {
         // Johnson handles negative edges (no negative cycle); its all-pairs matrix
         // must equal Floyd-Warshall's. Build a sparse digraph with some negative
@@ -10918,6 +10962,68 @@ pub fn dijkstra_all_pairs(graph: &CsrMatrix) -> SparseResult<Vec<ShortestPathRes
         handles
             .into_iter()
             .flat_map(|handle| handle.join().expect("dijkstra_all_pairs worker panicked"))
+            .collect()
+    });
+
+    Ok(results)
+}
+
+/// Multi-source shortest paths: single-source Dijkstra from each of the given
+/// `sources`, run in PARALLEL across cores. Matches
+/// `scipy.sparse.csgraph.dijkstra(graph, indices=sources)` — the common
+/// "distances from k landmarks" query — which SciPy runs serially per source.
+/// `result[i].distances[j]` is the shortest distance from `sources[i]` to `j`.
+/// Computes only the requested sources (unlike `dijkstra_all_pairs`, which does
+/// all V). Negative edges fall back to per-source Bellman-Ford.
+pub fn dijkstra_multi_source(
+    graph: &CsrMatrix,
+    sources: &[usize],
+) -> SparseResult<Vec<ShortestPathResult>> {
+    validate_csgraph(graph)?;
+    let n = graph.shape().rows;
+    if let Some(&bad) = sources.iter().find(|&&s| s >= n) {
+        return Err(SparseError::InvalidArgument {
+            message: format!("source {bad} out of bounds for graph with {n} nodes"),
+        });
+    }
+    if sources.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let data = graph.data();
+    if data.iter().any(|&weight| weight < 0.0) {
+        return sources.iter().map(|&s| bellman_ford(graph, s)).collect();
+    }
+
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+    let k = sources.len();
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(k);
+    let chunk = k.div_ceil(cores);
+
+    let results: Vec<ShortestPathResult> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..cores)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= k {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(k);
+                let src_chunk = &sources[i0..i1];
+                Some(scope.spawn(move || {
+                    src_chunk
+                        .iter()
+                        .map(|&s| dijkstra_core(indptr, indices, data, n, s))
+                        .collect::<Vec<_>>()
+                }))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("dijkstra_multi_source worker panicked"))
             .collect()
     });
 
