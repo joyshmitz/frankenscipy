@@ -11013,3 +11013,35 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   serial ref, mean 1e-12). fsci-stats lib 1996 passed / 0 failed. The whole binned_statistic family
   (1D/2D/dd) is now parallel; `parallel_minmax`/`parallel_bin_histogram` are reusable for future
   bin/histogram kernels.
+
+## 2026-06-28 - LANDED WIN (AmberForge): spsolve symmetric-banded → Cholesky route broadened beyond M-matrices — 1.12-1.39x self, widens scipy lead to 2.2-4.0x
+
+- Agent: AmberForge. DIG finding first: fsci's `spsolve` is ALREADY heavily optimized (grid-Dirichlet
+  direct + SPD-banded-Cholesky + general-banded-LU + SPD-CG + sparse-LU paths), and already BEATS scipy
+  on true narrow-band systems (the original "2D-Laplacian 4.8-7.1x slower" was the bw≈√N case where
+  scipy's nested-dissection SuperLU O(N^1.5) beats banded LU O(N²) — a nested-dissection wall, deferred).
+  The banded Cholesky was GATED to strict M-matrices (`spsolve_spd_m_matrix_candidate`: non-positive
+  off-diagonals + strict diagonal dominance), so symmetric PD systems that are NOT M-matrices (positive
+  off-diagonals / weak dominance — FEM stiffness, weighted operators) fell to the general banded LU.
+- FIX: added `spsolve_symmetric_banded_candidate` (symmetry + diagonal + bandwidth≤128, dropping the
+  M-matrix sign/dominance and the sparse-stencil nnz/row cap) and a second route to the existing
+  `spsolve_spd_banded_direct` (banded Cholesky, ~half the flops + no pivoting vs the general banded LU).
+  SAFE: that function validates its result against the real A (residual ≤ 1e-8) and returns `Err` on
+  non-PD/ill-conditioning → transparent fallback to the general banded path.
+- **MEASURED same-process A/B (route on vs off, n=8000, best-of-6), and vs scipy:**
+
+  | bw | before (general LU) | after (Cholesky) | self | fsci after vs scipy |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 8 | 2.25 ms | 1.97 ms | 1.14x | — |
+  | 16 | 5.86 ms | 5.24 ms | 1.12x | **4.0x** (scipy 24.9 ms) |
+  | 24 | 16.86 ms | 12.13 ms | 1.39x | — |
+  | 32 | 26.77 ms | 20.65 ms | 1.30x | **2.45x** (scipy 58.9 ms) |
+  | 64 | 90.71 ms | 73.72 ms | 1.23x | **2.22x** (scipy 189.5 ms) |
+  | 96 | 137.48 ms | 114.28 ms | 1.20x | — |
+
+  Modest (the banded Cholesky is not the full 2x faster than the banded LU — fsci's `dense_solveh_banded`
+  and `dense_solve_banded` are close), but real and consistent at EVERY bandwidth (no regression; the
+  earlier 4.16→4.28 was cross-run noise — clean same-run A/B shows bw=16 is 1.12x faster). Correctness:
+  `spsolve_symmetric_banded_non_m_matrix_route_is_accurate` (positive-off-diagonal SPD, ‖Ax−b‖<1e-9);
+  fsci-sparse lib 353/0. The bw≈√N (2D-grid-like, non-uniform) case remains the lone spsolve loss vs
+  scipy and needs nested dissection — a separate wall-class effort.

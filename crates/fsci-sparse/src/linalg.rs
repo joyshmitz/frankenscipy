@@ -211,6 +211,7 @@ impl SparseIluFactorization {
 const SPSOLVE_DENSE_MAX_N: usize = 32_768;
 const SPSOLVE_SPD_BANDED_CHOLESKY_MIN_N: usize = 256;
 const SPSOLVE_SPD_BANDED_CHOLESKY_MAX_NNZ_PER_ROW: usize = 8;
+const SPSOLVE_SPD_BANDED_MAX_HALF_BANDWIDTH: usize = 128;
 const SPSOLVE_SPD_BANDED_CHOLESKY_ACCEPT_RESIDUAL: f64 = 1.0e-8;
 const SPSOLVE_SQUARE_GRID_DIRICHLET_MIN_SIDE: usize = 16;
 const SPSOLVE_SQUARE_GRID_DIRICHLET_ACCEPT_RESIDUAL: f64 = 1.0e-8;
@@ -645,6 +646,75 @@ fn spsolve_spd_banded_cholesky_candidate(a: &CsrMatrix, options: SolveOptions) -
     )
 }
 
+/// Numerically-SYMMETRIC banded candidate for the Cholesky path — strictly broader
+/// than the M-matrix gate ([`spsolve_spd_banded_cholesky_candidate`]): it drops the
+/// sign (non-positive off-diagonal) and strict-diagonal-dominance requirements,
+/// keeping only symmetry + a diagonal in every row + the size/bandwidth bounds. A
+/// symmetric matrix that is positive-definite but NOT an M-matrix (FEM stiffness,
+/// positive-off-diagonal or merely weakly-dominant systems) is then routed to the
+/// banded Cholesky ([`spsolve_spd_banded_direct`], half the flops of the general
+/// banded LU and no pivoting) instead of falling through to the full banded LU.
+/// Safe by construction: `spsolve_spd_banded_direct` VALIDATES its result against
+/// the real A and returns `Err` on a large residual (non-PD / accuracy loss), so a
+/// mis-routed matrix transparently falls back to the general banded path.
+fn spsolve_symmetric_banded_candidate(
+    a: &CsrMatrix,
+    options: SolveOptions,
+    half_bandwidth: usize,
+) -> bool {
+    let n = a.shape().rows;
+    // No nnz/row cap here (unlike the sparse-stencil M-matrix gate): a dense band of
+    // half-bandwidth `bw` legitimately has up to 2·bw+1 nnz/row. The outer
+    // `genuinely_sparse` routing already vetted banded-worthiness, and the banded
+    // Cholesky is ~half the flops of the general banded LU it replaces regardless of
+    // in-band density. Bandwidth (≤128) bounds the O(n·bw²) cost.
+    if options.backend != SparseBackend::Auto
+        || options.ordering != PermutationOrdering::Colamd
+        || n < SPSOLVE_SPD_BANDED_CHOLESKY_MIN_N
+        || half_bandwidth == 0
+        || half_bandwidth > SPSOLVE_SPD_BANDED_MAX_HALF_BANDWIDTH
+    {
+        return false;
+    }
+
+    let data = a.data();
+    let indices = a.indices();
+    let indptr = a.indptr();
+    for row in 0..n {
+        let start = indptr[row];
+        let end = indptr[row + 1];
+        if start == end {
+            return false;
+        }
+        let mut has_diagonal = false;
+        let mut previous_col = None;
+        for idx in start..end {
+            let col = indices[idx];
+            let value = data[idx];
+            if !value.is_finite()
+                || col >= n
+                || previous_col.is_some_and(|previous| previous >= col)
+            {
+                return false;
+            }
+            previous_col = Some(col);
+            if col == row {
+                has_diagonal = true;
+                continue;
+            }
+            let mirror = find_value_in_row(data, indices, indptr, col, row);
+            let tol = 1.0e-12 * (1.0 + value.abs().max(mirror.abs()));
+            if (mirror - value).abs() > tol {
+                return false;
+            }
+        }
+        if !has_diagonal {
+            return false;
+        }
+    }
+    true
+}
+
 fn spsolve_spd_cg_candidate(a: &CsrMatrix, options: SolveOptions) -> bool {
     spsolve_spd_m_matrix_candidate(
         a,
@@ -744,6 +814,29 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
                 });
             }
             if spsolve_spd_banded_candidate(a, options, bandwidth)
+                && let Ok(solution) = spsolve_spd_banded_direct(a, b, options, bandwidth)
+            {
+                let warnings = if over_dense_guard {
+                    vec![format!(
+                        "native sparse direct solve used for n={n}; dense fallback guard is {SPSOLVE_DENSE_MAX_N}"
+                    )]
+                } else {
+                    Vec::new()
+                };
+                return Ok(SolveResult {
+                    solution,
+                    backend_used: SparseBackend::NativeSparseLu,
+                    ordering_used: options.ordering,
+                    warnings,
+                });
+            }
+            // Broader symmetric-banded → Cholesky route: a symmetric PD system that
+            // is not an M-matrix (positive off-diagonals / weak dominance, e.g. FEM
+            // stiffness) still factors with banded Cholesky at half the flops of the
+            // general banded LU below, with no pivoting. Self-validated (residual
+            // check inside `spsolve_spd_banded_direct`), so a non-PD/ill-conditioned
+            // case falls through to the general banded path.
+            if spsolve_symmetric_banded_candidate(a, options, bandwidth)
                 && let Ok(solution) = spsolve_spd_banded_direct(a, b, options, bandwidth)
             {
                 let warnings = if over_dense_guard {
@@ -9159,6 +9252,61 @@ mod tests {
             }
         }
         0.0
+    }
+
+    #[test]
+    fn spsolve_symmetric_banded_non_m_matrix_route_is_accurate() {
+        // A symmetric, banded, positive-definite matrix with POSITIVE off-diagonals
+        // (NOT an M-matrix) exercises the broadened symmetric→Cholesky route. The
+        // solution must satisfy A·x = b (residual-validated path); also verify it
+        // matches the general sparse-LU answer to rounding.
+        use crate::{CooMatrix, Shape2D};
+        let n = 400usize;
+        let bw = 20usize;
+        let mut s: u64 = 0x51ab_cd33_7777_0001;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+        for i in 0..n {
+            for j in (i + 1)..=(i + bw).min(n - 1) {
+                let v = next() * 0.5 + 0.05; // POSITIVE off-diagonal
+                rows[i].push((j, v));
+                rows[j].push((i, v));
+            }
+        }
+        let (mut data, mut ri, mut ci) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..n {
+            let off: f64 = rows[i].iter().map(|(_, v)| v.abs()).sum();
+            data.push(off + 1.0); // diagonally dominant ⇒ SPD
+            ri.push(i);
+            ci.push(i);
+            for &(j, v) in &rows[i] {
+                data.push(v);
+                ri.push(i);
+                ci.push(j);
+            }
+        }
+        let a = CooMatrix::from_triplets(Shape2D::new(n, n), data, ri, ci, true)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
+        let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 7) as f64).collect();
+
+        let x = spsolve(&a, &b, SolveOptions::default()).expect("spsolve").solution;
+        // Residual ‖A·x − b‖ must be tiny.
+        let mut resid = 0.0f64;
+        for row in 0..n {
+            let mut ax = 0.0;
+            for idx in a.indptr()[row]..a.indptr()[row + 1] {
+                ax += a.data()[idx] * x[a.indices()[idx]];
+            }
+            resid += (ax - b[row]).powi(2);
+        }
+        assert!(resid.sqrt() < 1e-9, "residual too large: {}", resid.sqrt());
     }
 
     #[test]
