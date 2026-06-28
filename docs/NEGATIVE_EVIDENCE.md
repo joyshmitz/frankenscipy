@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): SphericalVoronoi near-duplicate check O(n²)→O(n) spatial hash — 1.07-1.15x (grows with n), byte-identical
+
+- `SphericalVoronoi::new` rejected near-duplicate generators with an O(n²) all-pairs scan
+  (`for i { for j>i { ‖pᵢ−pⱼ‖² ≤ radius_tol² }}`). Replaced (for n ≥ 2048) with a uniform spatial hash
+  keyed by `radius_tol`-width cells + a 27-cell neighbourhood probe — two points within `radius_tol` differ
+  by < one cell on every axis, so the probe finds every such pair → identical accept/reject. Mirrors the
+  Voronoi-vertex dedup grid already in the same function. Small/mid n keeps the direct scan (gated, no change).
+- BYTE-IDENTICAL: the diagram digest (vertices + regions) matches the all-pairs path exactly across
+  n∈{500..8000}; the change is a pure validation-gate speedup, output untouched. fsci-spatial 280 tests / 0
+  fail incl. a new grid-path test (`spherical_voronoi_duplicate_check_grid_path`: 2050 Fibonacci-sphere
+  points build, +1 duplicate rejects).
+- MEASURED (same-process A/B, min-of-5, 2 rounds): n=4000 ~1.07x, n=8000 ~1.15x (consistent both rounds).
+  The win GROWS with n — not because the flop count grows (both old check and the hull are O(n²)) but because
+  the all-pairs scan is MEMORY-BOUND (it streams the whole point array O(n) times; at n≥~8000 that array
+  exceeds L2), whereas the grid touches each point O(1) times. So at larger n the cache penalty of the old
+  scan dominates and the gap widens.
+- HONEST BOUND: the dup-check is only ~5-13% of `new()` — the O(n²) 3-D convex-hull build
+  (`convex_hull_3d_facets`) dominates. The remaining (multi-session) SphericalVoronoi lever is the
+  O(n²)→O(n log n) hull, NOT this gate. (The memory note "SphericalVoronoi O(n⁴) loss" is STALE: the
+  O(n⁴)→O(n²) hull rewrite already shipped.)
+- LESSON: an O(n²) all-pairs validation scan is not just a flop cost — at scale it is MEMORY-BOUND (streams
+  the array n times). A spatial hash / O(n) check wins increasingly with n even when the flop fraction looks
+  small. Grep `for i { for j in i+1.. }` all-pairs distance/dup/collinearity scans in validators.
+
 ## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): RbfInterpolator drops the distance sqrt for r²-based kernels — 1.28-1.52x
 
 - `RbfInterpolator` evaluated `φ(r)` by computing `r = euclidean_dist(..)` (a `sqrt`) then the kernel, but

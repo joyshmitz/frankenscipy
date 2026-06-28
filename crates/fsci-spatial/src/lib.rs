@@ -4936,17 +4936,61 @@ impl SphericalVoronoi {
         }
         let radius_tol = tol * radius.max(1.0);
         let radius_tol_sq = radius_tol * radius_tol;
-        for i in 0..points.len() {
-            for j in (i + 1)..points.len() {
-                if norm3_squared(sub3(points[i], points[j])) <= radius_tol_sq {
-                    return Err(SpatialError::InvalidArgument(
-                        "spherical voronoi requires distinct points".to_string(),
-                    ));
+        let n = points.len();
+
+        // Reject near-duplicate generators (any pair within `radius_tol`). The
+        // former O(n²) all-pairs scan is replaced for large n by a uniform spatial
+        // hash with cell width `radius_tol`: two points closer than `radius_tol`
+        // differ by < one cell on every axis, so probing the 27-cell neighbourhood
+        // finds every such pair — identical accept/reject to the all-pairs scan
+        // (the result is only Ok/Err, no data depends on which pair triggers it).
+        // This mirrors the Voronoi-vertex dedup grid below; the small/mid-n branch
+        // keeps the direct scan where the hash cannot pay for itself (measured
+        // crossover: the cheap 8-flop pair test beats the hash-map probe until
+        // n ≈ 2k, so gate well past it to avoid any small-n regression).
+        if n >= 2048 {
+            let cell_key = |p: [f64; 3]| -> (i64, i64, i64) {
+                (
+                    (p[0] / radius_tol).floor() as i64,
+                    (p[1] / radius_tol).floor() as i64,
+                    (p[2] / radius_tol).floor() as i64,
+                )
+            };
+            let mut grid: std::collections::HashMap<(i64, i64, i64), Vec<usize>> =
+                std::collections::HashMap::with_capacity(n * 2);
+            for (idx, &p) in points.iter().enumerate() {
+                let key = cell_key(p);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            if grid
+                                .get(&(key.0 + dx, key.1 + dy, key.2 + dz))
+                                .is_some_and(|cands| {
+                                    cands.iter().any(|&c| {
+                                        norm3_squared(sub3(points[c], p)) <= radius_tol_sq
+                                    })
+                                })
+                            {
+                                return Err(SpatialError::InvalidArgument(
+                                    "spherical voronoi requires distinct points".to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                grid.entry(key).or_default().push(idx);
+            }
+        } else {
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    if norm3_squared(sub3(points[i], points[j])) <= radius_tol_sq {
+                        return Err(SpatialError::InvalidArgument(
+                            "spherical voronoi requires distinct points".to_string(),
+                        ));
+                    }
                 }
             }
         }
-
-        let n = points.len();
 
         // Face detection used to be an O(n³)-triplet × O(n)-validation gift-wrap
         // (overall O(n⁴)). The accepted faces are exactly the 3-D convex-hull
@@ -10138,6 +10182,30 @@ mod tests {
             [0.0, 0.0, 1.0],
         ];
         let err = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0).expect_err("duplicate");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn spherical_voronoi_duplicate_check_grid_path() {
+        // n >= 2048 exercises the spatial-hash duplicate check (vs the small-n
+        // all-pairs scan). A Fibonacci-sphere lattice gives well-separated
+        // generators that must build; duplicating one must still be rejected,
+        // proving the grid path agrees with the all-pairs accept/reject.
+        let n = 2050usize;
+        let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+        let mut points: Vec<[f64; 3]> = (0..n)
+            .map(|i| {
+                let y = 1.0 - (i as f64 / (n - 1) as f64) * 2.0;
+                let r = (1.0 - y * y).max(0.0).sqrt();
+                let theta = golden * i as f64;
+                [theta.cos() * r, y, theta.sin() * r]
+            })
+            .collect();
+        assert!(points.len() >= 2048);
+        assert!(SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0).is_ok());
+        points.push(points[0]);
+        let err = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0)
+            .expect_err("duplicate via grid path");
         assert!(matches!(err, SpatialError::InvalidArgument(_)));
     }
 
