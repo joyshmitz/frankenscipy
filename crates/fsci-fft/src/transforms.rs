@@ -243,6 +243,19 @@ fn get_bluestein_cache() -> &'static RwLock<HashMap<BluesteinKey, BluesteinPlan>
     BLUESTEIN_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+type RaderKey = (usize, bool);
+#[derive(Clone)]
+struct RaderPlan {
+    pow_g: Vec<usize>,     // g^j mod p — input gather permutation
+    out_idx: Vec<usize>,   // g^{-q} mod p — output scatter permutation
+    c_fft: Vec<Complex64>, // FFT of the (reversed) convolution kernel c̃
+}
+static RADER_CACHE: OnceLock<RwLock<HashMap<RaderKey, RaderPlan>>> = OnceLock::new();
+
+fn get_rader_cache() -> &'static RwLock<HashMap<RaderKey, RaderPlan>> {
+    RADER_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 /// Smallest even 5-smooth number (2^a·3^b·5^c with a ≥ 1) ≥ `n`.
 ///
 /// Bluestein converts a length-`n` DFT into a circular convolution of length
@@ -559,6 +572,142 @@ fn bluestein_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
         .collect()
 }
 
+/// `base^exp mod modulus` (modulus fits in u32-range FFT lengths, products in u64).
+fn pow_mod(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
+    let mut result = 1u64;
+    base %= modulus;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            result = result * base % modulus;
+        }
+        exp >>= 1;
+        base = base * base % modulus;
+    }
+    result
+}
+
+/// Distinct prime factors of `n` (ascending).
+fn distinct_prime_factors(mut n: usize) -> Vec<usize> {
+    let mut f = Vec::new();
+    let mut d = 2usize;
+    while d * d <= n {
+        if n % d == 0 {
+            f.push(d);
+            while n % d == 0 {
+                n /= d;
+            }
+        }
+        d += 1;
+    }
+    if n > 1 {
+        f.push(n);
+    }
+    f
+}
+
+/// Largest prime factor of `n` (n ≥ 2) by trial division.
+fn largest_prime_factor(mut n: usize) -> usize {
+    let mut largest = 1usize;
+    let mut d = 2usize;
+    while d * d <= n {
+        while n % d == 0 {
+            largest = d;
+            n /= d;
+        }
+        d += 1;
+    }
+    if n > 1 {
+        largest = n;
+    }
+    largest
+}
+
+/// Smallest primitive root of a prime `p` (generator of the multiplicative group).
+fn primitive_root(p: usize) -> usize {
+    let phi = p - 1;
+    let factors = distinct_prime_factors(phi);
+    for g in 2..p {
+        if factors
+            .iter()
+            .all(|&q| pow_mod(g as u64, (phi / q) as u64, p as u64) != 1)
+        {
+            return g;
+        }
+    }
+    p - 1
+}
+
+/// Rader's algorithm: a prime-length-`p` DFT as a length-`(p-1)` cyclic
+/// convolution. Cheaper than Bluestein (whose convolution length is ≥ 2p-1) when
+/// `p-1` is itself FFT-friendly. Gated by the caller to primes where `p-1` has no
+/// prime factor > `MIXED_RADIX_DIRECT_MAX_PRIME`, so the inner length-`(p-1)`
+/// transforms never recurse back into Bluestein/Rader. Unscaled, matching the
+/// engine convention.
+fn get_or_compute_rader_plan(p: usize, inverse: bool) -> RaderPlan {
+    let cache = get_rader_cache();
+    let key = (p, inverse);
+    if let Some(plan) = cache.read().ok().and_then(|guard| guard.get(&key).cloned()) {
+        return plan;
+    }
+
+    let l = p - 1;
+    let g = primitive_root(p);
+    // pow_g[j] = g^j mod p (j = 0..l); enumerates every nonzero residue once.
+    let mut pow_g = vec![0usize; l];
+    let mut acc = 1usize;
+    for slot in pow_g.iter_mut() {
+        *slot = acc;
+        acc = acc * g % p;
+    }
+    // output index g^{-q} mod p = pow_g[(l-q) mod l]
+    let out_idx: Vec<usize> = (0..l).map(|q| pow_g[(l - q) % l]).collect();
+    // c[m] = W^{g^m mod p}; W = exp(±2πi/p). c̃[m] = c[(l-m) mod l] turns the
+    // cyclic correlation X[g^{-q}] = x0 + Σ_j a_j c[(j-q) mod l] into the cyclic
+    // convolution (a ⊛ c̃)[q]. Store FFT(c̃) so each transform reuses it.
+    let sign = if inverse { 1.0 } else { -1.0 };
+    let mut c_fft = vec![(0.0, 0.0); l];
+    for m in 0..l {
+        let e = pow_g[(l - m) % l];
+        let ang = sign * 2.0 * PI * (e as f64) / (p as f64);
+        c_fft[m] = (ang.cos(), ang.sin());
+    }
+    COOLEY_TUKEY_BACKEND.transform_1d_inplace(&mut c_fft, false);
+
+    let plan = RaderPlan {
+        pow_g,
+        out_idx,
+        c_fft,
+    };
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(key, plan.clone());
+    }
+    plan
+}
+
+fn rader_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
+    let p = input.len();
+    let plan = get_or_compute_rader_plan(p, inverse);
+    let l = p - 1;
+    // a[j] = x[g^j]; cyclic conv via FFT (both length l, unscaled, /l on inverse).
+    let mut a: Vec<Complex64> = plan.pow_g.iter().map(|&idx| input[idx]).collect();
+    COOLEY_TUKEY_BACKEND.transform_1d_inplace(&mut a, false);
+    for (av, &cv) in a.iter_mut().zip(&plan.c_fft) {
+        *av = complex_mul(*av, cv);
+    }
+    COOLEY_TUKEY_BACKEND.transform_1d_inplace(&mut a, true);
+
+    let x0 = input
+        .iter()
+        .fold((0.0, 0.0), |acc, &v| complex_add(acc, v));
+    let inv_l = 1.0 / l as f64;
+    let mut out = vec![(0.0, 0.0); p];
+    out[0] = x0;
+    for (q, &idx) in plan.out_idx.iter().enumerate() {
+        out[idx] = complex_add(input[0], complex_scale(a[q], inv_l));
+    }
+    out
+}
+
 /// Largest prime length still handled by an in-place O(p²) DFT before falling
 /// back to Bluestein. Small odd-prime factors (3, 5, 7, …) bottom out here
 /// cheaply; only genuinely large residual prime factors go through Bluestein.
@@ -631,9 +780,18 @@ fn mixed_radix_fft(
     let p = mixed_radix_split_factor(n);
     if p == n {
         if n > MIXED_RADIX_DIRECT_MAX_PRIME {
-            // Large prime: gather the strided samples and let Bluestein carry it.
+            // Large prime: gather the strided samples. Rader (a length-(n-1) cyclic
+            // convolution) only beats Bluestein (length ≥ 2n-1) when n-1 is itself
+            // 5-SMOOTH, so its two inner transforms run entirely on fast radix-2/3/5
+            // butterflies. If n-1 carries a prime factor > 5 (e.g. 103→102=2·3·17,
+            // whose 17 needs an O(17²) direct DFT), the inner FFT(n-1) costs about
+            // as much as Bluestein's pow2 FFT and Rader gives nothing — use it.
             let gathered: Vec<Complex64> = (0..n).map(|t| src[base + t * stride]).collect();
-            let spectrum = bluestein_fft(&gathered, inverse);
+            let spectrum = if largest_prime_factor(n - 1) <= 5 {
+                rader_fft(&gathered, inverse)
+            } else {
+                bluestein_fft(&gathered, inverse)
+            };
             out[..n].copy_from_slice(&spectrum);
         } else {
             let tw = get_or_compute_twiddles(n, inverse);
@@ -4654,7 +4812,7 @@ mod tests {
     };
     use super::{
         cooley_tukey_radix2_inplace, cooley_tukey_radix4_inplace_with_twiddles,
-        get_or_compute_twiddles,
+        get_or_compute_twiddles, rader_fft,
     };
 
     fn naive_fft_for_test(input: &[Complex64]) -> Vec<Complex64> {
@@ -5475,6 +5633,42 @@ mod tests {
         let recovered = ifft(&spectrum, &FftOptions::default()).expect("ifft n=7");
         for (&a, &b) in recovered.iter().zip(&input) {
             assert_close_complex(a, b, 1e-9);
+        }
+    }
+
+    #[test]
+    fn rader_prime_dft_matches_naive() {
+        let naive_dft = |x: &[Complex64], inverse: bool| -> Vec<Complex64> {
+            let n = x.len();
+            let sign = if inverse { 1.0 } else { -1.0 };
+            (0..n)
+                .map(|k| {
+                    let mut acc = (0.0, 0.0);
+                    for (j, &(re, im)) in x.iter().enumerate() {
+                        let a = sign * 2.0 * std::f64::consts::PI * (k * j % n) as f64 / n as f64;
+                        let (c, s) = (a.cos(), a.sin());
+                        acc.0 += re * c - im * s;
+                        acc.1 += re * s + im * c;
+                    }
+                    acc
+                })
+                .collect()
+        };
+        // primes p where p-1 is smooth (the gated case): 67,71,101,103,1031.
+        for &p in &[67usize, 71, 101, 103, 1031] {
+            let x: Vec<Complex64> = (0..p)
+                .map(|i| ((i as f64 * 0.7 + 1.0).sin(), (i as f64 * 0.23).cos()))
+                .collect();
+            for &inv in &[false, true] {
+                let got = rader_fft(&x, inv);
+                let want = naive_dft(&x, inv);
+                let maxerr = got
+                    .iter()
+                    .zip(&want)
+                    .map(|(&(a, b), &(c, d))| ((a - c).powi(2) + (b - d).powi(2)).sqrt())
+                    .fold(0.0_f64, f64::max);
+                assert!(maxerr < 1e-7, "p={p} inv={inv} rader maxerr {maxerr}");
+            }
         }
     }
 

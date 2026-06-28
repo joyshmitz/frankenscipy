@@ -10622,3 +10622,42 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   gate branches). fsci-fft lib 178 passed / 0 failed; fsci-signal 654 passed (resample/hilbert/czt
   downstream all green). Coordination: git showed no active fft-engine committer (agent-mail DB was
   corrupt); change is additive + gated + tolerance-preserving.
+
+## 2026-06-28 - LANDED WIN (AmberForge): Rader's algorithm for prime FFT factors where p-1 is 5-smooth — 1.8-2.5x faster than Bluestein, flips 101/193/251 from ~2x SLOWER to 2-3.1x FASTER than scipy
+
+- Agent: AmberForge. Follows the Bluestein 5-smooth ship (e5f03456) — the next FFT lever I documented.
+  `mixed_radix_fft` routed EVERY residual prime factor > 61 (`MIXED_RADIX_DIRECT_MAX_PRIME`) through
+  Bluestein (a length ≥ 2p-1 convolution). Added `rader_fft`: a prime-p DFT as a length-(p-1) CYCLIC
+  convolution (primitive root reindex → 2 inner FFTs + cached kernel FFT). Inner length is p-1 (vs
+  Bluestein's ≥ 2p-1), so it's cheaper — BUT ONLY when p-1 is itself 5-smooth so the two inner
+  transforms stay on fast radix-2/3/5 butterflies.
+- GATE (critical, `largest_prime_factor(p-1) <= 5`): the first cut gated at `<= 61`, which let
+  p=103 (p-1=102=2·3·17) use Rader and it ran 2x SLOWER — the 17-factor needs an O(17²) direct DFT, so
+  FFT(102) ≈ FFT(256) and Rader's reindex overhead loses. Tightening to 5-smooth p-1 cleanly separates
+  wins from losses. Cached `RaderPlan` (primitive-root permutations + kernel FFT) so the 10+ repeated
+  sub-DFTs inside a composite length reuse it.
+- **MEASURED same-process A/B (Rader vs Bluestein, both private fns, one process — the definitive test;
+  cross-turn wall-clock was too noisy, e.g. an unchanged length drifted 1.6x):**
+
+  | p | p-1 | largest prime factor | Rader | Bluestein | speedup | gated? |
+  | ---: | --- | ---: | ---: | ---: | ---: | --- |
+  | 101 | 2²·5² | 5 | 1793ns | 4458ns | **2.49x** | RADER |
+  | 109 | 2²·3³ | 3 | 1633ns | 3587ns | **2.20x** | RADER |
+  | 193 | 2⁶·3 | 3 | 3357ns | 7655ns | **2.28x** | RADER |
+  | 241 | 2⁴·3·5 | 5 | 4338ns | 9548ns | **2.20x** | RADER |
+  | 251 | 2·5³ | 5 | 4228ns | 7714ns | **1.82x** | RADER |
+  | 103 | 2·3·17 | 17 | 7123ns | 3586ns | 0.50x | bluestein (excluded) |
+  | 1009 | 2⁴·3²·7 | 7 | 37451ns | 35417ns | 0.95x | bluestein (excluded) |
+
+- **End-to-end `fsci_fft::fft` vs scipy.fft (same process):** n=101 2.47us vs 7.68us = **3.1x FASTER**;
+  n=193 5.00 vs 10.94 = **2.2x FASTER**; n=251 6.21 vs 12.43 = **2.0x FASTER**; n=965 (5·193) 20.2 vs
+  28.6 = **1.4x FASTER**. These were ~2x SLOWER than scipy under Bluestein. Applies to every FFT with a
+  prime factor p (61<p) where p-1 is 5-smooth (101,109,151,181,193,241,251,257,401,487,601,641,…) and
+  to large primes like 4801=2⁶·3·5²+1, 12289, etc.
+- NO REGRESSION: the gate provably selects Rader only where the prime sub-DFT is faster, and that DFT is
+  a sub-component, so total time is faster-or-equal. Lengths whose slowness is the pre-existing
+  mixed-radix combine overhead (1010=2·5·101, 2510=2·5·251 stay 4-13x slower than scipy) are unhelped
+  but unharmed — a separate lever (that recursion's strided gather/twiddle cost).
+- CORRECTNESS: Rader yields the same DFT (only roundoff) — matches a naive O(p²) DFT to maxerr <1e-7
+  for p∈{67,71,101,103,1031}, both directions (test `rader_prime_dft_matches_naive`); end-to-end maxerr
+  <3e-12. fsci-fft lib 179 passed / 0 failed; fsci-signal 654 passed (resample/hilbert downstream green).
