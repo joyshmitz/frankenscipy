@@ -1,6 +1,13 @@
 # Plan: compact-banded `make_interp_spline` (close the remaining ~120x scipy loss)
 
-Status: DESIGN (authored under a disk-low / no-build window — implement + verify
+Status: ✅ DONE / CLOSED (Plan 1 shipped — `make_interp_spline` now uses
+`bspline_find_interval` + `CompactBandRow` + `solve_banded_compact`; Plan 2 GCV
+factor-once shipped via banded Cholesky). MEASURED 2026-06-28 (AmberForge): k3 n=1000
+fsci 125.9µs vs scipy 264µs = **2.10x FASTER** (was 29x slower); n=3000 376.9µs vs
+392µs = **1.04x** (was 175x slower). The O(n²) build is gone — do NOT re-implement.
+See `docs/NEGATIVE_EVIDENCE.md` 2026-06-28 DIG AUDIT. Original plan text retained below.
+
+Status (original): DESIGN (authored under a disk-low / no-build window — implement + verify
 when benches resume). Owner: cc / MistyBirch.
 
 ## Why

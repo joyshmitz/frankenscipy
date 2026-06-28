@@ -10270,3 +10270,49 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   count metrics (Hamming/Jaccard), not just the small-d real-vector metrics.** Remaining generic-arm
   metric: Minkowski (SciPy itself slow there). LESSON: don't trust a "the compiler already vectorizes
   it" guess about a scalar filter/count helper — MEASURE; the scalar count arms had no SIMD at all.
+
+## 2026-06-28 - DIG AUDIT (AmberForge): 3 stale scorecard "biggest gaps" are NOW WINS; pdist Hamming/Jaccard SoA REJECTED (cdist lever does NOT transfer)
+
+- Agent: AmberForge (claude-code / claude-opus-4-8), `AGENT_NAME=AmberForge`. Land-or-dig:
+  no unlanded MEASURED win sat in a bench worktree for me (the committed-but-unlanded
+  worktree HEADs are all 10+ days old / superseded — e.g. `e3b744f4` matmul-threshold was
+  already overtaken by main's threshold-256; the dirty worktrees are other live agents'
+  WIP). So I dug the documented biggest gaps — and MEASURED that they are stale-closed.
+- **`make_interp_spline` k3 — the ledger's headline "29-175x slower, gap grows O(n²)"
+  (`docs/perf/make_interp_spline_banded_plan.md`) is CLOSED.** The compact-banded build
+  (`bspline_find_interval` binary search + `CompactBandRow` + `solve_banded_compact`, single
+  reused length-n scratch) is on main. Re-measured same box vs scipy 1.17.1 (min-of-7):
+  n=1000 fsci **125.9 µs** vs scipy 264 µs = **2.10x FASTER** (was 6810 µs / 29x slower);
+  n=3000 fsci **376.9 µs** vs scipy 392 µs = **1.04x** (was 84.3 ms / 175x slower). Plan 1
+  is DONE — the plan doc is stale; do not re-implement.
+- **`kmeans2` k4/n2000 — scorecard line "0.41x (2.4x SLOWER), kernel gap → bead" is CLOSED.**
+  The `nearest_centroid_k4_d4` SoA-across-centroids fast path + double-buffer: fsci **489.5 µs**
+  vs scipy 2043 µs = **4.17x FASTER** (was 5126 µs). Don't re-chase.
+- **Large-codebook `vq` (k=128 d=16 n=20000, the regime the k4/d4 path does NOT cover) is
+  NOT a gap** — the prefilter + partial-distance-abandonment scan over a flat layout already
+  beats scipy's BLAS gemm-distance `_vq`: fsci **4.14 ms** vs scipy 12.08 ms = **2.9x FASTER**.
+  (Probe bench added + reverted.) The gemm-distance lever would not help here.
+- **REJECT — pdist Hamming/Jaccard SoA-across-pairs (the cdist boolean lever, ported).** The
+  cdist win (commit `fb6b48a9`) came because cdist's generic `_ =>` arm pointer-chases
+  `Vec<Vec>` per pair (no SIMD). But pdist's generic `_ =>` arm ALREADY flattens to a
+  contiguous row-major buffer + parallelizes (`pdist_fill` over `pdist_thread_count` threads),
+  so the scalar `hamming`/`jaccard` AUTOVECTORIZES over each contiguous point vector and the
+  parallel arm already dominates scipy. Built the bit-identical SoA kernel (parallel driver
+  mirroring `pdist_fill`'s `pdist_row_bounds`+offset split; `pdist_boolean_soa_matches_scalar_
+  bitwise` to_bits test, d∈{1,3,7,8,64,200} n∈{2,9,13,50} GREEN) and A/B'd it 800×{d64,d256}:
+
+  | pdist (800 pts) | generic flatten+parallel | SoA-across-pairs (parallel) | scipy pdist | generic vs scipy |
+  | --- | ---: | ---: | ---: | ---: |
+  | Hamming d64  | 1.67 ms | 1.89 ms (**0.88x, LOSS**) | 5.50 ms   | already 3.3x FASTER |
+  | Hamming d256 | 3.14 ms | 4.30 ms (**0.73x, LOSS**) | 22.63 ms  | already 7.2x FASTER |
+  | Jaccard d64  | 1.99 ms | 2.03 ms (~parity)         | 26.34 ms  | already 13x FASTER |
+  | Jaccard d256 | 3.61 ms | 4.68 ms (**0.77x, LOSS**) | 105.78 ms | already 29x FASTER |
+
+  SoA's strided column reads (`b[k][j..j+8]` across `dim` separate column Vecs) are
+  cache-hostile at high d, where the generic arm's contiguous per-point read + autovectorize
+  wins. REVERTED in full (code/test/bench). LESSON: the SoA-across-pairs lever only wins where
+  the baseline pointer-chases AoS (cdist); a baseline that already flattens+parallelizes+
+  autovectorizes (pdist) leaves no room. Don't re-port it to pdist boolean metrics.
+- NET: the spatial cdist boolean SoA vein is fully exhausted (only Hamming/Jaccard exist in the
+  enum; both landed `fb6b48a9`). The genuine remaining gaps are external-C-lib WALLS (Qhull
+  SphericalVoronoi O(n⁴), HiGHS, dense LAPACK, pocketfft non-pow2 SIMD) — none a quick lever.
