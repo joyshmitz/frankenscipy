@@ -10378,3 +10378,28 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   jnjnp_zeros (1.07-1.18x faster). The scorecard's loss section is largely stale — VERIFY same-box
   before chasing any row. NET this turn: no fresh tractable algorithmic win exists; the port is
   mature and the real losses need SIMD/numerical-library depth, not a new algorithmic identity.
+
+## 2026-06-28 - DIG (AmberForge): FFT 5-smooth "loss" is a cross-box artifact (fsci AHEAD); twiddle modulo-removal micro-lever is ~0-gain (REVERTED)
+
+- Agent: AmberForge (claude-code / claude-opus-4-8), `AGENT_NAME=AmberForge`. No unlanded
+  worktree win → dug the scorecard's last non-stale FFT row (`8l8r1/cod-a-fft-small-power-tail`,
+  "fft 5-smooth 1.37-2.54x slower than SciPy", measured on RCH `hz1` vs local SciPy).
+- **The "loss" is the RCH-vs-local cross-box artifact.** Re-measured `cargo bench -p fsci-fft --
+  fft_mixed_radix` (5-smooth n=720..10000) vs `scipy.fft.fft` local (min-of-50): even with fsci on a
+  remote rch worker and scipy local, fsci is AHEAD at every size — n=720 5.74µs vs scipy 9.90µs
+  (1.7x), n=1000 8.0 vs 13.0, n=1080 8.8 vs 13.8, n=1500 12.5 vs 17.1, n=1920 18.1 vs 20.5,
+  n=3000 25.4 vs 32.5, n=5000 44 vs 53, n=10000 vs 71. fsci's hardcoded radix-2/3/4/5 butterflies
+  (transforms.rs) already beat pocketfft at these smooth sizes. Don't chase the 5-smooth row.
+- **REJECT (~0-gain) — twiddle index modulo removal.** The combine butterflies gather
+  `twn[(j·r) % n]`, but `j·r ≤ (p-1)(m-1) = n-p-m+1 < n` ALWAYS (table length n), so the `% n` is a
+  provable no-op — `twn[j·r]` is bit-identical. Removed it at all 5 sites (radix-2/3/4/5 + generic
+  branch); 177/177 fsci-fft tests green (bit-identity held). Same-worker back-to-back A/B (stash
+  toggle): deltas all within ±5% noise, several sizes NEW-side slower (n=720 5.74↔5.74, n=1080 8.43→8.81,
+  n=1920 18.08→19.08, n=5000 45.6→44.2) — LLVM already strength-reduces the runtime-constant
+  modulo, and the kernel is memory/complex-mul bound, not index-arithmetic bound. REVERTED
+  (stash, recoverable). LESSON: a "redundant integer div per element" is NOT a lever when the
+  compiler reciprocal-reduces it and the loop is memory-bound — measure before assuming.
+- Genuine remaining frontier unchanged: `eigsh` restarted-Lanczos vs ARPACK (1.3-1.9x, the only
+  non-stale non-cross-box loss; needs IRLM, a large numerically-delicate port), pow2-FFT SIMD.
+  Probe aside: `scipy.special.struve` is scipy-SLOW (8.3ms/2000pts) — a potential fsci self-win
+  target if fsci's struve isn't already dominant (untested).
