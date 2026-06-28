@@ -1056,6 +1056,28 @@ fn next_regular_fft_len(n: usize) -> usize {
     best
 }
 
+/// FFT length for a Bluestein/CZT linear convolution of length `conv_len`: the
+/// cheaper of the even-5-smooth length and the next power of two.
+///
+/// fsci's mixed-radix FFT has fast radix-2/3/4/5 butterflies, so the even-5-smooth
+/// length (always ≤ next_pow2) does strictly fewer points — but its per-point
+/// constant is higher than the flat radix-2/4 pow2 kernel, so it only wins when it
+/// is SUBSTANTIALLY smaller (≤ 60% of the pow2 length, i.e. `conv_len` sits just
+/// above a power of two and the pow2 length nearly doubles). When the two are close
+/// the pow2 length is cheaper. This mirrors the gate fsci_fft's internal Bluestein
+/// uses (`m_5smooth*5 <= m_pow2*3`). Critically, it NEVER returns a 7/11-smooth
+/// length (scipy's `next_fast_len` does), which would hit fsci's slow large-prime
+/// path. Any length ≥ `conv_len` yields the same DFT, so this only changes round-off.
+fn bluestein_conv_fft_len(conv_len: usize) -> usize {
+    let p2 = conv_len.next_power_of_two();
+    let s5 = next_regular_fft_len(conv_len);
+    if s5.saturating_mul(5) <= p2.saturating_mul(3) {
+        s5
+    } else {
+        p2
+    }
+}
+
 /// FFT-based convolution (faster for large inputs).
 ///
 /// Matches `scipy.signal.fftconvolve(a, b, mode)`.
@@ -2121,7 +2143,7 @@ pub fn czt(
     // 2) Form h[n] = w^{-n²/2}
     // 3) Convolve yn with h, then multiply by w^{k²/2}
 
-    let l = (n + m - 1).next_power_of_two(); // FFT length
+    let l = bluestein_conv_fft_len(n + m - 1); // FFT length (5-smooth/pow2, cost-gated)
 
     // Precompute w^{k²/2} chirp factors
     // w^{k²/2} = (w_mag)^{k²/2} * exp(j * w_ang * k²/2)
@@ -2373,12 +2395,12 @@ impl CZT {
         let a_val = a.unwrap_or((1.0, 0.0));
         validate_czt_complex_control("a", a_val)?;
 
-        // Bluestein linear-convolution length only needs L ≥ n+m-1; pad to the
-        // smallest even 5-smooth (radix-2/3/4/5, fast under fsci's mixed-radix FFT)
-        // rather than scipy's {2,3,5,7,11}-smooth `next_fast_len`, whose 7/11 factors
-        // hit fsci's slow large-prime path (worst case 3·7³=1029). Same lever as
-        // fftconvolve; result is identical (any L ≥ n+m-1 gives the same DFT).
-        let nfft = next_regular_fft_len(n + m - 1);
+        // Bluestein linear-convolution length only needs L ≥ n+m-1; pick the cheaper
+        // of even-5-smooth / pow2 (both fast under fsci's mixed-radix FFT), never
+        // scipy's {2,3,5,7,11}-smooth `next_fast_len` whose 7/11 factors hit fsci's
+        // slow large-prime path (worst case 3·7³=1029). Result is identical (any
+        // L ≥ n+m-1 gives the same DFT).
+        let nfft = bluestein_conv_fft_len(n + m - 1);
 
         // _Awk2 = a^-k[:n] * wk2[:n]
         let awk2: Vec<(f64, f64)> = (0..n)
@@ -2553,12 +2575,12 @@ impl ZoomFFT {
             })
             .collect();
 
-        // Bluestein linear-convolution length only needs L ≥ n+m-1; pad to the
-        // smallest even 5-smooth (radix-2/3/4/5, fast under fsci's mixed-radix FFT)
-        // rather than scipy's {2,3,5,7,11}-smooth `next_fast_len`, whose 7/11 factors
-        // hit fsci's slow large-prime path (worst case 3·7³=1029). Same lever as
-        // fftconvolve; result is identical (any L ≥ n+m-1 gives the same DFT).
-        let nfft = next_regular_fft_len(n + m - 1);
+        // Bluestein linear-convolution length only needs L ≥ n+m-1; pick the cheaper
+        // of even-5-smooth / pow2 (both fast under fsci's mixed-radix FFT), never
+        // scipy's {2,3,5,7,11}-smooth `next_fast_len` whose 7/11 factors hit fsci's
+        // slow large-prime path (worst case 3·7³=1029). Result is identical (any
+        // L ≥ n+m-1 gives the same DFT).
+        let nfft = bluestein_conv_fft_len(n + m - 1);
         // _Awk2 = exp(-2j*pi*f1/fs*k[:n]) * wk2[:n]
         let awk2: Vec<(f64, f64)> = (0..n)
             .map(|k| {

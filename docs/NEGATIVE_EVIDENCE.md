@@ -11071,3 +11071,29 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - This closes a follow-on flagged in memory [[perf_signal_fft_even_5smooth_padding]]. NOTE remaining
   pow2-padded FFT-conv sites: `cwt` (lines ~2861/2882, `.next_power_of_two()`) — smaller win (pow2 is
   fast for fsci, just larger than 5-smooth) but the same lever; follow-on candidate.
+
+## 2026-06-28 - LANDED WIN (AmberForge): czt() / CZT / ZoomFFT Bluestein length cost-gated (pow2 → 5-smooth) — 1.27-1.39x self, flips small-n vs scipy
+
+- Agent: AmberForge. Follow-on to c0738692. The functional `czt()` (scipy.signal.czt) rolled its own
+  Bluestein with naive `next_power_of_two(n+m-1)` padding — pow2 is always fast for fsci but ~2x larger
+  than the even-5-smooth length when n+m-1 sits just above a power of two. fsci's *internal* Bluestein
+  already cost-gates (`m_5smooth*5 <= m_pow2*3`); the signal-crate Bluestein sites didn't. Added a shared
+  `bluestein_conv_fft_len` helper (cheaper of 5-smooth / pow2, never 7/11-smooth) and routed all three
+  sites through it: `czt()`, plus `CZT::new`/`ZoomFFT::new` (which previously used *unconditional*
+  5-smooth — the gate now keeps pow2 in the marginal region where 5-smooth isn't < 60% of pow2).
+- **MEASURED same-process FFT-level lever (best-of-6×300):** 5-smooth beats pow2 1.48-1.82x at just-
+  above-pow2 lengths (1199→1.78x, 2300→1.75x, 1100→1.60x, 4200→1.82x, 600→1.48x).
+- **pub-fn czt() before(pow2)/after(gated) A/B + vs scipy.signal.czt:**
+
+  | n=m | conv len L | before pow2 | after gated | self | scipy | after vs scipy |
+  | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 600 | 1199→1200 | 107.4 µs | 84.6 µs | **1.27x** | 96.6 µs | **1.14x faster** (was 1.10x slower) |
+  | 1150 | 2299→2304 | 226.7 µs | 175.2 µs | **1.29x** | 140.0 µs | 1.25x slower (was 1.62x) |
+  | 2100 | 4199→4320 | 480.6 µs | 345.1 µs | **1.39x** | 226.8 µs | 1.52x slower (was 2.12x) |
+  | 700 | 1399→pow2 2048 | 120.2 µs | 117.2 µs | 1.03x | 103.8 µs | 1.12x slower (gate kept pow2) |
+
+  Strict self-improvement (1.27-1.39x where the gate picks 5-smooth), flips n=600 to a scipy win, and
+  cuts the large-n loss roughly in half. The RESIDUAL large-n loss is NOT the FFT length — it's that
+  pub-fn `czt()` rebuilds the chirp tables on every call (scalar tuple arithmetic), unlike the `CZT`
+  struct which precomputes them in `new()` and already BEATS scipy (c0738692). Closing that needs a
+  chirp-construction rework (vectorize / precompute), a separate effort. Conformance: fsci-signal 654/0.
