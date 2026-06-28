@@ -44,6 +44,43 @@ ledger above so the project has one source of truth.
   design, or a narrow public route that can produce a stable same-worker factor
   and factor+solve win together.
 
+## 2026-06-28 - cod-a (codex-cli) - NO-SHIP: packed Cholesky panel solve / TRSM boundary is not a stable win
+
+- Land-or-dig audit: after `git fetch origin`, all live FrankenSciPy
+  `.scratch` / `.worktrees` bench-worktree heads were ancestors of
+  `origin/main`. No measured unlanded worktree win was available to land.
+- Gap routing: the stale sparse `spsolve` BTreeMap-LU wall was rechecked because
+  it had a larger historical ratio than dense Cholesky. Current `origin/main`
+  already contains `b130c6a2 perf(sparse): add square-grid spsolve spectral
+  route`; a fresh per-crate RCH bench on `hz2` measured
+  `sparse_spsolve_laplacian/spsolve/4900` at 1.0627 ms, so that ledger gap is
+  no longer the active target.
+- New lever tested and reverted: pack the factored diagonal Cholesky panel
+  once into a compact lower-triangular buffer and solve the trailing panel rows
+  against it in parallel before the existing SYRK update. This targets the
+  panel/TRSM boundary called out by prior entries, not the already-rejected
+  dot-width, panel-size, representation, or public-`matmul` SYRK routes.
+- Proof while candidate was present:
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo test -p fsci-linalg cholesky_lower_blocked_matches_unblocked_factorization --lib -- --nocapture`
+  passed 1/1 on `ovh-a`.
+- Per-crate bench command used the accepted release-profile spelling because
+  this repo's Cargo rejects literal `cargo bench --release`:
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-linalg --bench linalg_bench --profile release -- 1000x1000_rust_cho_factor --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- ORIG reference, clean `origin/main` worktree on `ovh-a`: `1000x1000_rust_cho_factor`
+  38.526 ms; `1000x1000_rust_cho_factor_solve` 32.891 ms.
+- Candidate local-fallback rows were not commit-grade: first run measured
+  53.028 ms / 45.568 ms; immediate replay measured 88.640 ms /
+  161.56 ms and Criterion reported `+90.045%` factor regression and
+  `+393.73%` factor+solve regression. Against the clean `ovh-a` ORIG row, the
+  best candidate speed ratios are 0.73x factor-only and 0.72x factor+solve; the
+  replay ratios are 0.43x and 0.20x. The local restored-source row after revert
+  was also noisy, so this is recorded as rejection/routing evidence, not a
+  same-worker keep.
+- Final source was reverted to `origin/main`; this commit is evidence-only.
+  Next Cholesky attempt should skip per-row panel packing/threading and move to
+  a true internal flat GEMM/SYRK micro-kernel or an explicitly scoped LAPACK
+  boundary.
+
 ## 2026-06-27 - GreenFalcon (codex) - NO-SHIP (reverted): FFT mixed-radix inner butterfly lane parallelism is not a reliable gap-close
 
 - Worktree scan: `.scratch/.worktrees` had no landable measured win absent from
