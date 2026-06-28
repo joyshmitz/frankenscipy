@@ -16412,6 +16412,51 @@ pub fn decimate(x: &[f64], q: usize) -> Result<Vec<f64>, SignalError> {
     Ok(output)
 }
 
+/// Decimate (anti-alias + downsample by `q`) along one axis of a rectangular 2-D
+/// input.
+///
+/// Matches `scipy.signal.decimate(x, q, axis)` with the default IIR
+/// (`cheby1(8, 0.05, 0.8/q)`) zero-phase filter. Each line is decimated
+/// independently — BIT-IDENTICAL to per-line 1-D `decimate`. Reuses the parallel
+/// `filtfilt_axis_2d` (filter built ONCE, applied across lines on all cores), then
+/// subsamples: scipy serial-loops the per-line zero-phase recurrence, so the fan-out
+/// wins big (the same multi-channel-filter lever as `filtfilt_axis_2d`). For
+/// `axis=-1`/`1` each row shrinks to `ceil(cols/q)`; for `axis=0` the row count
+/// shrinks to `ceil(nrows/q)`.
+pub fn decimate_axis_2d(
+    x: &[Vec<f64>],
+    q: usize,
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, SignalError> {
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+    if q < 2 {
+        return Err(SignalError::InvalidArgument("q must be >= 2".to_string()));
+    }
+    // Same anti-alias filter as the 1-D path, built once and shared across lines.
+    let cutoff = 0.8 / q as f64;
+    let ba = cheby1(8, 0.05, &[cutoff], FilterType::Lowpass)?;
+    match axis {
+        -1 | 1 => {
+            // Zero-phase filter each row in parallel, then subsample each row.
+            let filtered = filtfilt_axis_2d(&ba.b, &ba.a, x, -1)?;
+            Ok(filtered
+                .into_iter()
+                .map(|row| row.into_iter().step_by(q).collect())
+                .collect())
+        }
+        0 => {
+            // Zero-phase filter down each column in parallel, then subsample rows.
+            let filtered = filtfilt_axis_2d(&ba.b, &ba.a, x, 0)?;
+            Ok(filtered.into_iter().step_by(q).collect())
+        }
+        other => Err(SignalError::InvalidArgument(format!(
+            "axis must be 0, 1, or -1 for 2-D decimate, got {other}"
+        ))),
+    }
+}
+
 /// Compute GCD of two positive integers.
 fn gcd(mut a: usize, mut b: usize) -> usize {
     while b != 0 {
@@ -23335,6 +23380,45 @@ mod tests {
         }
 
         assert!(sosfiltfilt_axis_2d(&sos, &x, 5).is_err());
+    }
+
+    #[test]
+    fn decimate_axis_2d_matches_per_line_decimate() {
+        // 2-D decimate must be BIT-IDENTICAL to per-line 1-D decimate (independent
+        // lines). Sized past the filtfilt parallel gate; q=4.
+        let rows = 64usize;
+        let cols = 4096usize;
+        let q = 4usize;
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| ((r * 31 + c) as f64 * 0.013).sin() * 7.0)
+                    .collect()
+            })
+            .collect();
+
+        // axis = -1 (rows): each output row == decimate(row, q)
+        let par = decimate_axis_2d(&x, q, -1).expect("decimate_axis_2d rows");
+        let serial: Vec<Vec<f64>> = x
+            .iter()
+            .map(|row| decimate(row, q).expect("decimate row"))
+            .collect();
+        assert_eq!(par, serial, "decimate_axis_2d axis=-1");
+
+        // axis = 0 (columns): each output column == decimate(column, q)
+        let par0 = decimate_axis_2d(&x, q, 0).expect("decimate_axis_2d cols");
+        let out_rows = par0.len();
+        for col in 0..cols {
+            let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+            let dec = decimate(&column, q).expect("decimate col");
+            assert_eq!(dec.len(), out_rows, "axis=0 output row count");
+            for (r, &value) in dec.iter().enumerate() {
+                assert_eq!(par0[r][col], value, "decimate axis=0 col {col} row {r}");
+            }
+        }
+
+        assert!(decimate_axis_2d(&x, 1, -1).is_err()); // q < 2
+        assert!(decimate_axis_2d(&x, q, 3).is_err()); // bad axis
     }
 
     #[test]

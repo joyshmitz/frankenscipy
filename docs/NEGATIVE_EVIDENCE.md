@@ -11222,3 +11222,25 @@ n due to the per-call chirp rebuild.
 - VEIN STATUS: the parallel-across-lines recipe (grep `pub fn <op>(... x: &[f64])` whose scipy counterpart
   takes `axis`) has now paid 3 ships (sosfilt/filtfilt/sosfiltfilt 2-D). Remaining 1-D-only candidates with
   scipy axis args: `hilbert`, `decimate`, `savgol_filter`.
+
+## 2026-06-28 - LANDED WIN (AmberForge): decimate_axis_2d (multi-channel downsample) — 5.6-6.1x FASTER than scipy
+
+- Agent: AmberForge. 4th ship of the multi-channel-filter vein. fsci's `decimate(x, q)` (cheby1(8,0.05,
+  0.8/q) anti-alias → `filtfilt` zero-phase → subsample) was 1-D only; scipy.signal.decimate takes an axis.
+  Added `decimate_axis_2d(x, q, axis)` that builds the filter ONCE and reuses the just-shipped parallel
+  `filtfilt_axis_2d` across lines, then subsamples (axis=-1/1: each row → ceil(cols/q); axis=0: rows →
+  ceil(nrows/q)). scipy serial-loops the per-line zero-phase recurrence; the across-lines fan-out wins.
+- **MEASURED vs scipy.signal.decimate (q=4, axis=-1, best-of-5):**
+
+  | channels × length | fsci decimate_axis_2d | scipy decimate 2D | speedup |
+  | ---: | ---: | ---: | ---: |
+  | 1000 × 10000 | 47.49 ms | 291.75 ms | **6.1x** |
+  | 256 × 100000 | 137.56 ms | 775.58 ms | **5.6x** |
+
+  BYTE-IDENTICAL to per-line 1-D `decimate` (test `decimate_axis_2d_matches_per_line_decimate`, axis=-1 and
+  0). Numerical oracle vs scipy's 2-D decimate: max abs diff **6.0e-11** (fsci's filtfilt(b,a) order-8 vs
+  scipy's sosfiltfilt agree within tolerance; same output shape). fsci-signal 657/0. Smaller multiplier than
+  the pure filter family (8.7-15.1x) because the output is subsampled (q×) and the order-8 cheby1 filtfilt
+  carries more per-line overhead, but a clean ~6x. The multi-channel-filter vein has now paid **4 ships**
+  (sosfilt/filtfilt/sosfiltfilt/decimate 2-D). Remaining 1-D-only candidates: `hilbert` (FFT-based, scipy
+  batches it → smaller win), `savgol_filter` (FIR conv, scipy batches via ndimage).
