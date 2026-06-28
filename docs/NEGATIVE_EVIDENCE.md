@@ -10696,3 +10696,34 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - This is the 3rd FFT ship this session (Bluestein 5-smooth e5f03456, Rader 6cb307b0, this) — together
   they take the whole non-pow2 / prime-factor family from 2-13x SLOWER than scipy to parity-or-faster
   across primes (101/193/251), large primes (1031/4099/9001), and 2^k·large-prime composites.
+
+## 2026-06-28 - VALIDATION + DIG SURFACE (AmberForge): rfft inherits the 3 FFT fixes (1.5-2.5x faster than scipy at awkward lengths); clean algorithmic frontier CLOSED, remaining gaps are confirmed walls
+
+- Agent: AmberForge. After landing 3 complex-FFT wins this session (Bluestein 5-smooth e5f03456,
+  Rader 6cb307b0, split-factor 186284d2), confirmed they PROPAGATE to the real-FFT path that
+  resample/hilbert/spectral use. `fsci_fft::rfft` routes through the same `COOLEY_TUKEY_BACKEND`, so:
+  - **MEASURED rfft vs scipy.fft.rfft (same box):** n=1010 11.7us vs 21.0 = **1.80x FASTER**; n=2510
+    32.8 vs 54.2 = **1.65x FASTER**; n=101 2.3 vs 5.7 = **2.46x FASTER**; n=251 5.4 vs 8.4 = **1.56x
+    FASTER**. (Residual 1030/1031/4099 ~1.2-1.8x slower = the 103-prime Bluestein + mid-pow2 SIMD wall.)
+  - GUARD added: extended `rfft_metamorphic_matches_first_half_of_fft` to N ∈ {101, 1031, 1010, 2510}
+    so a future FFT-engine change can't silently regress rfft's inherited fast paths. 180 fft green.
+- **DIG RESULT — the clean algorithmic frontier is CLOSED; the next-biggest gaps are confirmed walls:**
+  - `nnls` (was scored 5-9x slower) is now ≈parity (1.10-1.23x, scorecard `nnls-triangle-syrk` line 18)
+    — the O(n²·m) Gram precompute was the real cost and it's byte-identically fixed. The filed
+    "incremental-Cholesky O(n⁴)→O(n³)" follow-up only matters for square/wide A (untested shape), so
+    LOW EV. Not chased.
+  - `kendalltau` already uses Knight's O(n log n) merge-sort (`kendall_pair_counts_knight`,
+    `kendall_strict_inversions`) — not the naive O(n²). Not a gap.
+  - **`cholesky` (n=1000, ~8x slower — the biggest scorecard gap): CONFIRMED AVX2 REGISTER WALL.** The
+    blocked path (`cholesky_lower_blocked` + threaded `cholesky_syrk_rows`) already runs a 1×4
+    register-blocked SYRK via `simd_dot4`, which uses four `Simd<f64,8>` accumulators = 8 YMM, at the
+    16-YMM limit of this AVX2 (no-AVX-512) box. A 2-D tile to reuse l21 loads across rows needs ≥8
+    accumulators (16 YMM) → guaranteed spill; the matching memory note already records "wider-tile
+    REJECTED (AVX2 16-YMM)". Beating OpenBLAS's AVX-512 asm here needs AVX-512 hardware or a packed
+    flat-GEMM + panel-TRSM mini-BLAS (multi-turn, the docstring's own characterization). True wall.
+  - Other open scorecard losses are likewise walls: `linprog` (dense tableau vs HiGHS revised/sparse
+    simplex), `lfilter` (1.2x, sequential IIR recurrence critical path), `label` (2.68x, f64-NdArray
+    output bandwidth), FFT mid-pow2 (std::simd butterflies blocked by `forbid(unsafe)`).
+- CONCLUSION: no clean fresh perf lever remains under the current `forbid(unsafe)` + AVX2 constraints;
+  the FFT family (complex + real) is now parity-or-faster across the full non-pow2 / prime-factor range,
+  which was the session's biggest measured frontier. Recording so future turns don't re-dig these.
