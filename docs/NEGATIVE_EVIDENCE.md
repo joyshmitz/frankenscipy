@@ -10129,3 +10129,39 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   the enum: euclidean/sqeuclidean/cityblock/chebyshev/cosine/correlation/canberra/braycurtis +
   seuclidean.** Remaining generic-arm metrics: Hamming/Jaccard (binary/categorical, usually high-d
   where the per-pair path already vectorizes — not the SoA regime) + Minkowski (SciPy itself slow).
+
+## 2026-06-28 - WIN: Boltzmann entropy closed form removes finite-support sum - 6.6k-48.7k x vs ORIG
+
+- Agent: Codex, `AGENT_NAME=cod-a`.
+- Worktree audit: `.worktrees/frankenscipy-eigvalsh-blackthrush-20260609` carried
+  `e3b744f47f2a` (matmul flat-workspace threshold 1024 -> 768, measured 6.13x on
+  768x768), but `origin/main` already superseded it with threshold 256. No unlanded
+  measured bench-worktree win remained to land.
+- Rejected first two KDE levers and reverted them before this keep:
+  - `GaussianKdeNd::evaluate_many` query-whitening buffer reuse regressed
+    `gaussian_kde_nd/d3_eval5k` from ORIG `6.5358 ms` to `20.607 ms` (0.32x vs ORIG).
+  - `GaussianKdeNd::evaluate` d=3 unroll measured `7.3529 ms` vs ORIG `6.5358 ms`
+    (0.89x vs ORIG). Criterion's apparent improvement was only against the prior
+    rejected candidate baseline, so it was reverted.
+- Kept lever: `Boltzmann::entropy()` previously summed `-sum pmf(k)*ln(pmf(k))` over
+  `k=0..n`. For the truncated geometric, `logpmf(k) = logpmf(0) - lambda*k`, so
+  `H = -E[logpmf(X)] = -logpmf(0) + lambda*E[X]`. The implementation now reuses the
+  existing closed-form `mean()` and `logpmf(0)` and removes the O(n) loop.
+- MEASURED same target-dir A/B, per-crate via
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-stats --bench stats_bench --profile release -- discrete_entropy/boltzmann --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+  Note: this Cargo rejects `cargo bench --release`, so the release profile was invoked with
+  `--profile release`.
+
+  | Case | ORIG mean | NEW mean | Ratio vs ORIG |
+  | --- | ---: | ---: | ---: |
+  | `discrete_entropy/boltzmann/10000` | 200.21 us | 30.255 ns | 6617x faster |
+  | `discrete_entropy/boltzmann/100000` | 1.7459 ms | 35.838 ns | 48716x faster |
+
+- GREEN gates:
+  - `cargo test -p fsci-stats --lib discrete_distributions_entropy_match_scipy -- --nocapture`
+  - `cargo test -p fsci-stats --lib discrete_entropy_recurrence_matches_scipy -- --nocapture`
+  - `cargo test -p fsci-conformance --test diff_stats_boltzmann -- --nocapture`
+  - `cargo test -p fsci-conformance --test golden_stats_boltzmann -- --nocapture`
+- Formatting caveat: `cargo fmt --check` and `cargo fmt -p fsci-stats --check` are blocked by
+  pre-existing rustfmt drift outside this patch in workspace files and older `fsci-stats` hunks;
+  those unrelated lines were left untouched.

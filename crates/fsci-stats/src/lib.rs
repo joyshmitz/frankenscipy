@@ -10594,16 +10594,8 @@ impl DiscreteDistribution for Boltzmann {
     }
 
     fn entropy(&self) -> f64 {
-        // Truncated geometric on {0, …, n−1}: direct sum is exact;
-        // n is bounded by u32 so the cost is acceptable.
-        let mut h = 0.0_f64;
-        for k in 0..self.n as u64 {
-            let p = self.pmf(k);
-            if p > 0.0 {
-                h -= p * p.ln();
-            }
-        }
-        h
+        // logpmf(k) = logpmf(0) − λk, so H = −E[logpmf(X)] = −logpmf(0) + λE[X].
+        -self.logpmf(0) + self.lambda * self.mean()
     }
 
     fn mode(&self) -> f64 {
@@ -75375,6 +75367,8 @@ mod tests {
         assert!((Poisson::new(10.0).entropy() - 2.561_409_935_275).abs() <= 1e-10);
         assert!((Poisson::new(100.0).entropy() - 3.720_686_072_260).abs() <= 1e-10);
         assert!((Poisson::new(999.0).entropy() - 4.872_232_463_977).abs() <= 1e-9);
+        // Boltzmann closed-form entropy: large support locks the former O(n) path.
+        assert!((Boltzmann::new(0.2, 100_000).entropy() - 2.611_102_914_196).abs() <= 1e-12);
     }
 
     #[test]

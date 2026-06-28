@@ -619,8 +619,8 @@ fn bench_discrete_moments(c: &mut Criterion) {
 fn bench_discrete_entropy(c: &mut Criterion) {
     use criterion::BenchmarkId;
     use fsci_stats::{
-        BetaBinomial, BetaNegativeBinomial, Binomial, DiscreteDistribution, NegHypergeometric,
-        Poisson,
+        BetaBinomial, BetaNegativeBinomial, Binomial, Boltzmann, DiscreteDistribution,
+        NegHypergeometric, Poisson,
     };
     let mut group = c.benchmark_group("discrete_entropy");
     // entropy summed −Σ pmf·ln(pmf) over the support at ~6 ln_gamma/pmf; the
@@ -640,6 +640,12 @@ fn bench_discrete_entropy(c: &mut Criterion) {
     for &mu in &[100.0_f64, 900.0] {
         let d = Poisson::new(mu);
         group.bench_function(BenchmarkId::new("poisson", mu as u64), |b| {
+            b.iter(|| black_box(d.entropy()))
+        });
+    }
+    for &n in &[10_000_u32, 100_000] {
+        let d = Boltzmann::new(0.2, n);
+        group.bench_function(BenchmarkId::new("boltzmann", n), |b| {
             b.iter(|| black_box(d.entropy()))
         });
     }
