@@ -10550,3 +10550,41 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   noise-dominated. Stacks with the 5-smooth padding win (`db8e099b`): combined the 2-D conv FFT path
   went from ~5-12x slower than SciPy (pow2+complex) toward parity. Conformance GREEN (correlate2d 3 +
   convolve2d 3 incl `convolve2d_matches_scipy`); full fsci-signal lib 654 passed / 0 failed.
+
+## 2026-06-28 - SURFACE (AmberForge): Bluestein FFT pads convolution length to pow2 → systemic 1.4-7.8x SciPy loss at awkward lengths; 5-smooth m would shrink it ~1.9x (FOR FFT-ENGINE OWNERS)
+
+- Agent: AmberForge. Dig. The 5-smooth FFT-padding lever (proven in fftconvolve/2D-conv, see prior
+  entries) has a much bigger SYSTEMIC target in the FFT engine itself — but it sits in the
+  heavily-contended `crates/fsci-fft/src/transforms.rs` (8 recent specialist commits), so I'm
+  SURFACING it rather than touching the central primitive.
+- ROOT CAUSE: `get_or_compute_bluestein_plan` (transforms.rs:254) sets the Bluestein convolution
+  length `let m = (2 * n - 1).next_power_of_two();`. Any m ≥ 2n-1 is valid, and fsci's mixed-radix is
+  faster at 5-smooth than pow2 — but m is forced to pow2 because all three transforms
+  (`bluestein_fft` lines 269/482/486) use `cooley_tukey_radix2_inplace` (radix-2 ONLY,
+  `debug_assert!(is_power_of_two)`). Bluestein is the fallback for EVERY FFT whose length has a prime
+  factor > 61 (`MIXED_RADIX_DIRECT_MAX_PRIME`), so this taxes resample/hilbert/czt/any-FFT at awkward N.
+- **MEASURED same-box `fsci_fft::fft` vs `scipy.fft.fft` at Bluestein-route lengths:**
+
+  | n | fsci | scipy | ratio | Bluestein m: pow2 → 5-smooth |
+  | ---: | ---: | ---: | ---: | --- |
+  | 1031 | 78us | 31us | 2.5x slower | 4096 → 2160 (1.90x) |
+  | 1030 | 156us | 22us | 7.0x slower | 4096 → 2160 (1.90x) |
+  | 2060 | 310us | 41us | 7.5x slower | 8192 → 4320 (1.90x) |
+  | 4099 | 388us | 126us | 3.1x slower | 16384 → 8640 (1.90x) |
+  | 4120 | 618us | 79us | 7.8x slower | 16384 → 8640 (1.90x) |
+  | 9001 | 911us | 523us | 1.7x slower | 32768 → 18432 (1.78x) |
+
+- THE WIN: a CLEAN same-process A/B of `fsci_fft::fft` (complex) at pow2 vs even-5-smooth length shows
+  the 5-smooth transform is **1.3-2.1x faster** (n=1030: 4096→35us vs 2160→16us = 2.1x; n=8200:
+  32768→585us vs 17280→300us = 1.95x). Bluestein is fft-DOMINATED (chirp is O(n), the two length-m
+  transforms are the bulk), so this ~1.8x translates directly to awkward-length FFT speedups
+  codebase-wide — UNLIKE the one-shot `czt` free fn, which is O(n)-chirp-`powf`-bound (the same
+  5-smooth change there was ~0-gain, REVERTED this turn).
+- FIX (for FFT owners): in `get_or_compute_bluestein_plan` set `m` to the smallest even 5-smooth ≥
+  2n-1 (add a `next_regular`/5-smooth helper — NOTE `fsci_fft::next_fast_len` returns 7-smooth like
+  3·7³ which fsci handles SLOWLY, so it's the wrong helper), and route the three length-m transforms
+  through a dispatch (`m.is_power_of_two()` → radix-2 fast path, else `mixed_radix_fft`). Won't break
+  goldens — only `fft_non_power_of_2_roundtrip` (tolerance) covers these lengths. The radix-2 fast
+  path stays for the (common) case where 5-smooth m IS a pow2 (e.g. n=8191 → m unchanged at 16384).
+- NOT a gap (verified this turn, no action): `oaconvolve` already beats SciPy 1.96-2.17x at scale;
+  `signal.cwt` REMOVED from SciPy 1.17 (no head-to-head); `czt` chirp-bound (fft not the bottleneck).
