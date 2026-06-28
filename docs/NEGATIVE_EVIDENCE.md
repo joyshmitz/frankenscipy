@@ -10990,3 +10990,26 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   early-break + parallel), somersd (O(n log n) fast path), kendalltau/entropy/gmean (parallel),
   binned_statistic_dd was already 4.5x (now 12.5-16.6x). Scorecard residual losses are documented walls
   (cholesky needs register-tiled SYRK GEMM, label needs native int-store, add_csc safe-Rust-vs-C const).
+
+## 2026-06-28 - LANDED WIN (AmberForge): binned_statistic (1D) + binned_statistic_2d parallel (both passes) — 3.8-5.3x → 13.9-23.2x faster than scipy
+
+- Agent: AmberForge. Applied the Amdahl lever (parallelize the serial min/max pre-scan AND the serial bin
+  accumulator) to the 1-D and 2-D `binned_statistic*` helpers — siblings of `binned_statistic_dd`
+  (`80f41196`) that have their OWN serial implementations (no delegation). Factored two shared helpers:
+  `parallel_minmax` (fused parallel min/max; BYTE-IDENTICAL — coords validated finite, min/max
+  order-independent) and `parallel_bin_histogram` (per-thread histograms merged once; count/min/max
+  exact, sum/mean ~1e-15 within the 1e-12 tolerance). Gated n≥131072 & total≤16384.
+- **MEASURED same-box, bins=50 mean, best-of-6:**
+
+  | fn | n | serial (before) | parallel (after) | scipy | self | after vs scipy |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | binned_statistic (1D) | 1M | 9.48 ms | 2.57 ms | 35.64 ms | 3.69x | **13.9x** (was 3.76x) |
+  | binned_statistic (1D) | 4M | 39.35 ms | 9.71 ms | 194.82 ms | 4.05x | **20.1x** (was 4.95x) |
+  | binned_statistic_2d | 1M | 18.68 ms | 5.25 ms | 75.71 ms | 3.56x | **14.4x** (was 4.05x) |
+  | binned_statistic_2d | 4M | 78.19 ms | 17.72 ms | 410.56 ms | 4.41x | **23.2x** (was 5.25x) |
+
+  Byte-exact `to_bits()` fast-path tests run at n=5000/4000 (below the parallel threshold → serial path,
+  unchanged); new `binned_statistic_1d_2d_parallel_matches_reference_large` (n=300k: count exact vs
+  serial ref, mean 1e-12). fsci-stats lib 1996 passed / 0 failed. The whole binned_statistic family
+  (1D/2D/dd) is now parallel; `parallel_minmax`/`parallel_bin_histogram` are reusable for future
+  bin/histogram kernels.

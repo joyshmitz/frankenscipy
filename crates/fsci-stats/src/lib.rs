@@ -45938,6 +45938,169 @@ pub fn histogram_bin_edges(data: &[f64], method: &str) -> Vec<f64> {
 ///
 /// Groups `values` by which bin in `x` they fall into, applies `statistic`.
 /// Matches `scipy.stats.binned_statistic`.
+/// Fused parallel min/max of a finite slice. Min/max are order-independent, so
+/// the result is BYTE-IDENTICAL to a serial fold; used by the `binned_statistic*`
+/// pre-scans (whose coordinate inputs are validated finite). Serial below 131072.
+fn parallel_minmax(data: &[f64]) -> (f64, f64) {
+    let n = data.len();
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if n >= 131_072 {
+        cores.min(n / 65_536).max(1)
+    } else {
+        1
+    };
+    if nthreads <= 1 {
+        let mut mn = f64::INFINITY;
+        let mut mx = f64::NEG_INFINITY;
+        for &v in data {
+            if v < mn {
+                mn = v;
+            }
+            if v > mx {
+                mx = v;
+            }
+        }
+        return (mn, mx);
+    }
+    let chunk = n.div_ceil(nthreads);
+    let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|c| {
+                scope.spawn(move || {
+                    let mut mn = f64::INFINITY;
+                    let mut mx = f64::NEG_INFINITY;
+                    for &v in c {
+                        if v < mn {
+                            mn = v;
+                        }
+                        if v > mx {
+                            mx = v;
+                        }
+                    }
+                    (mn, mx)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect()
+    });
+    parts
+        .into_iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(amn, amx), (mn, mx)| {
+            (amn.min(mn), amx.max(mx))
+        })
+}
+
+/// Parallel per-thread bin histograms (count/sum/min/max/has_nan) merged once.
+/// `bin_of(i)` returns element `i`'s flat bin in `0..total`. count/min/max are
+/// exact under the merge; sum reassociates by ~1e-15 (within the `binned_statistic`
+/// 1e-12 conformance tolerance — same precedent as parallel entropy/gmean).
+/// Serial below 131072 elements or for grids over 16384 bins (bounds the
+/// per-thread arrays); the serial path iterates in element order, byte-identical
+/// to a point-order scan.
+#[allow(clippy::type_complexity)]
+fn parallel_bin_histogram<F>(
+    total: usize,
+    values: &[f64],
+    bin_of: F,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<bool>)
+where
+    F: Fn(usize) -> usize + Sync,
+{
+    let n = values.len();
+    let mut count = vec![0.0f64; total];
+    let mut sum = vec![0.0f64; total];
+    let mut bmin = vec![f64::INFINITY; total];
+    let mut bmax = vec![f64::NEG_INFINITY; total];
+    let mut has_nan = vec![false; total];
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if n >= 131_072 && total <= 16_384 {
+        cores.min(n / 65_536).max(1)
+    } else {
+        1
+    };
+    if nthreads <= 1 {
+        for (i, &v) in values.iter().enumerate() {
+            let b = bin_of(i);
+            count[b] += 1.0;
+            sum[b] += v;
+            if v.is_nan() {
+                has_nan[b] = true;
+            } else {
+                if v < bmin[b] {
+                    bmin[b] = v;
+                }
+                if v > bmax[b] {
+                    bmax[b] = v;
+                }
+            }
+        }
+        return (count, sum, bmin, bmax, has_nan);
+    }
+    let chunk = n.div_ceil(nthreads);
+    type Partial = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<bool>);
+    let bin_of = &bin_of;
+    let parts: Vec<Partial> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= n {
+                    return None;
+                }
+                let hi = (lo + chunk).min(n);
+                Some(scope.spawn(move || {
+                    let mut c = vec![0.0f64; total];
+                    let mut sm = vec![0.0f64; total];
+                    let mut mn = vec![f64::INFINITY; total];
+                    let mut mx = vec![f64::NEG_INFINITY; total];
+                    let mut hn = vec![false; total];
+                    for i in lo..hi {
+                        let b = bin_of(i);
+                        let v = values[i];
+                        c[b] += 1.0;
+                        sm[b] += v;
+                        if v.is_nan() {
+                            hn[b] = true;
+                        } else {
+                            if v < mn[b] {
+                                mn[b] = v;
+                            }
+                            if v > mx[b] {
+                                mx[b] = v;
+                            }
+                        }
+                    }
+                    (c, sm, mn, mx, hn)
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect()
+    });
+    for (c, sm, mn, mx, hn) in parts {
+        for b in 0..total {
+            count[b] += c[b];
+            sum[b] += sm[b];
+            if mn[b] < bmin[b] {
+                bmin[b] = mn[b];
+            }
+            if mx[b] > bmax[b] {
+                bmax[b] = mx[b];
+            }
+            if hn[b] {
+                has_nan[b] = true;
+            }
+        }
+    }
+    (count, sum, bmin, bmax, has_nan)
+}
+
 pub fn binned_statistic(
     x: &[f64],
     values: &[f64],
@@ -45948,20 +46111,9 @@ pub fn binned_statistic(
         return (vec![], vec![]);
     }
 
-    let min_x = x.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.min(b)
-        }
-    });
-    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.max(b)
-        }
-    });
+    // Fused parallel min/max (x validated finite ⇒ byte-identical to the serial
+    // nan-fold; order-independent). Parallel above 131072.
+    let (min_x, max_x) = parallel_minmax(x);
     let bin_width = if max_x > min_x {
         (max_x - min_x) / bins as f64
     } else {
@@ -45978,26 +46130,13 @@ pub fn binned_statistic(
     // statistic (this 1-D helper's existing behavior — the `is_empty` check comes
     // first, unlike the 2-D/N-D helpers). median/std keep the materialize path.
     if !matches!(statistic, "median" | "std") {
-        let mut count = vec![0.0f64; bins];
-        let mut sum = vec![0.0f64; bins];
-        let mut bmin = vec![f64::INFINITY; bins];
-        let mut bmax = vec![f64::NEG_INFINITY; bins];
-        let mut has_nan = vec![false; bins];
-        for (&xi, &vi) in x.iter().zip(values.iter()) {
-            let bin = (((xi - min_x) / bin_width).floor() as usize).min(bins - 1);
-            count[bin] += 1.0;
-            sum[bin] += vi;
-            if vi.is_nan() {
-                has_nan[bin] = true;
-            } else {
-                if vi < bmin[bin] {
-                    bmin[bin] = vi;
-                }
-                if vi > bmax[bin] {
-                    bmax[bin] = vi;
-                }
-            }
-        }
+        // Per-bin aggregates via parallel per-thread histograms (large n), merged
+        // once. count/min/max exact; sum/mean ~1e-15 (within tolerance). The serial
+        // path is byte-identical to the point-order scan (the byte-exact fast-path
+        // test runs below the parallel threshold).
+        let (count, sum, bmin, bmax, has_nan) = parallel_bin_histogram(bins, values, |i| {
+            (((x[i] - min_x) / bin_width).floor() as usize).min(bins - 1)
+        });
         let stats: Vec<f64> = (0..bins)
             .map(|b| {
                 if count[b] == 0.0 {
@@ -46139,10 +46278,10 @@ pub fn binned_statistic_2d(
             })
     };
 
-    let min_x = nan_min(x);
-    let max_x = nan_max(x);
-    let min_y = nan_min(y);
-    let max_y = nan_max(y);
+    // Fused parallel min/max per axis (x,y validated finite ⇒ byte-identical to
+    // the serial nan-fold; order-independent). Parallel above 131072.
+    let (min_x, max_x) = parallel_minmax(x);
+    let (min_y, max_y) = parallel_minmax(y);
     let bw_x = if max_x > min_x {
         (max_x - min_x) / bins as f64
     } else {
@@ -46166,28 +46305,15 @@ pub fn binned_statistic_2d(
     // value / a two-pass mean) keep the materialize path below.
     if !matches!(statistic, "median" | "std") {
         let nb = bins * bins;
-        let mut count = vec![0.0f64; nb];
-        let mut sum = vec![0.0f64; nb];
-        let mut bmin = vec![f64::INFINITY; nb];
-        let mut bmax = vec![f64::NEG_INFINITY; nb];
-        let mut has_nan = vec![false; nb];
-        for ((&xi, &yi), &vi) in x.iter().zip(y.iter()).zip(values.iter()) {
-            let bx = (((xi - min_x) / bw_x).floor() as usize).min(bins - 1);
-            let by = (((yi - min_y) / bw_y).floor() as usize).min(bins - 1);
-            let b = bx * bins + by;
-            count[b] += 1.0;
-            sum[b] += vi;
-            if vi.is_nan() {
-                has_nan[b] = true;
-            } else {
-                if vi < bmin[b] {
-                    bmin[b] = vi;
-                }
-                if vi > bmax[b] {
-                    bmax[b] = vi;
-                }
-            }
-        }
+        // Per-bin aggregates via parallel per-thread histograms (large n), merged
+        // once. count/min/max exact; sum/mean ~1e-15 (within tolerance). The serial
+        // path is byte-identical to the point-order scan (the byte-exact fast-path
+        // test runs below the parallel threshold).
+        let (count, sum, bmin, bmax, has_nan) = parallel_bin_histogram(nb, values, |i| {
+            let bx = (((x[i] - min_x) / bw_x).floor() as usize).min(bins - 1);
+            let by = (((y[i] - min_y) / bw_y).floor() as usize).min(bins - 1);
+            bx * bins + by
+        });
         let finalize = |b: usize| -> f64 {
             let c = count[b];
             match statistic {
@@ -80416,6 +80542,66 @@ mod tests {
         // Invalid input -> empty.
         let (e, ee) = binned_statistic_dd(&s3, &v3[..2], 2, "mean");
         assert!(e.is_empty() && ee.is_empty());
+    }
+
+    #[test]
+    fn binned_statistic_1d_2d_parallel_matches_reference_large() {
+        // Large inputs cross the parallel threshold (n>=131072) for both the 1-D
+        // and 2-D helpers. count must be exact vs a single-thread reference; mean
+        // within 1e-12 (sum reassociates ~1e-15 under the per-thread merge).
+        let n = 300_000usize;
+        let bins = 30usize;
+        let mut state = 0xC0FFEE_1234_5678u64;
+        let mut nx = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let x: Vec<f64> = (0..n).map(|_| nx()).collect();
+        let y: Vec<f64> = (0..n).map(|_| nx()).collect();
+        let values: Vec<f64> = (0..n).map(|_| nx() * 6.0 - 3.0).collect();
+
+        // 1-D reference (serial, point order).
+        let (min_x, max_x) = (
+            x.iter().cloned().fold(f64::INFINITY, f64::min),
+            x.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        );
+        let bw = if max_x > min_x {
+            (max_x - min_x) / bins as f64
+        } else {
+            1.0
+        };
+        let mut rc = vec![0.0f64; bins];
+        let mut rs = vec![0.0f64; bins];
+        for (&xi, &vi) in x.iter().zip(&values) {
+            let b = (((xi - min_x) / bw).floor() as usize).min(bins - 1);
+            rc[b] += 1.0;
+            rs[b] += vi;
+        }
+        let (count1, _) = binned_statistic(&x, &values, bins, "count");
+        let (mean1, _) = binned_statistic(&x, &values, bins, "mean");
+        let total1: f64 = count1.iter().sum();
+        assert_eq!(total1, n as f64, "1D counts must sum to n");
+        for b in 0..bins {
+            assert_eq!(count1[b], rc[b], "1D count bin {b}");
+            if rc[b] > 0.0 {
+                assert!(
+                    (mean1[b] - rs[b] / rc[b]).abs() < 1e-12,
+                    "1D mean bin {b}"
+                );
+            }
+        }
+
+        // 2-D: counts sum to n and every cell count is a nonnegative integer.
+        let (count2, _, _) = binned_statistic_2d(&x, &y, &values, bins, "count");
+        let total2: f64 = count2.iter().flatten().sum();
+        assert!((total2 - n as f64).abs() == 0.0, "2D counts must sum to n");
+        for row in &count2 {
+            for &c in row {
+                assert!(c >= 0.0 && c.fract() == 0.0, "2D count integral");
+            }
+        }
     }
 
     #[test]
