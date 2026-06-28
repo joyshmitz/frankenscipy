@@ -6,6 +6,28 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-28 - CobaltCove (claude-code) - FRONTIER MAP (exhaustive scan) + stale-scorecard correction
+
+After landing the ODR solve win, an exhaustive cross-crate sweep confirms the *accessible* perf frontier
+(byte-identical parallelization, alloc/scratch elimination, flat-buffer cache, simple algorithmic swaps)
+is harvested. Verified ALREADY-DONE this scan (don't re-chase): integrate (rk/monte_carlo/cumsimp/bdf/radau;
+solve_bvp is single-shooting with FnMut RHS = parallel-blocked; qmc per-estimate-reduced), fft (radix-4 +
+mixed-radix), odr (this session), io loadtxt+read_csv (chunked-parallel + serial fallback), spatial
+(ALL KDTree methods + cdist parallel), sparse (spmm row-parallel; spsolve actively tuned), stats
+(cov_matrix transpose+parallel; pdf_many parallel; discrete entropy/moment recurrences actively shipped).
+No explicit invert-then-solve sites remain outside ODR (opt/stats/interpolate/ndimage/cluster/special/signal
+delegate to fsci-linalg or solve directly).
+
+STALE-SCORECARD CORRECTION (prevents the swarm chasing a phantom): "rfft/irfft needs a native real-FFT"
+is OUTDATED — fsci-fft ALREADY has `real_fft_specialized` (transforms.rs ~1012: pack N reals into N/2
+complex, FFT, unpack) and the inverse Makhoul real path. Any residual rfft ratio is the std::simd butterfly
+micro-opt (already REJECTED: c51c1389 / c51c1389-era butterfly-lane no-ship), NOT a missing algorithm.
+
+REMAINING = genuine multi-hour WALLS or contested-active fronts, not quick levers: dense LAPACK eigh/svd
+(OpenBLAS dsyevd D&C, ~3x), Qhull (Delaunay/ConvexHull/Voronoi C), HiGHS/linprog simplex (actively worked),
+structured/separable ODR + collocation BVP (O(N^3)->O(N·p^2) feature rewrite), sparse direct factorization.
+Next productive move needs either a multi-session wall assault or new surface opened by the swarm.
+
 ## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): ODR LM-step solves directly instead of inverting then multiplying — 1.8-2.05x
 
 - `solve_lm_step` (fsci-odr) computed the FULL inverse of the (n_params + n_free_delta)x(n_params + n_free_delta)
