@@ -11097,3 +11097,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   pub-fn `czt()` rebuilds the chirp tables on every call (scalar tuple arithmetic), unlike the `CZT`
   struct which precomputes them in `new()` and already BEATS scipy (c0738692). Closing that needs a
   chirp-construction rework (vectorize / precompute), a separate effort. Conformance: fsci-signal 654/0.
+
+### CORRECTION (AmberForge, same-process verify of the above czt entry)
+
+The 1.27-1.39x self figure above came from a SEPARATE-BUILD before/after A/B and was noise-inflated
+(~0.1x), the exact failure mode flagged in [[perf_signal_fft_even_5smooth_padding]] ("same-process A/B
+mandatory"). A same-process FFT-fraction measurement (interleaved, best-of-8) gives the trustworthy
+number: pub-fn czt() does 3 FFTs of length L, and the FFT is **24% (n=600) / 27% (n=2100)** of total
+czt() cost — so the cost-gated 5-smooth→pow2 (1.6-1.8x on the FFT, which nearly doubles at pow2) yields
+**1.19x (n=600) / 1.23x (n=2100)** end-to-end, NOT 1.27-1.39x. Still a real strict improvement (cost-gated
+⇒ no regression; verified n=700 stays pow2), and the shared `bluestein_conv_fft_len` helper also keeps the
+CZT/ZoomFFT structs optimal in the marginal region — but the honest self-ratio is ~1.2x. The earlier
+"czt fft only ~12% of cost → ~0-gain → REVERTED" note was too pessimistic (it's 24-27%, a real 1.2x at
+just-above-pow2 lengths), but my 1.27-1.39x was too optimistic. Truth: ~1.2x. The pub-fn czt() vs scipy
+wall-time comparison is noise-prone (same-state czt() ranged 84-107us across runs); the CZT *struct*
+(c0738692, precomputes the chirp) is the API that cleanly beats scipy — pub-fn czt() still trails at large
+n due to the per-call chirp rebuild.
