@@ -30,6 +30,48 @@ ledger above so the project has one source of truth.
   ~2.9x while cache-resident. fsci already beats SciPy 3-9x, so this is a lead-widener (now ~7-25x).
 - Conformance GREEN: fsci-integrate 56/0 + 11/0 + 1/0 lib (byte-identical => parity preserved).
 
+## 2026-06-28 - cod-a (codex-cli) - KEEP: BetaNegativeBinomial entropy pmf/logpmf recurrence
+
+- Land-or-dig audit: the only live `.scratch/.worktrees` bench-worktree head not
+  on `origin/main` was `e3b744f47f2a074cab707e7d82b38f1605af372e` at
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`perf(linalg): lower GEMM flat-workspace threshold`). Current main already
+  supersedes that lever with a lower 256-element threshold and existing ledger
+  rows, so there was no measured unlanded worktree win to land.
+- New lever: `BetaNegativeBinomial::entropy()` had the same recurrence-shaped
+  gap as the already-landed beta-binomial / negative-hypergeometric entropy
+  family. ORIG rebuilt `pmf(k)` on every infinite-support entropy term, paying
+  repeated `ln_gamma`; candidate anchors at `logpmf(0)` and carries both `p`
+  and `logp` with `pmf(i+1)/pmf(i) = (n+i)(b+i)/((i+1)(a+n+b+i))`, preserving
+  the existing cumulative-mass / tail-probability stop rule and cap.
+- Benchmark harness note: the `betanbinom` Criterion row was added before the
+  kernel change, so ORIG means are the old implementation plus the same bench
+  row. Literal `cargo bench --release` was tried through `rch exec` and rejected
+  by this Cargo (`unexpected argument '--release'`); the accepted release-profile
+  spelling was used for measurement.
+- ORIG bench, same scratch worktree, same local target dir via `rch exec`
+  fail-open:
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-stats --bench stats_bench --profile release -- discrete_entropy/betanbinom --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`
+  measured `discrete_entropy/betanbinom/10` at `8.4994 s` mean
+  (`[8.3563 s, 8.6901 s]`).
+- Candidate bench, same command and target dir, local through `rch` for
+  same-host comparability: `416.68 ms` mean (`[404.80 ms, 426.92 ms]`) with
+  Criterion reporting `-95.098%` and `p = 0.00`. Ratio vs ORIG:
+  `8.4994 s / 0.41668 s = 20.40x` faster.
+- Correctness: `BetaNegativeBinomial` entropy now has regression checks for the
+  preserved finite-tail contract. `scipy.stats.betanbinom(...).entropy()` emits
+  non-convergence warnings for these infinite-tail examples, so SciPy's warning
+  values are not used as goldens for this method.
+- Green proof: `rch exec -- cargo test -p fsci-stats
+  discrete_entropy_recurrence_matches_scipy --lib -- --nocapture` passed 1/1
+  (remote `vmi1264463`); `rch exec -- cargo test -p fsci-conformance --test
+  diff_stats_entropy -- --nocapture` passed 1/1. `git diff --check` passed on
+  the changed files. `cargo fmt -p fsci-stats --check` still reports pre-existing
+  rustfmt drift in large stats files outside this lever; no broad formatter
+  rewrite was included in this perf commit. `ubs` on the two changed files was
+  interrupted after about 90 seconds with no findings emitted beyond scanner
+  startup.
+
 ## 2026-06-27 - GreenFalcon (codex) - NO-SHIP (reverted/stashed): Cholesky panel TRSM row parallelism lacks stable proof
 
 - Land-or-dig audit: `.scratch/.worktrees` non-ancestor bench tips were covered

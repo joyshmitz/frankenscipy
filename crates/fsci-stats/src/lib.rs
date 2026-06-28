@@ -10307,24 +10307,32 @@ impl DiscreteDistribution for BetaNegativeBinomial {
     fn entropy(&self) -> f64 {
         // Support is infinite but the pmf tail decays polynomially, so
         // h = −Σ pmf·ln pmf converges (scipy betanbinom sums it too). Sum until
-        // the mass is essentially exhausted and the pmf is negligible.
-        // frankenscipy.
+        // the mass is essentially exhausted and the pmf is negligible. The mode is
+        // 0 and adjacent terms have a closed ratio, so one logpmf anchor replaces
+        // one ln_gamma-heavy pmf rebuild per term.
         let mut h = 0.0_f64;
         let mut cum = 0.0_f64;
+        let nf = self.n as f64;
+        let (a, b) = (self.a, self.b);
         let mut k = 0u64;
+        let mut logp = self.logpmf(0);
+        let mut p = logp.exp();
         loop {
-            let p = self.pmf(k);
             if p > 0.0 {
-                h -= p * p.ln();
+                h -= p * logp;
                 cum += p;
             }
             if cum > 1.0 - 1e-15 && p < 1e-16 {
                 break;
             }
-            k += 1;
-            if k > 50_000_000 {
+            if k >= 50_000_000 {
                 break;
             }
+            let fi = k as f64;
+            let r = (nf + fi) * (b + fi) / ((fi + 1.0) * (a + nf + b + fi));
+            p *= r;
+            logp += r.ln();
+            k += 1;
         }
         h
     }
@@ -75332,11 +75340,28 @@ mod tests {
 
     #[test]
     fn discrete_entropy_recurrence_matches_scipy() {
-        // Locks the pmf-ratio entropy override for BetaBinomial + NegHypergeometric.
-        // Golden H values from scipy.stats.<dist>.entropy() 1.17.1.
+        // Locks the pmf-ratio entropy override for beta-family discrete laws.
+        // Finite-support goldens are from scipy.stats.<dist>.entropy() 1.17.1.
+        // BetaNegativeBinomial preserves the existing finite-tail sum contract;
+        // SciPy emits non-convergence warnings for these infinite-tail entropy calls.
         assert!((BetaBinomial::new(20, 2.0, 3.0).entropy() - 2.867_278_018_798).abs() <= 1e-10);
         assert!((BetaBinomial::new(1000, 2.0, 3.0).entropy() - 6.675_336_036_505).abs() <= 1e-9);
         assert!((BetaBinomial::new(50, 0.5, 0.5).entropy() - 3.770_493_035_160).abs() <= 1e-10);
+        let bnb_10_3_3 = BetaNegativeBinomial::new(10, 3.0, 3.0).entropy();
+        assert!(
+            (bnb_10_3_3 - 3.678_870_298_482).abs() <= 1e-10,
+            "betanbinom(10,3,3).entropy() = {bnb_10_3_3}"
+        );
+        let bnb_10_5_4 = BetaNegativeBinomial::new(10, 5.0, 4.0).entropy();
+        assert!(
+            (bnb_10_5_4 - 3.277_497_930_475).abs() <= 1e-10,
+            "betanbinom(10,5,4).entropy() = {bnb_10_5_4}"
+        );
+        let bnb_20_5_4 = BetaNegativeBinomial::new(20, 5.0, 4.0).entropy();
+        assert!(
+            (bnb_20_5_4 - 3.907_339_814_189).abs() <= 1e-10,
+            "betanbinom(20,5,4).entropy() = {bnb_20_5_4}"
+        );
         assert!((NegHypergeometric::new(20, 7, 3).entropy() - 1.571_080_643_983).abs() <= 1e-10);
         assert!((NegHypergeometric::new(900, 400, 450).entropy() - 3.505_555_116_320).abs() <= 1e-9);
         assert!((NegHypergeometric::new(200, 50, 75).entropy() - 2.821_387_090_436).abs() <= 1e-10);
