@@ -11197,3 +11197,28 @@ n due to the per-call chirp rebuild.
   precision). fsci-signal 655/0. Gated by `lfilter_axis_thread_count` (work ≥ 1<<20, ≥8 lines) so small
   inputs stay serial. NOTE the residual: per-channel fsci 1-D sosfilt is ~near-parity with scipy's
   vectorised-per-channel throughput; the 11-20x is entirely the 64-core fan-out beating scipy's serial loop.
+
+## 2026-06-28 - LANDED WIN (AmberForge): filtfilt_axis_2d + sosfiltfilt_axis_2d (zero-phase 2-D filtering) — 8.7-15.1x FASTER than scipy
+
+- Agent: AmberForge. Continuing the multi-channel-filter vein (after `sosfilt_axis_2d` 7cda6fdf): fsci had
+  `filtfilt` and `sosfiltfilt` 1-D only, but scipy takes an `axis`. Zero-phase (forward+backward) doubles
+  the per-line work, so the across-lines fan-out pays even MORE than the single-pass case. Added
+  `filtfilt_axis_2d(b,a,x,axis)` and `sosfiltfilt_axis_2d(sos,x,axis)`, and refactored all three 2-D filter
+  functions onto a shared generic `apply_filter_axis_2d<F>(x, axis, nfilt, line_filter)` helper (the per-line
+  closure is invoked once per LINE, not per sample, so the `&F` indirection is free — unlike the reverted
+  label-mean per-element case).
+- **MEASURED vs scipy (axis=-1, same coeffs, best-of-5):**
+
+  | channels × length | filtfilt fsci | scipy | sosfiltfilt fsci | scipy |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 1000 × 10000 | 19.66 ms (**11.1x**) | 218.16 ms | 16.91 ms (**14.2x**) | 240.62 ms |
+  | 4000 × 10000 | 62.71 ms (**14.3x**) | 894.66 ms | 65.16 ms (**15.1x**) | 981.43 ms |
+  | 256 × 100000 | 65.21 ms (**8.7x**) | 568.03 ms | 45.85 ms (**13.5x**) | 619.04 ms |
+
+  BYTE-IDENTICAL to per-line 1-D filtfilt/sosfiltfilt (test `filtfilt_sosfiltfilt_axis_2d_match_per_line`,
+  axis=-1 and 0). Numerical oracle vs scipy 2-D: filtfilt 6.2e-15, sosfiltfilt 2.0e-13 (the default
+  `padtype="odd"` edge handling matches). fsci-signal 656/0. The 8.7-15.1x is the 64-core line fan-out
+  beating scipy's serial-over-lines (per-line throughput is near-parity).
+- VEIN STATUS: the parallel-across-lines recipe (grep `pub fn <op>(... x: &[f64])` whose scipy counterpart
+  takes `axis`) has now paid 3 ships (sosfilt/filtfilt/sosfiltfilt 2-D). Remaining 1-D-only candidates with
+  scipy axis args: `hilbert`, `decimate`, `savgol_filter`.

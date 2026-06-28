@@ -8172,6 +8172,65 @@ pub fn sosfilt_axis_2d(
     x: &[Vec<f64>],
     axis: isize,
 ) -> Result<Vec<Vec<f64>>, SignalError> {
+    // Per-sample cost scales with the number of second-order sections (~5 FMAs
+    // each); use the equivalent filter order 2·sections+1 as the work proxy.
+    let nfilt = sos.len().saturating_mul(2).saturating_add(1);
+    apply_filter_axis_2d(x, axis, nfilt, |line| sosfilt(sos, line))
+}
+
+/// Apply `filtfilt` (zero-phase forward+backward) across one axis of a 2-D input.
+///
+/// Matches `scipy.signal.filtfilt(b, a, x, axis)` (default `padtype="odd"`). Each
+/// line is an INDEPENDENT zero-phase pass, fanned across cores — BIT-IDENTICAL to
+/// per-line `filtfilt`. scipy serial-loops the lines; the fan-out wins with many.
+/// Zero-phase doubles the per-line work (forward + backward), so parallelism pays
+/// even more than the single-pass `sosfilt_axis_2d`/`lfilter_axis_2d`.
+pub fn filtfilt_axis_2d(
+    b: &[f64],
+    a: &[f64],
+    x: &[Vec<f64>],
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, SignalError> {
+    // Forward + backward doubles the per-sample work vs a single lfilter pass.
+    let nfilt = a.len().max(b.len()).saturating_mul(2).max(1);
+    apply_filter_axis_2d(x, axis, nfilt, |line| filtfilt(b, a, line))
+}
+
+/// Apply `sosfiltfilt` (zero-phase SOS forward+backward) across one axis of a 2-D
+/// input.
+///
+/// Matches `scipy.signal.sosfiltfilt(sos, x, axis)`. Each line is an INDEPENDENT
+/// zero-phase SOS pass, fanned across cores — BIT-IDENTICAL to per-line
+/// `sosfiltfilt`. Preferred over `filtfilt` for high-order filters (SOS stability),
+/// and the most expensive per line (forward + backward over all sections), so the
+/// across-lines fan-out is the biggest win of the 2-D filter family.
+pub fn sosfiltfilt_axis_2d(
+    sos: &[SosSection],
+    x: &[Vec<f64>],
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, SignalError> {
+    // Forward + backward over all second-order sections.
+    let nfilt = sos.len().saturating_mul(4).saturating_add(2);
+    apply_filter_axis_2d(x, axis, nfilt, |line| sosfiltfilt(sos, line))
+}
+
+/// Apply a 1-D `line_filter` independently to each line of a rectangular 2-D input
+/// along `axis` (-1/1 = rows, 0 = columns), fanning contiguous line-chunks across
+/// cores via `thread::scope`. Lines are independent and the 1-D filter is
+/// deterministic, so the result is BIT-IDENTICAL to filtering each line serially.
+/// `nfilt` is the per-sample work proxy that gates parallelism
+/// (`lfilter_axis_thread_count`). The closure is invoked once per LINE (not per
+/// sample), so the `&F` indirection is negligible (unlike a per-element scatter).
+/// Shared by `sosfilt_axis_2d` / `filtfilt_axis_2d` / `sosfiltfilt_axis_2d`.
+fn apply_filter_axis_2d<F>(
+    x: &[Vec<f64>],
+    axis: isize,
+    nfilt: usize,
+    line_filter: F,
+) -> Result<Vec<Vec<f64>>, SignalError>
+where
+    F: Fn(&[f64]) -> Result<Vec<f64>, SignalError> + Sync,
+{
     if x.is_empty() {
         return Ok(Vec::new());
     }
@@ -8181,35 +8240,29 @@ pub fn sosfilt_axis_2d(
             detail: "x must be a rectangular 2-D matrix".to_string(),
         });
     }
-
-    // Per-sample cost scales with the number of second-order sections (~5 FMAs
-    // each); use the equivalent filter order 2·sections+1 as the work proxy.
-    let nfilt = sos.len().saturating_mul(2).saturating_add(1);
     match axis {
         // Rows are independent; fan contiguous row-chunks across threads. Each
         // worker filters whole rows it owns, assembled in row order — bit-identical.
         -1 | 1 => {
             let nthreads = lfilter_axis_thread_count(x.len(), cols, nfilt);
             if nthreads <= 1 {
-                return x
-                    .iter()
-                    .map(|row| sosfilt(sos, row))
-                    .collect::<Result<Vec<_>, _>>();
+                return x.iter().map(|row| line_filter(row)).collect();
             }
             let chunk = x.len().div_ceil(nthreads);
+            let line_filter = &line_filter;
             let chunk_results: Vec<Result<Vec<Vec<f64>>, SignalError>> =
                 std::thread::scope(|scope| {
                     x.chunks(chunk)
                         .map(|rows| {
                             scope.spawn(move || {
                                 rows.iter()
-                                    .map(|row| sosfilt(sos, row))
+                                    .map(|row| line_filter(row))
                                     .collect::<Result<Vec<_>, _>>()
                             })
                         })
                         .collect::<Vec<_>>()
                         .into_iter()
-                        .map(|h| h.join().expect("sosfilt row chunk panicked"))
+                        .map(|h| h.join().expect("filter row chunk panicked"))
                         .collect()
                 });
             let mut y = Vec::with_capacity(x.len());
@@ -8227,7 +8280,7 @@ pub fn sosfilt_axis_2d(
                 let mut y = vec![vec![0.0; cols]; nrows];
                 for col in 0..cols {
                     let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
-                    let filtered = sosfilt(sos, &column)?;
+                    let filtered = line_filter(&column)?;
                     for (row_idx, value) in filtered.into_iter().enumerate() {
                         y[row_idx][col] = value;
                     }
@@ -8235,6 +8288,7 @@ pub fn sosfilt_axis_2d(
                 return Ok(y);
             }
             let chunk = cols.div_ceil(nthreads);
+            let line_filter = &line_filter;
             let chunk_results: Vec<LfilterAxisBlock> = std::thread::scope(|scope| {
                 (0..cols)
                     .step_by(chunk)
@@ -8244,14 +8298,14 @@ pub fn sosfilt_axis_2d(
                             let mut block = Vec::with_capacity(col1 - col0);
                             for col in col0..col1 {
                                 let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
-                                block.push(sosfilt(sos, &column)?);
+                                block.push(line_filter(&column)?);
                             }
                             Ok((col0, block))
                         })
                     })
                     .collect::<Vec<_>>()
                     .into_iter()
-                    .map(|h| h.join().expect("sosfilt col chunk panicked"))
+                    .map(|h| h.join().expect("filter col chunk panicked"))
                     .collect()
             });
             let mut y = vec![vec![0.0; cols]; nrows];
@@ -8267,7 +8321,7 @@ pub fn sosfilt_axis_2d(
             Ok(y)
         }
         other => Err(SignalError::InvalidArgument(format!(
-            "axis must be 0, 1, or -1 for 2-D sosfilt, got {other}"
+            "axis must be 0, 1, or -1 for 2-D filtering, got {other}"
         ))),
     }
 }
@@ -23219,6 +23273,68 @@ mod tests {
 
         // axis validation
         assert!(sosfilt_axis_2d(&sos, &x, 2).is_err());
+    }
+
+    #[test]
+    fn filtfilt_sosfiltfilt_axis_2d_match_per_line() {
+        // Zero-phase 2-D variants must be BIT-IDENTICAL to per-line 1-D filtfilt /
+        // sosfiltfilt (independent lines). Sized past the parallel gate.
+        let b = [0.067_455_27, 0.134_910_55, 0.067_455_27];
+        let a = [1.0, -1.142_980_5, 0.412_801_6];
+        let one: SosSection = [
+            0.067_455_27,
+            0.134_910_55,
+            0.067_455_27,
+            1.0,
+            -1.142_980_5,
+            0.412_801_6,
+        ];
+        let two: SosSection = [
+            0.031_239_1,
+            0.062_478_2,
+            0.031_239_1,
+            1.0,
+            -1.482_611_0,
+            0.555_854_5,
+        ];
+        let sos: Vec<SosSection> = vec![one, two, one, two];
+        let rows = 64usize;
+        let cols = 4096usize;
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| ((r * 31 + c) as f64 * 0.013).sin() * 7.0)
+                    .collect()
+            })
+            .collect();
+
+        // filtfilt axis=-1 bit-identical to per-row filtfilt
+        let par = filtfilt_axis_2d(&b, &a, &x, -1).expect("filtfilt_axis_2d");
+        let serial: Vec<Vec<f64>> = x
+            .iter()
+            .map(|row| filtfilt(&b, &a, row).expect("filtfilt"))
+            .collect();
+        assert_eq!(par, serial, "filtfilt_axis_2d axis=-1");
+
+        // sosfiltfilt axis=-1 bit-identical to per-row sosfiltfilt
+        let par_s = sosfiltfilt_axis_2d(&sos, &x, -1).expect("sosfiltfilt_axis_2d");
+        let serial_s: Vec<Vec<f64>> = x
+            .iter()
+            .map(|row| sosfiltfilt(&sos, row).expect("sosfiltfilt"))
+            .collect();
+        assert_eq!(par_s, serial_s, "sosfiltfilt_axis_2d axis=-1");
+
+        // sosfiltfilt axis=0 (columns) bit-identical
+        let par_s0 = sosfiltfilt_axis_2d(&sos, &x, 0).expect("sosfiltfilt cols");
+        for col in 0..cols {
+            let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+            let filtered = sosfiltfilt(&sos, &column).expect("sosfiltfilt col");
+            for (r, &value) in filtered.iter().enumerate() {
+                assert_eq!(par_s0[r][col], value, "sosfiltfilt axis=0 col {col} row {r}");
+            }
+        }
+
+        assert!(sosfiltfilt_axis_2d(&sos, &x, 5).is_err());
     }
 
     #[test]
