@@ -11113,3 +11113,34 @@ just-above-pow2 lengths), but my 1.27-1.39x was too optimistic. Truth: ~1.2x. Th
 wall-time comparison is noise-prone (same-state czt() ranged 84-107us across runs); the CZT *struct*
 (c0738692, precomputes the chirp) is the API that cleanly beats scipy — pub-fn czt() still trails at large
 n due to the per-call chirp rebuild.
+
+## 2026-06-28 - SURFACED NON-GAP (AmberForge): SphericalVoronoi is O(n log n) near-parity, NOT the "O(n⁴) largest filed spatial gap" the scorecard claims (stale ~100x)
+
+- Agent: AmberForge. `docs/progress/perf-release-readiness-scorecard.md` lists "SphericalVoronoi O(n^4)
+  remains the largest filed spatial gap." MEASURED — that is STALE. fsci's `SphericalVoronoi::new` routes
+  through `convex_hull_3d_facets`, which for n≥512 uses `convex_hull_3d_facets_fast` (Clarkson–Shor
+  conflict-graph incremental 3-D hull, O(n log n) expected) and below 512 an O(n²) incremental hull. Both
+  are FAR from O(n⁴). The Voronoi vertices are the facet circumcenters (the documented hull dual).
+- **MEASURED vs scipy.spatial.SphericalVoronoi (random unit-sphere points, best-of-4..6):**
+
+  | n | fsci | scipy | ratio | scaling |
+  | ---: | ---: | ---: | ---: | --- |
+  | 500 | 1.58 ms | 1.75 ms | **0.90x (faster)** | O(n²) fallback |
+  | 1000 | 3.75 ms | 3.44 ms | 1.09x slower | fast path |
+  | 2000 | 8.62 ms | 7.85 ms | 1.10x slower | fast path |
+  | 4000 | 16.81 ms | 15.85 ms | 1.06x slower | fast path |
+  | 8000 | 42.87 ms | 33.20 ms | 1.29x slower | fast path |
+  | 16000 | 85.69 ms | 68.85 ms | 1.24x slower | fast path |
+
+  fsci scales 2.0x per 2x n (8k→16k), same as scipy (2.07x) — both O(n log n). The residual constant
+  ~1.06-1.29x is the Clarkson-Shor-vs-Qhull constant (wall-class, hull insertion is sequential).
+- ALSO verified the n≥512 fast-path threshold is WELL-TUNED: same-session A/B showed the O(n²) fallback
+  BEATS the Clarkson-Shor path below 512 (n=500: fallback 1.58 ms vs fast-path 2.04 ms — the fast path's
+  O(n log n) overhead loses to the fallback's lower constant at small n). Lowering the threshold would
+  REGRESS small n. No change warranted.
+- VERDICT: SphericalVoronoi is a NON-GAP (near-parity). The scorecard's "O(n⁴) largest spatial gap" is a
+  phantom — do not chase it. The genuine remaining losses are documented WALLS: `label` f64-output
+  bandwidth (1.81-2.25x, native-int-store blocked by API), `cholesky` AVX2 16-YMM SYRK (~8x), `linprog`
+  dense-tableau-vs-HiGHS-sparse, `resample` FFT-non-pow2 SIMD, `nnls` O(n⁴)-resolve-vs-O(n³)-QR-update
+  (now only ~1.1x after greenfalcon's SYRK/Cholesky fixes). The clean parallel/algorithmic perf frontier
+  is genuinely harvested across all 13 crates.
