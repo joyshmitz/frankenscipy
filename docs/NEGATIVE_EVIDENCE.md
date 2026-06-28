@@ -88,6 +88,38 @@ ledger above so the project has one source of truth.
   Final source was reverted to `origin/main`; this commit is evidence-only.
   Next Cholesky work should skip wider dot tiles and move to a true blocked
   GEMM/SYRK layout with packed panels or a vendor-equivalent algorithmic boundary.
+## 2026-06-27 - CobaltCove (claude-code) - BLOCKER/WALL: rfft & irfft are 1.3-1.6x slower than SciPy at every size — native real-FFT + single-core SIMD, NOT a parallel/gate lever. Do not re-chase with threads.
+
+Followed up the pow2-fft win (496c483a). Scanned fft/rfft/irfft across pow2 + non-pow2 vs
+SciPy 1.17.1 (same box, min-of-30 clean):
+  size        fsci fft / rfft / irfft     scipy fft / rfft / irfft     rfft ratio
+  2^19 524288   13659 /  6529 /  6251       14057 / 4850 / 4052         1.35x SLOWER
+  2^20 1048576  27542 / 14538 / 21152*      33369 /11148 /10575         1.30x SLOWER
+  786432(3·2^18)14824 /  9454 /  9879       14414 / 6134 / 6012         1.54x SLOWER
+- fft itself is WON/parity now (2^20 0.83x, 2^19 0.97x, 786432 1.03x) thanks to 496c483a.
+- *the 2^20 irfft=21152 was shared-box CONTENTION (re-runs ~17k); irfft≈rfft at 2^19 (6251 vs
+  6529) and 786432 (9879 vs 9454) — symmetric, as expected. No irfft-specific inefficiency.
+ROOT CAUSE (measured, not guessed):
+- fsci rfft uses the pack-two-reals-into-one-complex trick ⇒ rfft(n) = complex_fft(n/2) + an
+  O(n/2) recombine. Measured: rfft(2^20)=14538 ≈ fsci complex_fft(2^19)=13659 ⇒ recombine is
+  only ~6% (~880us). Parallelizing the recombine ⇒ ~1.24x (does NOT flip) ⇒ ~0-gain, NOT shipped.
+- fsci complex_fft(2^19)=13659 ≈ SciPy complex_fft(2^19)=14057 (PARITY). But SciPy rfft(2^20)=
+  11148 < its OWN complex_fft(2^19)=14057: SciPy has a NATIVE real-valued FFT that is ~1.3x
+  cheaper than complex-of-n/2 (single-core + AVX). fsci has no native real kernel, so fsci
+  rfft = complex_fft(n/2) ≈ SciPy complex(n/2) > SciPy native-real. Hence the 1.3-1.6x gap.
+GATE LEVER RULED OUT: the radix-4 parallel sweep (496c483a) only beats serial at n>=2^20
+  (measured: 2^18 par 1.44x SLOWER, 2^19 par 1.06x SLOWER, 2^20 par 1.32x FASTER — per-stage
+  re-spawn vs bandwidth knee). rfft(2^20) packs to a 2^19 transform = BELOW the crossover, so
+  lowering the gate would regress direct 2^19 fft without helping rfft. And where the packed
+  transform IS already parallel (non-pow2 leaf path @786432, or rfft(2^21)'s 2^20 pack) rfft
+  STILL loses ~1.5x ⇒ the wall is per-core throughput (SIMD), not thread count.
+CONCLUSION: closing rfft/irfft needs a NATIVE real-valued FFT kernel (real split-radix, keeps
+  only the n/2+1 non-redundant bins through all stages) and/or std::simd vectorization of the
+  radix-4 butterfly (process 4 consecutive k as SoA lanes; twiddle gather is the hard part).
+  Both are substantial, non-byte-identical (rely on diff_fft tolerance), multi-hundred-line
+  efforts — NOT a one-cycle parallel lever. The byte-identical FFT parallel/gate vein is now
+  EXHAUSTED (pow2 fft won, non-pow2 fft parity/win, N-D fft already line-parallel). Next dig
+  should target a non-FFT crate's gap. conformance unchanged (no code change this entry).
 
 ## 2026-06-27 - cod-a (codex-cli) - NO-SHIP: flat row-major blocked Cholesky factor buffer improved factor-only but regressed factor+solve
 
