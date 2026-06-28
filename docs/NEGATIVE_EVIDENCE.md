@@ -10505,3 +10505,27 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   sizing (line ~1111), 2-D conv padding (line ~1310, uses fft2), and the `correlate` paths at lines
   ~2328/2503 that call `fsci_fft::next_fast_len` (7-smooth → slow); they should route through
   `next_regular_fft_len` too.
+
+## 2026-06-28 - LANDED WIN (AmberForge): correlate2d/convolve2d even-5-smooth FFT padding — 1.8-5.6x faster, narrows SciPy gap from 5-12x to 1.5-3.3x
+
+- Agent: AmberForge. Follow-on to the 1-D fftconvolve win (`3d4c32f0`), SAME lever applied to the 2-D
+  FFT convolution path (`correlate2d_fft_full_into`, used by both `correlate2d` and `convolve2d`).
+- ROOT CAUSE: per-axis FFT length was `next_power_of_two(full)`. In 2-D the pow2 jump COMPOUNDS over
+  both dims — e.g. full 519×519 padded to 1024×1024 = ~3.9x the area of a 540×540 5-smooth pad.
+- FIX: `lr/lc = next_regular_fft_len(full_r/full_c)` (even 5-smooth, ≤ next_pow2, fast under fsci's
+  radix-2/3/4/5 `fft2`).
+- **MEASURED same-box** (fsci self A/B = the fft2+multiply+ifft2 work; vs `scipy.signal.fftconvolve` 2-D):
+
+  | in / kernel | full | fsci pow2 (old) | fsci reg5 (new) | self | scipy | OLD vs scipy | NEW vs scipy |
+  | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 130²✻130² | 259² | 22.0ms (512²) | 3.96ms (270²) | **5.6x** | 1.78ms | 12.4x slower | 2.22x slower |
+  | 200²✻200² | 399² | 24.6ms (512²) | 7.24ms (400²) | **3.4x** | 4.90ms | 5.0x slower | 1.48x slower |
+  | 260²✻260² | 519² | 55.3ms (1024²) | 15.5ms (540²) | **3.6x** | 7.17ms | 7.7x slower | 2.16x slower |
+  | 300²✻300² | 599² | 56.0ms (1024²) | 30.97ms (600²) | **1.8x** | 9.50ms | 5.9x slower | 3.26x slower |
+
+  3-6x self-speedup; SciPy gap narrowed from 5-12x to 1.5-3.3x. Residual loss is because fsci's 2-D
+  path uses COMPLEX `fft2` (2 fwd + 1 inv complex transforms) where SciPy uses REAL `rfftn` (~2x less
+  work) on a faster pocketfft kernel — the rfft2 conversion is the next lever to close it.
+- CORRECTNESS: any FFT length ≥ full gives the same conv after trim; conformance GREEN (correlate2d 3
+  + convolve2d 3 incl `correlate2d_fft_path_matches_direct_reference`, `convolve2d_matches_scipy`);
+  full fsci-signal lib suite 654 passed / 0 failed.

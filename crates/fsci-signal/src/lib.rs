@@ -1347,8 +1347,11 @@ pub fn correlate2d(
     // (≤6×6 ✻ ≤3×3) — on the byte-identical direct loop, and only takes FFT where
     // it decisively wins; FFT then matches direct to FFT rounding (~1e-10),
     // consistent with the existing fftconvolve / convolve auto-dispatch.
-    let lr = full_r.next_power_of_two();
-    let lc = full_c.next_power_of_two();
+    // Even 5-smooth per-axis FFT lengths (≤ next_pow2, fast under fsci's
+    // radix-2/3/4/5 fft2): the pow2 jump compounds over both dims, so this is
+    // up to ~5x fewer points than pow2 padding — measured 1.8-5.6x faster.
+    let lr = next_regular_fft_len(full_r);
+    let lc = next_regular_fft_len(full_c);
     let direct_ops = (ar as u64) * (ac as u64) * (vr as u64) * (vc as u64);
     let l = (lr as u64) * (lc as u64);
     let fft_ops = l * (l.max(2).ilog2() as u64);
