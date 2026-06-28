@@ -475,6 +475,12 @@ fn hyperu_dispatch(
     {
         let s = *b_r - 1.0;
         let gamma_s = gamma_real(s);
+        if x_vec.len() >= 8192 {
+            return par_map_indices(x_vec.len(), |i| {
+                hyperu_a_one_gamma_or_scalar_with_gamma(*a_r, *b_r, s, gamma_s, x_vec[i], mode)
+            })
+            .map(SpecialTensor::RealVec);
+        }
         let mut out = Vec::with_capacity(x_vec.len());
         for &x_r in x_vec {
             out.push(hyperu_a_one_gamma_or_scalar_with_gamma(

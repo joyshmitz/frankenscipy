@@ -6,6 +6,43 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-28 - GreenFalcon (codex) - KEEP: hyperu a=1 incomplete-gamma vector identity uses gated parallel map
+
+- Land-or-dig audit: after fetch, no live `.scratch` / `.worktrees`
+  bench-worktree tip carried a measured unlanded win absent from `origin/main`;
+  the old lower-GEMM-threshold worktree tip was already superseded.
+- Gap routing: Cholesky, sparse `spsolve`, dense linalg SVD/eigh, and rfft lanes
+  were skipped because current ledger rows mark them covered, rejected, or stale.
+  A fresh special-function probe found `hyperu(1.0, 1.25, x)` still running the
+  exact `a=1,b>1` incomplete-gamma identity serially over vector inputs.
+- Lever: preserve the scalar identity and output order, but when `x_vec.len() >=
+  8192`, evaluate each independent scalar output via the existing
+  `par_map_indices` helper. The cheap `b=a+1` shifted identity remains on its
+  existing lane.
+- Per-crate bench command used the accepted release-profile spelling because
+  this workspace rejects literal `cargo bench --release`:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-greenfalcon-special rch exec -- cargo bench -p fsci-special --profile release --bench special_bench -- special_hyperu_a1_gamma_array --noplot`.
+- Earlier local helper gap, before adding the benchmark row: ORIG Rust
+  `29.381405 ms` vs SciPy `18.166037 ms`, so ORIG was `1.62x` slower than
+  SciPy on this lane.
+- Same-box Criterion ORIG, with only the benchmark row present and source
+  restored: Rust `15.550 ms` mean (`[15.252,15.819]`), SciPy `16.686 ms`
+  (`[16.071,17.317]`).
+- Same-box Criterion candidate: Rust `6.0600 ms` mean (`[5.4608,6.5956]`),
+  SciPy `18.898 ms` (`[18.008,19.761]`), Criterion `-59.244%`, `p=0.00`.
+- Ratio vs ORIG: `15.550 / 6.0600 = 2.57x` faster. Candidate vs same-run SciPy:
+  `18.898 / 6.0600 = 3.12x` faster.
+- Correctness: `rch exec -- cargo test -p fsci-special hyperu --lib --
+  --nocapture` passed 10/0. Local SciPy-oracle conformance passed
+  `special_packet_runner_passes`, `differential_test_special_fixture`, and
+  `diff_special_hyperu` (1/1). Full `fsci-conformance` on RCH `hz2` is not a
+  valid global gate because that worker lacks SciPy and current main already has
+  unrelated array-table, cluster fixture, and smoke-oracle failures; the special
+  surfaces passed before the run was stopped after those unrelated failures.
+- Decision: KEEP. Do not chase `hyperu(1.5,2.5,x)` or `hyperu(1.0,1.5,x)` as
+  current gaps; current main already beats SciPy on those identity lanes. Future
+  hyperu work should target genuinely generic positive-a Simpson/integral cases.
+
 ## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): SphericalVoronoi near-duplicate check O(n²)→O(n) spatial hash — 1.07-1.15x (grows with n), byte-identical
 
 - `SphericalVoronoi::new` rejected near-duplicate generators with an O(n²) all-pairs scan
