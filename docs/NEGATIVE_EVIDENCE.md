@@ -10316,3 +10316,36 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - NET: the spatial cdist boolean SoA vein is fully exhausted (only Hamming/Jaccard exist in the
   enum; both landed `fb6b48a9`). The genuine remaining gaps are external-C-lib WALLS (Qhull
   SphericalVoronoi O(n⁴), HiGHS, dense LAPACK, pocketfft non-pow2 SIMD) — none a quick lever.
+
+## 2026-06-28 - WIN: Zipfian.cdf O(n+k) partial sum → O(1) Hurwitz-zeta generalized harmonic — 31-16262x self, flips a 191x SciPy LOSS to 85x faster
+
+- Agent: AmberForge (claude-code / claude-opus-4-8), `AGENT_NAME=AmberForge`. Land-or-dig:
+  no unlanded worktree win for me → dug the PROVEN discrete-cdf→special-function vein
+  (skellam→chndtr). Probed scipy timing to find where scipy uses a CLOSED form but fsci SUMS:
+  `scipy.stats.zipfian.cdf` is **O(1)** (constant ~49 µs/call at k=900 AND k=180000), but
+  `Zipfian::cdf` summed `j^{-a}` over `1..=k` PLUS an O(n) `z()` sum = **O(n+k)** per call.
+  (Checked logser/nhypergeom too — scipy ALSO sums those, no gap.)
+- LEVER: the finite generalized harmonic `H_{m,a} = Σ_{j=1}^m j^{-a} = ζ(a) − ζ(a, m+1)`
+  (Hurwitz zeta), so `cdf(k) = H_{bound,a}/H_{n,a}` in O(1) — EXACTLY scipy zipfian's
+  `_gen_harmonic`. Used the local `riemann_zeta` + `fsci_special::hurwitz_zeta`. Gated `a>1`
+  (where ζ(a)/ζ(a,·) converge by their defining series); `a≤1` keeps the exact partial sum.
+- CONFORMANCE GREEN: existing `zipfian_pmf_cdf_match_scipy` (a∈{1.1,1.5,2,2.5,3}) still passes
+  at **1e-12** vs scipy reference values (scipy uses the same closed form). Added
+  `zipfian_cdf_hurwitz_matches_partial_sum`: closed form == exact partial sum to 1e-11 across
+  a∈{1.05,1.3,2,3.5} (a=1.05 = worst ζ-cancellation) × n∈{10,200,5000} × k up to n+5, plus
+  monotonicity, cdf(n)==1, and the a≤1 fallback. 6/6 zipfian tests green. sf (default 1−cdf)
+  now inherits the O(1) cdf for free.
+- MEASURED same-box A/B (`cargo bench -p fsci-stats -- zipfian_cdf`, a=1.3, 20 ks spanning the
+  support; `black_box` gate toggle, non-overlapping intervals) + scipy.stats.zipfian.cdf min-of-N:
+
+  | (20 ks) | OLD O(n+k) sum | NEW O(1) Hurwitz | self | scipy (O(1), py-overhead) | OLD vs scipy | NEW vs scipy |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | n=1,000   | 343 µs     | 10.9 µs | **31.5x**    | 924 µs | 2.7x faster | **85x FASTER** |
+  | n=50,000  | 17.27 ms   | 10.9 µs | **1,579x**   | 912 µs | 19x SLOWER  | **83x FASTER** |
+  | n=500,000 | 174.0 ms   | 10.7 µs | **16,262x**  | 909 µs | 191x SLOWER | **85x FASTER** |
+
+  The old sum was up to **191x SLOWER than scipy** at large n (O(n+k) vs scipy's O(1)); the
+  closed form is FLAT ~10.8 µs and **85x FASTER** (no Python overhead). LESSON (reaffirms the
+  vein): probe SCIPY's per-k timing scaling — a flat-vs-k curve means scipy has a closed
+  special-fn form; if fsci sums, that's a real gap. Discrete cdfs that sum a generalized
+  harmonic / ζ-series → Hurwitz-zeta closed form.

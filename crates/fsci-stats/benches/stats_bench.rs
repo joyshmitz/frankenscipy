@@ -690,8 +690,26 @@ fn bench_betanbinom_cdf(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_zipfian_cdf(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+    use fsci_stats::{DiscreteDistribution, Zipfian};
+    let mut group = c.benchmark_group("zipfian_cdf");
+    // Old cdf summed j^{-a} over 1..=k (plus an O(n) z() sum) → O(n+k). The Hurwitz-zeta
+    // generalized-harmonic closed form ζ(a)−ζ(a,m+1) makes it O(1) (matches scipy, which
+    // is O(1)). Cost scales with n+k for the old path; flat for the closed form.
+    for &n in &[1_000_u32, 50_000, 500_000] {
+        let d = Zipfian::new(1.3, n);
+        let ks: Vec<u64> = (1..=20).map(|i| (n as u64 * i) / 20).collect();
+        group.bench_function(BenchmarkId::new("cdf", n), |b| {
+            b.iter(|| ks.iter().map(|&k| d.cdf(black_box(k))).sum::<f64>())
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_zipfian_cdf,
     bench_discrete_moments,
     bench_discrete_entropy,
     bench_neghypergeom_cdf,

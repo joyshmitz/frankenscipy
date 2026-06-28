@@ -17203,6 +17203,18 @@ impl DiscreteDistribution for Zipfian {
             return 0.0;
         }
         let bound = k.min(self.n as u64);
+        // Closed form via the Hurwitz-zeta generalized harmonic, matching scipy's
+        // zipfian `_gen_harmonic`: H_{m,a} = Σ_{j=1}^m j^{-a} = ζ(a) − ζ(a, m+1), so
+        // cdf(k) = H_{bound,a} / H_{n,a}. O(1) vs the O(k) partial sum — scipy's
+        // zipfian.cdf is O(1) (Hurwitz zeta), so the sum left fsci O(k)-slower at
+        // large k. Gated a>1 where ζ(a) and ζ(a,·) converge by their defining series;
+        // a≤1 keeps the exact partial sum. frankenscipy-zipf-cdf-hurwitz
+        if self.a > 1.0 {
+            let za = riemann_zeta(self.a);
+            let h_k = za - fsci_special::hurwitz_zeta(self.a, bound as f64 + 1.0);
+            let h_n = za - fsci_special::hurwitz_zeta(self.a, self.n as f64 + 1.0);
+            return (h_k / h_n).min(1.0);
+        }
         let z = self.z();
         let mut acc = 0.0_f64;
         for j in 1..=bound {
@@ -67528,6 +67540,45 @@ mod tests {
             assert_close(dist.pmf(k), want_pmf, 1e-12, "Zipfian pmf");
             assert_close(dist.cdf(k), want_cdf, 1e-12, "Zipfian cdf");
         }
+    }
+
+    #[test]
+    fn zipfian_cdf_hurwitz_matches_partial_sum() {
+        // The O(1) Hurwitz-zeta closed form (a>1) must equal the exact O(k) partial
+        // sum H_{k,a}/H_{n,a} to tight tolerance across a just-above-1 (worst
+        // cancellation) and large k. a<=1 stays on the sum path (sanity: monotone,
+        // in [0,1], ends at 1). frankenscipy-zipf-cdf-hurwitz.
+        let sum_cdf = |a: f64, n: u32, k: u64| -> f64 {
+            let bound = k.min(n as u64);
+            let z: f64 = (1..=n).map(|j| (j as f64).powf(-a)).sum();
+            let acc: f64 = (1..=bound).map(|j| (j as f64).powf(-a)).sum();
+            (acc / z).min(1.0)
+        };
+        for &a in &[1.05_f64, 1.3, 2.0, 3.5] {
+            for &n in &[10_u32, 200, 5000] {
+                let d = Zipfian::new(a, n);
+                for &k in &[1_u64, 2, (n as u64) / 3, (n as u64) - 1, n as u64, n as u64 + 5] {
+                    let got = d.cdf(k);
+                    let want = sum_cdf(a, n, k);
+                    assert!(
+                        (got - want).abs() <= 1e-11 + 1e-11 * want.abs(),
+                        "zipfian cdf a={a} n={n} k={k}: closed {got} vs sum {want}"
+                    );
+                }
+                // Monotone non-decreasing + bounded.
+                let mut prev = 0.0;
+                for k in 0..=(n as u64 + 2) {
+                    let c = d.cdf(k);
+                    assert!((0.0..=1.0).contains(&c) && c >= prev - 1e-12, "monotone a={a} n={n} k={k}");
+                    prev = c;
+                }
+                assert!((d.cdf(n as u64) - 1.0).abs() <= 1e-12, "cdf(n)=1 a={a} n={n}");
+            }
+        }
+        // a<=1 fallback path still correct (uses the partial sum).
+        let d = Zipfian::new(0.5, 50);
+        assert!((d.cdf(50) - 1.0).abs() <= 1e-12, "a<=1 cdf(n)=1");
+        assert!((d.cdf(25) - sum_cdf(0.5, 50, 25)).abs() <= 1e-12, "a<=1 matches sum");
     }
 
     #[test]
