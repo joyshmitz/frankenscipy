@@ -10403,3 +10403,32 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   non-stale non-cross-box loss; needs IRLM, a large numerically-delicate port), pow2-FFT SIMD.
   Probe aside: `scipy.special.struve` is scipy-SLOW (8.3ms/2000pts) — a potential fsci self-win
   target if fsci's struve isn't already dominant (untested).
+
+## 2026-06-28 - GAP FOUND (AmberForge): SphericalVoronoi 3-D hull is O(n²) → 2.53x SLOWER than SciPy at n=4000 and GROWING (real, non-stale; fix scoped)
+
+- Agent: AmberForge (claude-code / claude-opus-4-8), `AGENT_NAME=AmberForge`. Dig (no unlanded
+  worktree win). The memory note "SphericalVoronoi O(n⁴)" is STALE — it was already de-O(n⁴)'d to
+  O(n²) (incremental insertion `convex_hull_3d_facets`, lib.rs:4880; comment at 5104). But O(n²)
+  still loses to scipy's Qhull O(n log n) at scale.
+- **MEASURED same-box (`cargo bench -p fsci-spatial -- spherical_voronoi`, golden-spiral unit-sphere
+  points) vs `scipy.spatial.SphericalVoronoi` (+ sort_vertices_of_regions), min-of-N:**
+
+  | n | fsci | scipy | fsci vs scipy |
+  | --- | ---: | ---: | ---: |
+  | 200  | 0.563 ms | 1.113 ms | **1.98x FASTER** |
+  | 1000 | 5.83 ms  | 5.32 ms  | 1.10x slower |
+  | 4000 | 61.6 ms  | 24.3 ms  | **2.53x SLOWER** |
+
+  The crossover (faster at small n, slower at large n; fsci 10.6x per 4x-n vs scipy ~linear) is the
+  textbook O(n²)-vs-O(n log n) complexity tell — NOT a constant-factor / cross-box artifact. This is
+  a genuine current loss that worsens with n. Added `bench_spherical_voronoi` (n=200/1000/4000) as
+  the reusable A/B + scipy harness.
+- ROOT CAUSE: the incremental hull's visible-face search scans ALL current faces per inserted point
+  (O(F)=O(n) per insert × n inserts = O(n²)). lib.rs:~4945 (`visible_faces` loop).
+- SCOPED FIX (next lever, ~150-200 lines, correctness-sensitive — needs the window I don't have this
+  turn): randomized-incremental hull with a CONFLICT GRAPH (Clarkson-Shor): maintain face→points-
+  above and point→a-visible-face, BFS the visible region via face adjacency on insert, redistribute
+  conflicts of deleted faces to the new faces. Expected O(n log n). ALT: stereographic-project the
+  sphere points → fsci's fast 2-D `Delaunay` (subquadratic) → lift triangles to facets + recover the
+  pole-nearest point's facets from the 2-D `ConvexHull` of the projection. Gate either behind the
+  existing SphericalVoronoi structural conformance tests (spherical_voronoi_* in lib.rs tests).

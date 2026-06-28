@@ -298,6 +298,29 @@ fn bench_pdist_highdim(c: &mut Criterion) {
     group.finish();
 }
 
+/// SphericalVoronoi: the on-sphere 3-D convex hull (incremental insertion) +
+/// region build. Probes the O(n^2) hull scan against scipy's Qhull O(n log n).
+fn bench_spherical_voronoi(c: &mut Criterion) {
+    use fsci_spatial::SphericalVoronoi;
+    let mut group = c.benchmark_group("spherical_voronoi");
+    group.sample_size(10);
+    for &n in &[200usize, 1000, 4000] {
+        // Deterministic quasi-uniform points on the unit sphere (golden-spiral).
+        let pts: Vec<[f64; 3]> = (0..n)
+            .map(|i| {
+                let k = i as f64 + 0.5;
+                let phi = (1.0 - 2.0 * k / n as f64).acos();
+                let theta = std::f64::consts::PI * (1.0 + 5.0f64.sqrt()) * k;
+                [phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos()]
+            })
+            .collect();
+        group.bench_function(BenchmarkId::from_parameter(n), |b| {
+            b.iter(|| SphericalVoronoi::new(&pts, [0.0, 0.0, 0.0], 1.0))
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_transform_batch,
@@ -307,6 +330,7 @@ criterion_group!(
     bench_pdist_highdim,
     bench_kdtree,
     bench_delaunay,
+    bench_spherical_voronoi,
     bench_find_simplex,
     bench_sparse_dm
 );
