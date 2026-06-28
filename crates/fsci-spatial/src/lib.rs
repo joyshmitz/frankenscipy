@@ -2790,9 +2790,16 @@ impl KDTree {
         let cores = std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1);
-        // k-NN is heavier per query than k=1 (bounded heap + sort), so a lower gate.
+        // k-NN per-query cost grows fast with dimension (more backtracking), so
+        // scale threads with the *work* (queries × dim × k), not a flat cap. A
+        // fixed 16-thread ceiling left high-dimensional batches (e.g. d=8) ~3.5x
+        // slower than SciPy's `workers=-1`; here we let compute-heavy batches use
+        // all cores while keeping ≥32 queries/thread so cheap low-d batches don't
+        // over-spawn.
+        let per_query_work = self.dim.saturating_mul(kk.max(1));
+        let thread_ceiling = if per_query_work >= 24 { cores } else { cores.min(16) };
         let nthreads = if nq >= 128 {
-            cores.min(16).min(nq / 32).max(1)
+            thread_ceiling.min(nq / 32).max(1)
         } else {
             1
         };
@@ -3353,7 +3360,8 @@ fn knn_search(
     results: &mut Vec<(usize, f64)>,
 ) {
     let node = &nodes[node_idx];
-    let dist_sq = sqeuclidean(query, &node.point);
+    let point = &node.point;
+    let dist_sq = sqeuclidean(query, point);
 
     // Insert if we have room or this is closer than the worst
     let is_better = results
@@ -3371,7 +3379,7 @@ fn knn_search(
         }
     }
 
-    let diff = query[node.split_dim] - node.point[node.split_dim];
+    let diff = query[node.split_dim] - point[node.split_dim];
     let (near, far) = if diff <= 0.0 {
         (node.left, node.right)
     } else {

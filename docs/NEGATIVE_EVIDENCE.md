@@ -10820,3 +10820,28 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (No scipy.csgraph.eccentricity equivalent — self-speedup, scipy-exact transitively via FW.)
 - fsci-sparse lib 350 passed / 0 failed. VEIN STILL OPEN: `bellman_ford` all-pairs (indices=None),
   multi-source BFS/DFS orders, betweenness — all per-source-serial in scipy.
+
+## 2026-06-28 - LANDED WIN (AmberForge): KDTree.query_k thread ceiling scales with per-query work (dim×k) — d=3 k-NN now 1.46-2.38x FASTER than scipy.cKDTree(workers=-1); flat-coords cache lever REVERTED
+
+- Agent: AmberForge. `KDTree::query_k_many` (matches `scipy.spatial.cKDTree.query(X,k)`) capped threads
+  at a flat `cores.min(16)`. k-NN per-query cost grows fast with dimension (more backtracking), so on a
+  64-core box a high-d batch was thread-starved. Changed the ceiling to scale with the work signature
+  `per_query_work = dim·k`: ≥24 → use all cores, else keep the 16-cap (cheap low-d batches don't
+  over-spawn, ≥32 queries/thread preserved). BYTE-IDENTICAL — each query's `knn_search`+sort is
+  independent and order-preserving regardless of thread count; fsci-spatial 225/0.
+- **MEASURED same-box, `query_k_many` k=8 vs `scipy.spatial.cKDTree.query(workers=-1)`:**
+
+  | n / dim | before (flat 16-cap) | after (work-scaled) | self | scipy w=-1 | after vs scipy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | 20k / d3 | 4.69 ms | 3.37 ms | 1.39x | 8.02 ms | **2.38x FASTER** |
+  | 50k / d3 | 9.51 ms | 6.36 ms | 1.50x | 9.28 ms | **1.46x FASTER** |
+  | 20k / d8 | 66.33 ms | 38.32 ms | 1.73x | 18.72 ms | 2.05x slower (was 3.5x) |
+
+  (Radius queries already win: `query_ball_point_many` 4.7-6.4x faster than scipy across d=3/d=8.)
+- RESIDUAL d=8 2.05x slower = per-query constant factor (heavy backtracking vs scipy's compiled
+  cKDTree), NOT threads. ATTEMPTED + REVERTED: a flat `coords` slab read by `node.index*dim` to replace
+  the scattered per-node `Vec<f64>` (classic cache lever) REGRESSED it (d=8 38→49 ms): the tree visits
+  nodes in query-dependent order so `node.index` is a RANDOM gather into the slab — same cache misses
+  as the scattered Vecs, plus added index-multiply + bounds-check. The inline-Vec-header layout is
+  actually better here. Lesson: the flat-buffer cache lever needs SEQUENTIAL or cache-resident access;
+  a random gather by a permuted index gains nothing and costs the arithmetic.
