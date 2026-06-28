@@ -43,6 +43,33 @@ ledger above so the project has one source of truth.
   current gaps; current main already beats SciPy on those identity lanes. Future
   hyperu work should target genuinely generic positive-a Simpson/integral cases.
 
+## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): 1-D node duplicate-check de-O(n²)'d in two interpolators — FloaterHormann up to 78x, Barycentric 1.5-1.65x, byte-identical
+
+Two 1-D interpolator constructors validated "no duplicate nodes" with an O(n²) all-pairs scan
+(`for i { for j>i { |xi[i]-xi[j]| <= 1e-15 }}`). Both fixed; accept-path output bit-identical (verified by
+an eval-over-2000-point-grid FNV digest matching the all-pairs path at every n).
+
+- **FloaterHormannInterpolator::new — the big one (up to 78x).** Its weight pass is only O(n·d) (windowed,
+  d small), so the O(n²) dup-scan COMPLETELY dominated construction. Replaced (gated n>64) with an
+  O(n log n) sort of node values carrying original indices + an adjacent-pair check: any pair within 1e-15
+  must be sorted-adjacent (every value between two near-equal nodes is itself within 1e-15 of both), so the
+  sweep finds them all. `total_cmp` keeps it NaN-safe (NaN never flags, matching `(NaN).abs() <= 1e-15 ==
+  false`). MEASURED (same-process A/B, min-of-7): n=200 4.0x, n=500 10.9x, n=1000 20.2x, n=2000 46.1x,
+  n=4000 78.0x — the win GROWS as O(n²)/O(n log n). Small n keeps the direct scan (no alloc, no regression).
+- **BarycentricInterpolator::new — fusion (1.5-1.65x).** Its weight loop is itself O(n²) (∏_{j≠i}(xi[i]-xi[j])),
+  i.e. it already forms every difference the dup-scan needed. Deleted the separate scan and folded the
+  tolerance check into the weight loop, reusing the same `diff = xi[i]-xi[j]` (so weights are bit-identical:
+  `inv_cap*diff == inv_cap*(xi[i]-xi[j])`). MEASURED: n=200 1.50x, n=500 1.65x, n=1000 1.54x. (n>=2000 panics
+  on a pre-existing weight-product overflow in BOTH paths — unrelated to this change.)
+- fsci-interpolate 234 tests / 0 fail incl. a new sort-path test (`floater_hormann_duplicate_check_sort_path`:
+  200 nodes build; a duplicate non-adjacent in index — only the sort can pair it — is rejected). The existing
+  `barycentric_interpolator_rejects_duplicate_nodes` covers the fused reject path (fusion is ungated).
+- LESSON (extends the SphericalVoronoi memory-bound finding): when an O(n²) all-pairs validation scan sits in
+  front of a SUB-O(n²) construction (here O(n·d)), the scan is the WHOLE cost — de-O(n²)'ing it is a 10-80x
+  algorithmic win, not a constant factor. For 1-D tolerance dup-checks the O(n log n) sort+adjacent test is
+  the drop-in (exact-hash can't do tolerance). For checks fronting an O(n²) build (Barycentric), fuse into the
+  existing pass instead (bit-identical). Grep remaining `for i { for j in i+1.. }` tolerance/dup validators.
+
 ## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): SphericalVoronoi near-duplicate check O(n²)→O(n) spatial hash — 1.07-1.15x (grows with n), byte-identical
 
 - `SphericalVoronoi::new` rejected near-duplicate generators with an O(n²) all-pairs scan

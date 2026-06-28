@@ -1359,15 +1359,9 @@ impl BarycentricInterpolator {
                 actual: 0,
             });
         }
-        for i in 0..xi.len() {
-            for j in i + 1..xi.len() {
-                if (xi[i] - xi[j]).abs() <= 1e-15 {
-                    return Err(InterpError::InvalidArgument {
-                        detail: format!("duplicate interpolation nodes at indices {i} and {j}"),
-                    });
-                }
-            }
-        }
+        // Duplicate-node rejection is fused into the weight pass below: that loop already
+        // forms every xi[i]-xi[j] difference, so the check costs one abs+compare instead of
+        // a separate O(n²) scan over xi (and re-streaming the array). Weights are unchanged.
 
         // Barycentric weights w_i = 1/∏_{j≠i}(x_i − x_j). The raw product over/underflows for
         // even moderate node counts; SciPy's BarycentricInterpolator scales every difference by
@@ -1383,7 +1377,14 @@ impl BarycentricInterpolator {
             let mut denom = 1.0;
             for j in 0..xi.len() {
                 if i != j {
-                    denom *= inv_cap * (xi[i] - xi[j]);
+                    let diff = xi[i] - xi[j];
+                    if diff.abs() <= 1e-15 {
+                        let (a, b) = (i.min(j), i.max(j));
+                        return Err(InterpError::InvalidArgument {
+                            detail: format!("duplicate interpolation nodes at indices {a} and {b}"),
+                        });
+                    }
+                    denom *= inv_cap * diff;
                 }
             }
             if !denom.is_finite() || denom == 0.0 {
@@ -1469,12 +1470,32 @@ impl FloaterHormannInterpolator {
                 detail: format!("d must satisfy 0 <= d < n (got d={d}, n={n})"),
             });
         }
-        for i in 0..n {
-            for j in i + 1..n {
-                if (xi[i] - xi[j]).abs() <= 1e-15 {
+        // Near-duplicate rejection. For large n the O(n²) all-pairs scan dominated
+        // construction (the Floater–Hormann weight pass below is only O(n·d)), so switch to
+        // an O(n log n) sort: sort node values carrying original indices, then any pair
+        // within 1e-15 must appear as a sorted-adjacent pair (every value lying between two
+        // near-equal nodes is itself within 1e-15 of both). Weights are untouched (the
+        // sorted copy is discarded); total_cmp is NaN-safe — NaN never flags, matching the
+        // all-pairs scan where (NaN).abs() <= 1e-15 is false. Small n keeps the direct scan.
+        if n > 64 {
+            let mut order: Vec<usize> = (0..n).collect();
+            order.sort_by(|&a, &b| xi[a].total_cmp(&xi[b]));
+            for w in order.windows(2) {
+                if (xi[w[0]] - xi[w[1]]).abs() <= 1e-15 {
+                    let (a, b) = (w[0].min(w[1]), w[0].max(w[1]));
                     return Err(InterpError::InvalidArgument {
-                        detail: format!("duplicate interpolation nodes at indices {i} and {j}"),
+                        detail: format!("duplicate interpolation nodes at indices {a} and {b}"),
                     });
+                }
+            }
+        } else {
+            for i in 0..n {
+                for j in i + 1..n {
+                    if (xi[i] - xi[j]).abs() <= 1e-15 {
+                        return Err(InterpError::InvalidArgument {
+                            detail: format!("duplicate interpolation nodes at indices {i} and {j}"),
+                        });
+                    }
                 }
             }
         }
@@ -10052,6 +10073,24 @@ mod tests {
         }
         // d >= n rejected.
         assert!(FloaterHormannInterpolator::new(&x, &y, 6).is_err());
+    }
+
+    #[test]
+    fn floater_hormann_duplicate_check_sort_path() {
+        // n > 64 exercises the O(n log n) sort+adjacent duplicate check (vs the small-n
+        // all-pairs scan). A strictly increasing node set builds; injecting a duplicate
+        // (non-adjacent in index, so only the sort can pair it up) must still be rejected.
+        let n = 200usize;
+        let mut x: Vec<f64> = (0..n).map(|i| i as f64 * 0.5).collect();
+        let y: Vec<f64> = x.iter().map(|&v| (v * 0.1).cos()).collect();
+        assert!(FloaterHormannInterpolator::new(&x, &y, 3).is_ok());
+        x[10] = x[150]; // duplicate value far apart in index order
+        let yd: Vec<f64> = x.iter().map(|&v| (v * 0.1).cos()).collect();
+        let result = FloaterHormannInterpolator::new(&x, &yd, 3);
+        assert!(matches!(
+            result,
+            Err(InterpError::InvalidArgument { .. })
+        ));
     }
 
     #[test]
