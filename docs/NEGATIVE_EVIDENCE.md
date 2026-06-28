@@ -6,6 +6,26 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-28 - CobaltCove (claude-code) - NO-SHIP (reverted, ~0-gain): RK solver per-step y_old/f_old clone-elimination
+
+- Tried to extend the scratch-Vec lever to the RK ODE solvers (rk.rs): each accepted step does
+  `self.y_old = Some(self.y.clone()); self.f_old = Some(self.f.clone())` for dense-output snapshots —
+  two O(n) heap allocs per step. Replaced with a `store_reuse(slot, src)` helper that `copy_from_slice`s
+  into the existing Option<Vec> buffer (no alloc after step 1, no API/reader change). BYTE-IDENTICAL
+  (result matched to 12 decimals + identical step counts on a harmonic-oscillator long integration).
+- MEASURED ~0-gain / within noise: harmonic oscillator (n=2), RK45, tf=20000 rtol=1e-9 (400k steps) and
+  tf=50000 rtol=1e-10 (1.58M steps). A/B across runs swung both directions (e.g. 166ms vs 178ms one way,
+  174ms vs 165ms the other) → net neutral. REVERTED per the ~0-gain rule.
+- WHY (refines the alloc-elimination lever): the eliminated allocs were TINY (n=2 ⇒ 16 bytes) and on the
+  allocator's fast path, so removing them saves nothing and the match+copy adds a hair of overhead. The
+  lever scales with allocation SIZE, not frequency: cumulative_simpson/monte_carlo eliminated 8MB–128MB
+  buffers (page faults) ⇒ 1.6–8.3x; per-step 16-byte ODE clones ⇒ ~0. Real ODE systems are mostly small-n,
+  and the RHS eval dominates regardless. DON'T re-chase per-step small-Vec clones in the ODE/RK/BDF
+  steppers. (Large-n stiff systems might benefit marginally, but RHS+linear-solve dominate there too.)
+- integrate's materialize-then-reduce vein is now EXHAUSTED: cumulative_simpson (a5c67222) + monte_carlo
+  (b0f13a54) shipped; qmc_quad already reduces per-estimate (tiny n_estimates Vec, not a target); ODE
+  per-step clones ~0-gain. quad/dblquad/tanhsinh are adaptive (sequential) or closure-bound (already win).
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (3.6-8.3x): monte_carlo_integrate drops the per-sample buffer (per-thread partial reduction)
 
 - Same scratch-Vec lesson as cumulative_simpson, far bigger payoff. The parallel path allocated
