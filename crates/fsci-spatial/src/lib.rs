@@ -7521,6 +7521,37 @@ pub struct RigidTransform {
     translation: [f64; 3],
 }
 
+/// Apply a per-point transform across cores, writing into a pre-allocated output
+/// in input order — byte-identical to the equivalent serial `iter().map(op)`.
+/// Used by the batch transform kernels once the working set spills L3 and
+/// single-threaded AoS `[f64; 3]` access turns latency-bound (see the analysis on
+/// [`Rotation::apply_many`]). Generic over the closure so it monomorphizes to the
+/// same tight loop as the inline serial path; the chunks are disjoint so no
+/// synchronization is needed.
+fn par_point_map<F>(points: &[[f64; 3]], op: F) -> Vec<[f64; 3]>
+where
+    F: Fn(&[f64; 3]) -> [f64; 3] + Sync,
+{
+    let n = points.len();
+    let mut out = vec![[0.0f64; 3]; n];
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(64);
+    let chunk = n.div_ceil(cores);
+    let op = &op;
+    std::thread::scope(|scope| {
+        for (out_chunk, pts_chunk) in out.chunks_mut(chunk).zip(points.chunks(chunk)) {
+            scope.spawn(move || {
+                for (o, p) in out_chunk.iter_mut().zip(pts_chunk.iter()) {
+                    *o = op(p);
+                }
+            });
+        }
+    });
+    out
+}
+
 impl RigidTransform {
     /// The identity transform (no rotation, no translation).
     #[must_use]
@@ -7631,32 +7662,42 @@ impl RigidTransform {
     /// point.
     #[must_use]
     pub fn apply_many(&self, points: &[[f64; 3]], inverse: bool) -> Vec<[f64; 3]> {
+        // Same AoS-latency-bound profile as `Rotation::apply_many`: serial above the
+        // L3 cliff stalls far below DRAM bandwidth, so fan out across cores once the
+        // working set is large. Byte-identical to the serial map (disjoint chunks,
+        // input order, identical per-point arithmetic).
+        const PAR_THRESHOLD: usize = 1_400_000;
         let t = self.translation;
+        let parallel = points.len() >= PAR_THRESHOLD;
         if inverse {
             let m = self.rotation.inv().as_matrix();
-            points
-                .iter()
-                .map(|&[x, y, z]| {
-                    let (sx, sy, sz) = (x - t[0], y - t[1], z - t[2]);
-                    [
-                        m[0][0] * sx + m[0][1] * sy + m[0][2] * sz,
-                        m[1][0] * sx + m[1][1] * sy + m[1][2] * sz,
-                        m[2][0] * sx + m[2][1] * sy + m[2][2] * sz,
-                    ]
-                })
-                .collect()
+            let op = move |&[x, y, z]: &[f64; 3]| {
+                let (sx, sy, sz) = (x - t[0], y - t[1], z - t[2]);
+                [
+                    m[0][0] * sx + m[0][1] * sy + m[0][2] * sz,
+                    m[1][0] * sx + m[1][1] * sy + m[1][2] * sz,
+                    m[2][0] * sx + m[2][1] * sy + m[2][2] * sz,
+                ]
+            };
+            if parallel {
+                par_point_map(points, op)
+            } else {
+                points.iter().map(op).collect()
+            }
         } else {
             let m = self.rotation.as_matrix();
-            points
-                .iter()
-                .map(|&[x, y, z]| {
-                    [
-                        m[0][0] * x + m[0][1] * y + m[0][2] * z + t[0],
-                        m[1][0] * x + m[1][1] * y + m[1][2] * z + t[1],
-                        m[2][0] * x + m[2][1] * y + m[2][2] * z + t[2],
-                    ]
-                })
-                .collect()
+            let op = move |&[x, y, z]: &[f64; 3]| {
+                [
+                    m[0][0] * x + m[0][1] * y + m[0][2] * z + t[0],
+                    m[1][0] * x + m[1][1] * y + m[1][2] * z + t[1],
+                    m[2][0] * x + m[2][1] * y + m[2][2] * z + t[2],
+                ]
+            };
+            if parallel {
+                par_point_map(points, op)
+            } else {
+                points.iter().map(op).collect()
+            }
         }
     }
 
@@ -8381,6 +8422,29 @@ mod tests {
                     *b,
                     tf.apply(*p, inverse),
                     "apply_many({inverse}) != apply at {p:?}"
+                );
+            }
+        }
+
+        // Large input crosses the parallel threshold (1.4M); the multi-threaded
+        // chunked path must stay byte-identical to per-point apply (both branches).
+        let n = 1_500_000usize;
+        let mut s: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / 9.007_199_254_740_992e15 - 0.5
+        };
+        let big: Vec<[f64; 3]> = (0..n).map(|_| [next(), next(), next()]).collect();
+        for inverse in [false, true] {
+            let big_batch = tf.apply_many(&big, inverse);
+            assert_eq!(big_batch.len(), n);
+            for &i in &[0usize, 1, 999_999, 1_400_001, n - 1] {
+                assert_eq!(
+                    big_batch[i],
+                    tf.apply(big[i], inverse),
+                    "parallel apply_many({inverse}) != apply at index {i}"
                 );
             }
         }

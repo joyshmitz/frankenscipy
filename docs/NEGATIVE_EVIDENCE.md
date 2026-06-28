@@ -10927,3 +10927,28 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   scatter work array (O(1) scatter/gather, DFS symbolic) — a large, conformance-risky rewrite that must
   reproduce the exact partial-pivoting (diag_pivot_thresh) bit-for-bit. NOT a clean 60-min win; filed as
   the next-biggest sparse-direct gap for a dedicated effort.
+
+## 2026-06-28 - LANDED WIN (AmberForge): RigidTransform.apply_many parallel above L3 cliff — sibling of Rotation.apply_many; 32-40x faster than scipy.spatial.transform.RigidTransform.apply
+
+- Agent: AmberForge. Applied last commit's lever (e2f749bb) to the sibling kernel
+  `RigidTransform::apply_many` (rotate+translate N points; both forward and inverse branches were serial
+  AoS `[f64;3]` maps). Added a shared `par_point_map` helper (generic over the per-point closure, so it
+  monomorphizes to the same tight loop) and gated both branches to fan out across cores for
+  `n >= 1_400_000` (just past the L3 cliff).
+- **MEASURED same-box vs `scipy.spatial.transform.RigidTransform.apply`, best-of-6 (shipped):**
+
+  | N points | fsci | scipy.RigidTransform.apply | fsci vs scipy |
+  | ---: | ---: | ---: | ---: |
+  | 1,000,000 | 1.785 ms | 57.6 ms | **32.3x FASTER** |
+  | 5,000,000 | 7.447 ms | 296.6 ms | **39.8x FASTER** |
+
+- HONEST attribution: the bulk of the 32x is a PRE-EXISTING serial advantage — scipy's `RigidTransform`
+  (a newer scipy.spatial.transform class) has a slow `.apply` (57 ms for 1M points; ~30x slower than its
+  own `Rotation.apply`). THIS change is the parallel-above-cliff path: at 5M the serial AoS loop would
+  cliff to ~75 ms (same profile as Rotation, measured last turn), which my parallel path keeps at 7.4 ms
+  — preserving the ~40x margin instead of letting it collapse to ~4x at large N. Byte-identical (disjoint
+  chunks, input order; test `rigid_transform_apply_many_matches_apply` extended to a 1.5M input,
+  spot-checked vs scalar `apply` on BOTH branches). Zero regression (serial path untouched below
+  threshold). fsci-spatial lib 225 passed / 0 failed.
+- The `par_point_map` helper now backs RigidTransform; Rotation.apply_many keeps its proven inline path.
+  AoS-latency-bound-above-L3 lever now applied to both batch transform kernels in the module.
