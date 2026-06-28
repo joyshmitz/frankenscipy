@@ -1260,32 +1260,37 @@ fn correlate2d_fft_full_into(
 ) -> Result<(), SignalError> {
     let opts = fsci_fft::FftOptions::default();
     let n = lr * lc;
-    let mut a_pad: Vec<fsci_fft::Complex64> = vec![(0.0, 0.0); n];
+    // Inputs are REAL: zero-pad into real grids and use the real 2-D FFT. rfft2
+    // packs the reals into an (lr × lc/2+1) half-spectrum — ~2x less work than a
+    // full complex fft2 over the whole grid — and irfft2 returns the real result
+    // directly (no `.0` discard of a known-zero imaginary part). lc is even (the
+    // 5-smooth padding forces it), keeping the real packing on its fast path.
+    let mut a_pad = vec![0.0_f64; n];
     for i in 0..ar {
         for j in 0..ac {
-            a_pad[i * lc + j] = (a[i * ac + j], 0.0);
+            a_pad[i * lc + j] = a[i * ac + j];
         }
     }
-    let mut v_pad: Vec<fsci_fft::Complex64> = vec![(0.0, 0.0); n];
+    let mut v_pad = vec![0.0_f64; n];
     for i in 0..vr {
         for j in 0..vc {
-            v_pad[i * lc + j] = (v[i * vc + j], 0.0);
+            v_pad[i * lc + j] = v[i * vc + j];
         }
     }
-    let fa = fsci_fft::fft2(&a_pad, (lr, lc), &opts)
+    let fa = fsci_fft::rfft2(&a_pad, (lr, lc), &opts)
         .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
-    let fv = fsci_fft::fft2(&v_pad, (lr, lc), &opts)
+    let fv = fsci_fft::rfft2(&v_pad, (lr, lc), &opts)
         .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
     let fc: Vec<fsci_fft::Complex64> = fa
         .iter()
         .zip(fv.iter())
         .map(|(&(are, aim), &(bre, bim))| (are * bre - aim * bim, are * bim + aim * bre))
         .collect();
-    let conv = fsci_fft::ifft2(&fc, (lr, lc), &opts)
+    let conv = fsci_fft::irfft2(&fc, (lr, lc), &opts)
         .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
     for i in 0..full_r {
         for j in 0..full_c {
-            out[i * full_c + j] = conv[i * lc + j].0;
+            out[i * full_c + j] = conv[i * lc + j];
         }
     }
     Ok(())

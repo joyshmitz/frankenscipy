@@ -10529,3 +10529,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - CORRECTNESS: any FFT length ≥ full gives the same conv after trim; conformance GREEN (correlate2d 3
   + convolve2d 3 incl `correlate2d_fft_path_matches_direct_reference`, `convolve2d_matches_scipy`);
   full fsci-signal lib suite 654 passed / 0 failed.
+
+## 2026-06-28 - LANDED WIN (AmberForge): correlate2d/convolve2d real 2-D FFT (rfft2) — 1.6-1.85x further on top of 5-smooth padding
+
+- Agent: AmberForge. The 2-D FFT conv path (`correlate2d_fft_full_into`) used COMPLEX `fft2` (2 fwd +
+  1 inv full-grid complex transforms) on real-valued, real-padded inputs. Switched to the real 2-D
+  FFT: `rfft2` packs the reals into an (lr × lc/2+1) half-spectrum (~2x less work), pointwise-multiply
+  over the half-spectrum, `irfft2` returns the real result directly. Simpler too (no complex padding,
+  no `.0` imaginary discard). lc is even (the 5-smooth padding forces it) → real packing stays fast.
+- **MEASURED same-box self A/B** (fft2-work vs rfft2-work, identical 5-smooth grid):
+
+  | conv size | FFT grid | fft2 | rfft2 | rfft2/fft2 |
+  | --- | --- | ---: | ---: | ---: |
+  | 130² | 270² | 5.26ms | 5.71ms | 1.09x (noise: fft2 baseline varied 3.96-5.26ms across runs) |
+  | 200² | 400² | 15.9ms | 9.74ms | **0.61x (1.64x faster)** |
+  | 260² | 540² | 31.1ms | 17.6ms | **0.56x (1.79x faster)** |
+  | 300² | 600² | 33.4ms | 18.0ms | **0.54x (1.85x faster)** |
+
+  Decisive 1.6-1.85x at the grids that dominate (FFT path is only taken for large convs); smallest is
+  noise-dominated. Stacks with the 5-smooth padding win (`db8e099b`): combined the 2-D conv FFT path
+  went from ~5-12x slower than SciPy (pow2+complex) toward parity. Conformance GREEN (correlate2d 3 +
+  convolve2d 3 incl `convolve2d_matches_scipy`); full fsci-signal lib 654 passed / 0 failed.
