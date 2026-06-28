@@ -4907,8 +4907,8 @@ impl RbfInterpolator {
         let mut phi = vec![0.0f64; n * n];
         for i in 0..n {
             for j in 0..n {
-                let r = euclidean_dist(&points[i], &points[j]);
-                phi[i * n + j] = rbf_eval(kernel, r, epsilon);
+                let r2 = euclidean_dist_sq(&points[i], &points[j]);
+                phi[i * n + j] = rbf_eval_sq(kernel, r2, epsilon);
             }
         }
 
@@ -4933,8 +4933,8 @@ impl RbfInterpolator {
         }
         let mut result = 0.0;
         for (i, pt) in self.points.iter().enumerate() {
-            let r = euclidean_dist(pt, query);
-            result += self.weights[i] * rbf_eval(self.kernel, r, self.epsilon);
+            let r2 = euclidean_dist_sq(pt, query);
+            result += self.weights[i] * rbf_eval_sq(self.kernel, r2, self.epsilon);
         }
         result
     }
@@ -5077,6 +5077,41 @@ fn euclidean_dist(a: &[f64], b: &[f64]) -> f64 {
         .map(|(&ai, &bi)| (ai - bi).powi(2))
         .sum::<f64>()
         .sqrt()
+}
+
+/// Squared Euclidean distance — `euclidean_dist` without the final `sqrt`.
+fn euclidean_dist_sq(a: &[f64], b: &[f64]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(&ai, &bi)| (ai - bi).powi(2))
+        .sum::<f64>()
+}
+
+/// Evaluate an RBF kernel from the SQUARED radius `r2 = ||·||²`, skipping the
+/// distance `sqrt` for the kernels that only depend on `r²`. For the smooth
+/// kernels `φ(r) = f((εr)²) = f(ε²r²)`, so the squared distance feeds the kernel
+/// directly — this drops one `sqrt` per (query, centre) on the hot RBF build/eval
+/// loops. The two `r`-based kernels recover `r = √r2` and reuse [`rbf_eval`], so
+/// they stay bit-identical; the `r²`-based kernels differ from the prior
+/// `sqrt`-then-square only at the last ULP (`(√x)²` rounds back to `x ± 1 ULP`).
+fn rbf_eval_sq(kernel: RbfKernel, r2: f64, epsilon: f64) -> f64 {
+    match kernel {
+        // r-based kernels: recover r = √r2 and use the original formula verbatim
+        // (`r` equals the previous `euclidean_dist`, so these stay bit-identical).
+        RbfKernel::Linear => r2.sqrt(),
+        RbfKernel::ThinPlateSpline => {
+            let r = r2.sqrt();
+            if r < 1e-30 {
+                0.0
+            } else {
+                r * r * r.ln()
+            }
+        }
+        // r²-based kernels: (εr)² == ε²r², so feed r2 straight in and skip the sqrt.
+        RbfKernel::Multiquadric => (1.0 + epsilon * epsilon * r2).sqrt(),
+        RbfKernel::InverseMultiquadric => 1.0 / (1.0 + epsilon * epsilon * r2).sqrt(),
+        RbfKernel::Gaussian => (-(epsilon * epsilon * r2)).exp(),
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════

@@ -6,6 +6,28 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): RbfInterpolator drops the distance sqrt for r²-based kernels — 1.28-1.52x
+
+- `RbfInterpolator` evaluated `φ(r)` by computing `r = euclidean_dist(..)` (a `sqrt`) then the kernel, but
+  the gaussian / multiquadric / inverse-multiquadric kernels depend only on `r²` (`(εr)² = ε²r²`), so the
+  `sqrt` is wasted. Added `euclidean_dist_sq` (no final sqrt) + `rbf_eval_sq(kernel, r2, ε)` and routed both
+  the O(n²) matrix build and the O(n_q·n_centers) eval through them. The two r-based kernels (linear,
+  thin-plate) recover `r = √r2` inline, so they stay BIT-IDENTICAL; the r²-based kernels drop one sqrt per
+  (query, centre).
+- Same-process A/B (min-of-7, nc=500 nq=5000 d=3, eval_many): gaussian 1.28x, multiquadric 1.52x,
+  inverse-multiquadric 1.34x; linear/thin-plate controls at parity (1.04-1.05x noise) with EXACT sum match
+  (byte-identical). r²-kernel result sums match the sqrt-then-square path to ULP-accumulation level (~1e-9
+  over 2.5M ops; per-element ~1 ULP since `(√x)²` rounds back to `x ± 1 ULP`). fsci-interpolate 233 tests /
+  0 fail (incl. tolerance `rbf_exact_at_data_points` 1e-6 and the eval_many==eval bit-identity self-check,
+  which still holds since both use the new path).
+- GOTCHA paid: the first cut routed linear/thin-plate via `rbf_eval(kernel, r2.sqrt(), ε)` (a nested call) —
+  the double match REGRESSED the trivial linear kernel to 0.75x. Inlining all five kernel arms in
+  `rbf_eval_sq` fixed it (controls back to parity). LESSON: when adding a fast-path wrapper over a hot
+  per-element kernel, inline the slow arms too — don't delegate back through the original match.
+- LEVER (generalizable): "kernel depends on r² ⇒ don't take the distance sqrt." Grep for
+  `euclidean_dist`/`.sqrt()`-then-`.powi(2)` feeding a kernel that's a function of r² (gaussian/RBF/SE
+  kernels in stats KDE, spatial, GP-like code). Non-byte-identical (~1 ULP) so needs a tolerance test.
+
 ## 2026-06-28 - CobaltCove (claude-code) - WIN (shipped): cwt parallelized over widths — 1.53-3.31x byte-identical
 
 - `cwt` (fsci-signal) ran a SERIAL loop over `widths`, each scale doing 2 FFTs (wavelet forward + inverse)
