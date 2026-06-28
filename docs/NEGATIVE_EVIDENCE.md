@@ -10230,3 +10230,43 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Formatting caveat: `cargo fmt --check` and `cargo fmt -p fsci-stats --check` are blocked by
   pre-existing rustfmt drift outside this patch in workspace files and older `fsci-stats` hunks;
   those unrelated lines were left untouched.
+
+## 2026-06-28 - WIN: cdist Hamming/Jaccard SoA-across-pairs (HIGH-d binary) — up to 3.0x self; Hamming-d64 flips SciPy loss→win; Jaccard d256 lever flips a self-regression
+
+- Agent: AmberForge (claude-code / claude-opus-4-8), `AGENT_NAME=AmberForge`.
+- Land-or-dig: the prior session's note (just above) flagged Hamming/Jaccard as the *remaining*
+  generic-arm metrics but GUESSED "high-d where the per-pair path already vectorizes — not the SoA
+  regime", so it was left undug. MEASURED here: that guess is WRONG. The generic `metric_distance`
+  arm runs the SCALAR `hamming`/`jaccard` helpers (a per-dim filter/count with NO per-dim SIMD), so
+  the SoA-across-pairs count (lane = a different `xb` pair) vectorizes the comparison the scalar arm
+  never did. Routed `Hamming`/`Jaccard` unconditionally through `cdist_row_{hamming,jaccard}_soa`.
+- BIT-IDENTICAL for ANY `d`: the counters (`mismatches`; `nz`/`uneq`) are exact integers (`< 2^53`,
+  sum of 1.0s), so the across-pairs reduction equals the scalar helper's count regardless of
+  dimension — no per-dim SIMD in the scalar path to match. `simd_ne` treats NaN as unequal exactly
+  like Rust `!=`. Locked by new `cdist_boolean_soa_matches_scalar_bitwise` (`to_bits()` equality,
+  real PRNG binary data, d∈{1,3,7,8,64,200}, nb hitting both the 8-lane chunk and scalar tail).
+  17/17 fsci-spatial cdist tests green.
+- THE DIG (one lever): the FIRST cut of the Jaccard SoA REGRESSED at d=256 (4.28 ms vs 3.97 ms
+  generic = 0.93x) while Hamming WON there (1.67x) — same memory access, so the Jaccard/Hamming
+  ratio of 1.8x proved Jaccard d256 is COMPUTE-bound on its extra ALU (OR+XOR+2 selects vs Hamming's
+  1 select). `a_b = splat(ai[k]).ne(0)` is LANE-UNIFORM (ai[k] is a scalar), so branching on the
+  scalar `ai[k]≠0` once per k drops the splat/cmp/OR/XOR: `ai[k]≠0` ⇒ `nz += 1` everywhere,
+  `uneq += !b_b`; else both reduce to `b_b`. Increments exactly the same lanes ⇒ still bit-identical.
+  This flipped d256 0.93x→1.34x AND lifted d64 2.11x→3.05x.
+- MEASURED same-window A/B (`cargo bench -p fsci-spatial -- cdist_boolean_metrics`, 400×400 binary,
+  `if false` guard to toggle SoA vs the generic per-pair arm; non-overlapping criterion intervals).
+  SciPy `scipy.spatial.distance.cdist` same shapes, min-of-7, same box.
+
+  | (400×400) | OLD generic arm | NEW SoA (lever) | self | SciPy cdist | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Hamming d=64  | 3.90 ms | 1.28 ms | 3.04x | 2.68 ms  | 1.46x slower → **2.09x FASTER** (flip) |
+  | Hamming d=256 | 3.94 ms | 2.36 ms | 1.67x | 11.17 ms | 2.84x → **4.73x FASTER** |
+  | Jaccard d=64  | 3.91 ms | 1.28 ms | 3.05x | 13.06 ms | 3.34x → **10.2x FASTER** |
+  | Jaccard d=256 | 3.97 ms | 2.97 ms | 1.34x | 52.60 ms | 13.3x → **17.7x FASTER** |
+
+  Win GROWS with d (more comparisons to vectorize across pairs) — the opposite of the prior guess.
+  Hamming-d64 was the lone SciPy LOSS in the boolean family; the SoA route flips it to a 2.09x win
+  and widens the lead on the other three. **cdist SoA-across-pairs family now also covers the boolean
+  count metrics (Hamming/Jaccard), not just the small-d real-vector metrics.** Remaining generic-arm
+  metric: Minkowski (SciPy itself slow there). LESSON: don't trust a "the compiler already vectorizes
+  it" guess about a scalar filter/count helper — MEASURE; the scalar count arms had no SIMD at all.

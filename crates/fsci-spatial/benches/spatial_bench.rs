@@ -112,6 +112,32 @@ fn bench_cdist_small_metrics(c: &mut Criterion) {
     group.finish();
 }
 
+/// cdist Hamming/Jaccard on high-dimensional binary data (the realistic regime for
+/// these set-overlap metrics) — the generic per-pair arm vs a SoA-across-pairs count.
+fn bench_cdist_boolean_metrics(c: &mut Criterion) {
+    use fsci_spatial::{DistanceMetric, cdist_metric};
+    let mut group = c.benchmark_group("cdist_boolean_metrics");
+    for &d in &[64usize, 256] {
+        // Deterministic pseudo-binary {0.0,1.0} data.
+        let bit = |i: usize, k: usize| -> f64 {
+            (((i.wrapping_mul(2654435761).wrapping_add(k.wrapping_mul(40503))) >> 13) & 1) as f64
+        };
+        let xa: Vec<Vec<f64>> = (0..400usize)
+            .map(|i| (0..d).map(|k| bit(i, k)).collect())
+            .collect();
+        let xb: Vec<Vec<f64>> = (0..400usize)
+            .map(|i| (0..d).map(|k| bit(i + 7919, k * 3 + 1)).collect())
+            .collect();
+        for metric in [DistanceMetric::Hamming, DistanceMetric::Jaccard] {
+            group.bench_function(
+                BenchmarkId::new(format!("{metric:?}"), format!("d{d}")),
+                |b| b.iter(|| cdist_metric(&xa, &xb, metric)),
+            );
+        }
+    }
+    group.finish();
+}
+
 /// KDTree build (O(n) median via select_nth) and nearest-neighbour query sweep.
 fn bench_kdtree(c: &mut Criterion) {
     use fsci_spatial::KDTree;
@@ -277,6 +303,7 @@ criterion_group!(
     bench_transform_batch,
     bench_pdist,
     bench_cdist_small_metrics,
+    bench_cdist_boolean_metrics,
     bench_pdist_highdim,
     bench_kdtree,
     bench_delaunay,

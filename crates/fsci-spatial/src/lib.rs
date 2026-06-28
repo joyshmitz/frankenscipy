@@ -1608,6 +1608,22 @@ pub fn cdist_metric(
                 cdist_row_braycurtis_soa(&xa[i], &b_soa, nb)
             })
         }
+        // Hamming / Jaccard count (in)equalities per pair — the scalar helpers are
+        // ALWAYS scalar filter/count (no per-dim SIMD), so the SoA-across-pairs count
+        // is bit-identical at EVERY d (exact integer counters), and the win grows with
+        // d (more comparisons to vectorize across pairs). Bandwidth-bound ⇒ cap at 16.
+        DistanceMetric::Hamming => {
+            let b_soa = cdist_soa(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_hamming_soa(&xa[i], &b_soa, nb)
+            })
+        }
+        DistanceMetric::Jaccard => {
+            let b_soa = cdist_soa(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_jaccard_soa(&xa[i], &b_soa, nb)
+            })
+        }
         _ => cdist_fill(na, nb, nthreads, |i, j| {
             metric_distance(&xa[i], &xb[j], metric)
         }),
@@ -1942,6 +1958,99 @@ fn cdist_row_braycurtis_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
             den += (ai[k] + b[k][j]).abs();
         }
         row[j] = if den == 0.0 { 0.0 } else { num / den };
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs Hamming cdist row: per-lane `count_k(ai[k] != b[k][lane]) / d`.
+/// The count is an exact integer (sum of 1.0s, `< 2^53`), so it equals the scalar
+/// helper's `mismatches as f64`, and the final `/ d` matches — bit-identical for ANY
+/// `d` (the scalar `hamming` is always a scalar filter/count, no per-dim SIMD to match,
+/// so the across-pairs reduction is exact regardless of dimension). `simd_ne` treats
+/// NaN as unequal, exactly like Rust `!=`.
+fn cdist_row_hamming_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
+    use std::simd::{Select, Simd, cmp::SimdPartialEq};
+    const L: usize = 8;
+    let d = ai.len();
+    let one = Simd::<f64, L>::splat(1.0);
+    let zero = Simd::<f64, L>::splat(0.0);
+    let dv = Simd::<f64, L>::splat(d as f64);
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut acc = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            let av = Simd::<f64, L>::splat(ai[k]);
+            let bv = Simd::<f64, L>::from_slice(&b[k][j..j + L]);
+            acc += av.simd_ne(bv).select(one, zero);
+        }
+        (acc / dv).copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let mut cnt = 0.0_f64;
+        for k in 0..d {
+            if ai[k] != b[k][j] {
+                cnt += 1.0;
+            }
+        }
+        row[j] = cnt / d as f64;
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs Jaccard cdist row: per-lane counts `nz = #(ai[k]≠0 ∨ b≠0)` and
+/// `uneq = #(ai[k]≠0 ⊕ b≠0)`, result `uneq/nz` (0 if `nz==0`). `a_b ⊕ b_b ⇒ a_b ∨ b_b`,
+/// so counting `uneq` unconditionally equals the scalar helper's guarded count; both
+/// counters are exact integers, so this is bit-identical for ANY `d`.
+///
+/// `a_b = splat(ai[k]).ne(0)` is LANE-UNIFORM (ai[k] is a scalar), so we branch on
+/// the scalar once per k instead of materializing the splat/OR/XOR per chunk: when
+/// `ai[k]≠0` every lane is `(a_b|b_b)=1` (so `nz += 1`) and `(a_b^b_b)=!b_b`; when
+/// `ai[k]=0` both reduce to `b_b`. Halves the per-element ALU at high `d` (the
+/// compute-bound regime) while incrementing exactly the same lanes ⇒ still bit-identical.
+fn cdist_row_jaccard_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
+    use std::simd::{Select, Simd, cmp::SimdPartialEq};
+    const L: usize = 8;
+    let d = ai.len();
+    let one = Simd::<f64, L>::splat(1.0);
+    let zero = Simd::<f64, L>::splat(0.0);
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut nz = Simd::<f64, L>::splat(0.0);
+        let mut uneq = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            let b_b = Simd::<f64, L>::from_slice(&b[k][j..j + L]).simd_ne(zero);
+            if ai[k] != 0.0 {
+                nz += one;
+                uneq += b_b.select(zero, one);
+            } else {
+                let bm = b_b.select(one, zero);
+                nz += bm;
+                uneq += bm;
+            }
+        }
+        nz.simd_eq(zero)
+            .select(zero, uneq / nz)
+            .copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let (mut nz, mut uneq) = (0.0_f64, 0.0_f64);
+        for k in 0..d {
+            let a_b = ai[k] != 0.0;
+            let b_b = b[k][j] != 0.0;
+            if a_b || b_b {
+                nz += 1.0;
+                if a_b != b_b {
+                    uneq += 1.0;
+                }
+            }
+        }
+        row[j] = if nz == 0.0 { 0.0 } else { uneq / nz };
         j += 1;
     }
     row
@@ -8548,6 +8657,8 @@ mod tests {
                     DistanceMetric::Canberra,
                     DistanceMetric::Braycurtis,
                     DistanceMetric::Correlation,
+                    DistanceMetric::Hamming,
+                    DistanceMetric::Jaccard,
                 ] {
                     let got = cdist_metric(&xa, &xb, metric).expect("cdist");
                     for (i, gr) in got.iter().enumerate() {
@@ -8588,6 +8699,44 @@ mod tests {
                             want.to_bits(),
                             "nan cdist mismatch at ({i},{j}) {metric:?} d={d}"
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cdist_boolean_soa_matches_scalar_bitwise() {
+        // Hamming/Jaccard SoA-across-pairs counts must be BIT-identical to the scalar
+        // helpers on real binary data (where ties/zeros actually exercise the count
+        // logic) across low AND high d — the integer counters are exact regardless of
+        // dimension. nb=43 hits both the 8-lane chunk and the scalar tail.
+        let mut s: u64 = 0x2468_ACE0_1357_9BDF;
+        let mut bit = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 33) & 1) as f64
+        };
+        for &d in &[1usize, 3, 7, 8, 64, 200] {
+            for &(na, nb) in &[(40usize, 43usize), (500, 300)] {
+                let xa: Vec<Vec<f64>> = (0..na)
+                    .map(|_| (0..d).map(|_| bit()).collect())
+                    .collect();
+                let xb: Vec<Vec<f64>> = (0..nb)
+                    .map(|_| (0..d).map(|_| bit()).collect())
+                    .collect();
+                for metric in [DistanceMetric::Hamming, DistanceMetric::Jaccard] {
+                    let got = cdist_metric(&xa, &xb, metric).expect("cdist");
+                    for (i, gr) in got.iter().enumerate() {
+                        for (j, &g) in gr.iter().enumerate() {
+                            let want = metric_distance(&xa[i], &xb[j], metric);
+                            assert_eq!(
+                                g.to_bits(),
+                                want.to_bits(),
+                                "soa boolean cdist mismatch at ({i},{j}) {metric:?} d={d} na={na} nb={nb}"
+                            );
+                        }
                     }
                 }
             }
