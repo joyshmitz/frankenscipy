@@ -10890,3 +10890,40 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - 5 csgraph parallel-across-sources ships now (dijkstra_all_pairs 35x, johnson 31.7x, eccentricity 14x,
   dijkstra_multi_source 24x, bellman_ford_multi_source up to 5984x). The Bellman-Ford ratio is the
   outlier because scipy's BF lacks aggressive early termination, not just the parallelism.
+
+## 2026-06-28 - LANDED WIN (AmberForge): Rotation.apply_many parallel above L3 cliff — flips 6x SciPy loss to 1.74x WIN at 5M vectors, byte-identical
+
+- Agent: AmberForge. `Rotation::apply_many` (rotate N vectors by one rotation; matches
+  `scipy.spatial.transform.Rotation.apply`) was a serial AoS `[f64;3]` map. MEASURED: parity/win up to
+  ~1.3M, then a sharp L3 cache cliff — single-thread AoS access goes *latency*-bound (~3 GB/s, one thread
+  can't issue enough outstanding loads to hide DRAM latency), so it stalled far below bandwidth (N=5M:
+  ~70 ms = **6x SLOWER** than SciPy's vectorized 11.70 ms).
+- FIX: fan the per-vector loop out across cores for `n >= 1_400_000` (just past the cliff; serial ~3 ms
+  at 1.3M, ~16 ms at 1.4M). Chunks supply memory-level parallelism → saturate aggregate bandwidth. Each
+  chunk runs identical per-vector arithmetic in input order → BYTE-IDENTICAL (verified, and test
+  `rotation_apply_many_matches_apply` extended to a 1.5M input spot-checked vs scalar `apply`).
+- **MEASURED same-box vs `scipy.spatial.transform.Rotation.apply`, best-of-6 (shipped code):**
+
+  | N vectors | fsci before | fsci after | scipy | after vs scipy |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 1,000,000 | 2.24 ms | 2.24 ms (serial, unchanged) | ~2.3 ms | ~parity |
+  | 5,000,000 | ~70 ms | **6.71 ms** | 11.70 ms | **1.74x FASTER** |
+
+  A/B in-binary (serial vs parallel, same process): 1.4M 5.43x, 2M 6.04x, 5M 8.25x, all `identical=true`.
+  Below 1.4M stays serial (thread-spawn overhead > win). fsci-spatial lib 225 passed / 0 failed. Zero
+  regression (serial path untouched below threshold). NOTE: threshold tuned to THIS box's L3 (~64MB →
+  ~1.35M vectors × 48 B); a runtime cache-size gate would be more portable (future lever).
+
+## 2026-06-28 - SURFACED BLOCKER (AmberForge): sparse spsolve 4.8-7.1x slower than scipy — BTreeMap right-looking LU, needs Gilbert-Peierls/supernodal rewrite (NOT an ordering swap)
+
+- `fsci_sparse::spsolve` (sparse direct solve) MEASURED on a 2D 5-point Laplacian (k×k grid), best-of-5:
+  N=900 2.14ms vs scipy 2.19 (parity), N=2500 **21.6 vs 4.46 (4.84x SLOWER)**, N=4900 **75.0 vs 10.54
+  (7.11x SLOWER)** — gap GROWS with N (fill-in signature).
+- DIAGNOSIS: NOT the ordering — A/B'd the default `Colamd`(→RCM) vs `MmdAtPlusA`(true min-degree) and they
+  are EQUAL on the Laplacian (1.0x; min-degree even 0.93x at k=70). The cost is the FACTORIZATION:
+  `SparseLuFactorization::factor` is a RIGHT-looking LU over `BTreeMap<usize,f64>` rows + per-column
+  `BTreeSet` membership — every fill-in entry is an O(log n) BTree insert/lookup, vs SciPy SuperLU's
+  supernodal dense-BLAS. The real fix is a Gilbert-Peierls LEFT-looking sparse LU with a dense size-n
+  scatter work array (O(1) scatter/gather, DFS symbolic) — a large, conformance-risky rewrite that must
+  reproduce the exact partial-pivoting (diag_pivot_thresh) bit-for-bit. NOT a clean 60-min win; filed as
+  the next-biggest sparse-direct gap for a dedicated effort.

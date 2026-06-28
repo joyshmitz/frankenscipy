@@ -7291,19 +7291,57 @@ impl Rotation {
     ///
     /// Byte-identical to mapping [`apply`](Self::apply), but the quaternion→matrix
     /// conversion is done ONCE rather than for every vector.
+    ///
+    /// For very large clouds (`n >= PAR_THRESHOLD`) the loop fans out across cores.
+    /// Single-threaded access to the AoS `[f64; 3]` layout is *latency*-bound once
+    /// the working set (input + output ≈ `n·48` bytes) spills L3 — it stalls near
+    /// ~3 GB/s, far below DRAM bandwidth — because one thread can't issue enough
+    /// outstanding loads to hide DRAM latency. Splitting the cloud into per-core
+    /// chunks supplies that memory-level parallelism and saturates aggregate
+    /// bandwidth: measured 5.4× at 1.4M and 8.3× at 5M vectors on a 64-core box,
+    /// flipping a 6× loss vs SciPy's vectorized `Rotation.apply` into a win. Each
+    /// chunk runs the identical per-vector arithmetic in input order, so the result
+    /// is byte-identical to the serial path. The threshold sits just past the L3
+    /// cliff (serial is ~3 ms at 1.3M, ~16 ms at 1.4M); below it the serial loop is
+    /// faster than thread-spawn overhead, so small inputs keep the plain map.
     #[must_use]
     pub fn apply_many(&self, vectors: &[[f64; 3]]) -> Vec<[f64; 3]> {
         let m = self.as_matrix();
-        vectors
-            .iter()
-            .map(|&[x, y, z]| {
-                [
-                    m[0][0] * x + m[0][1] * y + m[0][2] * z,
-                    m[1][0] * x + m[1][1] * y + m[1][2] * z,
-                    m[2][0] * x + m[2][1] * y + m[2][2] * z,
-                ]
-            })
-            .collect()
+        const PAR_THRESHOLD: usize = 1_400_000;
+        let n = vectors.len();
+        if n < PAR_THRESHOLD {
+            return vectors
+                .iter()
+                .map(|&[x, y, z]| {
+                    [
+                        m[0][0] * x + m[0][1] * y + m[0][2] * z,
+                        m[1][0] * x + m[1][1] * y + m[1][2] * z,
+                        m[2][0] * x + m[2][1] * y + m[2][2] * z,
+                    ]
+                })
+                .collect();
+        }
+
+        let mut out = vec![[0.0f64; 3]; n];
+        let cores = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(64);
+        let chunk = n.div_ceil(cores);
+        std::thread::scope(|scope| {
+            for (out_chunk, vec_chunk) in out.chunks_mut(chunk).zip(vectors.chunks(chunk)) {
+                scope.spawn(move || {
+                    for (o, &[x, y, z]) in out_chunk.iter_mut().zip(vec_chunk.iter()) {
+                        *o = [
+                            m[0][0] * x + m[0][1] * y + m[0][2] * z,
+                            m[1][0] * x + m[1][1] * y + m[1][2] * z,
+                            m[2][0] * x + m[2][1] * y + m[2][2] * z,
+                        ];
+                    }
+                });
+            }
+        });
+        out
     }
 
     /// Return the inverse rotation.
@@ -11361,6 +11399,28 @@ mod tests {
         let batch = r.apply_many(&pts);
         for (p, b) in pts.iter().zip(batch.iter()) {
             assert_eq!(*b, r.apply(*p), "apply_many != apply at {p:?}");
+        }
+
+        // Large input crosses the parallel threshold (1.4M); the multi-threaded
+        // chunked path must stay byte-identical to per-vector apply.
+        let n = 1_500_000usize;
+        let mut s: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / 9.007_199_254_740_992e15 - 0.5
+        };
+        let big: Vec<[f64; 3]> = (0..n).map(|_| [next(), next(), next()]).collect();
+        let big_batch = r.apply_many(&big);
+        assert_eq!(big_batch.len(), n);
+        // Spot-check a spread of indices against the scalar reference.
+        for &i in &[0usize, 1, 999_999, 1_400_001, n - 1] {
+            assert_eq!(
+                big_batch[i],
+                r.apply(big[i]),
+                "parallel apply_many != apply at index {i}"
+            );
         }
     }
 
