@@ -10952,3 +10952,41 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   threshold). fsci-spatial lib 225 passed / 0 failed.
 - The `par_point_map` helper now backs RigidTransform; Rotation.apply_many keeps its proven inline path.
   AoS-latency-bound-above-L3 lever now applied to both batch transform kernels in the module.
+
+## 2026-06-28 - LANDED WIN (AmberForge): binned_statistic_dd parallel (both passes) — 4.5x → 12.5-16.6x faster than scipy
+
+- Agent: AmberForge. `stats.binned_statistic_dd` general accumulator path (ndim≠3, count/sum/mean/min/max)
+  ran TWO serial passes over the sample: a min/max pre-scan (2·ndim folds) and the bin scatter. Both are
+  compute-bound (the per-point floor-divides dominate; the grid accumulator stays L2-resident), so both
+  now fan out across cores for large n.
+  - **min/max pre-scan**: fused into ONE pass (was 2·ndim separate scans), parallel per-dim reduce +
+    merge. BYTE-IDENTICAL (sample coords validated finite ⇒ plain min/max = NaN-fold; min/max are
+    order-independent). This pre-scan was the Amdahl bottleneck — parallelizing only the accumulator gave
+    just 1.5x; adding this took it to ~3x.
+  - **bin accumulator**: per-thread histograms (count/sum/bmin/bmax/has_nan) merged once. count/min/max
+    EXACT under merge; sum/mean reassociate ~1e-15, within the 1e-12 conformance tolerance (same
+    precedent as parallel entropy/gmean). Gated n≥131072 & total≤16384 (bounds per-thread memory).
+- **MEASURED same-box, d=2 bins=50 mean, best-of-6:**
+
+  | n | fsci serial (before) | fsci parallel (after) | scipy | self | after vs scipy |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 1,000,000 | 30.53 ms | 10.62 ms | 132.79 ms | 2.87x | **12.5x FASTER** (was 4.35x) |
+  | 4,000,000 | 115.56 ms | 32.35 ms | 538.44 ms | 3.57x | **16.6x FASTER** (was 4.66x) |
+
+  Test `binned_statistic_dd_parallel_matches_serial_large` (n=400k 2D: count exact vs serial ref, mean
+  within 1e-12). fsci-stats lib 1995 passed / 0 failed. Below the gate or for big grids: serial (unchanged).
+
+## 2026-06-28 - DIG NOTE (AmberForge): spsolve cost is the BTreeMap factorization kernel, NOT ordering (new evidence)
+
+- Profiled `spsolve` phases on the 2D Laplacian k=70 (N=4900): RCM-ordering-only **0.19 ms** (0.3% of
+  the 64.6 ms total), and `Natural` (no reorder) **63.7 ms** ≈ `RCM` **64.6 ms**. So the fill-reducing
+  ordering is irrelevant here (Natural and RCM give the same banded fill) and the ENTIRE cost is the
+  right-looking BTreeMap LU factorization kernel. Confirms the only fix is the Gilbert-Peierls
+  left-looking dense-scatter rewrite (a different primitive) — narrows the future effort to the
+  factorization inner loop, rules out an ordering swap. Still the lone non-wall LOSS vs scipy
+  (4.8-7.1x); deferred as a dedicated multi-turn effort.
+- Confirmed already-WINNING / already-optimized this turn (DON'T re-chase): ndimage affine_transform/
+  map_coordinates/geometric_transform/rotate (all fill_pixels_parallel), directed_hausdorff (Taha-Hanbury
+  early-break + parallel), somersd (O(n log n) fast path), kendalltau/entropy/gmean (parallel),
+  binned_statistic_dd was already 4.5x (now 12.5-16.6x). Scorecard residual losses are documented walls
+  (cholesky needs register-tiled SYRK GEMM, label needs native int-store, add_csc safe-Rust-vs-C const).

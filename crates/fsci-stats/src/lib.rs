@@ -46303,39 +46303,83 @@ pub fn binned_statistic_dd(
         return binned_statistic_dd_3d_accumulator(sample, values, bins, statistic);
     }
 
-    let nan_min = |it: &dyn Fn(usize) -> f64, n: usize| {
-        (0..n).map(it).fold(f64::INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.min(b)
-            }
-        })
+    // Per-dimension min/max → bin-width/edges. Sample coords are finite (input
+    // validated above), so plain min/max equals the NaN-aware fold and is
+    // order-independent ⇒ the parallel fused pass is BYTE-IDENTICAL to the serial
+    // per-dim folds. ONE fused pass over points replaces the 2·ndim separate scans,
+    // and for a large sample each worker reduces its chunk's per-dim min/max,
+    // merged once (this pre-scan was itself the Amdahl bottleneck once the
+    // accumulator below was parallelized).
+    let n = sample.len();
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let mut mins = vec![f64::INFINITY; ndim];
+    let mut maxs = vec![f64::NEG_INFINITY; ndim];
+    let scan_threads = if n >= 131_072 {
+        cores.min(n / 65_536).max(1)
+    } else {
+        1
     };
-    let nan_max = |it: &dyn Fn(usize) -> f64, n: usize| {
-        (0..n).map(it).fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
+    if scan_threads > 1 {
+        let chunk = n.div_ceil(scan_threads);
+        let partials: Vec<(Vec<f64>, Vec<f64>)> = std::thread::scope(|scope| {
+            sample
+                .chunks(chunk)
+                .map(|sc| {
+                    scope.spawn(move || {
+                        let mut mn = vec![f64::INFINITY; ndim];
+                        let mut mx = vec![f64::NEG_INFINITY; ndim];
+                        for p in sc {
+                            for d in 0..ndim {
+                                if p[d] < mn[d] {
+                                    mn[d] = p[d];
+                                }
+                                if p[d] > mx[d] {
+                                    mx[d] = p[d];
+                                }
+                            }
+                        }
+                        (mn, mx)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect()
+        });
+        for (mn, mx) in partials {
+            for d in 0..ndim {
+                if mn[d] < mins[d] {
+                    mins[d] = mn[d];
+                }
+                if mx[d] > maxs[d] {
+                    maxs[d] = mx[d];
+                }
             }
-        })
-    };
+        }
+    } else {
+        for p in sample {
+            for d in 0..ndim {
+                if p[d] < mins[d] {
+                    mins[d] = p[d];
+                }
+                if p[d] > maxs[d] {
+                    maxs[d] = p[d];
+                }
+            }
+        }
+    }
 
-    // Per-dimension min/max/bin-width/edges.
-    let mut mins = vec![0.0; ndim];
     let mut bws = vec![0.0; ndim];
     let mut edges: Vec<Vec<f64>> = Vec::with_capacity(ndim);
     for d in 0..ndim {
-        let getter = |i: usize| sample[i][d];
-        let lo = nan_min(&getter, sample.len());
-        let hi = nan_max(&getter, sample.len());
+        let (lo, hi) = (mins[d], maxs[d]);
         let bw = if hi > lo {
             (hi - lo) / bins as f64
         } else {
             1.0
         };
-        mins[d] = lo;
         bws[d] = bw;
         edges.push((0..=bins).map(|i| lo + i as f64 * bw).collect());
     }
@@ -46355,22 +46399,94 @@ pub fn binned_statistic_dd(
         let mut bmin = vec![f64::INFINITY; total];
         let mut bmax = vec![f64::NEG_INFINITY; total];
         let mut has_nan = vec![false; total];
-        for (point, &v) in sample.iter().zip(values.iter()) {
+
+        // The per-point scatter is compute-bound (the `ndim` floor-divides per
+        // point dominate; the grid accumulator stays L2-resident), so it scales
+        // near-linearly with cores. For a large sample over a modest grid, give
+        // each worker its OWN histogram and merge once at the end. count/min/max
+        // are exact under the merge (integer counts ≤ 2^53; min/max order-free);
+        // sum/mean reassociate by ~1e-15, within the 1e-12 conformance tolerance
+        // (same precedent as the parallel entropy/gmean reductions). Bounded grid
+        // (`total ≤ 16384`) keeps the per-thread arrays small. `n`/`cores` reuse
+        // the values from the min/max pre-scan above.
+        let nthreads = if n >= 131_072 && total <= 16_384 {
+            cores.min(n / 65_536).max(1)
+        } else {
+            1
+        };
+        let scatter = |point: &[f64]| -> usize {
             let mut flat = 0usize;
             for d in 0..ndim {
                 let bd = (((point[d] - mins[d]) / bws[d]).floor() as usize).min(bins - 1);
                 flat = flat * bins + bd;
             }
-            count[flat] += 1.0;
-            sum[flat] += v;
-            if v.is_nan() {
-                has_nan[flat] = true;
-            } else {
-                if v < bmin[flat] {
-                    bmin[flat] = v;
+            flat
+        };
+        if nthreads > 1 {
+            let chunk = n.div_ceil(nthreads);
+            type Partial = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<bool>);
+            let partials: Vec<Partial> = std::thread::scope(|scope| {
+                let handles: Vec<_> = sample
+                    .chunks(chunk)
+                    .zip(values.chunks(chunk))
+                    .map(|(sc, vc)| {
+                        let scatter = &scatter;
+                        scope.spawn(move || {
+                            let mut c = vec![0.0f64; total];
+                            let mut sm = vec![0.0f64; total];
+                            let mut mn = vec![f64::INFINITY; total];
+                            let mut mx = vec![f64::NEG_INFINITY; total];
+                            let mut hn = vec![false; total];
+                            for (point, &v) in sc.iter().zip(vc.iter()) {
+                                let flat = scatter(point);
+                                c[flat] += 1.0;
+                                sm[flat] += v;
+                                if v.is_nan() {
+                                    hn[flat] = true;
+                                } else {
+                                    if v < mn[flat] {
+                                        mn[flat] = v;
+                                    }
+                                    if v > mx[flat] {
+                                        mx[flat] = v;
+                                    }
+                                }
+                            }
+                            (c, sm, mn, mx, hn)
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            for (c, sm, mn, mx, hn) in partials {
+                for b in 0..total {
+                    count[b] += c[b];
+                    sum[b] += sm[b];
+                    if mn[b] < bmin[b] {
+                        bmin[b] = mn[b];
+                    }
+                    if mx[b] > bmax[b] {
+                        bmax[b] = mx[b];
+                    }
+                    if hn[b] {
+                        has_nan[b] = true;
+                    }
                 }
-                if v > bmax[flat] {
-                    bmax[flat] = v;
+            }
+        } else {
+            for (point, &v) in sample.iter().zip(values.iter()) {
+                let flat = scatter(point);
+                count[flat] += 1.0;
+                sum[flat] += v;
+                if v.is_nan() {
+                    has_nan[flat] = true;
+                } else {
+                    if v < bmin[flat] {
+                        bmin[flat] = v;
+                    }
+                    if v > bmax[flat] {
+                        bmax[flat] = v;
+                    }
                 }
             }
         }
@@ -80300,6 +80416,69 @@ mod tests {
         // Invalid input -> empty.
         let (e, ee) = binned_statistic_dd(&s3, &v3[..2], 2, "mean");
         assert!(e.is_empty() && ee.is_empty());
+    }
+
+    #[test]
+    fn binned_statistic_dd_parallel_matches_serial_large() {
+        // Large 2-D sample crosses the parallel accumulator threshold (n>=131072,
+        // total<=16384). The per-thread-histogram merge must match a single-thread
+        // reference: count exactly (integer), sum/mean within ~1e-12.
+        let n = 400_000usize;
+        let bins = 40usize; // total = 1600 <= 16384
+        let mut state = 0x1234_5678_9abc_def0u64;
+        let mut nx = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let sample: Vec<Vec<f64>> = (0..n).map(|_| vec![nx(), nx()]).collect();
+        let values: Vec<f64> = (0..n).map(|_| nx() * 10.0 - 5.0).collect();
+
+        // Single-thread reference accumulation (same flat index, point order).
+        let total = bins * bins;
+        let (mut mins, mut maxs) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for p in &sample {
+            for d in 0..2 {
+                mins[d] = mins[d].min(p[d]);
+                maxs[d] = maxs[d].max(p[d]);
+            }
+        }
+        let bws: Vec<f64> = (0..2).map(|d| (maxs[d] - mins[d]) / bins as f64).collect();
+        let mut rcount = vec![0.0f64; total];
+        let mut rsum = vec![0.0f64; total];
+        for (p, &v) in sample.iter().zip(&values) {
+            let mut flat = 0usize;
+            for d in 0..2 {
+                let bd = (((p[d] - mins[d]) / bws[d]).floor() as usize).min(bins - 1);
+                flat = flat * bins + bd;
+            }
+            rcount[flat] += 1.0;
+            rsum[flat] += v;
+        }
+
+        let (count, _) = binned_statistic_dd(&sample, &values, bins, "count");
+        let (mean, _) = binned_statistic_dd(&sample, &values, bins, "mean");
+        assert_eq!(count.len(), total);
+        let total_count: f64 = count.iter().sum();
+        assert_eq!(total_count, n as f64, "counts must sum to n exactly");
+        for b in 0..total {
+            assert_eq!(count[b], rcount[b], "count mismatch at bin {b}");
+            let expected = if rcount[b] == 0.0 {
+                f64::NAN
+            } else {
+                rsum[b] / rcount[b]
+            };
+            if expected.is_nan() {
+                assert!(mean[b].is_nan(), "expected NaN mean at bin {b}");
+            } else {
+                assert!(
+                    (mean[b] - expected).abs() < 1e-12,
+                    "mean mismatch at bin {b}: {} vs {expected}",
+                    mean[b]
+                );
+            }
+        }
     }
 
     #[test]
