@@ -89,6 +89,7 @@ pub use linalg::{
     degree_sequence,
     depth_first_order,
     dijkstra,
+    dijkstra_all_pairs,
     eccentricity,
     // Eigensolvers
     eigs,

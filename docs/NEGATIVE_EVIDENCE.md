@@ -10761,3 +10761,35 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   CPU-memory-bandwidth + forbid(unsafe)/AVX2. Recorded so future turns skip re-deriving this. The live
   frontier needs either an unsafe-SIMD/AVX-512 budget, or a NEW scipy surface not yet ported (capability
   gap), not another primitive swap on the existing dense/recurrence kernels.
+
+## 2026-06-28 - LANDED WIN (AmberForge): all-pairs shortest path via PARALLEL per-source Dijkstra — 9.8-35.8x FASTER than scipy.sparse.csgraph.shortest_path (different primitive: Dijkstra-per-node, not Floyd-Warshall)
+
+- Agent: AmberForge. Overturns last turn's "frontier harvested" by finding a fresh ALGORITHMIC+PARALLEL
+  gap. fsci's only all-pairs shortest-path was `floyd_warshall` (O(V³), parallelized — already beats
+  scipy's O(V³) C floyd_warshall ~7x, and beat scipy's serial Dijkstra at V≥1000 but LOST 1.5x at
+  V=500). scipy.sparse.csgraph.shortest_path on a SPARSE graph auto-routes to Dijkstra-from-each-node
+  (O(V·E log V)). fsci had single-source `dijkstra` (BinaryHeap, already 1.6x faster than scipy) but NO
+  all-pairs-via-Dijkstra. Added `dijkstra_all_pairs`: refactor the heap loop into a pure `dijkstra_core`,
+  then run it from every source in PARALLEL across cores (the sources are independent; scipy runs them
+  serially). Two compounding wins: O(V·E log V) ≪ O(V³) for sparse, AND multicore vs scipy's serial.
+- **MEASURED same-box, fsci `dijkstra_all_pairs` vs `scipy.sparse.csgraph.shortest_path(method='D')`,
+  sparse graph deg=6, best-of-3-6:**
+
+  | V | fsci floyd_warshall (old all-pairs) | fsci dijkstra_all_pairs | scipy Dijkstra-allpairs | fsci vs scipy |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 500 | 49.5 ms | **3.05 ms** | 29.9 ms | **9.8x FASTER** (was 1.5x slower) |
+  | 1000 | 103 ms | **5.60 ms** | 131.7 ms | **23.5x FASTER** |
+  | 1500 | 240 ms | **11.4 ms** | 315.4 ms | **27.6x FASTER** |
+  | 3000 | 982 ms | **40.6 ms** | 1450.7 ms | **35.8x FASTER** |
+
+  16-24x faster than fsci's own floyd_warshall too; the V=500 scipy LOSS flips to a 9.8x WIN.
+- CORRECTNESS: shortest-path distances are unique, so any correct algorithm yields the SAME matrix.
+  New test `dijkstra_all_pairs_matches_floyd_warshall` (60-node random sparse graph, all V² entries
+  exact incl. INF unreachable). Transitively scipy-exact: `floyd_warshall` already has
+  `floyd_warshall_matches_scipy_reference_values`. Negative edges fall back to per-source Bellman-Ford
+  (serial, propagates negative-cycle errors like scipy). fsci-sparse lib 349 passed / 0 failed.
+- LESSON: "frontier harvested" was premature — the lever was a MISSING fast variant (scipy's auto
+  Dijkstra-routing for sparse all-pairs had no fsci equivalent; fsci only had the O(V³) FW). Different
+  primitive (Dijkstra-per-node) + embarrassingly-parallel-across-sources is a general csgraph pattern:
+  any scipy csgraph routine that scipy runs per-source serially (BFS/DFS orders, eccentricity,
+  reachability) is a parallel-across-sources candidate.
