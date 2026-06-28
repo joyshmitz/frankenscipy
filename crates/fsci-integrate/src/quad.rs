@@ -2089,7 +2089,9 @@ pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateVal
         return cumulative_trapezoid(y, x);
     }
 
-    let mut dx = Vec::with_capacity(n - 1);
+    // Validate x is finite and strictly increasing WITHOUT materializing a `dx`
+    // buffer (the interval widths are recomputed inline below from `x`); this drops
+    // an O(n) allocation + write pass from this bandwidth-bound routine.
     for points in x.windows(2) {
         let h = points[1] - points[0];
         if !(h.is_finite() && h > 0.0) {
@@ -2097,17 +2099,17 @@ pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateVal
                 detail: "x must be finite and strictly increasing".to_string(),
             });
         }
-        dx.push(h);
     }
 
-    let mut result = Vec::with_capacity(n - 1);
-    let mut interval_integrals = vec![0.0; n - 1];
-
-    // The per-interval Simpson coefficients are division-heavy (3-4 divisions each,
-    // see the *_interval helpers) and each even index `i` writes the disjoint pair
-    // (i, i+1) independently — a COMPUTE-bound embarrassingly-parallel loop. Fan it
-    // across cores for large n; the cheap cumulative scan below stays serial.
-    // BYTE-IDENTICAL: same per-interval formulas, same pair order, same scan order.
+    // Fill `result` in place with each interval's integral, then prefix-sum it
+    // in place — no separate `interval_integrals` buffer (one O(n) Vec instead of
+    // three). The per-interval Simpson coefficients are division-heavy (3-4
+    // divisions each, see the *_interval helpers) and each even index `i` writes
+    // the disjoint pair (i, i+1) independently — a compute-bound embarrassingly-
+    // parallel loop, fanned across cores for large n. BYTE-IDENTICAL: same
+    // per-interval formulas, same pair order, and the in-place prefix sum adds the
+    // intervals in the same left-to-right order as the original cumulative scan.
+    let mut result = vec![0.0; n - 1];
     let main_len = if n.is_multiple_of(2) { n - 2 } else { n - 1 };
     let nthreads = if main_len < (1 << 19) {
         1
@@ -2119,11 +2121,11 @@ pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateVal
     };
 
     {
-        let (main_part, tail_part) = interval_integrals.split_at_mut(main_len);
+        let (main_part, tail_part) = result.split_at_mut(main_len);
         let fill_pairs = |seg: &mut [f64], base_pair: usize| {
             for (cl, chunk) in seg.chunks_mut(2).enumerate() {
                 let i = 2 * (base_pair + cl);
-                let (h0, h1) = (dx[i], dx[i + 1]);
+                let (h0, h1) = (x[i + 1] - x[i], x[i + 2] - x[i + 1]);
                 chunk[0] = cumulative_simpson_left_interval(y[i], y[i + 1], y[i + 2], h0, h1);
                 chunk[1] = cumulative_simpson_right_interval(y[i], y[i + 1], y[i + 2], h0, h1);
             }
@@ -2145,15 +2147,13 @@ pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateVal
         // Even n leaves a trailing half-interval handled by the right rule.
         if n.is_multiple_of(2) {
             let i = n - 3;
-            tail_part[0] =
-                cumulative_simpson_right_interval(y[i], y[i + 1], y[i + 2], dx[i], dx[i + 1]);
+            let (h0, h1) = (x[i + 1] - x[i], x[i + 2] - x[i + 1]);
+            tail_part[0] = cumulative_simpson_right_interval(y[i], y[i + 1], y[i + 2], h0, h1);
         }
     }
 
-    let mut cumsum = 0.0;
-    for value in interval_integrals {
-        cumsum += value;
-        result.push(cumsum);
+    for i in 1..result.len() {
+        result[i] += result[i - 1];
     }
 
     Ok(result)

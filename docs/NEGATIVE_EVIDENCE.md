@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.6-2.4x more): cumulative_simpson drops two O(n) scratch Vecs (alloc/page-fault elimination)
+
+- Follow-on to the cumulative_simpson parallel commit (7f1c4eff). That version still allocated TWO
+  O(n) f64 buffers per call: a `dx` Vec (interval widths) and an `interval_integrals` Vec, plus a
+  final read-interval/write-result cumsum copy. At 1M each Vec is 8MB ⇒ malloc + first-touch PAGE
+  FAULTS + a serial fill — a large hidden cost (Amdahl serial + ~2ms of faults per 8MB).
+- LEVER (alloc-elimination, my proven cargo-check-safe vein): (1) validate x finite & strictly
+  increasing WITHOUT storing dx, recompute h0/h1 = x[i+1]-x[i] inline in the interval loop; (2) write
+  the interval integrals directly into `result` (one vec![0.0; n-1]) and PREFIX-SUM it in place
+  (result[i] += result[i-1]) instead of a separate interval_integrals buffer + push-copy. Three O(n)
+  Vecs ⇒ one.
+- BYTE-IDENTICAL: same per-interval formulas, same h values (identical f64 subtraction), same
+  left-to-right prefix-sum order. FNV digest of the full output unchanged across 600000/1048576/4194304
+  (d5cf625aaabed14f / aaad75110693a08f / e65f0debf9bde7ae) — matches the pre-change parallel version.
+  Error semantics preserved (still errors on non-increasing x — cumulative_simpson_requires_strictly_
+  increasing_x test green).
+- Same-box A/B vs the committed parallel version (min-of-40):
+  - n=600000:  7362 ->  4553 = 1.62x
+  - n=1048576:15956 ->  6653 = 2.40x
+  - n=4194304:59920 -> 25607 = 2.34x
+  Compounds with 7f1c4eff: cumulative_simpson is now ~3-6x over the original serial and ~10-25x vs
+  SciPy. LESSON: per-call O(n) scratch Vecs (esp. 8MB+) carry a large alloc + page-fault + extra-pass
+  cost that dominates once the inner loop is parallel — eliminate/fuse scratch buffers and prefix-sum
+  in place; the win (1.6-2.4x) dwarfed the parallelization's own gain.
+- Conformance GREEN: fsci-integrate 56/0 + 11/0 + 1/0 lib; diff_integrate_cumulative_simpson 1/0.
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.4-2.9x self): cumulative_simpson interval loop parallelized
 
 - fsci-integrate is the least-contested crate (1 recent commit vs 15-17 for hot crates). Its array
