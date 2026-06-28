@@ -6,6 +6,44 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - GreenFalcon (codex) - NO-SHIP (reverted/stashed): Cholesky panel TRSM row parallelism lacks stable proof
+
+- Land-or-dig audit: `.scratch/.worktrees` non-ancestor bench tips were covered
+  by existing scorecard/ledger rows or superseded by current `origin/main`; no
+  measured unlanded worktree win was available to land.
+- First dig target was the sparse `spsolve` Laplacian row named by the current
+  ledger, but current `origin/main` already closes that stale gap: filtered
+  `fsci-sparse` bench on `ovh-a` measured
+  `sparse_spsolve_laplacian/spsolve/1600` `171.55 us` and `/4900` `847.59 us`.
+  That is not the old 120 ms residual, so further sparse guard work was skipped.
+- New Cholesky lever tested: parallelize the blocked Cholesky panel solve
+  (`A21 = A21 * L11^-T`) over independent trailing rows before the existing
+  parallel SYRK update. This is the BLAS-TRSM side of the LAPACK-class route,
+  distinct from the already-rejected flat-buffer swap and 8-dot SYRK tile.
+- ORIG remote release bench (`rch exec -- cargo bench -p fsci-linalg
+  --profile release --bench linalg_bench 1000x1000_rust_cho_factor -- ...`) on
+  `ovh-a`: `1000x1000_rust_cho_factor` `37.649 ms`;
+  `1000x1000_rust_cho_factor_solve` `31.861 ms`.
+- Candidate run fell back local because `ovh-a` was full: factor `63.485 ms`
+  and factor+solve `34.006 ms`. Cross-mode ratio against the stable remote ORIG
+  is therefore not keep-grade and factor+solve is only `0.94x` as fast.
+- Same-mode local ORIG rerun after stashing the candidate was too noisy to rely
+  on: factor `72.127 ms` with `[56.169, 111.11] ms` interval; factor+solve
+  `68.722 ms` with `[56.838, 87.005] ms` interval. The apparent local ratios
+  (`1.14x` factor, `2.02x` factor+solve) are rejected as load/variance, not
+  landed evidence.
+- Validation while candidate was present: `rch exec -- cargo check -p
+  fsci-linalg --all-targets` passed, with only the pre-existing `perf_control`
+  unused-mut warning. Candidate code and unintended formatter churn were
+  preserved in stash `rejected cholesky panel threading no-ship`; final source is
+  restored to `HEAD`. Final conformance after restore: `rch exec -- cargo test
+  -p fsci-conformance --test diff_linalg_structured_solvers
+  diff_linalg_structured_solvers -- --nocapture` passed 1/1.
+- Next lever: do not retry row-threading the panel solve without same-worker
+  perf counters. The Cholesky gap still needs a real packed-panel GEMM/SYRK/TRSM
+  design, or a narrow public route that can produce a stable same-worker factor
+  and factor+solve win together.
+
 ## 2026-06-27 - GreenFalcon (codex) - NO-SHIP (reverted): FFT mixed-radix inner butterfly lane parallelism is not a reliable gap-close
 
 - Worktree scan: `.scratch/.worktrees` had no landable measured win absent from
