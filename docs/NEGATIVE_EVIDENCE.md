@@ -10867,3 +10867,26 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   eccentricity ~14x, now multi-source 24x). NEGATIVE evidence this session for context: cdist already
   SIMD+parallel+SoA (no gap), solve_banded already packed-banded-LU O(n·b²) (no gap), KDTree flat-coords
   cache lever reverted (random gather). The vein's edge is scipy running per-source SWEEPS serially.
+
+## 2026-06-28 - LANDED WIN (AmberForge): multi-source Bellman-Ford 1527-5984x FASTER than scipy.bellman_ford(indices=subset) — early-termination + parallel vs scipy's full-V-iteration serial
+
+- Agent: AmberForge. 5th csgraph parallel-across-sources ship. `bellman_ford_multi_source(graph,
+  sources)` runs single-source Bellman-Ford from each source in PARALLEL across cores. Matches
+  `scipy.sparse.csgraph.bellman_ford(graph, indices=sources)` (all sources when sources==0..n).
+- **MEASURED same-box vs `scipy.sparse.csgraph.bellman_ford(indices=subset)`, sparse deg=6, best-of-5:**
+
+  | V | k sources | fsci | scipy | fsci vs scipy |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 2000 | 100 | 2.86 ms | 4367.5 ms | **1527x FASTER** |
+  | 2000 | 300 | 4.82 ms | 13131.5 ms | **2724x FASTER** |
+  | 4000 | 100 | 2.96 ms | 17711.6 ms | **5984x FASTER** |
+
+  TWO compounding factors: (1) fsci's single-source BF has the `if no change: break` early termination
+  → converges in ~diameter passes on a sparse graph, not scipy's full V-1 iterations (the dominant
+  factor — even single-source fsci BF is ~100x faster); (2) the multi-source sweep is parallel across
+  cores (scipy serial). Distances IDENTICAL (BF is exact) — test
+  `bellman_ford_multi_source_matches_floyd_warshall_subset` (subset rows exact vs FW). Handles negative
+  edges; errors on negative cycle. fsci-sparse lib 352 passed / 0 failed.
+- 5 csgraph parallel-across-sources ships now (dijkstra_all_pairs 35x, johnson 31.7x, eccentricity 14x,
+  dijkstra_multi_source 24x, bellman_ford_multi_source up to 5984x). The Bellman-Ford ratio is the
+  outlier because scipy's BF lacks aggressive early termination, not just the parallelism.

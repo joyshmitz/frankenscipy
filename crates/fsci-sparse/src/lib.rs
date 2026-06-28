@@ -85,6 +85,7 @@ pub use linalg::{
     clustering_coefficient,
     connected_component_sizes,
     // Graph algorithms
+    bellman_ford_multi_source,
     connected_components,
     degree_sequence,
     depth_first_order,

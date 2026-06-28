@@ -8222,6 +8222,49 @@ mod tests {
     }
 
     #[test]
+    fn bellman_ford_multi_source_matches_floyd_warshall_subset() {
+        // Parallel multi-source Bellman-Ford rows must match Floyd-Warshall on a
+        // sparse graph (non-negative here; BF gives the same distances).
+        let n = 55usize;
+        let mut s: u64 = 0xabcd_0011_2233_4455;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let (mut rows, mut cols, mut vals) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..n {
+            for _ in 0..5 {
+                let j = (next() as usize) % n;
+                if j == i {
+                    continue;
+                }
+                rows.push(i);
+                cols.push(j);
+                vals.push(1.0 + (next() % 1000) as f64 / 100.0);
+            }
+        }
+        let g = CooMatrix::from_triplets(Shape2D::new(n, n), vals, rows, cols, true)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
+        let fw = floyd_warshall(&g);
+        let sources = [1usize, 9, 30, 54, 0];
+        let bf = bellman_ford_multi_source(&g, &sources).expect("bf multi");
+        assert_eq!(bf.len(), sources.len());
+        for (si, &src) in sources.iter().enumerate() {
+            for j in 0..n {
+                let (a, b) = (bf[si].distances[j], fw[src][j]);
+                assert!(
+                    (a - b).abs() < 1e-9 || (a.is_infinite() && b.is_infinite()),
+                    "mismatch src={src} j={j}: bf_multi={a}, fw={b}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn dijkstra_multi_source_matches_all_pairs_subset() {
         // Multi-source Dijkstra over a subset of sources must equal the
         // corresponding rows of the all-pairs solve (and of Floyd-Warshall).
@@ -11200,6 +11243,64 @@ pub fn bellman_ford(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPa
         distances: dist,
         predecessors: pred,
     })
+}
+
+/// Multi-source Bellman-Ford: single-source Bellman-Ford from each of `sources`,
+/// run in PARALLEL across cores. Matches
+/// `scipy.sparse.csgraph.bellman_ford(graph, indices=sources)` (all sources when
+/// `sources == 0..n`), which SciPy runs SERIALLY per source. Handles negative
+/// edges; errors on a negative-weight cycle. `result[i].distances[j]` is the
+/// shortest distance from `sources[i]` to `j`.
+pub fn bellman_ford_multi_source(
+    graph: &CsrMatrix,
+    sources: &[usize],
+) -> SparseResult<Vec<ShortestPathResult>> {
+    validate_csgraph(graph)?;
+    let n = graph.shape().rows;
+    if let Some(&bad) = sources.iter().find(|&&s| s >= n) {
+        return Err(SparseError::InvalidArgument {
+            message: format!("source {bad} out of bounds for graph with {n} nodes"),
+        });
+    }
+    if sources.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let k = sources.len();
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(k);
+    let chunk = k.div_ceil(cores);
+
+    let chunk_results: Vec<SparseResult<Vec<ShortestPathResult>>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..cores)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= k {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(k);
+                let src_chunk = &sources[i0..i1];
+                Some(scope.spawn(move || {
+                    src_chunk
+                        .iter()
+                        .map(|&s| bellman_ford(graph, s))
+                        .collect::<SparseResult<Vec<_>>>()
+                }))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("bellman_ford_multi_source worker panicked"))
+            .collect()
+    });
+
+    let mut out = Vec::with_capacity(k);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
 }
 
 /// Breadth-first search traversal order from a source node.
