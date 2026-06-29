@@ -1342,6 +1342,193 @@ fn nmf_rel_err(
     s.sqrt() / x_norm
 }
 
+/// Parallel NMF multiplicative-update iteration via a SAFE persistent worker pool
+/// (no `unsafe` — the workspace forbids it).
+///
+/// The two dominant GEMMs are 91% of the serial time. Each worker permanently OWNS a
+/// contiguous row-band of W and X (moved-in `Vec`s) and talks to the driver over channels:
+/// - **Phase 1** (`Wᵀ·X`, `Wᵀ·W` — reductions over all rows): each worker computes the
+///   partial `Wᵀ·X` / `Wᵀ·W` from its OWN band; the driver sums the partials. This turns
+///   the cross-band reductions into embarrassingly-parallel per-band work with a cheap merge.
+/// - Driver updates H (small, serial), forms `Hᵀ`, `H·Hᵀ`.
+/// - **Phase 2** (`X·Hᵀ`, `W·H·Hᵀ`, W-update — independent per row): each worker updates its
+///   OWN W band using the shared `Hᵀ`/`H·Hᵀ`.
+///
+/// On convergence-check iterations the workers also return their updated band + partial
+/// reconstruction error, so the driver can assemble W and test `tol` without a separate pass.
+/// Spawned ONCE per call (persistent), so there is no per-iteration thread-spawn tax — the
+/// reason a naive per-call `thread::scope` plateaus well short of this.
+#[allow(clippy::too_many_arguments)]
+fn nmf_pool_iterate(
+    x_flat: &[f64],
+    w0_flat: Vec<f64>,
+    mut h_flat: Vec<f64>,
+    n: usize,
+    d: usize,
+    k: usize,
+    max_iter: usize,
+    tol: f64,
+    x_norm: f64,
+    eps: f64,
+    nthreads: usize,
+) -> (Vec<f64>, Vec<f64>, usize, f64) {
+    use std::sync::mpsc;
+
+    enum Msg {
+        P1,
+        P2 {
+            ht: Vec<f64>,
+            hht: Vec<f64>,
+            h_err: Option<Vec<f64>>,
+        },
+        Stop,
+    }
+    enum Resp {
+        P1 { pwtx: Vec<f64>, pwtw: Vec<f64> },
+        P2 { off: usize, wp: Option<Vec<f64>>, perr: Option<f64> },
+    }
+
+    let bnd: Vec<(usize, usize)> = (0..nthreads)
+        .map(|w| {
+            let lo = w * n / nthreads;
+            let hi = if w + 1 == nthreads { n } else { (w + 1) * n / nthreads };
+            (lo, hi)
+        })
+        .collect();
+
+    let mut wtx = vec![0.0f64; k * d];
+    let mut wtw = vec![0.0f64; k * k];
+    let mut wtwh = vec![0.0f64; k * d];
+    let mut ht = vec![0.0f64; d * k];
+    let mut hht = vec![0.0f64; k * k];
+
+    let mut n_iter = 0usize;
+    let mut last_w = w0_flat.clone();
+    let mut last_err = f64::INFINITY;
+
+    std::thread::scope(|s| {
+        let mut cmd_tx = Vec::with_capacity(nthreads);
+        let (resp_tx, resp_rx) = mpsc::channel::<Resp>();
+        for &(lo, hi) in &bnd {
+            let np = hi - lo;
+            let wp0 = w0_flat[lo * k..hi * k].to_vec();
+            let xp = x_flat[lo * d..hi * d].to_vec();
+            let (ctx, crx) = mpsc::channel::<Msg>();
+            cmd_tx.push(ctx);
+            let resp_tx = resp_tx.clone();
+            s.spawn(move || {
+                let mut wp = wp0;
+                let mut wpt = vec![0.0f64; k * np];
+                let mut pwtx = vec![0.0f64; k * d];
+                let mut pwtw = vec![0.0f64; k * k];
+                let mut xhtp = vec![0.0f64; np * k];
+                let mut whtp = vec![0.0f64; np * k];
+                let mut recon = vec![0.0f64; np * d];
+                while let Ok(msg) = crx.recv() {
+                    match msg {
+                        Msg::P1 => {
+                            transpose_flat(&wp, np, k, &mut wpt);
+                            nmf_mm(&wpt, &xp, k, np, d, &mut pwtx);
+                            nmf_mm(&wpt, &wp, k, np, k, &mut pwtw);
+                            if resp_tx
+                                .send(Resp::P1 { pwtx: pwtx.clone(), pwtw: pwtw.clone() })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Msg::P2 { ht, hht, h_err } => {
+                            nmf_mm(&xp, &ht, np, d, k, &mut xhtp);
+                            nmf_mm(&wp, &hht, np, k, k, &mut whtp);
+                            for idx in 0..np * k {
+                                wp[idx] *= xhtp[idx] / (whtp[idx] + eps);
+                            }
+                            let (wp_out, perr) = if let Some(h) = h_err {
+                                nmf_mm(&wp, &h, np, k, d, &mut recon);
+                                let mut sm = 0.0;
+                                for idx in 0..np * d {
+                                    let diff = xp[idx] - recon[idx];
+                                    sm += diff * diff;
+                                }
+                                (Some(wp.clone()), Some(sm))
+                            } else {
+                                (None, None)
+                            };
+                            if resp_tx.send(Resp::P2 { off: lo, wp: wp_out, perr }).is_err() {
+                                break;
+                            }
+                        }
+                        Msg::Stop => break,
+                    }
+                }
+            });
+        }
+        drop(resp_tx);
+
+        let mut prev = f64::INFINITY;
+        for it in 0..max_iter {
+            n_iter = it + 1;
+            let check = it % 10 == 9 || it == max_iter - 1;
+            for c in &cmd_tx {
+                let _ = c.send(Msg::P1);
+            }
+            wtx.iter_mut().for_each(|v| *v = 0.0);
+            wtw.iter_mut().for_each(|v| *v = 0.0);
+            for _ in 0..nthreads {
+                if let Ok(Resp::P1 { pwtx, pwtw }) = resp_rx.recv() {
+                    for (a, b) in wtx.iter_mut().zip(&pwtx) {
+                        *a += *b;
+                    }
+                    for (a, b) in wtw.iter_mut().zip(&pwtw) {
+                        *a += *b;
+                    }
+                }
+            }
+            nmf_mm(&wtw, &h_flat, k, k, d, &mut wtwh);
+            for idx in 0..k * d {
+                h_flat[idx] *= wtx[idx] / (wtwh[idx] + eps);
+            }
+            transpose_flat(&h_flat, k, d, &mut ht);
+            nmf_mm(&h_flat, &ht, k, d, k, &mut hht);
+            let h_err = if check { Some(h_flat.clone()) } else { None };
+            for c in &cmd_tx {
+                let _ = c.send(Msg::P2 {
+                    ht: ht.clone(),
+                    hht: hht.clone(),
+                    h_err: h_err.clone(),
+                });
+            }
+            let mut err_sum = 0.0;
+            for _ in 0..nthreads {
+                if let Ok(Resp::P2 { off, wp, perr }) = resp_rx.recv() {
+                    if let Some(wp) = wp {
+                        last_w[off * k..off * k + wp.len()].copy_from_slice(&wp);
+                    }
+                    if let Some(pe) = perr {
+                        err_sum += pe;
+                    }
+                }
+            }
+            if check {
+                let err = err_sum.sqrt() / x_norm;
+                last_err = err;
+                if (prev - err).abs() < tol {
+                    for c in &cmd_tx {
+                        let _ = c.send(Msg::Stop);
+                    }
+                    return;
+                }
+                prev = err;
+            }
+        }
+        for c in &cmd_tx {
+            let _ = c.send(Msg::Stop);
+        }
+    });
+
+    (last_w, h_flat, n_iter, last_err)
+}
+
 /// Non-negative Matrix Factorization `X ≈ W·H` (W, H ≥ 0) by multiplicative updates
 /// (Lee–Seung, Frobenius objective).
 ///
@@ -1428,6 +1615,27 @@ pub fn nmf(
     let mut h_flat = vec![0.0f64; k * d];
     for (r, row) in h.iter().enumerate() {
         h_flat[r * d..r * d + d].copy_from_slice(row);
+    }
+
+    // Large factorizations: fan the two dominant GEMMs (91% of serial time) across a
+    // SAFE persistent worker pool (own-band partials + channel merge). Spawned once per
+    // call, so no per-iteration thread-spawn tax. Gated so only sizes where it clearly
+    // wins use it (≥4 worker bands of meaningful width); small inputs stay serial.
+    let avail = std::thread::available_parallelism()
+        .map(|x| x.get())
+        .unwrap_or(1);
+    let nthreads = avail.min(n / 96).min(16);
+    if nthreads >= 4 && d >= 4 && k >= 2 {
+        let (w_flat, h_flat, n_iter, reconstruction_err) = nmf_pool_iterate(
+            &x_flat, w_flat, h_flat, n, d, k, max_iter, tol, x_norm, eps, nthreads,
+        );
+        let (w_out, h_out) = nmf_unflatten(&w_flat, &h_flat, n, k, d);
+        return Ok(NmfResult {
+            w: w_out,
+            h: h_out,
+            n_iter,
+            reconstruction_err,
+        });
     }
 
     let mut wt_flat = vec![0.0f64; k * n];

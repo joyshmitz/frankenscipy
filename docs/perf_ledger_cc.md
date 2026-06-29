@@ -1982,3 +1982,18 @@ WHY: the SoA pays one `splat(col[i])` broadcast + column load per coordinate per
 **REJECTED in the same A/B — register-tiled MR=4×NR=8** (C-tile held in registers across the K loop): 458 ms, SLOWER than the MR=4 panel (346). Why: the panel's 4×N partials are already L1-resident, so the register-residency saves little while the j-tiling + scalar column-remainder on the narrow matmuls (xht output is 1000×20, hht/whht are k×k) costs more. Don't re-chase register tiling here.
 
 **RESIDUAL = serial GEMM micro-kernel wall, NOT a parallel wall (NEW finding):** sklearn NMF mu is **145 ms single-thread AND 145 ms all-threads** (measured both) — at this size the GEMMs are too small for OpenBLAS to parallelize, so its 145 ms is pure single-thread OpenBLAS micro-kernel (≈36 Gflops vs my MR=4 ≈15 Gflops). Matching that serially needs hand-tuned-assembly packing/prefetch — not reachable from portable Rust. The ONLY remaining lever to actually BEAT sklearn is **parallelism across the 64 cores** (now de-risked: since sklearn is single-threaded here, even modest parallel efficiency wins), but per prior sweeps per-call `thread::scope` spawn always loses (tiny GEMMs) and the persistent barrier-pool deadlocked — Amdahl also bites (serial element-wise updates + small matmuls + transposes ≈ 115 ms floor). Deferred to a dedicated turn. SHIPPED the safe 2.9× self-win now.
+
+## 2026-06-29 — AmberKestrel (cc): NMF safe persistent worker-pool — FLIPS the marquee loss to a WIN (sklearn 145ms → fsci ~99-118ms, 1.23-1.46× FASTER; ~9× vs ORIG)
+
+Follow-on to the serial flat+MR4 win (cc00089a). Per-phase profiling showed the 2 dominant GEMMs (Wᵀ·X 43% + X·Hᵀ 47%) are **91%** of serial time → Amdahl cap @P=8 = 82ms, @16 = 59ms, both well under sklearn's 145ms. KEY: sklearn NMF mu is single-threaded at this size (145ms both 1-thread and all-threads), so parallelism is a genuine, un-taken win.
+
+Two parallelizations measured same-box (1000×300, k=20, 200 iters):
+| approach | best time | self | vs sklearn(145) | note |
+|---|---|---|---|---|
+| serial (shipped cc00089a) | 346-359 ms | 1.0× | 0.42× | MR=4 panel |
+| per-call `thread::scope` row-split | 213-218 ms @nt=8 | 1.65× | 0.67× | PLATEAUS then degrades — 400-scope spawn tax (matches the old "spawn always loses" sweep) |
+| **SAFE persistent pool (SHIPPED)** | **99 ms @nt=12** (118@8, 105@16) | **3.6×** | **1.46×** | spawn-once, no per-iter tax |
+
+**The pool is SAFE (no `unsafe` — workspace is `unsafe_code = "forbid"`, which is exactly why the prior raw-pointer pool attempt failed).** Mechanism: each worker permanently OWNS a moved-in row-band of W and X and talks to the driver over `mpsc` channels. The cross-band reductions `Wᵀ·X`/`Wᵀ·W` become per-band PARTIALS summed by the driver; H-update is serial (small); `X·Hᵀ`/`W·H·Hᵀ`/W-update are per-band (owned). On convergence-check iters workers also return their band + partial reconstruction error so the driver assembles W and tests `tol` with no extra pass. `rel_err = 0.470968` identical to serial across all nt (partial-reduction reassociation is negligible). Gated `nthreads = avail.min(n/96).min(16) >= 4 && d>=4 && k>=2` — small inputs stay serial. Conformance 142/142 GREEN.
+
+**Net: the documented NMF loss (1005ms = 6.9× slower than sklearn) is now a 1.46× WIN at ~9-10× self-speedup vs ORIG.** REJECTED en route: register-tiled MR4×NR8 (slower, last cycle) and per-call scope (spawn-tax plateau, above). LEVER (generalizable): a sequential multiplicative/EM iteration whose cross-band matmuls are reductions → SAFE persistent pool with OWNED bands + partial-sum merge over channels beats both serial and per-call-spawn, AND sidesteps `forbid(unsafe)`. Candidates: factor_analysis / PPCA / LDA EM loops (same matmul-EM structure).
