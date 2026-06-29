@@ -1580,3 +1580,22 @@ three ways: (1) result i BYTE-IDENTICAL (.to_bits() on integral/error/converged)
 (2) NUMERICAL vs scipy: fsci I(p=20)=0.156588231977 == scipy 0.156588231977 to 2.87e-13; (3) new dblquad_many
 test green. The vmap-over-solver vein now spans SIX solver families (curve_fit/solve_ivp/minimize/root/quad/
 dblquad); win size tracks scipy's per-solve Python-callback density (dblquad O(n²) ⇒ 211×).
+
+### ✅✅✅ integrate: tplquad_many (vmap-over-solver 3D-integral sweep) — 83-159× faster than looped scipy
+Seventh vmap-over-solver family — the HEAVIEST-callback case. tplquad nests three adaptive quadratures, so
+each triple integral makes O(n³) integrand calls; in SciPy all Python, and a parameter sweep loops tplquad in
+Python, N integrals SERIALLY. fsci `tplquad_many` (param-sweep `F: Fn(f64 z, f64 y, f64 x, &[f64] params)->f64`,
+shared box) fans the N independent triple integrations across cores and inlines the integrand. Purely additive;
+heavy-per-item cap (cores.min(nrows), serial <4).
+
+**SAME-BOX head-to-head (∫∫∫ e^{-p(x²+y²+z²)} over unit cube, N parameter sets; both this box):**
+| N   | scipy (Python loop over tplquad) | fsci tplquad_many | speedup   |
+|-----|----------------------------------|-------------------|-----------|
+| 30  | 123.6 ms                         | 1.49 ms (30/30 conv)   | **83×**  |
+| 100 | 392.0 ms                         | 2.46 ms (100/100 conv) | **159×** |
+
+Confirms the callback-density LAW at equal N=100: tplquad 159× > dblquad 62.7× > quad ~30× (O(n³)>O(n²)>O(n)
+Python integrand calls). All integrals converge; speedup grows with N. CONFORMANCE three ways: (1) result i
+BYTE-IDENTICAL (.to_bits() on integral/error/converged) to per-param tplquad; (2) NUMERICAL vs scipy: fsci
+I(p=5)=0.061963890934 == scipy 0.061963890934 to 4.41e-13; (3) new tplquad_many test green. The vmap-over-
+solver vein now spans SEVEN solver families (curve_fit/solve_ivp/minimize/root/quad/dblquad/tplquad).

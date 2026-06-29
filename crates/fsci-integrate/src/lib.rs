@@ -26,6 +26,7 @@ pub use quad::{
     QuadOptions, QuadResult, QuadVecResult, cubature, cubature_scalar, cumulative_simpson,
     cumulative_trapezoid, cumulative_trapezoid_initial, cumulative_trapezoid_uniform, dblquad,
     dblquad_many, dblquad_rect, fixed_quad, gauss_kronrod_quad, gauss_legendre, line_integral,
+    tplquad_many,
     monte_carlo_integrate, newton_cotes, newton_cotes_quad, nquad, nsum, qmc_quad, quad, quad_many,
     quad_cauchy_pv, quad_explain, quad_full_inf, quad_inf, quad_neg_inf, quad_vec, romb, romb_func,
     romberg, simpson, simpson_irregular, simpson_uniform, tanhsinh, tplquad, tplquad_rect,

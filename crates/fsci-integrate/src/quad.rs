@@ -1258,6 +1258,85 @@ where
     })
 }
 
+/// Batched triple integration: evaluate `I(params) = ∫∫∫ f(z, y, x, params) dz dy dx` for MANY
+/// parameter sets (`param_rows`) over a shared box, one [`DblquadResult`] per set. This is the
+/// HEAVIEST-callback vmap case: tplquad nests three adaptive quadratures, so each integral makes
+/// O(n³) integrand calls; in SciPy those are all Python calls and a parameter sweep loops tplquad
+/// in Python, N integrals SERIALLY. fsci `tplquad_many` (param-sweep `F: Fn(f64 z, f64 y, f64 x,
+/// &[f64] params)->f64`, shared box) fans the N independent triple integrations across cores and
+/// inlines the integrand. Result `i` is byte-identical to `tplquad(|z,y,x| f(z,y,x,&param_rows[i]),
+/// a, b, |_| y_lo, |_| y_hi, |_,_| z_lo, |_,_| z_hi, options)`.
+#[allow(clippy::too_many_arguments)]
+pub fn tplquad_many<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    y_lo: f64,
+    y_hi: f64,
+    z_lo: f64,
+    z_hi: f64,
+    param_rows: &[Vec<f64>],
+    options: DblquadOptions,
+) -> Vec<Result<DblquadResult, IntegrateValidationError>>
+where
+    F: Fn(f64, f64, f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let f_ref = &f;
+    let solve_one = move |params: &[f64]| {
+        tplquad(
+            |z, y, x| f_ref(z, y, x, params),
+            a,
+            b,
+            |_| y_lo,
+            |_| y_hi,
+            |_, _| z_lo,
+            |_, _| z_hi,
+            options,
+        )
+    };
+
+    // Each triple integral is an independent, very expensive (O(n³) integrand evals) solve → fan
+    // whole parameter sets across cores, capped by the row count; a tiny sweep stays serial.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<DblquadResult, IntegrateValidationError>>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || {
+                        (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("tplquad_many worker panicked"))
+                .collect()
+        });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 /// Romberg integration of a function over [a, b].
 ///
 /// Matches `scipy.integrate.romberg(function, a, b)`.
@@ -3996,6 +4075,46 @@ mod tests {
         }
         assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() >= nrows / 2);
         assert!(dblquad_many(f, 0.0, 1.0, 0.0, 1.0, &[], opts).is_empty());
+    }
+
+    #[test]
+    fn tplquad_many_byte_identical_to_per_param() {
+        // Parameter sweep of a 3D Gaussian over the unit cube.
+        let f = |z: f64, y: f64, x: f64, p: &[f64]| (-p[0] * (x * x + y * y + z * z)).exp();
+        let mut s = 11u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            2.0 + 13.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 8usize; // crosses the serial->parallel gate
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng()]).collect();
+        let opts = DblquadOptions::default();
+
+        let batched = tplquad_many(f, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, &params, opts);
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let single = tplquad(
+                |z, y, x| f(z, y, x, p),
+                0.0,
+                1.0,
+                |_| 0.0,
+                |_| 1.0,
+                |_, _| 0.0,
+                |_, _| 1.0,
+                opts,
+            )
+            .expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(
+                many.integral.to_bits(),
+                single.integral.to_bits(),
+                "integral mismatch param {i}"
+            );
+            assert_eq!(many.error.to_bits(), single.error.to_bits(), "error mismatch param {i}");
+            assert_eq!(many.converged, single.converged, "converged mismatch param {i}");
+        }
+        assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() >= nrows / 2);
+        assert!(tplquad_many(f, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, &[], opts).is_empty());
     }
 
     #[test]
