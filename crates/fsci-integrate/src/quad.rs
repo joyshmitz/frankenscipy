@@ -1603,6 +1603,68 @@ where
     })
 }
 
+/// Batched N-dimensional integration: evaluate `I(params) = ∫…∫ f(x⃗, params) dx⃗` over a shared
+/// hyper-rectangle `ranges` for MANY parameter sets, one [`QuadResult`] per set. This is the
+/// vmap-over-solver primitive for arbitrary dimension — the deepest-nested callback case: an
+/// `ndim`-dimensional `nquad` nests `ndim` adaptive quadratures, so each integral makes O(n^ndim)
+/// integrand calls; in SciPy those are all Python and a parameter sweep loops `nquad` in Python,
+/// N integrals SERIALLY. fsci `nquad_many` (param-sweep `F: Fn(&[f64] x, &[f64] params)->f64`) fans
+/// the N independent integrations across cores and inlines the integrand. Result `i` is
+/// byte-identical to `nquad(|x| f(x, &param_rows[i]), ranges, options)`.
+pub fn nquad_many<F>(
+    func: F,
+    ranges: &[(f64, f64)],
+    param_rows: &[Vec<f64>],
+    options: QuadOptions,
+) -> Vec<Result<QuadResult, IntegrateValidationError>>
+where
+    F: Fn(&[f64], &[f64]) -> f64 + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let func_ref = &func;
+    let solve_one = move |params: &[f64]| nquad(|x| func_ref(x, params), ranges, options);
+
+    // Each N-D integral is an independent, very expensive (O(n^ndim) integrand evals) solve → fan
+    // whole parameter sets across cores, capped by the row count; a tiny sweep stays serial.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<QuadResult, IntegrateValidationError>>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || {
+                        (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("nquad_many worker panicked"))
+                .collect()
+        });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 fn nquad_inner<F>(
     func: &F,
     ranges: &[(f64, f64)],
@@ -4115,6 +4177,38 @@ mod tests {
         }
         assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() >= nrows / 2);
         assert!(tplquad_many(f, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, &[], opts).is_empty());
+    }
+
+    #[test]
+    fn nquad_many_byte_identical_to_per_param() {
+        // Parameter sweep of a 4-D Gaussian over the unit hypercube. The batched integral
+        // must equal looping nquad per parameter set, bit-for-bit.
+        let f = |x: &[f64], p: &[f64]| {
+            (-p[0] * (x[0] * x[0] + x[1] * x[1] + x[2] * x[2] + x[3] * x[3])).exp()
+        };
+        let ranges = [(0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0)];
+        let mut s = 17u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            1.0 + 5.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 8usize; // crosses the serial->parallel gate
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng()]).collect();
+        let opts = QuadOptions::default();
+
+        let batched = nquad_many(f, &ranges, &params, opts);
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let single = nquad(|x| f(x, p), &ranges, opts).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(
+                many.integral.to_bits(),
+                single.integral.to_bits(),
+                "integral mismatch param {i}"
+            );
+            assert_eq!(many.converged, single.converged, "converged mismatch param {i}");
+        }
+        assert!(nquad_many(f, &ranges, &[], opts).is_empty());
     }
 
     #[test]

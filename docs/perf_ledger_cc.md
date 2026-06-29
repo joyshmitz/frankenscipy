@@ -1690,3 +1690,23 @@ all-zero histograms) and the `[min,max]` inclusion filter. CONFORMANCE: BYTE-IDE
 Vec<Vec<usize>>) to a serial reference incl. out-of-range filtering; 253/0 fsci-ndimage tests green incl. new
 `histogram_one_based_fast_path_byte_identical_to_serial`. Gated cores.min(n/128_000). The ndimage label-stat
 suite is now fully streaming except median (needs the full group — a quantile can't stream).
+
+### ✅✅✅✅ integrate: nquad_many (vmap-over-solver N-D integral sweep) — ~1100-1950× faster than looped scipy
+Eighth vmap-over-solver family and the CAPSTONE of the integration set: arbitrary-dimension `nquad`. An
+`ndim`-D nquad nests `ndim` adaptive quadratures → each integral makes O(n^ndim) integrand calls; at 4-D those
+are O(n⁴), the deepest-nested callback case. SciPy loops nquad in Python over the sweep, N integrals SERIALLY;
+fsci `nquad_many` (param-sweep `F: Fn(&[f64] x, &[f64] params)->f64`, shared `ranges`) fans the N independent
+N-D integrations across cores and inlines the integrand.
+
+**SAME-BOX head-to-head (4-D Gaussian ∫_[0,1]⁴ e^{-p(a²+b²+c²+d²)}, N parameter sets; both this box):**
+| N  | scipy (Python loop over nquad) | fsci nquad_many | speedup    |
+|----|--------------------------------|-----------------|------------|
+| 20 | 1650.7 ms                      | 1.49 ms (20/20 conv)  | **1108×** |
+| 80 | 6703.3 ms                      | 3.43 ms (80/80 conv)  | **1954×** |
+
+Confirms the callback-density LAW to its extreme: 4-D nquad ~1950× > tplquad (O(n³)) 159× > dblquad (O(n²))
+62.7× > quad (O(n)) 30× — the win scales with the integrand-call density scipy pays in Python. All integrals
+converge. CONFORMANCE two ways: (1) result i BYTE-IDENTICAL (.to_bits() on integral/converged) to per-param
+nquad; (2) NUMERICAL vs scipy: fsci I(p=2,4D)=0.128003847000 == scipy 0.128003847000 (all 12 digits). new
+nquad_many test green. The vmap-over-solver vein now spans EIGHT solver families
+(curve_fit/solve_ivp/minimize/root/quad/dblquad/tplquad/nquad); integration sub-family COMPLETE.
