@@ -38396,6 +38396,23 @@ pub fn weightedtau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, Stats
     all_pairs_symmetric_matrix(variables, weightedtau)
 }
 
+/// All-pairs first-Wasserstein (earth-mover) distance matrix over `samples` (each a 1-D sample of
+/// equal length). Returns an `m × m` symmetric matrix with `out[i][j] == wasserstein_distance(
+/// samples[i], samples[j])` (bit-identical on the upper triangle), zero diagonal. SciPy has NO
+/// vectorized all-pairs form — users loop `scipy.stats.wasserstein_distance` in Python; this runs the
+/// O(n log n) per-pair kernel in parallel across pairs.
+pub fn wasserstein_distance_matrix(samples: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    all_pairs_symmetric_matrix(samples, wasserstein_distance)
+}
+
+/// All-pairs energy-distance matrix over `samples` (each a 1-D sample of equal length). Returns an
+/// `m × m` symmetric matrix with `out[i][j] == energy_distance(samples[i], samples[j])` (bit-identical
+/// on the upper triangle), zero diagonal. SciPy has NO vectorized all-pairs form — users loop
+/// `scipy.stats.energy_distance` in Python; this runs the O(n log n) per-pair kernel in parallel.
+pub fn energy_distance_matrix(samples: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    all_pairs_symmetric_matrix(samples, energy_distance)
+}
+
 pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
     let n = x.len();
     if n < 2 || x.len() != y.len() {
@@ -59732,6 +59749,38 @@ mod tests {
             }
         }
         assert!(weightedtau_matrix(&bad).is_err());
+    }
+
+    #[test]
+    fn distance_matrices_match_pairwise() {
+        // wasserstein/energy distance matrices: upper triangle + diagonal bit-identical to per-pair,
+        // symmetric, zero diagonal.
+        let n = 80usize;
+        let m = 8usize;
+        let samples: Vec<Vec<f64>> = (0..m)
+            .map(|v| {
+                (0..n)
+                    .map(|i| (((i * (v + 3) + v * 11) % 101) as f64) * 0.07 + (v as f64) * 0.5)
+                    .collect()
+            })
+            .collect();
+        let wm = wasserstein_distance_matrix(&samples).unwrap();
+        let em = energy_distance_matrix(&samples).unwrap();
+        for i in 0..m {
+            // diagonal (j == i) is covered by the j in i..m loop: bit-identical to the self-distance.
+            for j in i..m {
+                let we = wasserstein_distance(&samples[i], &samples[j]);
+                let ee = energy_distance(&samples[i], &samples[j]);
+                assert_eq!(wm[i][j].to_bits(), we.to_bits(), "wasserstein_matrix[{i}][{j}]");
+                assert_eq!(em[i][j].to_bits(), ee.to_bits(), "energy_matrix[{i}][{j}]");
+                assert_eq!(wm[i][j].to_bits(), wm[j][i].to_bits(), "wasserstein not symmetric {i},{j}");
+                assert_eq!(em[i][j].to_bits(), em[j][i].to_bits(), "energy not symmetric {i},{j}");
+            }
+        }
+        let mut bad = samples.clone();
+        bad[0].push(1.0);
+        assert!(wasserstein_distance_matrix(&bad).is_err());
+        assert!(energy_distance_matrix(&bad).is_err());
     }
 
     #[test]

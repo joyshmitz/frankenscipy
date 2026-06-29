@@ -1207,3 +1207,21 @@ kendalltau (hyperbolic weighting), so the gap is even larger.
 the upper triangle; NOTE weightedtau is mathematically but NOT bit-symmetric across arg order due to its
 Fenwick accumulation sorting by the first arg, so only i<=j is asserted per-pair). The `all_pairs_symmetric_matrix`
 helper now backs both matrices and any future one (somersd/distance-correlation). fsci-stats GREEN.
+
+### ✅✅ stats: wasserstein/energy distance matrices (all-pairs) — 16-63x faster than scipy
+Extends the all-pairs primitive from correlation to DISTANCE matrices (distribution comparison /
+clustering of m 1-D samples). wasserstein_distance & energy_distance are symmetric f64 distances → both
+are one-liners over `all_pairs_symmetric_matrix`. SciPy has NO vectorized all-pairs form — users loop
+`scipy.stats.wasserstein_distance` / `energy_distance` in Python over m·(m−1)/2 pairs.
+
+**SAME-BOX head-to-head (fsci matrix vs scipy Python distance-loop, both this box):**
+| matrix (m × n)  | pairs  | scipy wass. | fsci wass. | ×        | scipy energy | fsci energy | ×        |
+|-----------------|--------|-------------|------------|----------|--------------|-------------|----------|
+| m=40,  n=400    | 780    | 55.5 ms     | 2.74 ms    | **20.3×**| 54.2 ms      | 3.35 ms     | **16.2×**|
+| m=100, n=1000   | 4 950  | 843.3 ms    | 13.47 ms   | **62.6×**| 869.9 ms     | 19.20 ms    | **45.3×**|
+
+Conformance: `distance_matrices_match_pairwise` — upper triangle + diagonal bit-identical to per-pair
+`wasserstein_distance`/`energy_distance`, symmetric, ragged-input rejected (diagonal = self-distance, not
+asserted == 0.0: `d(u,u)` may be ±0.0/tiny-rounding, the per-pair i<=j check covers it). The
+`all_pairs_symmetric_matrix` helper now backs FOUR matrices (kendalltau/weightedtau/wasserstein/energy);
+ANY symmetric `fn(&[f64],&[f64])->f64` scipy makes you Python-loop is now a one-liner. fsci-stats GREEN.
