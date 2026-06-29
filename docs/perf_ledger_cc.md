@@ -1923,3 +1923,15 @@ linprog uses a DENSE TABLEAU simplex (`Vec<Vec>`) whose pivot elimination is ALR
 **What worked (but isn't enough):** rewrote the loop on FLAT row-major buffers (reused across iters) with an ikj AXPY kernel → **509 ms = 2.0× self**, BUT still **2.9× SLOWER than sklearn** (property test green: shapes, ≥0, rec-err). The 2 dominant GEMMs are individually tiny (~6M flops) and the iteration is SEQUENTIAL, so per-call `thread::scope` spawn is pure overhead — a thread sweep confirmed EVERY T>1 is ≥ the T=1 serial time (T=8 → 1059 ms). So closing the gap to a WIN needs aggregated memory bandwidth via a PERSISTENT thread pool (spawn once, barrier fork-join the big GEMMs across all 1200 calls) or a BLAS-grade matmul.
 
 **REVERTED:** prototyped the barrier pool (workers write disjoint output row-bands via raw ptr; main runs small GEMMs) but it DEADLOCKED at some thread counts (barrier-count mismatch in the fork/join/terminate handshake) — unshippable, reverted to HEAD rather than leave broken concurrency. BACKLOG (clear path to a 2-3× WIN, ~50-100ms est. at the memory floor): persistent-pool-done-right (careful fork/join/stop barrier accounting + a correctness check vs the serial result) OR a parallel flat GEMM in fsci-linalg that NMF can call. Serial-flat alone (1005→509) is a real 2× but a still-loss → not landed as a "win".
+
+## 2026-06-29 — AmberKestrel (cc): NEGATIVE EVIDENCE — fsci-spatial mostly DOMINATES; lone gap = kdtree k≥10/high-d (diagnosed, deprioritized)
+
+Swept fsci-spatial vs scipy (same-box). Wins everywhere except one regime:
+| fn (size) | fsci | scipy | verdict |
+|---|---|---|---|
+| cdist euclidean (2000²×4d / 3000×1500×8d / 2000²×20d) | 5.5 / 9.8 / 6.9 ms | 8.7 / 28.6 / 28.6 | **1.6–4.2× WIN** (parallel-over-rows) |
+| KDTree.query_k_many (10k,3d,k=1) | 1.43 ms | 6.07 ser / 7.34 par | **4–5× WIN** |
+| KDTree.query_k_many (20k,4d,k=5) | 7.73 ms | 49.6 ser / 9.62 par | **1.2–6.4× WIN** |
+| KDTree.query_k_many (10k,8d,k=10) | 24.78 ms | 269.6 ser / **15.93 par** | 10.9× vs serial but **1.56× SLOWER vs scipy workers=-1** |
+
+The k=10/8d loss is per-query traversal (both already parallel; query_k_many's thread-scaling was already tuned by a prior agent 3.5×→1.56×). Two diagnosed root causes, both real but with risk that outweighs a 1.56× gap: (1) `KDNode.point: Vec<f64>` → each visited node chases a pointer to a SCATTERED 8-double buffer (cache miss/node); fix = store points in one flat n×dim buffer indexed by node.index (BYTE-IDENTICAL — same values relocated — but ~10 `node.point` sites across 2 node types). (2) `sqeuclidean`'s std::simd needs d≥16 (the 2·L=16 unroll), so 8≤d<16 runs fully SCALAR; adding an L=8 block would vectorize it but CHANGES the sum associativity → breaks the byte-identical pdist/cdist locks. BACKLOG: the flat-points refactor (safe, byte-identical) is the cleaner future attempt; est. closes to ~parity, may flip to a slight win.
