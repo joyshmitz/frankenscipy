@@ -1829,3 +1829,17 @@ Parallelized `minmax_along_axis_hgw` (van Herk–Gil-Werman flat min/max under g
 | grey_erosion 9 | 6.38 ms | 5.78 ms | parallel SLOWER |
 
 HGW is ~O(1) work/element (memory-bandwidth-bound); the serial pass already saturates bandwidth, and the axis-0 transpose+scatter adds traffic → net ~0-gain to slight LOSS. REVERTED (working tree back to c911c3dc). grey_dilation/erosion sit at scipy PARITY (5.4-6.0ms vs scipy 5.5-6.05) and that is the memory wall, not a thread gap. DON'T re-chase parallelizing memory-bound separable min/max. (Contrast: EDT's lower-envelope transform is compute-heavier → its parallel pass DOES win 1.79×.) Remaining real ndimage gap = affine/map_coordinates Constant/Wrap order∈{2,4,5} prefilter (per-line make_interp_spline, scipy o2 18.6ms vs fsci 61ms) but the solver lives in fsci-interpolate (other-agent crate) and a reimplemented boundary-IIR is risky for uncommon orders.
+
+## 2026-06-29 — AmberKestrel (cc): sobel/prewitt via separable correlate1d (FLIP 1.07× loss → 1.85× win)
+
+**Lever:** `sobel`/`prewitt` built an N-D kernel of shape [3,1,…] / [1,3,…] per axis and called the GENERAL N-D `correlate` once per axis. For a 3-tap kernel the general footprint machinery (per-element N-D index + boundary match over the whole kernel volume) is overhead-bound — sobel was 4.73 ms, SLOWER than a 7×7 general correlate (3.87 ms) and slower than scipy. Routed each 1-D pass through the separable `correlate1d` (the axpy-vectorized path uniform/gaussian filters already ride): same centered weights, same boundary mode, no flip → equivalent.
+
+**scipy-EXACT** (byte-exact goldens 12/24/2/4 on a 5×6 probe, both axes); full fsci-ndimage lib suite GREEN (255 passed / 0 failed / 5 pre-existing-ignored). No new test needed — covered by existing sobel/prewitt conformance (5 sobel tests pass).
+
+**Measured same-box, 512×512** (best of repeated runs; correlate1d parallelizes so box-load varies):
+| op | before | after | vs scipy |
+|---|---|---|---|
+| sobel ax0 | 4.73 ms | **2.38 ms** (1.99× self) | **1.86× FASTER** (was 1.07× SLOWER, scipy 4.42) |
+| prewitt ax0 | ~4.7 ms (same pattern) | **2.43 ms** | **~parity** (scipy 2.57, was ~1.8× slower) |
+
+sobel was the lone common ndimage filter still losing to scipy; now all of correlate (2.98×)/uniform (3.04×)/gaussian (3.92×)/laplace (2.42×)/sobel (1.86×) WIN. Generalizable: any derivative/separable filter calling general N-D `correlate` with a 1-D kernel → swap to `correlate1d`.

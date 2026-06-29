@@ -4566,19 +4566,22 @@ pub fn sobel(
         ));
     }
 
-    // Apply smoothing kernels along non-axis dims, derivative along axis
-    let mut current = input.clone();
-
-    for d in 0..input.ndim() {
-        let kernel_1d = if d == axis {
+    // Apply smoothing kernels along non-axis dims, derivative along axis. Each pass is a 1-D
+    // kernel, so route through the separable `correlate1d` (the axpy-vectorized path used by
+    // gaussian/uniform filters) instead of the general N-D `correlate`: for a 3-tap kernel the
+    // general-correlate footprint machinery is overhead-bound (it made sobel ~4.7ms, slower than
+    // a 7x7 general correlate). `correlate1d` along axis `d` with the same centered weights and
+    // boundary mode is equivalent (neither flips), just without the N-D footprint overhead.
+    let kernel_for = |d: usize| {
+        if d == axis {
             vec![-1.0, 0.0, 1.0] // derivative
         } else {
             vec![1.0, 2.0, 1.0] // smoothing (triangle)
-        };
-        let mut kernel_shape = vec![1usize; input.ndim()];
-        kernel_shape[d] = 3;
-        let kernel = NdArray::new(kernel_1d, kernel_shape)?;
-        current = correlate(&current, &kernel, mode, cval)?;
+        }
+    };
+    let mut current = correlate1d(input, &kernel_for(0), 0, mode, cval)?;
+    for d in 1..input.ndim() {
+        current = correlate1d(&current, &kernel_for(d), d, mode, cval)?;
     }
 
     Ok(current)
@@ -4620,18 +4623,19 @@ pub fn prewitt(
         )));
     }
 
-    let mut current = input.clone();
-
-    for d in 0..input.ndim() {
-        let kernel_1d = if d == axis {
+    // Each pass is a 1-D kernel — use the separable `correlate1d` (the fast axpy path) rather than
+    // the general N-D `correlate`, whose footprint machinery is overhead-bound for 3-tap kernels
+    // (same fix as `sobel`). Equivalent: same centered weights, same boundary mode, no flip.
+    let kernel_for = |d: usize| {
+        if d == axis {
             vec![-1.0, 0.0, 1.0]
         } else {
             vec![1.0, 1.0, 1.0] // box smoothing (Prewitt uses uniform weights)
-        };
-        let mut kernel_shape = vec![1usize; input.ndim()];
-        kernel_shape[d] = 3;
-        let kernel = NdArray::new(kernel_1d, kernel_shape)?;
-        current = correlate(&current, &kernel, mode, cval)?;
+        }
+    };
+    let mut current = correlate1d(input, &kernel_for(0), 0, mode, cval)?;
+    for d in 1..input.ndim() {
+        current = correlate1d(&current, &kernel_for(d), d, mode, cval)?;
     }
 
     Ok(current)
