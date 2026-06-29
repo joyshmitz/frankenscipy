@@ -11599,3 +11599,15 @@ SHIPPED as a WIN (87× vs scipy, perf_ledger_cc.md) but with two recorded caveat
   capture only shared data satisfy it; a closure capturing a non-Sync handle would no longer compile.
 - This is the cache-friendly counter-example to the earlier resampler-parallelism REJECT: streaming a
   per-thread L1-resident buffer wins where materializing all resamples lost 3.3×.
+
+## fft_axis2d/rfft_axis2d — honest dual-baseline (win vs default, mixed vs parallel), AmberKestrel 2026-06-29
+New batched-axis FFT (fsci-fft had none). Shipped as a WIN but the head-to-head depends on scipy's `workers`:
+- vs scipy DEFAULT `workers=1` (serial across rows — the documented default, what most code uses): fsci
+  wins 7.5-13.4× (parallel across rows).
+- vs scipy `workers=-1` (all cores): MIXED. fsci wins 2.1-2.5× at ncol=8192 and complex-fft@2048, but
+  LOSES on rfft at ncol=2048/4096 (fsci 6.38-9.31 ms vs scipy 3.82-5.33 ms ≈ 0.57-0.60×). Root cause is
+  fsci's per-FFT mid-pow2 kernel being ~1.5× slower than pocketfft (a known SIMD wall, NOT a
+  parallelization defect) — when both parallelize across rows, the per-FFT kernel gap is exposed.
+- Not reverted: it is a genuinely missing capability and a clean win vs the default API; the loss is only
+  against scipy's opt-in parallel mode at mid transform sizes, and is bounded by the FFT-kernel wall the
+  directive says not to chase via more SIMD.

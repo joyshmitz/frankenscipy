@@ -1353,3 +1353,25 @@ euclidean 10-13× (parallel + per-pair SIMD, all dims d=2..50); stats `gaussian_
 `scipy.interpolate.Rbf` (kernel+epsilon, ≤4096 pts), NOT the modern `RBFInterpolator` — semantic mismatch,
 not a comparable gap. The accessible uncontended surface is saturated; remaining gaps sit in contended
 crates (linalg/signal/sparse — other agents' probes present) or known SIMD walls (FFT mid-pow2).
+
+### ✅ fft: fft_axis2d / rfft_axis2d (batched 1-D FFT along last axis) — NEW gap-fill, 7.5-13x vs scipy DEFAULT
+fsci-fft had NO batched-1-D-along-axis transform: `fftn`/`rfftn` always transform ALL axes (no `axes`
+param), so `scipy.fft.fft(x, axis=-1)` over a 2-D array (per-row/per-channel FFT — spectrograms, batch
+signal processing) had no direct fsci equivalent. Added `fft_axis2d`/`rfft_axis2d`: `rows` INDEPENDENT
+length-`ncols` transforms, parallel ACROSS rows (each row's 1-D FFT serial on its owning thread — inner
+`WorkerPolicy::Exact(1)` avoids 64×64 oversubscription). Row r bit-identical to per-row `fft`/`rfft`.
+
+**SAME-BOX head-to-head (fsci vs scipy.fft, both this box):**
+| rows × ncol  | fsci rfft | scipy rfft w=1 | × (w=1) | scipy rfft w=-1 | fsci fft | scipy fft w=1 | × (w=1) | scipy fft w=-1 |
+|--------------|-----------|----------------|---------|-----------------|----------|---------------|---------|----------------|
+| 2000 × 4096  | 6.38 ms   | 53.3 ms        | 8.4×    | 3.82 ms (0.60×) | 9.06 ms  | 121.1 ms      | 13.4×   | 7.90 ms (0.87×)|
+| 5000 × 2048  | 9.31 ms   | 69.6 ms        | 7.5×    | 5.33 ms (0.57×) | 11.48 ms | 132.8 ms      | 11.6×   | 13.00 ms (1.13×)|
+| 1000 × 8192  | 6.06 ms   | 58.6 ms        | 9.7×    | 12.88 ms (2.13×)| 9.23 ms  | 122.3 ms      | 13.3×   | 23.44 ms (2.54×)|
+
+HONEST (see NEGATIVE_EVIDENCE.md): vs scipy's DEFAULT (`workers=1`, what most code uses) fsci wins
+7.5-13.4× across the board. vs scipy's PARALLEL (`workers=-1`) it's MIXED — fsci WINS 2.1-2.5× at large
+ncol=8192 and on complex fft@2048, but LOSES on rfft@2048/4096 (0.57-0.60×) because fsci's per-FFT kernel
+is ~1.5× slower than pocketfft (the documented mid-pow2 SIMD wall) and when BOTH sides parallelize across
+rows that kernel gap dominates. Net: a real new capability that beats the default API and is
+competitive-to-winning vs scipy's best at large transforms. Conformance: `fft_rfft_axis2d_match_per_row`
+bit-identical to per-row, shapes validated. fsci-fft GREEN.

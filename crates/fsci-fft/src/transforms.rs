@@ -1664,6 +1664,149 @@ pub fn irfft_with_audit(
     irfft_impl(input, output_len, options, Some(audit_ledger))
 }
 
+/// Worker count for a batched (across-rows) 1-D transform: each row is an O(ncols·log ncols) transform,
+/// so fan out one core per row up to `available_parallelism`, gated off for tiny batches where the
+/// thread-spawn floor would dominate.
+fn batched_axis2d_threads(rows: usize, work: usize) -> usize {
+    if rows < 2 || work < (1 << 14) {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(|c| c.get())
+        .unwrap_or(1)
+        .min(rows)
+}
+
+/// Batched 1-D forward complex FFT along the last axis of a row-major `rows × ncols` array.
+///
+/// Equivalent to `scipy.fft.fft(x.reshape(rows, ncols), axis=-1)` — `rows` INDEPENDENT length-`ncols`
+/// transforms — but parallel ACROSS rows (each row's 1-D FFT runs serially on its owning thread). This
+/// beats both looping the 1-D [`fft`] and SciPy's default `workers=1` (serial over rows). Output is
+/// row-major `rows × ncols`; row `r` is bit-identical to `fft(&input[r*ncols..(r+1)*ncols], options)`.
+pub fn fft_axis2d(
+    input: &[Complex64],
+    rows: usize,
+    ncols: usize,
+    options: &FftOptions,
+) -> Result<Vec<Complex64>, FftError> {
+    if rows == 0 || ncols == 0 {
+        return Err(FftError::InvalidShape {
+            detail: "rows and ncols must be > 0",
+        });
+    }
+    if input.len() != rows.saturating_mul(ncols) {
+        return Err(FftError::LengthMismatch {
+            expected: rows.saturating_mul(ncols),
+            actual: input.len(),
+        });
+    }
+    // Parallelism is ACROSS rows; keep each row's transform serial to avoid 64×64 oversubscription.
+    let mut inner = options.clone();
+    inner.workers = WorkerPolicy::Exact(1);
+    let row_out = ncols;
+    let mut out = vec![(0.0, 0.0); rows * row_out];
+    let work = rows.saturating_mul(ncols);
+    let nthreads = batched_axis2d_threads(rows, work);
+    if nthreads <= 1 {
+        for r in 0..rows {
+            let res = fft(&input[r * ncols..(r + 1) * ncols], &inner)?;
+            out[r * row_out..(r + 1) * row_out].copy_from_slice(&res);
+        }
+        return Ok(out);
+    }
+    let rows_per = rows.div_ceil(nthreads);
+    let inner = &inner;
+    let first_err = std::thread::scope(|scope| {
+        let handles: Vec<_> = out
+            .chunks_mut(rows_per * row_out)
+            .enumerate()
+            .map(|(ti, chunk)| {
+                let r0 = ti * rows_per;
+                scope.spawn(move || -> Result<(), FftError> {
+                    for (rr, slot) in chunk.chunks_mut(row_out).enumerate() {
+                        let r = r0 + rr;
+                        let res = fft(&input[r * ncols..(r + 1) * ncols], inner)?;
+                        slot.copy_from_slice(&res);
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().unwrap().err())
+            .next()
+    });
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(out),
+    }
+}
+
+/// Batched 1-D real-input FFT along the last axis of a row-major `rows × ncols` real array.
+///
+/// Equivalent to `scipy.fft.rfft(x.reshape(rows, ncols), axis=-1)` — `rows` INDEPENDENT length-`ncols`
+/// real transforms — but parallel ACROSS rows. Output is row-major `rows × (ncols/2 + 1)` complex; row
+/// `r` is bit-identical to `rfft(&input[r*ncols..(r+1)*ncols], options)`.
+pub fn rfft_axis2d(
+    input: &[f64],
+    rows: usize,
+    ncols: usize,
+    options: &FftOptions,
+) -> Result<Vec<Complex64>, FftError> {
+    if rows == 0 || ncols == 0 {
+        return Err(FftError::InvalidShape {
+            detail: "rows and ncols must be > 0",
+        });
+    }
+    if input.len() != rows.saturating_mul(ncols) {
+        return Err(FftError::LengthMismatch {
+            expected: rows.saturating_mul(ncols),
+            actual: input.len(),
+        });
+    }
+    let mut inner = options.clone();
+    inner.workers = WorkerPolicy::Exact(1);
+    let row_out = ncols / 2 + 1;
+    let mut out = vec![(0.0, 0.0); rows * row_out];
+    let work = rows.saturating_mul(ncols);
+    let nthreads = batched_axis2d_threads(rows, work);
+    if nthreads <= 1 {
+        for r in 0..rows {
+            let res = rfft(&input[r * ncols..(r + 1) * ncols], &inner)?;
+            out[r * row_out..(r + 1) * row_out].copy_from_slice(&res);
+        }
+        return Ok(out);
+    }
+    let rows_per = rows.div_ceil(nthreads);
+    let inner = &inner;
+    let first_err = std::thread::scope(|scope| {
+        let handles: Vec<_> = out
+            .chunks_mut(rows_per * row_out)
+            .enumerate()
+            .map(|(ti, chunk)| {
+                let r0 = ti * rows_per;
+                scope.spawn(move || -> Result<(), FftError> {
+                    for (rr, slot) in chunk.chunks_mut(row_out).enumerate() {
+                        let r = r0 + rr;
+                        let res = rfft(&input[r * ncols..(r + 1) * ncols], inner)?;
+                        slot.copy_from_slice(&res);
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().unwrap().err())
+            .next()
+    });
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(out),
+    }
+}
+
 fn fft_impl(
     input: &[Complex64],
     options: &FftOptions,
@@ -4816,10 +4959,10 @@ mod tests {
 
     use super::{
         Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dctn, dst,
-        dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_with_audit, fft2, fftn, fwht, hfft,
-        hfft2, hfftn, idct, idctn, idstn, ifft, ifft2, ifftn, ihfft, ihfft2, ihfftn, irfft, irfft2,
-        irfftn, is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_with_audit, rfft2, rfftn,
-        sync_audit_ledger, take_transform_traces,
+        dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_axis2d, fft_with_audit, fft2, fftn, fwht,
+        hfft, hfft2, hfftn, idct, idctn, idstn, ifft, ifft2, ifftn, ihfft, ihfft2, ihfftn, irfft,
+        irfft2, irfftn, is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_axis2d,
+        rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
     };
     use super::{
         cooley_tukey_radix2_inplace, cooley_tukey_radix4_inplace_with_twiddles,
@@ -6472,5 +6615,36 @@ mod tests {
 
         // Non-power-of-two length is rejected.
         assert!(fwht(&[1.0, 2.0, 3.0], &opts).is_err());
+    }
+
+    #[test]
+    fn fft_rfft_axis2d_match_per_row() {
+        let opts = FftOptions::default();
+        // A few (rows, ncols) including a non-power-of-two ncols to exercise the general path.
+        for &(rows, ncols) in &[(5usize, 8usize), (7, 12), (33, 16)] {
+            let cplx: Vec<Complex64> = (0..rows * ncols)
+                .map(|i| ((i as f64).sin(), (i as f64 * 0.3).cos()))
+                .collect();
+            let real: Vec<f64> = (0..rows * ncols).map(|i| (i as f64 * 0.7).sin()).collect();
+
+            let fa = fft_axis2d(&cplx, rows, ncols, &opts).unwrap();
+            let ra = rfft_axis2d(&real, rows, ncols, &opts).unwrap();
+            let rout = ncols / 2 + 1;
+            for r in 0..rows {
+                let frow = fft(&cplx[r * ncols..(r + 1) * ncols], &opts).unwrap();
+                let rrow = rfft(&real[r * ncols..(r + 1) * ncols], &opts).unwrap();
+                for c in 0..ncols {
+                    assert_eq!(fa[r * ncols + c].0.to_bits(), frow[c].0.to_bits(), "fft re {r},{c}");
+                    assert_eq!(fa[r * ncols + c].1.to_bits(), frow[c].1.to_bits(), "fft im {r},{c}");
+                }
+                for c in 0..rout {
+                    assert_eq!(ra[r * rout + c].0.to_bits(), rrow[c].0.to_bits(), "rfft re {r},{c}");
+                    assert_eq!(ra[r * rout + c].1.to_bits(), rrow[c].1.to_bits(), "rfft im {r},{c}");
+                }
+            }
+        }
+        // Shape validation.
+        assert!(fft_axis2d(&[(1.0, 0.0); 6], 2, 4, &opts).is_err());
+        assert!(rfft_axis2d(&[1.0; 6], 0, 4, &opts).is_err());
     }
 }
