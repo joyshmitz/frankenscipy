@@ -1225,3 +1225,23 @@ Conformance: `distance_matrices_match_pairwise` — upper triangle + diagonal bi
 asserted == 0.0: `d(u,u)` may be ±0.0/tiny-rounding, the per-pair i<=j check covers it). The
 `all_pairs_symmetric_matrix` helper now backs FOUR matrices (kendalltau/weightedtau/wasserstein/energy);
 ANY symmetric `fn(&[f64],&[f64])->f64` scipy makes you Python-loop is now a one-liner. fsci-stats GREEN.
+
+### ✅ stats: ks_2samp_matrix (all-pairs two-sample KS test) — 8-29x faster than scipy
+Extends the all-pairs primitive to two-sample TESTS (pairwise distribution comparison — a common
+multiple-comparison workflow). New tuple helper `all_pairs_two_symmetric_matrices` (per-pair kernel
+returns `(stat, pvalue)` → two symmetric matrices); `ks_2samp_matrix` returns `(D_matrix, pvalue_matrix)`.
+SciPy has NO vectorized all-pairs form — users loop `scipy.stats.ks_2samp` in Python.
+
+**SAME-BOX head-to-head (fsci ks_2samp_matrix vs scipy Python ks_2samp-loop, both this box):**
+| matrix (m × n)  | pairs  | scipy      | fsci      | speedup   |
+|-----------------|--------|------------|-----------|-----------|
+| m=40,  n=400    | 780    | 262.0 ms   | 9.1 ms    | **28.8×** |
+| m=100, n=1000   | 4 950  | 2 030.2 ms | 243.2 ms  | **8.3×**  |
+
+HONEST NOTE: the m=100/n=1000 win (8.3×) is smaller than the correlation/distance matrices (16-222×)
+because fsci's `ks_2samp` P-VALUE is heavy per-pair at large n (~3.4 ms/pair, ~8× slower than scipy's
+asymptotic) — the matrix is already at all 64 cores (compute-bound, not thread-limited). FOLLOW-ON (noted,
+not done): speed fsci's ks_2samp pvalue at large n (likely an exact/series path where scipy goes
+asymptotic), or offer a statistic-only `ks_2samp_statistic_matrix` (the D stat is O(n log n), would be
+50-100×). Conformance: `ks_2samp_matrix` upper-triangle + diagonal bit-identical to per-pair ks_2samp
+(both stat & pvalue), symmetric, ragged rejected. fsci-stats GREEN.

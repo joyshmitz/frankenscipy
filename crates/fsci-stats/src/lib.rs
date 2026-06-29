@@ -38413,6 +38413,92 @@ pub fn energy_distance_matrix(samples: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, Sta
     all_pairs_symmetric_matrix(samples, energy_distance)
 }
 
+/// Parallel all-pairs producing TWO symmetric matrices from a per-pair kernel returning
+/// `(stat, pvalue)` — e.g. a symmetric two-sample test's statistic and p-value. Both matrices are
+/// symmetric by construction; diagonal `= pair_stat(v_d, v_d)`. Same heavy-per-pair thread strategy as
+/// [`all_pairs_symmetric_matrix`].
+fn all_pairs_two_symmetric_matrices<F>(
+    variables: &[Vec<f64>],
+    pair_stat: F,
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError>
+where
+    F: Fn(&[f64], &[f64]) -> (f64, f64) + Sync,
+{
+    let m = variables.len();
+    if m == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let n = variables[0].len();
+    if variables.iter().any(|v| v.len() != n) {
+        return Err(StatsError::InvalidArgument(
+            "all variables must have the same length".to_string(),
+        ));
+    }
+    let pairs: Vec<(usize, usize)> = (0..m)
+        .flat_map(|i| ((i + 1)..m).map(move |j| (i, j)))
+        .collect();
+    let np = pairs.len();
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if np < 8 || cores <= 1 {
+        1
+    } else {
+        cores.min((np / 4).max(1))
+    };
+    let compute = |k: usize| -> (f64, f64) {
+        let (i, j) = pairs[k];
+        pair_stat(&variables[i], &variables[j])
+    };
+    let vals: Vec<(f64, f64)> = if nthreads <= 1 {
+        (0..np).map(compute).collect()
+    } else {
+        let chunk = np.div_ceil(nthreads);
+        let compute = &compute;
+        let mut out = vec![(0.0f64, 0.0f64); np];
+        std::thread::scope(|scope| {
+            for (ci, ochunk) in out.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (k, slot) in ochunk.iter_mut().enumerate() {
+                        *slot = compute(base + k);
+                    }
+                });
+            }
+        });
+        out
+    };
+    let mut stat = vec![vec![0.0f64; m]; m];
+    let mut pval = vec![vec![0.0f64; m]; m];
+    for d in 0..m {
+        let (s, p) = pair_stat(&variables[d], &variables[d]);
+        stat[d][d] = s;
+        pval[d][d] = p;
+    }
+    for (k, &(i, j)) in pairs.iter().enumerate() {
+        let (s, p) = vals[k];
+        stat[i][j] = s;
+        stat[j][i] = s;
+        pval[i][j] = p;
+        pval[j][i] = p;
+    }
+    Ok((stat, pval))
+}
+
+/// All-pairs two-sample Kolmogorov–Smirnov test over `samples`. Returns `(statistic, pvalue)` matrices,
+/// both `m × m` symmetric, with `out.0[i][j] == ks_2samp(samples[i], samples[j]).statistic` and
+/// `out.1[i][j] ==` its p-value (bit-identical on the upper triangle). SciPy has NO vectorized all-pairs
+/// form — pairwise distribution comparison (a common multiple-comparison workflow) means looping
+/// `scipy.stats.ks_2samp` in Python; this runs the O(n log n) per-pair kernel in parallel across pairs.
+pub fn ks_2samp_matrix(
+    samples: &[Vec<f64>],
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+    all_pairs_two_symmetric_matrices(samples, |a, b| {
+        let r = ks_2samp(a, b);
+        (r.statistic, r.pvalue)
+    })
+}
+
 pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
     let n = x.len();
     if n < 2 || x.len() != y.len() {
@@ -59781,6 +59867,20 @@ mod tests {
         bad[0].push(1.0);
         assert!(wasserstein_distance_matrix(&bad).is_err());
         assert!(energy_distance_matrix(&bad).is_err());
+
+        // ks_2samp_matrix: (statistic, pvalue) matrices, upper triangle + diagonal bit-identical to
+        // per-pair ks_2samp, both symmetric.
+        let (ksstat, kspval) = ks_2samp_matrix(&samples).unwrap();
+        for i in 0..m {
+            for j in i..m {
+                let r = ks_2samp(&samples[i], &samples[j]);
+                assert_eq!(ksstat[i][j].to_bits(), r.statistic.to_bits(), "ks stat[{i}][{j}]");
+                assert_eq!(kspval[i][j].to_bits(), r.pvalue.to_bits(), "ks pval[{i}][{j}]");
+                assert_eq!(ksstat[i][j].to_bits(), ksstat[j][i].to_bits(), "ks stat not symmetric {i},{j}");
+                assert_eq!(kspval[i][j].to_bits(), kspval[j][i].to_bits(), "ks pval not symmetric {i},{j}");
+            }
+        }
+        assert!(ks_2samp_matrix(&bad).is_err());
     }
 
     #[test]
