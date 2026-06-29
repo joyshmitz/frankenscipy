@@ -1873,3 +1873,18 @@ Closed most of a 3.75× loss; the residual ~1.25× is scipy's Householder-QR For
 | + Cholesky subproblem | **294.33 ms** (1.18× of trf, 1.84× of bvls) |
 
 1.5× self-speedup, narrowing the loss. REMAINING LEVER (not yet done — higher risk): the inner loop still RE-FACTORS the free Gram from scratch each iteration (O(n⁴)); an incrementally-maintained Cholesky with rank-1 add on KKT-free + DOWN-DATE on inner-fix would reach O(n³) ≈ scipy. nnls already has the add/refactor helpers (`nnls_chol_*`); lsq_linear needs the downdate (removals dominate here).
+
+## 2026-06-29 — AmberKestrel (cc): lsq_linear incremental Cholesky — MARQUEE FLIP 2.76× loss → 4.0× WIN vs scipy
+
+**Lever (completes last commit's lead):** `lsq_linear`'s inner active-set loop re-built and re-factored the FULL free-set Gram submatrix from scratch on EVERY solve = O(n⁴). Replaced with an incrementally-maintained Cholesky (`lflat`, strided) reusing the nnls helpers: KKT-free a variable = O(p²) rank-1 column add (`nnls_chol_add_col`); inner-loop fix = O(p³) refactor (`nnls_chol_refactor`) — turns out REMOVES are rare (the active set mostly grows), so refactor-on-remove sufficed (no Givens downdate needed). Gram flattened to row-major for the strided helpers; `use_slow` fallback for rank-deficient free sets. → O(n³).
+
+**Correctness:** bounded-LS minimizer unique → converged x unchanged. FULL fsci-opt suite GREEN (320 lib + 56 integration tests, 0 failed; incl. `lsq_linear` scipy-reference).
+
+**Measured same-box, 600×300 box-constrained** (scipy.optimize.lsq_linear: trf 249.46 ms, bvls 160.04 ms):
+| stage | time | vs scipy bvls |
+|---|---|---|
+| original | 441.30 ms | 2.76× SLOWER |
+| rank-1 Gram + Cholesky subproblem (prev commit) | 294.33 ms | 1.84× slower |
+| **+ incremental Cholesky (this)** | **39.87 ms** | **4.0× FASTER** (6.3× vs trf) |
+
+**11× total self-speedup; flipped a 2.76× loss into a 4.0× WIN.** Confirms the active-set lever from [[nnls]]: any solver re-factoring a growing/shrinking submatrix from scratch each iteration → incremental up/refactor. Both nnls (3.75× loss→1.25×) and lsq_linear (2.76× loss→4.0× win) now done.

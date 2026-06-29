@@ -4351,14 +4351,14 @@ pub fn lsq_linear(a: &[Vec<f64>], b: &[f64], lb: &[f64], ub: &[f64]) -> Result<V
     // reassociation only; lsq_linear's bounded LS has a unique minimizer (full column rank), so
     // the optimum is unchanged (the Gram only feeds the subproblem solves and the KKT gradient).
     let a_flat: Vec<f64> = a.iter().flat_map(|row| row.iter().copied()).collect();
-    let mut gram = vec![vec![0.0_f64; n]; n];
+    let mut gram = vec![0.0_f64; n * n]; // contiguous row-major (full symmetric); feeds nnls_chol_*
     let mut atb = vec![0.0_f64; n];
     for i in 0..m {
         let ai = &a_flat[i * n..i * n + n];
         let bi = b[i];
         for j1 in 0..n {
             let v1 = ai[j1];
-            let grow = &mut gram[j1];
+            let grow = &mut gram[j1 * n..j1 * n + n];
             for (g, &v2) in grow.iter_mut().zip(ai.iter()) {
                 *g += v1 * v2;
             }
@@ -4383,40 +4383,62 @@ pub fn lsq_linear(a: &[Vec<f64>], b: &[f64], lb: &[f64], ub: &[f64]) -> Result<V
     }
     let tol = 1e-10;
     let max_outer = 10 * (n + 1);
+
+    // Incrementally-maintained Cholesky of `gram[free, free]` (`lflat`, strided stride=n). A
+    // variable ENTERS the free set via the KKT step = O(p²) rank-1 column add (`nnls_chol_add_col`);
+    // it LEAVES via inner-loop blocking = O(p³) refactor (`nnls_chol_refactor`) — rare, since the
+    // active set mostly grows. The old code rebuilt+re-factored the full free submatrix on EVERY
+    // inner solve (O(n⁴)); this is O(n³). `use_slow` reverts to the gather + Cholesky/Gauss-Jordan
+    // path on a rank-deficient free set. Bounded-LS minimizer is unique → converged x unchanged.
+    let mut free: Vec<usize> = (0..n).filter(|&j| state[j] == 0).collect();
+    let mut lflat = vec![0.0_f64; n * n];
+    let mut use_slow = !free.is_empty() && !nnls_chol_refactor(&gram, n, &free, &mut lflat);
+    let mut rhs = vec![0.0_f64; n];
+    let mut zbuf = vec![0.0_f64; n];
+    let mut ybuf = vec![0.0_f64; n];
+
     for _ in 0..max_outer {
         // Inner active-set loop: solve the free subproblem, fixing blocking vars.
         loop {
-            let free: Vec<usize> = (0..n).filter(|&j| state[j] == 0).collect();
-            if free.is_empty() {
+            if use_slow {
+                free = (0..n).filter(|&j| state[j] == 0).collect();
+            }
+            let p = free.len();
+            if p == 0 {
                 break;
             }
-            let sub_gram: Vec<Vec<f64>> = free
-                .iter()
-                .map(|&i| free.iter().map(|&jj| gram[i][jj]).collect())
-                .collect();
-            let sub_rhs: Vec<f64> = free
-                .iter()
-                .map(|&i| {
-                    atb[i]
-                        - (0..n)
-                            .filter(|&k| state[k] != 0)
-                            .map(|k| gram[i][k] * x[k])
-                            .sum::<f64>()
-                })
-                .collect();
-            // `sub_gram` is a principal submatrix of AᵀA → SPD on an independent free set, so
-            // Cholesky solves it in ~⅓ the flops of the full Gauss-Jordan `dense_spd_solve` (which
-            // also re-allocates a Vec<Vec> augmented matrix per call). Fall back to the pivoting
-            // Gauss-Jordan on a rank-deficient free set (Cholesky hits a non-positive pivot →
-            // None), preserving the original break-on-singular behavior. ~1e-13 difference; the
-            // bounded-LS minimizer is unique so the converged x is unchanged.
-            let Some(z) = cholesky_solve_spd(&sub_gram, &sub_rhs)
-                .or_else(|| dense_spd_solve(&sub_gram, &sub_rhs))
-            else {
-                break;
-            };
-            // Step toward z; if any free var would cross a bound, clamp the
-            // most-binding one and fix it, then re-solve.
+            // sub_rhs[k] = atb[free[k]] − Σ_{fixed j} gram[free[k]][j]·x[j].
+            for (k, &jk) in free.iter().enumerate() {
+                let grow = &gram[jk * n..jk * n + n];
+                let mut r = atb[jk];
+                for (j2, (&gv, &xv)) in grow.iter().zip(x.iter()).enumerate() {
+                    if state[j2] != 0 {
+                        r -= gv * xv;
+                    }
+                }
+                rhs[k] = r;
+            }
+            // Solve gram[free,free] · z = rhs. Incremental factor on the fast path; gather +
+            // Cholesky/Gauss-Jordan on the rank-deficient fallback (preserving break-on-singular).
+            if use_slow {
+                let mut sub_gram = vec![vec![0.0_f64; p]; p];
+                for (pi, &ii) in free.iter().enumerate() {
+                    for (pj, &jj) in free.iter().enumerate() {
+                        sub_gram[pi][pj] = gram[ii * n + jj];
+                    }
+                }
+                match cholesky_solve_spd(&sub_gram, &rhs[..p])
+                    .or_else(|| dense_spd_solve(&sub_gram, &rhs[..p]))
+                {
+                    Some(zz) => zbuf[..p].copy_from_slice(&zz),
+                    None => break,
+                }
+            } else {
+                nnls_chol_solve(&lflat, n, p, &rhs[..p], &mut zbuf[..p], &mut ybuf[..p]);
+            }
+            let z = &zbuf[..p];
+
+            // Step toward z; if any free var would cross a bound, clamp the most-binding one.
             let mut alpha = 1.0_f64;
             let mut block: Option<(usize, i8)> = None;
             for (fi, &j) in free.iter().enumerate() {
@@ -4441,23 +4463,30 @@ pub fn lsq_linear(a: &[Vec<f64>], b: &[f64], lb: &[f64], ub: &[f64]) -> Result<V
                 Some((j, side)) => {
                     x[j] = if side == -1 { lb[j] } else { ub[j] };
                     state[j] = side;
+                    if !use_slow {
+                        free.retain(|&f| f != j);
+                        if !nnls_chol_refactor(&gram, n, &free, &mut lflat) {
+                            use_slow = true;
+                        }
+                    }
                 }
                 None => break, // all free vars within bounds: subproblem solved
             }
         }
         // KKT check: free the bound variable that most violates optimality.
-        // Gradient g = Gram·x − atb = Aᵀ(Ax − b).
-        let g: Vec<f64> = (0..n)
-            .map(|j| (0..n).map(|k| gram[j][k] * x[k]).sum::<f64>() - atb[j])
-            .collect();
+        // Gradient g[j] = (Gram·x − atb)[j] = Aᵀ(Ax − b); only bound vars can be freed.
         let mut best = None;
         let mut best_score = tol;
         for j in 0..n {
-            let score = match state[j] {
-                -1 => -g[j], // at lower, negative gradient wants to increase x
-                1 => g[j],   // at upper, positive gradient wants to decrease x
-                _ => continue,
-            };
+            if state[j] == 0 {
+                continue;
+            }
+            let grow = &gram[j * n..j * n + n];
+            let mut gj = -atb[j];
+            for (&gv, &xv) in grow.iter().zip(x.iter()) {
+                gj += gv * xv;
+            }
+            let score = if state[j] == -1 { -gj } else { gj };
             if score > best_score {
                 best_score = score;
                 best = Some(j);
@@ -4465,6 +4494,13 @@ pub fn lsq_linear(a: &[Vec<f64>], b: &[f64], lb: &[f64], ub: &[f64]) -> Result<V
         }
         let Some(j_free) = best else { break };
         state[j_free] = 0;
+        if !use_slow {
+            if nnls_chol_add_col(&gram, n, &free, j_free, &mut lflat) {
+                free.push(j_free);
+            } else {
+                use_slow = true;
+            }
+        }
     }
     Ok(x)
 }
