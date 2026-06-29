@@ -1997,3 +1997,15 @@ Two parallelizations measured same-box (1000×300, k=20, 200 iters):
 **The pool is SAFE (no `unsafe` — workspace is `unsafe_code = "forbid"`, which is exactly why the prior raw-pointer pool attempt failed).** Mechanism: each worker permanently OWNS a moved-in row-band of W and X and talks to the driver over `mpsc` channels. The cross-band reductions `Wᵀ·X`/`Wᵀ·W` become per-band PARTIALS summed by the driver; H-update is serial (small); `X·Hᵀ`/`W·H·Hᵀ`/W-update are per-band (owned). On convergence-check iters workers also return their band + partial reconstruction error so the driver assembles W and tests `tol` with no extra pass. `rel_err = 0.470968` identical to serial across all nt (partial-reduction reassociation is negligible). Gated `nthreads = avail.min(n/96).min(16) >= 4 && d>=4 && k>=2` — small inputs stay serial. Conformance 142/142 GREEN.
 
 **Net: the documented NMF loss (1005ms = 6.9× slower than sklearn) is now a 1.46× WIN at ~9-10× self-speedup vs ORIG.** REJECTED en route: register-tiled MR4×NR8 (slower, last cycle) and per-call scope (spawn-tax plateau, above). LEVER (generalizable): a sequential multiplicative/EM iteration whose cross-band matmuls are reductions → SAFE persistent pool with OWNED bands + partial-sum merge over channels beats both serial and per-call-spawn, AND sidesteps `forbid(unsafe)`. Candidates: factor_analysis / PPCA / LDA EM loops (same matmul-EM structure).
+
+## 2026-06-29 — AmberKestrel (cc): gaussian_mixture_full M-step parallelized across components — flips a 2.4× LOSS to a 1.9-2.8× WIN (byte-identical)
+
+Fresh measured loss found by probing the full-covariance GMM (the diagonal E-step was already parallel, but the full-cov M-step was overlooked). The M-step is `for c in 0..k { ... }` where each component's covariance is an O(n·d²) weighted outer-product sum — **all serial**, and it dominated (E-step was already fanned across points). Each component is independent ⇒ fanned the k components across cores via `thread::scope` (one thread per component, `chunks_mut` over weights/means/covariances output slots, shared `&data`/`&resp` reads). Each component is computed by the IDENTICAL serial arithmetic on its own thread → **byte-identical** result. Gated `mwork = n·d² >= 1<<16 && k >= 2`.
+
+Same-box (max_iter=50, tol=0, reg_covar=1e-6):
+| size | ORIG (serial M-step) | parallel M-step | sklearn GMM-full | flip |
+|---|---|---|---|---|
+| n=5000 d=30 k=8 | 1935 ms | **422 ms** (4.6× self) | 815 ms | 2.37× SLOWER → **1.93× FASTER** |
+| n=10000 d=20 k=10 | 2841 ms | **420 ms** (6.8× self) | 1182 ms | 2.40× SLOWER → **2.81× FASTER** |
+
+Conformance 142/142 GREEN (both gaussian_mixture tests pass). LESSON: when an iterative algo has BOTH an E-step and an M-step, check BOTH for parallelism — a parallel E-step can mask a serial M-step that then dominates (Amdahl). The M-step's per-component covariance is the classic "independent per-group O(work) reduction" → fan groups across cores, byte-identical. CANDIDATES with the same shape: other full-covariance EM (bayesian GMM), per-class scatter matrices (LDA/QDA fit), per-cluster covariance in any mixture model.

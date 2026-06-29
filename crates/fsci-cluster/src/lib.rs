@@ -3401,12 +3401,15 @@ pub fn gaussian_mixture_full(
         }
         old_ll = log_likelihood;
 
-        // M-step.
-        for c in 0..k {
+        // M-step. Each component's (weight, mean, full covariance) is independent and the
+        // covariance is the dominant O(n·d²) cost — fan the k components across cores. Each
+        // component is computed by the identical serial arithmetic on its own thread, so the
+        // result is BYTE-IDENTICAL to the serial loop (disjoint output slots, shared reads).
+        let m_compute = |c: usize, w_out: &mut f64, m_out: &mut [f64], cov_out: &mut Vec<Vec<f64>>| {
             let nk: f64 = resp.iter().map(|r| r[c]).sum::<f64>().max(FLOOR);
-            weights[c] = nk / n as f64;
-            for j in 0..d {
-                means[c][j] = data.iter().enumerate().map(|(i, r)| resp[i][c] * r[j]).sum::<f64>() / nk;
+            *w_out = nk / n as f64;
+            for (j, mv) in m_out.iter_mut().enumerate() {
+                *mv = data.iter().enumerate().map(|(i, r)| resp[i][c] * r[j]).sum::<f64>() / nk;
             }
             let mut cov = vec![vec![0.0f64; d]; d];
             for (i, row) in data.iter().enumerate() {
@@ -3415,9 +3418,9 @@ pub fn gaussian_mixture_full(
                     continue;
                 }
                 for a in 0..d {
-                    let ga = g * (row[a] - means[c][a]);
+                    let ga = g * (row[a] - m_out[a]);
                     for b in 0..d {
-                        cov[a][b] += ga * (row[b] - means[c][b]);
+                        cov[a][b] += ga * (row[b] - m_out[b]);
                     }
                 }
             }
@@ -3429,7 +3432,47 @@ pub fn gaussian_mixture_full(
             for (a, rowv) in cov.iter_mut().enumerate() {
                 rowv[a] += reg_covar;
             }
-            covariances[c] = cov;
+            *cov_out = cov;
+        };
+        let mwork = (n as u64)
+            .saturating_mul(d as u64)
+            .saturating_mul(d as u64);
+        let nthreads_m = if mwork < (1 << 16) || k < 2 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(|c| c.get())
+                .unwrap_or(1)
+                .min(k)
+        };
+        if nthreads_m <= 1 {
+            for c in 0..k {
+                let (w_slot, m_slot, cov_slot) = (&mut weights[c], &mut means[c], &mut covariances[c]);
+                m_compute(c, w_slot, m_slot, cov_slot);
+            }
+        } else {
+            let per = k.div_ceil(nthreads_m);
+            let m_compute = &m_compute;
+            std::thread::scope(|scope| {
+                for ((((w_ch, m_ch), cov_ch), base), _) in weights
+                    .chunks_mut(per)
+                    .zip(means.chunks_mut(per))
+                    .zip(covariances.chunks_mut(per))
+                    .zip((0..k).step_by(per))
+                    .zip(0..nthreads_m)
+                {
+                    scope.spawn(move || {
+                        for (lc, ((w_out, m_out), cov_out)) in w_ch
+                            .iter_mut()
+                            .zip(m_ch.iter_mut())
+                            .zip(cov_ch.iter_mut())
+                            .enumerate()
+                        {
+                            m_compute(base + lc, w_out, m_out, cov_out);
+                        }
+                    });
+                }
+            });
         }
     }
 
