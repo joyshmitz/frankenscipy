@@ -2038,3 +2038,23 @@ Same-box (order 3, Reflect):
 | 256×256×256 | 247 ms | **148 ms** (1.67× self) | 520.6 ms | 2.11× → **3.52× faster** |
 
 Conformance 255/255 ndimage lib GREEN (5 spline tests + all interpolation consumers). LEVER: an IIR/recursive sweep along one axis of an N-D array is sequential per line but the LINES are independent — parallelize across contiguous outer-blocks (non-last axes) / rows (last axis); the outer=1 first-axis stays serial under forbid-unsafe. Same shape: other separable IIR (gaussian via recursive filter, uniform_filter running-sum, any `*_filter1d` IIR).
+
+## 2026-06-29 (AmberKestrel, cc) — signal.lfilter chunked PARALLEL associative scan (single long signal)
+
+scipy's `lfilter` is sequential C; fsci's DF2T recurrence was also serial → PARITY/slight-loss
+(n=1M order8: fsci 6.72ms vs scipy 5.90ms = 1.14x SLOWER). The state recurrence is a constant-matrix
+affine map `d_n = M·d_{n-1} + v·x_n`, so by linearity (superposition) the output splits into a
+zero-state response (computed per contiguous chunk INDEPENDENTLY, in parallel) plus the homogeneous
+response to each chunk's true entry state. Entry states recovered by a serial O(P·m²) boundary combine
+using `M^chunk` (binary matrix power, m×m companion). Two parallel `thread::scope` passes + serial combine.
+
+MEASURED (n=1M, clean back-to-back): order4 5.50→3.63ms = **1.52x self / 1.38x FASTER than scipy 5.00ms**;
+order8 6.72→4.16ms = **1.62x self / 1.42x FASTER than scipy 5.90ms**. n=4M ~1.6-1.9x faster (grows with N).
+Gate `lfilter_scan_thread_count`: serial below 1<<18 (byte-identical, all 17 existing lfilter scipy-ref
+tests + sosfilt/dlti/filtfilt callers GREEN), parallel above with P = avail.min(N/65536). NOT byte-identical
+(superposition reassociates) → max_abs_diff vs serial reference 5e-13 @order8 (max_rel blows up only at
+zero-crossings where |y|≈0); verified by new `lfilter_parallel_scan_matches_serial_reference` property test
+(<1e-9, orders 4/6/8, N above gate w/ remainder chunk). filtfilt inherits the win (calls lfilter 2x).
+LEVER: any constant-coefficient linear recurrence (IIR filter, DF2T) → chunked parallel scan via
+superposition (zero-state pass ∥ + serial M^chunk boundary combine + homogeneous-correction pass ∥);
+exact-to-roundoff for stable filters since M^k decays. The "genuinely different primitive" (parallel-scan).
