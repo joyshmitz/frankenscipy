@@ -196,6 +196,76 @@ where
     }
 }
 
+/// Batched boundary-value problems: solve N independent BVPs that share the dynamics/BC SHAPE but
+/// differ by a parameter vector, one [`BvpResult`] per set. This is the vmap-over-solver primitive
+/// for BVPs — a parameter study (vary a nonlinearity strength, a boundary value, a forcing term)
+/// loops `solve_bvp` in Python, N collocation-Newton solves SERIALLY, each calling the Python RHS
+/// at every mesh node every Newton iteration. fsci `solve_bvp_many` (`f: Fn(t, y, params)->Vec`,
+/// `bc: Fn(ya, yb, params)->Vec`) fans the N independent solves across cores and inlines both
+/// callbacks. Result `i` is byte-identical to the per-parameter `solve_bvp` call.
+pub fn solve_bvp_many<F, BC>(
+    f: F,
+    bc: BC,
+    t_span: (f64, f64),
+    y_guess: &[f64],
+    param_rows: &[Vec<f64>],
+    options: BvpOptions,
+) -> Vec<Result<BvpResult, BvpError>>
+where
+    F: Fn(f64, &[f64], &[f64]) -> Vec<f64> + Sync,
+    BC: Fn(&[f64], &[f64], &[f64]) -> Vec<f64> + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let f_ref = &f;
+    let bc_ref = &bc;
+    let solve_one = move |params: &[f64]| {
+        // solve_bvp wants `&mut F: FnMut` and `&BC: Fn`; wrap the shared user closures so each
+        // member gets a fresh local closure capturing its own parameter row.
+        let mut local_f = |t: f64, y: &[f64]| f_ref(t, y, params);
+        let local_bc = |ya: &[f64], yb: &[f64]| bc_ref(ya, yb, params);
+        solve_bvp(&mut local_f, &local_bc, t_span, y_guess, options.clone())
+    };
+
+    // Each BVP is an independent, expensive (collocation-Newton) solve → fan whole parameter sets
+    // across cores, capped by the row count; a tiny sweep stays serial.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<BvpResult, BvpError>>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= nrows {
+                    return None;
+                }
+                let hi = (lo + chunk).min(nrows);
+                Some(scope.spawn(move || {
+                    (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("solve_bvp_many worker panicked"))
+            .collect()
+    });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 fn validate_bvp_options(options: &BvpOptions) -> Result<(), BvpError> {
     if options.max_iter == 0 {
         return Err(BvpError::InvalidArgument(
@@ -334,6 +404,45 @@ fn solve_small_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn solve_bvp_many_byte_identical_to_per_param() {
+        // Parameter sweep of a nonlinear BVP: y0'=y1, y1'=p*(1+y0^2); y0(0)=0, y0(1)=1.
+        // The batched solve must equal looping solve_bvp per parameter, bit-for-bit.
+        let f = |_t: f64, y: &[f64], p: &[f64]| vec![y[1], p[0] * (1.0 + y[0] * y[0])];
+        let bc = |ya: &[f64], yb: &[f64], _p: &[f64]| vec![ya[0], yb[0] - 1.0];
+        let mut s = 21u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            0.5 + 1.5 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 8usize; // crosses the serial->parallel gate
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng()]).collect();
+        let opts = BvpOptions::default();
+
+        let batched = solve_bvp_many(f, bc, (0.0, 1.0), &[0.0, 0.0], &params, opts.clone());
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let mut local_f = |t: f64, y: &[f64]| f(t, y, p);
+            let local_bc = |ya: &[f64], yb: &[f64]| bc(ya, yb, p);
+            let single = solve_bvp(&mut local_f, &local_bc, (0.0, 1.0), &[0.0, 0.0], opts.clone())
+                .expect("single solve");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(many.converged, single.converged, "converged mismatch param {i}");
+            assert_eq!(many.t.len(), single.t.len(), "mesh size mismatch param {i}");
+            for (a, b) in many.t.iter().zip(&single.t) {
+                assert_eq!(a.to_bits(), b.to_bits(), "t mismatch param {i}");
+            }
+            for (ra, rb) in many.y.iter().zip(&single.y) {
+                for (a, b) in ra.iter().zip(rb) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "y mismatch param {i}");
+                }
+            }
+        }
+        // The sweep exercises genuine converging solves.
+        assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() >= nrows / 2);
+        assert!(solve_bvp_many(f, bc, (0.0, 1.0), &[0.0, 0.0], &[], opts).is_empty());
+    }
 
     #[test]
     fn bvp_linear_ode() {

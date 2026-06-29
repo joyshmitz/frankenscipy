@@ -1737,3 +1737,24 @@ scipy's `workers=-1` can't even run a local lambda (multiprocessing pickling err
 parallel (thread::scope, byte-identical argmin). So the fsci-opt global optimizers are already dominant; the
 DE population eval uses IMMEDIATE in-generation updates (not parallelizable without switching to scipy's
 deferred scheme = an algorithm change). No change shipped.
+
+### ✅✅✅ integrate: solve_bvp_many (vmap-over-solver BVP ensemble) — 53-123× faster than looped scipy
+Tenth vmap-over-solver family, on a NEW heavy-callback solver and closing the long-standing "solve_bvp" backlog
+in the vmap sense. A BVP parameter study (vary a nonlinearity strength / boundary value / forcing) loops
+`solve_bvp` in Python, N collocation-Newton solves SERIALLY — each calling the Python RHS at every mesh node
+every Newton iteration. fsci `solve_bvp_many` (`f: Fn(t, y, params)->Vec`, `bc: Fn(ya, yb, params)->Vec`,
+shared t_span/y_guess) fans the N independent solves across cores and inlines both callbacks. Purely additive;
+heavy-per-item cap (cores.min(nrows), serial <4).
+
+**SAME-BOX head-to-head (nonlinear BVP y0'=y1, y1'=p(1+y0²), y0(0)=0, y0(1)=1; both this box):**
+| N   | scipy (Python loop over solve_bvp) | fsci solve_bvp_many | speedup    |
+|-----|------------------------------------|---------------------|------------|
+| 200 | 166.2 ms                           | 3.111 ms (200/200 conv) | **53.4×**  |
+| 800 | 611.5 ms                           | 4.953 ms (800/800 conv) | **123.5×** |
+
+A genuinely BIG vmap win (heavy collocation callback), unlike the modest fast-C cases (brentq/root). Speedup
+grows with N; all solves converge. CONFORMANCE two ways: (1) result i BYTE-IDENTICAL (.to_bits() on t & y) to
+per-param solve_bvp; (2) NUMERICAL vs scipy: fsci y0(0.573)=0.4258989360 == scipy 0.4259060979 (7e-6, the
+collocation tolerance — fsci solve_bvp independently matches scipy). new solve_bvp_many test green. The
+vmap-over-solver vein now spans TEN solver families (curve_fit/solve_ivp/minimize/root/quad/dblquad/tplquad/
+nquad/brentq/solve_bvp).

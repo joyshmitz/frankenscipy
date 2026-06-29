@@ -17,7 +17,7 @@ pub use api::{
     solve_ivp_many, solve_ivp_with_audit,
 };
 pub use bdf::{BdfSolver, BdfSolverConfig};
-pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
+pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp, solve_bvp_many};
 pub use complex::{ComplexOdeResult, complex_ode};
 pub use lebedev::{LebedevRule, lebedev_rule};
 pub use quad::{
