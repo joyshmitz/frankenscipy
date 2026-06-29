@@ -1419,3 +1419,20 @@ Simpson it replaced) + new `voigt_profile_many_matches_scalar` (bit-identical to
 paths). NOTE: fsci's per-point wofz (~1 µs) is still ~11× slower than scipy's Weideman Faddeeva (~92 ns) —
 a further CF-everywhere / Weideman-rational kernel could lift the scalar path too, but the parallel batched
 form already DOMINATES scipy 5.6×.
+
+### ✅ special: hyperu DOMINATES scipy on BOTH speed and accuracy (measured + mpmath-verified) — lever closed
+Investigated the filed "hyperu 768-step Simpson → faster quadrature" lever. Outcome: the lever is CLOSED
+because fsci already wins decisively and the 768-Simpson is excellent — verified by an oracle-differential
+sweep over a∈[0.5,50], b∈[0.5,4], x∈[0.3,10] (incl. narrow-peak large a) against mpmath at 40 dps:
+- **Accuracy:** fsci max rel-err **1.27e-12** vs **scipy 5.49e-06** (scipy has a latent ~5e-6 error for
+  moderate-large a, e.g. a=10,b=4,x=5: mpmath 1.5250375e-10, fsci 1.5250375e-10 ✓, scipy 1.5250459e-10 ✗).
+  fsci is ~4×10⁶× more accurate than scipy at the worst point.
+- **Speed:** fsci 1.47-1.71× faster (52.6/504 ms vs scipy 90.1/738.6 ms @100k/1M, parallel par_map_indices).
+So fsci hyperu DOMINATES scipy on both axes. The 768-Simpson is NOT accuracy-marginal (it hits 1e-12) and
+reducing the step count would forfeit the accuracy lead — the perf "win" of fewer steps is a real-correctness
+LOSS. Generalized Gauss-Laguerre (weight u^{a-1}e^{-u}) would be the analytically-exact route but its nodes
+depend on a → caches poorly for per-element varying-a batches (recompute per distinct a). No change warranted.
+LESSON: before "optimizing" a slow-looking fixed quadrature, oracle-check accuracy vs mpmath FIRST — here the
+768 steps were buying a 1e-12 accuracy that BEATS scipy; the apparent fsci-vs-scipy "deviation" was scipy's
+bug, not fsci's. (Contrast the wofz-CF win affac121, where the 768-Simpson bought NO accuracy a faster CF
+couldn't match.)
