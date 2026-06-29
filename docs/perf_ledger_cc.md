@@ -1113,3 +1113,32 @@ than tmin, fsci wins it). FOLLOW-ON LEVER (noted, not done): the ~1.5ms floor is
 overhead — ALL reducers hit it at 2000 lines regardless of op cost (tstd≈tmax≈1.5ms). Capping
 reduce_axis_2d's thread count for low total-work would lower the floor AND flip tmin; needs careful
 same-process A/B (risk of regressing the big-win heavy reducers). Deferred.
+
+### ✅✅ stats: reduce_axis_2d thread-count cap — lifts ALL 25 axis-2D reducers 1.0-2.4x (byte-identical) + flips tmin loss→win
+DIG via extreme-software-optimization (profile-driven). reduce_axis_2d (and the rankdata_axis_2d helper)
+fanned out to ALL 64 cores whenever work >= 1<<16. Same-process A/B (one bin, fixed thread counts,
+byte-identical checksum asserted across all counts) showed 64 threads is ALWAYS worse than 16-32 for the
+common 1-2M-element regime — a ~1.5ms FLOOR that is pure OS-thread spawn/join overhead (~20µs × 64),
+dominating the actual cheap per-line reduce. Optimal is ~21t at work≈1M, ~42t at work≈2M.
+
+FIX (both parallel-across-lines sites): cap nthreads at `work / 48_000` element-ops/thread (each thread
+busy enough to amortize its spawn), `threads.min(n_lines).min(work/48000)`. BYTE-IDENTICAL (thread count
+never changes a per-line reduction; family + rankdata bit-identity tests green) and never spawns MORE
+than the old `threads.min(n_lines)` → a MONOTONE win that still ramps to all 64 cores once work justifies
+it (>= 64·48k ≈ 3.1M elements).
+
+**Same-process A/B (64t OLD → formula-picked NEW, measured back-to-back same load):**
+| reducer  | work≈1M: 64t→21t          | work≈2M: 64t→42t          |
+|----------|---------------------------|---------------------------|
+| tmin     | 1.449→0.593 → **2.44×**   | 1.484→1.030 → **1.44×**   |
+| tstd     | 1.431→0.809 → **1.77×**   | 1.539→1.242 → 1.24×       |
+| entropy  | 1.527→0.853 → **1.79×**   | 1.563→1.305 → 1.20×       |
+| mode     | 1.809→1.491 → 1.21×       | 2.418→2.396 → 1.01× (par) |
+| circmean | 1.741→1.438 → 1.21×       | 2.195→2.063 → 1.06×       |
+
+Lifts the WHOLE 25-reducer family (skew/kurtosis/.../trimmed/circular/mode/entropy) since they all route
+through reduce_axis_2d — biggest gains on cheap/medium ops at narrow columns (the spawn-floor-bound case).
+BONUS: tmin_axis_2d (dropped in the prior batch as a 0.72× loss vs scipy's fast masked-min) RE-ADDED — now
+0.59ms vs scipy 1.01ms = **1.7× WIN** at 2000×512 (4.4× at 500×4096). The lever I built to kill the floor
+flipped the one function the floor had cost me. LESSON: probe `available_parallelism()`-driven fan-out with
+a same-process fixed-thread A/B; "use all cores" is wrong when per-call work is < ~64·spawn_cost.

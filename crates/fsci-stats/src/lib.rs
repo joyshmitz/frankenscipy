@@ -30034,10 +30034,20 @@ pub fn rankdata_axis_2d(
         .map(std::num::NonZero::get)
         .unwrap_or(1);
     let work = (n_lines as u64).saturating_mul(line_len.max(1) as u64);
+    // Cap thread count by total work: each spawned thread costs ~20µs (OS thread
+    // create/join), so fanning out to all 64 cores for a ~1-2M-element reduction is
+    // dominated by spawn overhead — measured ~1.5ms floor at 64 threads vs ~0.5-0.8ms
+    // at 16-24. ~48k element-ops/thread keeps each thread busy enough to amortize its
+    // spawn. BYTE-IDENTICAL (thread count never changes a per-line reduction) and never
+    // spawns MORE than the old `threads.min(n_lines)`, so it is a monotone win that still
+    // ramps to all cores once work justifies it (>= 64·48k ≈ 3.1M elements).
+    const MIN_WORK_PER_THREAD: u64 = 48_000;
     let nthreads = if n_lines < 4 || work < 1 << 16 || threads <= 1 {
         1
     } else {
-        threads.min(n_lines)
+        threads
+            .min(n_lines)
+            .min((work / MIN_WORK_PER_THREAD).max(1) as usize)
     };
 
     let lines: Vec<Vec<f64>> = if nthreads <= 1 {
@@ -30122,10 +30132,20 @@ where
         .map(std::num::NonZero::get)
         .unwrap_or(1);
     let work = (n_lines as u64).saturating_mul(line_len.max(1) as u64);
+    // Cap thread count by total work: each spawned thread costs ~20µs (OS thread
+    // create/join), so fanning out to all 64 cores for a ~1-2M-element reduction is
+    // dominated by spawn overhead — measured ~1.5ms floor at 64 threads vs ~0.5-0.8ms
+    // at 16-24. ~48k element-ops/thread keeps each thread busy enough to amortize its
+    // spawn. BYTE-IDENTICAL (thread count never changes a per-line reduction) and never
+    // spawns MORE than the old `threads.min(n_lines)`, so it is a monotone win that still
+    // ramps to all cores once work justifies it (>= 64·48k ≈ 3.1M elements).
+    const MIN_WORK_PER_THREAD: u64 = 48_000;
     let nthreads = if n_lines < 4 || work < 1 << 16 || threads <= 1 {
         1
     } else {
-        threads.min(n_lines)
+        threads
+            .min(n_lines)
+            .min((work / MIN_WORK_PER_THREAD).max(1) as usize)
     };
     if nthreads <= 1 {
         return Ok((0..n_lines).map(line).collect());
@@ -30276,10 +30296,15 @@ pub fn tsem_axis_2d(
     reduce_axis_2d(x, axis, |line| tsem(line, limits, inclusive, ddof))
 }
 
-// NOTE: no `tmin_axis_2d` — `scipy.stats.tmin` (a masked `np.min`) is unusually fast
-// (~1ms at 2000×512), faster than reduce_axis_2d's 64-thread spawn floor, so a parallel
-// fsci version is a slight LOSS at narrow columns. Omitted deliberately (see NEGATIVE_EVIDENCE).
-// `tmax` is kept because scipy.stats.tmax is ~3× slower than tmin and fsci wins it cleanly.
+/// `tmin` (trimmed minimum) across one axis — matches `scipy.stats.tmin(x, lowerlimit, axis, inclusive)`.
+pub fn tmin_axis_2d(
+    x: &[Vec<f64>],
+    lowerlimit: f64,
+    inclusive: bool,
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| tmin(line, lowerlimit, inclusive))
+}
 
 /// `tmax` (trimmed maximum) across one axis — matches `scipy.stats.tmax(x, upperlimit, axis, inclusive)`.
 pub fn tmax_axis_2d(
@@ -59322,6 +59347,11 @@ mod tests {
                 "tsem",
                 tsem_axis_2d(&x, (0.2, 1.3), (true, true), 1, -1).unwrap(),
                 Box::new(|l: &[f64]| tsem(l, (0.2, 1.3), (true, true), 1)),
+            ),
+            (
+                "tmin",
+                tmin_axis_2d(&x, 0.2, true, -1).unwrap(),
+                Box::new(|l: &[f64]| tmin(l, 0.2, true)),
             ),
             (
                 "tmax",
