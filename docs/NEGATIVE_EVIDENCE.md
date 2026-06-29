@@ -11386,3 +11386,31 @@ n due to the per-call chirp rebuild.
   use nperseg-sized FFTs < 1<<16 → serial → no oversubscription). The wall is only for ops doing ONE big FFT
   of the whole line (hilbert/periodogram at L>=1<<16). 8 vein ships now. The stft_frame_thread_count gate
   opens csd/coherence/spectrogram 2-D as low-risk follow-ons.
+
+## 2026-06-28 - LANDED WINS (AmberForge): csd_axis_2d + coherence_axis_2d (multi-channel cross-spectral) — coherence 8-10.9x / csd 3-5.2x FASTER than scipy
+
+- Agent: AmberForge. 9th + 10th ships of the multi-channel vein, in one commit (shared
+  `spectral_pair_axis_2d` driver). fsci's `csd`/`coherence` were 1-D only; scipy takes an axis (single-
+  threaded). Both take TWO equal-shape 2-D inputs and estimate per line-PAIR, parallel across pairs. csd
+  returns complex CSD (`CsdResult2d`), coherence returns the real MSC curve (`CoherenceResult2d`).
+- Same small-segment-FFT trick as welch (nperseg=256 ≪ 1<<16 → serial FFTs), and the inner across-frames
+  parallelism forced serial via the shared `PAR_INDEX_FILL_SERIAL` thread-local (gating
+  `stft_frame_thread_count`). coherence wins BIGGER than welch because scipy's coherence is much slower
+  (3 spectral estimates per pair: welch(x), welch(y), csd — heavier per-pair work amortizes the fan-out
+  better, and it's less FFT-overhead-bound).
+- **MEASURED vs scipy (nperseg=256, hann, axis=-1, best-of-5):**
+
+  | function | channels × length | fsci | scipy | speedup |
+  | --- | ---: | ---: | ---: | ---: |
+  | csd_axis_2d | 1000 × 10000 | 186 ms | 971 ms | **5.2x** |
+  | csd_axis_2d | 256 × 100000 | 487 ms | 1468 ms | **3.0x** |
+  | coherence_axis_2d | 1000 × 10000 | 192 ms | 2100 ms | **10.9x** |
+  | coherence_axis_2d | 256 × 100000 | 570 ms | 4547 ms | **8.0x** |
+
+  BYTE-IDENTICAL to per-pair 1-D `csd`/`coherence` (test `csd_coherence_axis_2d_match_per_line`, axis=-1 and
+  0). Oracle vs scipy: csd **1.6e-14**; coherence **1.1e-9** (the coherence ratio |Pxy|²/(Pxx·Pyy) amplifies
+  FFT rounding — this is fsci-1D-vs-scipy, faithfully reproduced by the bit-identical 2-D). fsci-signal 662/0.
+  GOTCHA fixed in test: `csd` does NOT clamp nperseg (welch does), so axis=0 with short columns needs a
+  fitting nperseg.
+- 10 vein ships now (sosfilt/filtfilt/sosfiltfilt/decimate/savgol/resample_poly/detrend/welch/csd/coherence
+  2-D). spectrogram_axis_2d remains (3-D output); the gate is already open.

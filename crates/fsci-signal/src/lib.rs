@@ -16090,6 +16090,158 @@ pub fn coherence(
     })
 }
 
+/// Multi-channel cross-spectral-density result: shared freqs + one complex CSD per line-pair.
+#[derive(Debug, Clone)]
+pub struct CsdResult2d {
+    /// Frequency bins (shared across all line-pairs).
+    pub frequencies: Vec<f64>,
+    /// Complex cross-spectral density per line-pair (`lines x n_freqs`).
+    pub csd: Vec<Vec<(f64, f64)>>,
+}
+
+/// Multi-channel magnitude-squared-coherence result: shared freqs + one curve per line-pair.
+#[derive(Debug, Clone)]
+pub struct CoherenceResult2d {
+    /// Frequency bins (shared across all line-pairs).
+    pub frequencies: Vec<f64>,
+    /// Magnitude-squared coherence per line-pair (`lines x n_freqs`).
+    pub coherence: Vec<Vec<f64>>,
+}
+
+/// Shared driver: apply a paired per-line spectral estimator (`csd`/`coherence`)
+/// across one axis of two rectangular 2-D inputs of equal shape, fanning out across
+/// line-pairs. Each pair is estimated independently — BIT-IDENTICAL to the per-pair
+/// 1-D call. The per-segment FFTs are small (`nperseg`), and the inner across-frames
+/// parallelism is forced serial in the parallel branch (`with_serial_par_index_fill`
+/// → `stft_frame_thread_count` returns 1), so there is exactly one parallelism level.
+fn spectral_pair_axis_2d<T, F>(
+    x: &[Vec<f64>],
+    y: &[Vec<f64>],
+    axis: isize,
+    nfilt: usize,
+    per_pair: F,
+) -> Result<Vec<T>, SignalError>
+where
+    F: Fn(&[f64], &[f64]) -> Result<T, SignalError> + Sync,
+    T: Send,
+{
+    if x.len() != y.len() {
+        return Err(SignalError::InvalidInputShape {
+            detail: "x and y must have the same shape".to_string(),
+        });
+    }
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cols = x[0].len();
+    if x.iter().chain(y.iter()).any(|row| row.len() != cols) {
+        return Err(SignalError::InvalidInputShape {
+            detail: "x and y must be rectangular 2-D matrices of equal shape".to_string(),
+        });
+    }
+    let (n_lines, line_len): (usize, usize) = match axis {
+        -1 | 1 => (x.len(), cols),
+        0 => (cols, x.len()),
+        other => {
+            return Err(SignalError::InvalidArgument(format!(
+                "axis must be 0, 1, or -1 for 2-D spectral estimation, got {other}"
+            )));
+        }
+    };
+    let by_columns = axis == 0;
+    let line = |idx: usize| -> Result<T, SignalError> {
+        if by_columns {
+            let xc: Vec<f64> = x.iter().map(|r| r[idx]).collect();
+            let yc: Vec<f64> = y.iter().map(|r| r[idx]).collect();
+            per_pair(&xc, &yc)
+        } else {
+            per_pair(&x[idx], &y[idx])
+        }
+    };
+    let nthreads = lfilter_axis_thread_count(n_lines, line_len, nfilt);
+    if nthreads <= 1 {
+        // One parallelism level: let each pair's frame loop use the cores.
+        return (0..n_lines).map(&line).collect();
+    }
+    let chunk = n_lines.div_ceil(nthreads);
+    let line = &line;
+    let chunk_results: Vec<Result<Vec<T>, SignalError>> = std::thread::scope(|scope| {
+        (0..n_lines)
+            .step_by(chunk)
+            .map(|l0| {
+                scope.spawn(move || {
+                    let l1 = (l0 + chunk).min(n_lines);
+                    (l0..l1)
+                        .map(|i| with_serial_par_index_fill(|| line(i)))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("spectral pair chunk panicked"))
+            .collect()
+    });
+    let mut all = Vec::with_capacity(n_lines);
+    for chunk_result in chunk_results {
+        all.extend(chunk_result?);
+    }
+    Ok(all)
+}
+
+/// Apply `csd` (cross-spectral density) across one axis of two rectangular 2-D inputs.
+///
+/// Matches `scipy.signal.csd(x, y, fs, window, nperseg, noverlap, axis=...)`, returning
+/// shared freqs + one complex CSD per line-pair. BIT-IDENTICAL to per-pair 1-D `csd`;
+/// the across-line-pairs fan-out over cores beats scipy's single-threaded axis loop.
+pub fn csd_axis_2d(
+    x: &[Vec<f64>],
+    y: &[Vec<f64>],
+    fs: f64,
+    window: Option<&str>,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+    axis: isize,
+) -> Result<CsdResult2d, SignalError> {
+    let results: Vec<CsdResult> = spectral_pair_axis_2d(x, y, axis, 16, |xl, yl| {
+        csd(xl, yl, fs, window, nperseg, noverlap)
+    })?;
+    let frequencies = results
+        .first()
+        .map(|r| r.frequencies.clone())
+        .unwrap_or_default();
+    let csd = results.into_iter().map(|r| r.csd).collect();
+    Ok(CsdResult2d { frequencies, csd })
+}
+
+/// Apply `coherence` (magnitude-squared coherence) across one axis of two rectangular
+/// 2-D inputs.
+///
+/// Matches `scipy.signal.coherence(x, y, fs, window, nperseg, noverlap, axis=...)`,
+/// returning shared freqs + one coherence curve per line-pair. BIT-IDENTICAL to per-pair
+/// 1-D `coherence`; the across-line-pairs fan-out beats scipy's single-threaded axis loop.
+pub fn coherence_axis_2d(
+    x: &[Vec<f64>],
+    y: &[Vec<f64>],
+    fs: f64,
+    window: Option<&str>,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+    axis: isize,
+) -> Result<CoherenceResult2d, SignalError> {
+    let results: Vec<CoherenceResult> = spectral_pair_axis_2d(x, y, axis, 24, |xl, yl| {
+        coherence(xl, yl, fs, window, nperseg, noverlap)
+    })?;
+    let frequencies = results
+        .first()
+        .map(|r| r.frequencies.clone())
+        .unwrap_or_default();
+    let coherence = results.into_iter().map(|r| r.coherence).collect();
+    Ok(CoherenceResult2d {
+        frequencies,
+        coherence,
+    })
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Signal Resampling: resample, resample_poly, decimate
 // ══════════════════════════════════════════════════════════════════════
@@ -23780,6 +23932,53 @@ mod tests {
 
         assert!(decimate_axis_2d(&x, 1, -1).is_err()); // q < 2
         assert!(decimate_axis_2d(&x, q, 3).is_err()); // bad axis
+    }
+
+    #[test]
+    fn csd_coherence_axis_2d_match_per_line() {
+        // 2-D csd/coherence must be BIT-IDENTICAL to per-pair 1-D calls.
+        let rows = 40usize;
+        let cols = 8192usize;
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| ((r * 7 + c) as f64 * 0.05).sin() * 2.0 + (c as f64 * 0.31).cos())
+                    .collect()
+            })
+            .collect();
+        let y: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| ((r * 5 + c) as f64 * 0.04).cos() * 1.5 + (c as f64 * 0.13).sin())
+                    .collect()
+            })
+            .collect();
+
+        // axis = -1 (rows)
+        let csd2 = csd_axis_2d(&x, &y, 1.0, Some("hann"), Some(256), None, -1).expect("csd rows");
+        let coh2 =
+            coherence_axis_2d(&x, &y, 1.0, Some("hann"), Some(256), None, -1).expect("coh rows");
+        for r in 0..rows {
+            let cs = csd(&x[r], &y[r], 1.0, Some("hann"), Some(256), None).expect("csd row");
+            let co =
+                coherence(&x[r], &y[r], 1.0, Some("hann"), Some(256), None).expect("coh row");
+            assert_eq!(csd2.csd[r], cs.csd, "csd_axis_2d axis=-1 row {r}");
+            assert_eq!(coh2.coherence[r], co.coherence, "coherence_axis_2d axis=-1 row {r}");
+        }
+        assert_eq!(csd2.frequencies, coh2.frequencies, "shared freqs");
+
+        // axis = 0 (columns are length `rows`=40, so use a fitting nperseg).
+        let csd0 = csd_axis_2d(&x, &y, 1.0, Some("hann"), Some(16), None, 0).expect("csd cols");
+        for col in 0..cols {
+            let xc: Vec<f64> = x.iter().map(|r| r[col]).collect();
+            let yc: Vec<f64> = y.iter().map(|r| r[col]).collect();
+            let cs = csd(&xc, &yc, 1.0, Some("hann"), Some(16), None).expect("csd col");
+            assert_eq!(csd0.csd[col], cs.csd, "csd_axis_2d axis=0 col {col}");
+        }
+
+        // shape mismatch + bad axis are errors
+        assert!(csd_axis_2d(&x, &y[..rows - 1], 1.0, None, Some(256), None, -1).is_err());
+        assert!(coherence_axis_2d(&x, &y, 1.0, None, Some(256), None, 9).is_err());
     }
 
     #[test]
