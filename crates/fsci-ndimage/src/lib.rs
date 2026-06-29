@@ -1126,6 +1126,21 @@ fn pad_array_mode(
     Ok(padded)
 }
 
+/// Thread count for a spline-prefilter axis pass that fans out across `blocks`
+/// independent, equal-size contiguous units (outer blocks for the strided fast path,
+/// rows for the contiguous last-axis path). Gated on total element work so small
+/// arrays stay serial (where the spawn cost is not amortised).
+fn spline_axis_threads(blocks: usize, block_work: usize) -> usize {
+    let work = (blocks as u64).saturating_mul(block_work as u64);
+    if work < (1 << 20) || blocks < 2 {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(|c| c.get())
+        .unwrap_or(1)
+        .min(blocks)
+}
+
 fn prefilter_spline_coefficients(
     input: &NdArray,
     order: usize,
@@ -1196,8 +1211,48 @@ fn prefilter_spline_coefficients(
         let reflect_kernel = (exact_reflect && mode == BoundaryMode::Reflect)
             || (bspline_reflect && mode == BoundaryMode::Nearest);
         if reflect_kernel && stride > 1 {
-            bspline_reflect_axis_inplace(&mut current.data, outer, axis_len, stride, order);
+            // The `outer` blocks (each `axis_len*stride` contiguous elements) are independent,
+            // so split the buffer into contiguous outer-block chunks across cores — each chunk
+            // runs the same in-place IIR. Byte-identical (block partition is the only change).
+            let block = axis_len * stride;
+            let nthreads = spline_axis_threads(outer, block);
+            if nthreads <= 1 {
+                bspline_reflect_axis_inplace(&mut current.data, outer, axis_len, stride, order);
+            } else {
+                let per = outer.div_ceil(nthreads);
+                std::thread::scope(|scope| {
+                    for chunk in current.data.chunks_mut(per * block) {
+                        let chunk_outer = chunk.len() / block;
+                        scope.spawn(move || {
+                            bspline_reflect_axis_inplace(chunk, chunk_outer, axis_len, stride, order);
+                        });
+                    }
+                });
+            }
             continue;
+        }
+        // Contiguous last-axis (stride==1) bspline-reflect lines: each row is an independent,
+        // contiguous `axis_len` block with a non-fallible coefficient kernel — fan the rows
+        // across cores (byte-identical to the serial per-line walk below).
+        if reflect_kernel && stride == 1 {
+            let nthreads = spline_axis_threads(outer, axis_len);
+            if nthreads > 1 {
+                let per = outer.div_ceil(nthreads);
+                std::thread::scope(|scope| {
+                    for chunk in current.data.chunks_mut(per * axis_len) {
+                        scope.spawn(move || {
+                            let mut line = Vec::with_capacity(axis_len);
+                            for row in chunk.chunks_mut(axis_len) {
+                                line.clear();
+                                line.extend_from_slice(row);
+                                let coeffs = bspline_reflect_coefficients(&line, order);
+                                row.copy_from_slice(&coeffs);
+                            }
+                        });
+                    }
+                });
+                continue;
+            }
         }
         let line_count = outer * stride;
         let mut line = Vec::with_capacity(axis_len);

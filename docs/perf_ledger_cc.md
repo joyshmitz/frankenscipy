@@ -2023,3 +2023,18 @@ Same-box (max_iter=50, tol=0, reg_covar=1e-6):
 | n=50000 d=30 k=10 | 6059 ms | **382 ms** (15.9× self) | 2441 ms | 2.48× SLOWER → **6.39× FASTER** |
 
 Conformance 142/142 GREEN. LESSON (compounds the GMM-full one): the loop interchange was the BIGGER lever here (d× cache-pass reduction), parallelism stacked on top. AUDIT any `for group { for feature { for sample } }` moment/covariance accumulation — the sample loop belongs INNERMOST-but-vectorized (contiguous feature access), not re-scanned per feature. grep `for j .. { for i .. { .*\[i\]\[c\].*\[j\] } }`-shaped nests.
+
+## 2026-06-29 — AmberKestrel (cc): spline_filter (B-spline prefilter) parallelized across independent lines — 1.46-1.67× self, widens scipy win 2× → 2.8-3.5× (byte-identical)
+
+`ndimage.spline_filter` (the IIR B-spline prefilter used by ALL order>1 spline interpolation: zoom/rotate/affine_transform/map_coordinates) was already 2× faster than scipy SERIAL, but left cores idle. The IIR recursion is sequential WITHIN a line but the lines along each axis are independent. Parallelized both axis-pass shapes across CONTIGUOUS blocks (no unsafe — workspace forbids it):
+- strided fast path (`bspline_reflect_axis_inplace`, non-last axes): split the buffer into contiguous outer-block chunks, each chunk runs the same in-place IIR.
+- contiguous last-axis (stride==1) reflect lines: fan the rows across cores (non-fallible `bspline_reflect_coefficients` kernel).
+Both byte-identical (block/row partition is the only change). Gated `spline_axis_threads`: total element work ≥ 1<<20 && blocks ≥ 2. The one un-parallelizable case is axis 0 with outer=1 + stride>1 (interleaved strided writes can't `split_at_mut` safely under forbid-unsafe) — stays serial, capping the win.
+
+Same-box (order 3, Reflect):
+| size | ORIG (serial) | parallel | scipy | win |
+|---|---|---|---|---|
+| 2048×2048 | 54 ms | **37 ms** (1.46× self) | 103.5 ms | 1.92× → **2.80× faster** |
+| 256×256×256 | 247 ms | **148 ms** (1.67× self) | 520.6 ms | 2.11× → **3.52× faster** |
+
+Conformance 255/255 ndimage lib GREEN (5 spline tests + all interpolation consumers). LEVER: an IIR/recursive sweep along one axis of an N-D array is sequential per line but the LINES are independent — parallelize across contiguous outer-blocks (non-last axes) / rows (last axis); the outer=1 first-axis stays serial under forbid-unsafe. Same shape: other separable IIR (gaussian via recursive filter, uniform_filter running-sum, any `*_filter1d` IIR).
