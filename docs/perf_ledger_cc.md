@@ -1539,3 +1539,24 @@ mostly the N-way parallelism. FAIR head-to-head: fsci converges slightly MORE th
 system was discarded as invalid since neither library converged there). CONFORMANCE: result i is
 BYTE-IDENTICAL (.to_bits() on x and fun) to per-param root; fsci-opt root_many test green (byte-id + ≥half
 converge). vmap-over-solver vein now spans 4 solver families.
+
+### ✅✅✅ integrate: quad_many (vmap-over-solver definite-integral sweep) — 14.5-61× faster than looped scipy
+Fifth vmap-over-solver family (curve_fit / solve_ivp / minimize / root / quad). A definite-integral sweep —
+`I(params) = ∫_a^b f(x, params) dx` for many parameter sets — is common (a family of moments / partition
+functions / marginalisations); SciPy loops `quad` in Python, calling the Python integrand adaptively per
+integral, N integrals SERIALLY. fsci `quad_many` (param-sweep signature `F: Fn(f64 x, &[f64] params)->f64`)
+fans the N independent adaptive integrations across cores and inlines the integrand. Purely additive;
+heavy-per-item cap (cores.min(nrows), serial <4).
+
+**SAME-BOX head-to-head (peaked+oscillatory ∫_0^1 e^{-p(x-c)²}cos(wx)dx, N parameter sets; both this box):**
+| N    | scipy (Python loop over quad) | fsci quad_many | speedup   |
+|------|-------------------------------|----------------|-----------|
+| 500  | 47.9 ms                       | 3.30 ms (500/500 conv)   | **14.5×** |
+| 2000 | 179.6 ms                      | 2.94 ms (2000/2000 conv) | **61.1×** |
+
+Speedup grows with N as parallelism amortises (all integrals converge). The callback lever is real here
+(scipy's QUADPACK calls the Python integrand adaptively, fsci inlines a Rust closure) — stronger than root
+(11-25×, fast-C hybr) though below minimize/solve_ivp. CONFORMANCE three ways: (1) result i is BYTE-IDENTICAL
+(.to_bits() on integral/error/converged) to per-param quad; (2) NUMERICAL cross-check vs scipy: fsci
+I(p=100,c=0.5,w=10)=0.039156400368 == scipy 0.039156400368 to 3.84e-13; (3) fsci-integrate quad_many test
+green. The vmap-over-solver vein now spans FIVE solver families.

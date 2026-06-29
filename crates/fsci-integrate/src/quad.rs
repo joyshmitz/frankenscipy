@@ -263,6 +263,68 @@ where
     })
 }
 
+/// Batched adaptive integration: evaluate `I(params) = ∫_a^b f(x, params) dx` for MANY parameter
+/// sets (`param_rows`), one [`QuadResult`] per set over the shared interval `[a, b]`. This is the
+/// vmap-over-solver primitive SciPy lacks — a definite-integral sweep (a family of moments /
+/// partition functions / marginalisations) loops `quad` in Python, calling the Python integrand
+/// adaptively per integral, N integrals SERIALLY; here the N independent integrations are fanned
+/// across cores and the integrand is an inlined Rust closure (callback lever × N-way parallel).
+/// Result `i` is byte-identical to `quad(|x| f(x, &param_rows[i]), a, b, options)`.
+pub fn quad_many<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    param_rows: &[Vec<f64>],
+    options: QuadOptions,
+) -> Vec<Result<QuadResult, IntegrateValidationError>>
+where
+    F: Fn(f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let f_ref = &f;
+    let solve_one = move |params: &[f64]| quad(|x| f_ref(x, params), a, b, options);
+
+    // Each adaptive integral is an independent solve (many integrand evals) → fan whole
+    // parameter sets across cores, capped by the row count; a tiny sweep stays serial.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<QuadResult, IntegrateValidationError>>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || {
+                        (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("quad_many worker panicked"))
+                .collect()
+        });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 /// Numerically integrate a vector-valued function over a finite interval [a, b].
 ///
 /// Uses the same adaptive Gauss-Kronrod quadrature core as [`quad`], but
@@ -3804,6 +3866,39 @@ mod tests {
             2.0_f64.atan(),
             "1/(1+x^2) on [0,2]",
         );
+    }
+
+    #[test]
+    fn quad_many_byte_identical_to_per_param() {
+        // Parameter sweep of a peaked + oscillatory integrand. The batched integral must
+        // equal looping quad per parameter set, bit-for-bit.
+        let f = |x: f64, p: &[f64]| (-p[0] * (x - p[1]).powi(2)).exp() * (p[2] * x).cos();
+        let mut s = 3u64;
+        let mut rng = |lo: f64, hi: f64| {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            lo + (hi - lo) * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 20usize; // crosses the serial->parallel gate
+        let params: Vec<Vec<f64>> = (0..nrows)
+            .map(|_| vec![rng(20.0, 200.0), rng(0.3, 0.7), rng(5.0, 30.0)])
+            .collect();
+        let opts = QuadOptions::default();
+
+        let batched = quad_many(f, 0.0, 1.0, &params, opts);
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let single = quad(|x| f(x, p), 0.0, 1.0, opts).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(
+                many.integral.to_bits(),
+                single.integral.to_bits(),
+                "integral mismatch param {i}"
+            );
+            assert_eq!(many.error.to_bits(), single.error.to_bits(), "error mismatch param {i}");
+            assert_eq!(many.converged, single.converged, "converged mismatch param {i}");
+        }
+        assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() >= nrows / 2);
+        assert!(quad_many(f, 0.0, 1.0, &[], opts).is_empty());
     }
 
     #[test]
