@@ -1901,3 +1901,17 @@ After the nnls + lsq_linear active-set flips, swept the remaining unmeasured fsc
 | isotonic_regression (N=2M) | 28.1 ms | 24.3 ms | ~parity (PAVA O(n) sequential scan — wall) |
 
 linprog uses a DENSE TABLEAU simplex (`Vec<Vec>`) whose pivot elimination is ALREADY a contiguous AXPY (`t_row -= factor·p_row`, take(rhs_col+1)) → the flat-buffer/cache lever that flipped nnls/lsq does NOT apply (no column-strided access in the hot loop). It wins 2-5.6× at common dense sizes; the win SHRINKS with size (2.4→1.95×) so a very-large DENSE LP would eventually favor HiGHS's revised simplex (a wall, not worth a dense-tableau rewrite). Per-pivot elimination is too small (~0.05ms) to amortize thread spawn → parallelization would be ~0-gain (cf. HGW). **CONCLUSION: opt/integrate/ndimage lanes are DOMINATED** — remaining gaps are engineering walls (HiGHS at huge dense scale, LAPACK/FFT/Qhull in OTHER agents' crates) or blocked (ndimage spline prefilter order∈{2,4,5} Constant/Wrap = make_interp_spline in fsci-interpolate, uncommon orders). Future cycles: cross-crate measurement or the spline-prefilter IIR (needs scipy boundary match).
+
+## 2026-06-29 — AmberKestrel (cc): dbscan parallel neighbour precompute + [i64;6] grid key — 9.4× self, 12.7× vs sklearn
+
+**Cross-crate (fsci-cluster, low-contention).** dbscan already had a spatial grid (O(n) for low-d bounded density) but two constant-factor sinks: (1) the grid was a `HashMap<Vec<i64>, Vec<usize>>` — a per-query `Vec<i64>` cell-key heap alloc + slow pointer-chasing Vec hash; (2) the entire neighbour scan ran SERIALLY even though each point's eps-neighbourhood is independent of the (serial) BFS label expansion.
+
+**Fix (BYTE-IDENTICAL):** (1) cell key `Vec<i64>` → fixed `[i64;6]` (Copy, zero alloc, fast array hash; d≤6 whenever gridding, unused dims 0 → identical bucket partition). (2) Precompute all n neighbour lists IN PARALLEL (thread::scope, ordered chunks, gated `grid && n≥2048`), then the sequential BFS moves each out with `std::mem::take` — every point's list is consumed exactly once, so same sets, same ascending order, same labels.
+
+**Measured same-box, 20k points / 4-d** (sklearn DBSCAN eps=0.5 min_samples=5: 310.69 ms):
+| | time | vs sklearn |
+|---|---|---|
+| fsci before | 230.59 ms | 1.35× faster |
+| **fsci after** | **24.45 ms** | **12.7× FASTER** |
+
+**9.4× self-speedup.** Full fsci-cluster suite green (142 lib + 7+5 dbscan integration, 0 failed). Byte-identical by construction (grid query deterministic + order-independent). LEVER: a serial driver (BFS/DFS/label-prop) over an independent per-item query → precompute the queries in parallel, consume serially via mem::take; + Vec<i64> spatial-grid keys → fixed-size array keys (no alloc, faster hash) whenever the dim is bounded.

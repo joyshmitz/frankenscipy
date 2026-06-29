@@ -5326,9 +5326,18 @@ pub fn dbscan(
     // membership and the 0..n index order the linear filter produced. In high
     // dimensions (3^d blows up and offers no pruning) keep the linear scan.
     let use_grid = d <= 6 && n >= 256;
-    let cell_of = |p: &[f64]| -> Vec<i64> { (0..d).map(|k| (p[k] / eps).floor() as i64).collect() };
-    let grid: Option<std::collections::HashMap<Vec<i64>, Vec<usize>>> = use_grid.then(|| {
-        let mut g: std::collections::HashMap<Vec<i64>, Vec<usize>> =
+    // Fixed-size [i64;6] cell key (d<=6 whenever gridding): Copy, no per-call heap
+    // alloc, and hashes far faster than a Vec<i64> (no pointer chase). Unused dims
+    // stay 0 → identical bucket partition to the Vec key, byte-identical results.
+    let cell_of = |p: &[f64]| -> [i64; 6] {
+        let mut c = [0i64; 6];
+        for (ck, &pk) in c[..d].iter_mut().zip(p.iter()) {
+            *ck = (pk / eps).floor() as i64;
+        }
+        c
+    };
+    let grid: Option<std::collections::HashMap<[i64; 6], Vec<usize>>> = use_grid.then(|| {
+        let mut g: std::collections::HashMap<[i64; 6], Vec<usize>> =
             std::collections::HashMap::with_capacity(n);
         for idx in 0..n {
             g.entry(cell_of(row(idx))).or_default().push(idx);
@@ -5344,7 +5353,7 @@ pub fn dbscan(
                 .collect();
         };
         let base = cell_of(pi);
-        let mut cell = base.clone();
+        let mut cell = base;
         let mut out = Vec::new();
         for code in 0..3usize.pow(d as u32) {
             let mut c = code;
@@ -5364,13 +5373,50 @@ pub fn dbscan(
         out
     };
 
+    // Each point's eps-neighbourhood is independent of the (serial) label
+    // expansion, and every point's list is consumed EXACTLY once below. When the
+    // grid is active (bounded per-point degree → bounded memory) precompute all n
+    // lists in parallel; the sequential BFS then moves each out with mem::take.
+    // Byte-identical: same neighbour sets, same ascending index order, same labels.
+    let mut all_nbrs: Option<Vec<Vec<usize>>> = if grid.is_some() && n >= 2048 {
+        let nthreads = std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(n);
+        let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
+        if nthreads <= 1 {
+            for (i, o) in out.iter_mut().enumerate() {
+                *o = neighbors(i);
+            }
+        } else {
+            let chunk = n.div_ceil(nthreads);
+            let neighbors_ref = &neighbors;
+            std::thread::scope(|scope| {
+                for (t, slot) in out.chunks_mut(chunk).enumerate() {
+                    let base = t * chunk;
+                    scope.spawn(move || {
+                        for (i, o) in slot.iter_mut().enumerate() {
+                            *o = neighbors_ref(base + i);
+                        }
+                    });
+                }
+            });
+        }
+        Some(out)
+    } else {
+        None
+    };
+
     for i in 0..n {
         if visited[i] {
             continue;
         }
         visited[i] = true;
 
-        let nbrs = neighbors(i);
+        let nbrs = match &mut all_nbrs {
+            Some(a) => std::mem::take(&mut a[i]),
+            None => neighbors(i),
+        };
         if nbrs.len() < min_samples {
             // Noise (may be reclassified later)
             continue;
@@ -5390,7 +5436,10 @@ pub fn dbscan(
             }
             visited[j] = true;
 
-            let j_nbrs = neighbors(j);
+            let j_nbrs = match &mut all_nbrs {
+                Some(a) => std::mem::take(&mut a[j]),
+                None => neighbors(j),
+            };
             if j_nbrs.len() >= min_samples {
                 core_samples.push(j);
                 for &nb in &j_nbrs {
