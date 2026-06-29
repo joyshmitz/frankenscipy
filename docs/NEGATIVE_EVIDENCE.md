@@ -11244,3 +11244,32 @@ n due to the per-call chirp rebuild.
   carries more per-line overhead, but a clean ~6x. The multi-channel-filter vein has now paid **4 ships**
   (sosfilt/filtfilt/sosfiltfilt/decimate 2-D). Remaining 1-D-only candidates: `hilbert` (FFT-based, scipy
   batches it → smaller win), `savgol_filter` (FIR conv, scipy batches via ndimage).
+
+## 2026-06-28 - REVERTED (AmberForge): hilbert_axis_2d — wins 7-8.7x for small L but FFT-wall loss for large L (FFT ignores WorkerPolicy)
+
+- Agent: AmberForge. Tried extending the multi-channel vein to `hilbert` (analytic signal, FFT-based).
+  scipy.signal.hilbert computes the batched FFT SINGLE-THREADED (no `workers`), so parallel-across-channels
+  should win. Implemented `hilbert_axis_2d` (parallel across lines, complex output), bit-identical per-line,
+  conformance 658/0.
+- **MEASURED vs scipy.signal.hilbert (axis=-1, best-of-5) — MIXED:**
+
+  | channels × length | fsci | scipy | ratio |
+  | ---: | ---: | ---: | ---: |
+  | 4000 × 8192 | 92.9 ms | 810.5 ms | **8.7x faster** |
+  | 1000 × 10000 | 33.5 ms | 237.9 ms | **7.1x faster** |
+  | 100 × 65536 | 216.4 ms | 174.4 ms | 1.24x slower |
+  | 256 × 100000 | 2790 ms | 700.8 ms | **4x SLOWER** |
+
+  ROOT CAUSE of the large-L loss: fsci's 1-D FFT SELF-PARALLELIZES at length ≥ 1<<16 (`fft_iter_par_threads`),
+  so nesting it inside an across-lines fan-out OVERSUBSCRIBES (64×64 threads). The clean fix would be to force
+  the per-line FFT SERIAL (then parallel-across-channels wins for all L) — but `fsci_fft` IGNORES
+  `FftOptions.workers`: `WorkerPolicy::Exact(1)` is only VALIDATED (`validate_workers`), never consumed; the
+  thread count comes straight from `available_parallelism()`. Plus fsci's non-pow2 FFT (e.g. 100000=2⁵·5⁵) is
+  ~4x slower than pocketfft regardless (the documented FFT SIMD wall). So large-L hilbert can't win either way.
+- REVERTED clean (empty diff, 657/0). Not a clean win (mixed). ACTIONABLE FSCI-FFT FIX (filed here): make
+  `fft_iter_par_threads`/`fft_radix4_par_threads` honor `WorkerPolicy::Exact(n)`/`Max(n)` (cap the worker
+  count, default Auto = current behavior). That single change would unblock nested parallelism — `hilbert_axis_2d`
+  (force serial per-line FFT) would then win across ALL L, and it generalizes to any FFT-in-a-parallel-loop.
+- VEIN STATUS: the multi-channel-filter vein's clean wins are the IIR/recurrence ops scipy serial-loops
+  (sosfilt/filtfilt/sosfiltfilt/decimate 2-D, 4 ships). FFT-based ops (hilbert) hit the FFT-self-parallel +
+  non-pow2-wall ceiling. `savgol_filter` (FIR conv, scipy batches via ndimage) likely similar — low EV.
