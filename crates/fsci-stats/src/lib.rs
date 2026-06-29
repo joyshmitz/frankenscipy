@@ -24946,13 +24946,20 @@ fn gmean_log_sum(data: &[f64]) -> f64 {
         s
     };
     let n = data.len();
+    // Short-circuit small inputs BEFORE probing parallelism: `available_parallelism()`
+    // is a `sched_getaffinity` syscall, and when `gmean` is called once per line by
+    // `gmean_axis_2d` (thousands of short lines), that per-call syscall dominates the
+    // (otherwise cheap) `ln` work. The serial `chunk_sum` is what we'd take here anyway.
+    if n < (1 << 16) {
+        return chunk_sum(data);
+    }
     // Cap workers so each owns >=64k elements: the per-element `ln` is light, so a
     // 64-way split has too little work per chunk to amortize the thread spawn.
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
     let threads = cores.min((n / (1 << 16)).max(1)).min(16);
-    if n < (1 << 16) || threads <= 1 {
+    if threads <= 1 {
         return chunk_sum(data);
     }
     let chunk = n.div_ceil(threads);
@@ -30176,6 +30183,52 @@ pub fn trim_mean_axis_2d(
     axis: isize,
 ) -> Result<Vec<f64>, StatsError> {
     reduce_axis_2d(x, axis, |line| trim_mean(line, proportiontocut))
+}
+
+/// `sem` (standard error of the mean, ddof=1) across one axis — matches `scipy.stats.sem(x, axis)`.
+pub fn sem_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, sem)
+}
+
+/// `gmean` (geometric mean) across one axis — matches `scipy.stats.gmean(x, axis)`.
+pub fn gmean_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, gmean)
+}
+
+/// `hmean` (harmonic mean) across one axis — matches `scipy.stats.hmean(x, axis)`.
+pub fn hmean_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, hmean)
+}
+
+/// `gstd` (geometric standard deviation, ddof=1) across one axis — matches `scipy.stats.gstd(x, axis)`.
+pub fn gstd_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, gstd)
+}
+
+/// `kstat` (k-statistic of order `n`) across one axis — matches `scipy.stats.kstat(x, n, axis)`.
+pub fn kstat_axis_2d(x: &[Vec<f64>], n: u32, axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| kstat(line, n))
+}
+
+/// `kstatvar` (variance of the k-statistic of order `n`) across one axis —
+/// matches `scipy.stats.kstatvar(x, n, axis)`.
+pub fn kstatvar_axis_2d(x: &[Vec<f64>], n: u32, axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| kstatvar(line, n))
+}
+
+/// `moment` (central moment of order `k`) across one axis — matches `scipy.stats.moment(x, k, axis)`.
+pub fn moment_axis_2d(x: &[Vec<f64>], k: u32, axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| moment(line, k))
+}
+
+/// `differential_entropy` across one axis — matches `scipy.stats.differential_entropy(x, axis)`.
+pub fn differential_entropy_axis_2d(
+    x: &[Vec<f64>],
+    window_length: Option<usize>,
+    base: Option<f64>,
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| differential_entropy(line, window_length, base))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59140,10 +59193,28 @@ mod tests {
                 trim_mean_axis_2d(&x, 0.1, -1).unwrap(),
                 Box::new(|l: &[f64]| trim_mean(l, 0.1)),
             ),
+            ("sem", sem_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| sem(l))),
+            ("gmean", gmean_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| gmean(l))),
+            ("hmean", hmean_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| hmean(l))),
+            ("gstd", gstd_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| gstd(l))),
+            ("kstat2", kstat_axis_2d(&x, 2, -1).unwrap(), Box::new(|l: &[f64]| kstat(l, 2))),
+            (
+                "kstatvar2",
+                kstatvar_axis_2d(&x, 2, -1).unwrap(),
+                Box::new(|l: &[f64]| kstatvar(l, 2)),
+            ),
+            ("moment4", moment_axis_2d(&x, 4, -1).unwrap(), Box::new(|l: &[f64]| moment(l, 4))),
+            (
+                "dentropy",
+                differential_entropy_axis_2d(&x, None, None, -1).unwrap(),
+                Box::new(|l: &[f64]| differential_entropy(l, None, None)),
+            ),
         ];
         for (label, par, f) in &checks {
             for (r, row) in x.iter().enumerate() {
-                assert_eq!(par[r], f(row), "{label} axis=-1 row {r}");
+                // Bit-identical to the per-line 1-D call (to_bits so NaN on a
+                // negative line, e.g. gmean/gstd, still compares equal).
+                assert_eq!(par[r].to_bits(), f(row).to_bits(), "{label} axis=-1 row {r}");
             }
         }
         // axis = 0 (columns) for one representative

@@ -1043,3 +1043,38 @@ at m=16k-131k is the common interpolation batch path and was 3-18x pessimized. S
 ndimage gates (shared 1<<18 too low for many-core spawn) but WORSE here (per-thread Vec alloc, not
 in-place). Lever now paid out 4× across two crates: gate on per-element cost AND account for the
 parallel implementation's fixed overhead (alloc-per-thread ⇒ much higher break-even than chunks_mut).
+
+### ✅✅ stats: 8 new axis-2D reducers + gmean per-call syscall fix (3.1-40x faster than scipy, same-box)
+Continues the proven axis-2D reducer vein (8ec65b21 added 6 at 27-145x; 29f1a75a rankdata 60-90x).
+Eight new `*_axis_2d` multi-channel reducers wrap their scalar 1-D fn through the parallel-across-lines
+`reduce_axis_2d` helper (bit-identical to per-line by construction; conformance via the extended
+`reduce_axis_2d_family_matches_per_line` test, `to_bits` so NaN-on-negative still matches): `sem`,
+`gmean`, `hmean`, `gstd`, `kstat`, `kstatvar`, `moment`, `differential_entropy`.
+
+**SAME-BOX head-to-head (best-of-20, fsci binary + scipy.stats both on this 64-core box):**
+| reducer              | 2000×512 (scipy/fsci ms → ×) | 500×4096 (scipy/fsci ms → ×) |
+|----------------------|------------------------------|------------------------------|
+| sem                  | 2.04 / 1.60 → **1.27×**      | 5.99 / 1.69 → **3.55×**      |
+| gmean                | 5.41 / 1.70 → **3.18×**      | 12.44 / 1.88 → **6.62×**     |
+| hmean                | 1.73 / 1.71 → 1.01× (parity) | 5.48 / 1.67 → **3.28×**      |
+| gstd                 | 18.20 / 1.88 → **9.68×**     | 39.52 / 2.08 → **18.97×**    |
+| kstat(n=2)           | 1.82 / 1.81 → 1.00× (parity) | 6.30 / 1.96 → **3.21×**      |
+| kstatvar(n=2)        | 25.24 / 1.89 → **13.36×**    | 52.26 / 2.27 → **23.04×**    |
+| moment(k=4)          | 12.25 / 1.82 → **6.73×**     | 26.06 / 1.68 → **15.51×**    |
+| differential_entropy | 55.12 / 2.40 → **22.97×**    | 135.88 / 3.36 → **40.46×**   |
+
+gstd/kstatvar/moment/differential_entropy win 7-40× because scipy's own implementations are heavy
+Python; sem/hmean/kstat are parity-to-3.5× (never a loss).
+
+**BUG CAUGHT & FIXED while measuring (byte-identical):** `gmean_axis_2d` was initially a *2.3× LOSS*
+at 2000×512 (11.8 ms) yet 3.5 ms at 500×4096 — non-monotonic (1M logs slower than 2M). Root cause:
+the scalar `gmean`→`gmean_log_sum` calls `std::thread::available_parallelism()` (a `sched_getaffinity`
+syscall) on EVERY invocation, BEFORE the `n < 1<<16` serial short-circuit. Called once per line by the
+reducer (2000 short lines), the ~5µs syscall ×2000 ≈ 10 ms dominated the cheap `ln` work. gstd (no
+parallelism probe) stayed 1.9 ms on identical log counts — the smoking gun. FIX: hoist the `n < 1<<16`
+return ABOVE the `available_parallelism()` call (byte-identical: that path always took `chunk_sum`
+anyway). gmean_axis_2d 11.8→1.70 ms (6.9×), flipping the loss to a 3.18× win. Bonus: standalone
+`gmean()` on any <65536-elt input no longer pays the syscall (helps every per-line/hot-loop caller).
+LESSON (generalizable): probing `available_parallelism()` inside a per-element scalar kernel is a hidden
+syscall tax when that kernel is the reduce-closure of an axis sweep — order the cheap serial-gate FIRST.
+fsci-stats GREEN (reduce_axis_2d_family + all gmean/gstd/hmean tests pass). Same-process A/B mandatory.
