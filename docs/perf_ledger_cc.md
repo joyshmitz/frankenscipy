@@ -1799,3 +1799,19 @@ Python callback (212 ms @ 256² for np.ptp). The ndimage filter surface is fully
 | Constant o3 | 13.19 ms | 13.19 ms | — | 1.48× faster (unchanged path) |
 
 Marquee flip: **Constant order=1 affine 7.8× LOSS → 1.85× WIN** (same fast path now serves map_coordinates / geometric_transform / shift / rotate, all sharing `sample_interpolated`). Backlog: Constant o2 prefilter (per-line `spline_coefficients_for_line`), Reflect o1 (16.7ms).
+
+## 2026-06-29 — AmberKestrel (cc): ndimage order-1 reflect/mirror — drop the eager array pad (FLIP 2× loss → 2.4-2.7× win)
+
+**Lever:** `prefilter_spline_coefficients` for order≤1 reflect/mirror eagerly built a padded copy via `pad_array_mode(input, SPLINE_NEAREST_PAD=12, mode)` — O(padded²) with per-element reflect index reconstruction (~15ms for a 512²→536² array) — purely so linear-interp support lands in range. But the cardinal interp path already folds the support TAPS on the fly. Removed the pad: order-1 reflect/mirror now returns `coeffs=input.clone(), coord_offsets=0` and the `fold` closure uses the actual boundary mode. Fold is also EXACT for coords arbitrarily far outside the grid (the pad only reflected 12 deep then clamped).
+
+**scipy-exact:** affine_transform order=1 reflect & mirror match scipy to **9.99e-16** including coords pushed well outside the grid; new hardcoded-golden regression test `affine_order1_reflect_mirror_matches_scipy_goldens` (asserts no padding + scipy values). Full fsci-ndimage lib suite GREEN (254 passed / 0 failed / 5 pre-existing-ignored, +1 new).
+
+**Measured same-box, 512×512** (scipy affine o1=7.64ms, map_coordinates o1=10.73ms):
+| op / mode | before | after | self | vs scipy |
+|---|---|---|---|---|
+| affine Reflect o1 | 16.14 ms | **3.12 ms** | 5.2× | **2.4× FASTER** (was 2.1× SLOWER) |
+| affine Mirror o1 | 15.60 ms | **2.78 ms** | 5.6× | **2.7× FASTER** (was 2× SLOWER) |
+| map_coordinates Reflect o1 | 16.37 ms | **2.78 ms** | 5.9× | **3.9× FASTER** |
+| map_coordinates Mirror o1 | 15.88 ms | **3.02 ms** | 5.3× | **3.6× FASTER** |
+
+Two-step domination of the geometric-transform family: Constant o1 (compact-support, prior commit) + Reflect/Mirror o1 (this). All order-1 modes now WIN vs scipy. Backlog: Constant o2/o4/o5 prefilter (per-line make_interp_spline), Nearest o3 (~parity).

@@ -1134,16 +1134,14 @@ fn prefilter_spline_coefficients(
     let ndim = input.ndim();
     if order <= 1 {
         // Order <= 1 has no spline coefficients to solve — the samples ARE the
-        // coefficients. But linear interpolation under `reflect` needs support
-        // beyond [0, len-1] near a boundary (a coord folded to e.g. -0.3 spans
-        // indices -1 and 0). Pad the array with the reflected values so the
-        // support always lands in range, mirroring the order>=2 path.
-        if order == 1 && matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror) {
-            return Ok(SplinePrefilter {
-                coeffs: pad_array_mode(input, SPLINE_NEAREST_PAD, mode)?,
-                coord_offsets: vec![SPLINE_NEAREST_PAD as f64; ndim],
-            });
-        }
+        // coefficients. Linear interpolation under reflect/mirror needs support beyond
+        // [0, len-1] near a boundary, but the cardinal interp path folds the support TAPS on
+        // the fly (the `fold` closure with the actual boundary mode), so NO array padding is
+        // needed. The old reflect/mirror branch eagerly padded with `pad_array_mode`, which is
+        // O(padded_size) with per-element reflect index reconstruction (~15 ms for a 512² →
+        // 536² array) and made affine_transform / map_coordinates Reflect/Mirror order=1 ~2×
+        // slower than scipy. Folding the taps is also exact for coords arbitrarily far outside
+        // the grid (the pad only reflected SPLINE_NEAREST_PAD=12 deep, then clamped).
         return Ok(SplinePrefilter {
             coeffs: input.clone(),
             coord_offsets: vec![0.0; ndim],
@@ -1388,14 +1386,18 @@ fn sample_interpolated(
             if cardinal_reflect_nearest {
                 let cc = coord + coord_offsets[axis];
                 let len = coeff_len as isize;
-                // Padded order=1 reflect/mirror folds via clamp (the padding already
-                // encodes the reflection); everything else folds per the actual mode.
-                let fold_mode =
-                    if order == 1 && matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror) {
-                        BoundaryMode::Nearest
-                    } else {
-                        mode
-                    };
+                // A still-padded order=1 reflect/mirror axis (coord_offsets>0, e.g. an order>=2
+                // short-axis fallback) folds via clamp because the padding already encodes the
+                // reflection; the unpadded order=1 path (coord_offsets==0) and every other case
+                // fold per the actual boundary mode.
+                let fold_mode = if order == 1
+                    && matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror)
+                    && coord_offsets[axis] > 0.0
+                {
+                    BoundaryMode::Nearest
+                } else {
+                    mode
+                };
                 let fold = |i: isize| -> usize {
                     match fold_mode {
                         BoundaryMode::Nearest => i.clamp(0, len - 1) as usize,
@@ -11164,6 +11166,47 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 19_000, "expected near-full coverage, got {checked}");
+    }
+
+    /// Order-1 reflect/mirror no longer eagerly pads the array (it folds the support taps on the
+    /// fly), so lock the boundary values against scipy.ndimage.affine_transform goldens — including
+    /// a transform whose offset pushes coords well outside the grid (where the old 12-deep pad +
+    /// clamp would have diverged from scipy's infinite fold).
+    #[test]
+    fn affine_order1_reflect_mirror_matches_scipy_goldens() {
+        let img = NdArray::new((1..=20).map(|v| v as f64).collect(), vec![4, 5]).unwrap();
+        let mat = [[0.7, 0.2, -1.5], [-0.1, 0.9, 2.0]]; // 2x3: linear part + offset column (row, col)
+        // scipy.ndimage.affine_transform(img, [[0.7,0.2],[-0.1,0.9]], offset=[-1.5,2.0], order=1)
+        let reflect_golden = [
+            5.5, 5.3999999999999995, 5.3000000000000007, 5.0, 4.4000000000000004,
+            2.9000000000000004, 3.7999999999999998, 4.7000000000000002, 5.0, 4.5,
+            2.7999999999999998, 4.1999999999999993, 6.0999999999999996, 7.5, 8.0999999999999996,
+            5.6999999999999975, 7.5999999999999979, 9.4999999999999982, 11.0, 11.699999999999999,
+        ];
+        let mirror_golden = [
+            10.5, 10.4, 10.300000000000002, 8.8000000000000007, 6.9000000000000004,
+            6.9000000000000004, 6.7999999999999998, 6.7000000000000002, 5.4000000000000004, 3.5,
+            3.3000000000000003, 4.1999999999999993, 6.0999999999999996, 7.0, 7.0999999999999996,
+            5.6999999999999975, 7.5999999999999979, 9.4999999999999982, 10.6, 10.699999999999999,
+        ];
+        for (mode, golden) in [
+            (BoundaryMode::Reflect, &reflect_golden),
+            (BoundaryMode::Mirror, &mirror_golden),
+        ] {
+            let r = affine_transform(&img, &mat, 1, mode, 0.0).unwrap();
+            // No padding: order<=1 must report zero coordinate offsets.
+            let pre = prefilter_spline_coefficients(&img, 1, mode).unwrap();
+            assert!(
+                pre.coord_offsets.iter().all(|&o| o == 0.0),
+                "order-1 {mode:?} should not pad"
+            );
+            for (got, want) in r.data.iter().zip(golden.iter()) {
+                assert!(
+                    (got - want).abs() < 1e-12,
+                    "{mode:?}: {got} vs scipy {want}"
+                );
+            }
+        }
     }
 
     /// HGW must be bit-for-bit identical to the legacy monotonic-deque path across
