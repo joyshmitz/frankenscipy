@@ -1622,3 +1622,27 @@ max|Δmean| = 6.66e-16 (sub-ULP). GATED `nthreads = cores.min(n/128_000)`: small
 on the serial path and is BYTE-IDENTICAL (Δ=0, no regression). CONFORMANCE: 249/0 fsci-ndimage tests green incl.
 new `mean_one_based_parallel_scatter_matches_serial_reference` (<1e-9) + all existing mean/label fixtures.
 Generalizes to variance/sum/std label reductions (same scatter).
+
+### ✅✅✅ ndimage: sum/variance/standard_deviation(labels,index) streaming fast path — flips 1.5-10x LOSS → 2.2-8.2x FASTER
+Generalises the privatized-histogram lever (e7f5ddd4) to the label reductions that were still on the SLOW
+group-materialization path (`measurement_label_groups` builds a `Vec<Vec<f64>>` per label, then reduces). These
+were REAL losses (not stale): same-box, N=589824 K=4096 — sum 15238 us (scipy 1485 = **10.3x SLOWER**), variance
+16202 us (scipy 10451 = 1.55x slower), std 16031 us (scipy 10874 = 1.47x slower). Added one-based-contiguous
+fast paths: `sum` → parallel privatized-histogram scatter (sums only); `variance`/`standard_deviation` → a
+numerically-stable TWO-PASS parallel reduction (privatized sum/count → means, then a second privatized
+histogram of centred squares), matching scipy's two-pass. std inherits via variance.
+
+**SAME-BOX head-to-head (one-based index, N parameter sets; both this box):**
+| op       | N      | scipy     | fsci before        | fsci after   | vs scipy   | self-speedup |
+|----------|--------|-----------|--------------------|--------------|------------|--------------|
+| sum      | 262144 | 716 us    | 5520 us            | 485 us       | **1.48x**  | 11.4x |
+| sum      | 589824 | 1485 us   | 15238 us (10.3x↓)  | 659 us       | **2.25x**  | 23x  |
+| variance | 262144 | 4067 us   | 5759 us            | 998 us       | **4.07x**  | 5.8x |
+| variance | 589824 | 10451 us  | 16202 us (1.55x↓)  | 1326 us      | **7.88x**  | 12.2x |
+| std      | 589824 | 10874 us  | 16031 us (1.47x↓)  | 1321 us      | **8.23x**  | 12.1x |
+
+variance/std dominate hard because scipy's OWN variance/std are slow (4-10 ms, ~7x its sum); fsci's streaming
+two-pass is ~1.3 ms. CONFORMANCE: deterministic same-data NUMERICAL cross-check vs scipy is EXACT — fsci
+sum[0]=25806.4, var[0]=0.083191077066, std[0]=0.288428634268 == scipy to all 10-12 digits; 250/0 fsci-ndimage
+tests green incl. new `sum_variance_one_based_fast_path_matches_serial_reference` (two-pass, non-zero mean) +
+all existing scipy-fixture small-N tests (serial path byte-identical, no regression). Gated cores.min(n/128_000).

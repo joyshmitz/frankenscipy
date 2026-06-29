@@ -6003,6 +6003,100 @@ fn measurement_one_based_scatter(
     (sums, counts)
 }
 
+/// One-based-contiguous squared-deviation scatter: `out[label-1] += (value - means[label-1])²`,
+/// as a parallel privatized-histogram reduction (same shape/gate as
+/// [`measurement_one_based_scatter`]). `means` holds the per-label means from pass 1.
+fn measurement_one_based_sqdev_scatter(
+    data: &[f64],
+    labels: &[f64],
+    label_count: usize,
+    means: &[f64],
+) -> Vec<f64> {
+    let n = data.len();
+    let serial = || {
+        let mut sq = vec![0.0; label_count];
+        for (&value, &label_value) in data.iter().zip(labels) {
+            if let Some(pos) = measurement_one_based_label_pos(label_count, label_value) {
+                let d = value - means[pos];
+                sq[pos] += d * d;
+            }
+        }
+        sq
+    };
+
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(n / 128_000);
+    if nthreads <= 1 {
+        return serial();
+    }
+
+    let chunk = n.div_ceil(nthreads);
+    let partials: Vec<Vec<f64>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= n {
+                    return None;
+                }
+                let hi = (lo + chunk).min(n);
+                let d = &data[lo..hi];
+                let l = &labels[lo..hi];
+                Some(scope.spawn(move || {
+                    let mut sq = vec![0.0; label_count];
+                    for (&value, &label_value) in d.iter().zip(l) {
+                        if let Some(pos) = measurement_one_based_label_pos(label_count, label_value)
+                        {
+                            let dv = value - means[pos];
+                            sq[pos] += dv * dv;
+                        }
+                    }
+                    sq
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("sqdev-scatter worker panicked"))
+            .collect()
+    });
+
+    let mut sq = vec![0.0; label_count];
+    for ps in partials {
+        for k in 0..label_count {
+            sq[k] += ps[k];
+        }
+    }
+    sq
+}
+
+/// Per-label population variance over the one-based-contiguous fast path, computed as a
+/// numerically-stable TWO-PASS streaming reduction (means, then centred sum of squares) to
+/// match `scipy.ndimage.variance`. Empty labels yield NaN. Both passes are parallel
+/// privatized histograms (≈1 ULP reassociation; byte-identical below the gate).
+fn measurement_one_based_variance(data: &[f64], labels: &[f64], label_count: usize) -> Vec<f64> {
+    let (sums, counts) = measurement_one_based_scatter(data, labels, label_count);
+    let means: Vec<f64> = (0..label_count)
+        .map(|k| {
+            if counts[k] > 0 {
+                sums[k] / counts[k] as f64
+            } else {
+                f64::NAN
+            }
+        })
+        .collect();
+    let sq = measurement_one_based_sqdev_scatter(data, labels, label_count, &means);
+    (0..label_count)
+        .map(|k| {
+            if counts[k] > 0 {
+                sq[k] / counts[k] as f64
+            } else {
+                f64::NAN
+            }
+        })
+        .collect()
+}
+
 fn measurement_label_mean(
     input: &NdArray,
     labels: Option<&NdArray>,
@@ -6236,6 +6330,18 @@ pub fn sum(
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<Vec<f64>, NdimageError> {
+    // Fast streaming path: a one-based-contiguous index needs only the per-label sums,
+    // so skip the per-group Vec materialization and use the parallel privatized-histogram
+    // scatter (counts discarded). Falls back to the general group path otherwise.
+    if let (Some(labels), Some(index)) = (labels, index) {
+        if input.shape == labels.shape {
+            if let Some(label_count) = measurement_one_based_contiguous_index_len(index) {
+                let (sums, _counts) =
+                    measurement_one_based_scatter(&input.data, &labels.data, label_count);
+                return Ok(sums);
+            }
+        }
+    }
     Ok(measurement_label_groups(input, labels, index)?
         .iter()
         .map(|values| values.iter().sum())
@@ -6322,6 +6428,20 @@ pub fn variance(
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<Vec<f64>, NdimageError> {
+    // Fast streaming path: a one-based-contiguous index uses a numerically-stable two-pass
+    // parallel privatized-histogram variance, skipping per-group Vec materialization. Falls
+    // back to the general group path otherwise.
+    if let (Some(labels), Some(index)) = (labels, index) {
+        if input.shape == labels.shape {
+            if let Some(label_count) = measurement_one_based_contiguous_index_len(index) {
+                return Ok(measurement_one_based_variance(
+                    &input.data,
+                    &labels.data,
+                    label_count,
+                ));
+            }
+        }
+    }
     Ok(measurement_label_groups(input, labels, index)?
         .iter()
         .map(|values| {
@@ -13853,6 +13973,55 @@ mod tests {
                 "label {i}: parallel {} vs serial {want}",
                 got[i]
             );
+        }
+    }
+
+    #[test]
+    fn sum_variance_one_based_fast_path_matches_serial_reference() {
+        // Crosses the parallel gate (n/128_000 >= 2) so the privatized-histogram sum and
+        // two-pass variance run in parallel; both must match a serial reference to tolerance.
+        let n = 300_000usize;
+        let k = 64usize;
+        let mut s = 0xfeed_face_dead_beefu64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        // Values with a non-zero mean to exercise the two-pass (one-pass would cancel).
+        let vals: Vec<f64> = (0..n)
+            .map(|_| 100.0 + (rng() >> 11) as f64 / (1u64 << 53) as f64)
+            .collect();
+        let labels: Vec<f64> = (0..n).map(|_| (1 + (rng() % k as u64)) as f64).collect();
+        let index: Vec<usize> = (1..=k).collect();
+        let input = NdArray::new(vals.clone(), vec![n]).unwrap();
+        let lab = NdArray::new(labels.clone(), vec![n]).unwrap();
+
+        let got_sum = sum(&input, Some(&lab), Some(&index)).unwrap();
+        let got_var = variance(&input, Some(&lab), Some(&index)).unwrap();
+        let got_std = standard_deviation(&input, Some(&lab), Some(&index)).unwrap();
+
+        // Serial reference (two-pass).
+        let mut sref = vec![0.0f64; k];
+        let mut cref = vec![0usize; k];
+        for (&v, &lv) in vals.iter().zip(&labels) {
+            let p = (lv as usize) - 1;
+            sref[p] += v;
+            cref[p] += 1;
+        }
+        let means: Vec<f64> = (0..k).map(|i| sref[i] / cref[i] as f64).collect();
+        let mut vsum = vec![0.0f64; k];
+        for (&v, &lv) in vals.iter().zip(&labels) {
+            let p = (lv as usize) - 1;
+            let d = v - means[p];
+            vsum[p] += d * d;
+        }
+        for i in 0..k {
+            assert!((got_sum[i] - sref[i]).abs() < 1e-6, "sum label {i}");
+            let want_var = vsum[i] / cref[i] as f64;
+            assert!((got_var[i] - want_var).abs() < 1e-9, "var label {i}");
+            assert!((got_std[i] - want_var.sqrt()).abs() < 1e-9, "std label {i}");
         }
     }
 
