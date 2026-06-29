@@ -588,6 +588,84 @@ fn uniform_interpolation_knots(len: usize, order: usize) -> Vec<f64> {
     knots
 }
 
+/// Closed-form knot value of `uniform_interpolation_knots(len, order)` at index `j`, without
+/// materializing the knot vector (the left/right clamps are constant and the interior is linear).
+#[inline]
+fn uniform_knot_at(j: usize, len: usize, order: usize) -> f64 {
+    if j < order + 1 {
+        0.0
+    } else if j >= len {
+        (len - 1) as f64
+    } else {
+        (j - order + (order - 1) / 2) as f64
+    }
+}
+
+/// Locally-supported B-spline interpolation weights at `x`, BYTE-IDENTICAL to the nonzero entries
+/// of `eval_bspline_basis_all(&uniform_interpolation_knots(len, order), x, order, len)` filtered by
+/// `|w| > 1e-12`, but O(order²) instead of O(len·order) with NO per-call allocation of the
+/// length-`len` knot/basis vectors. A B-spline of degree `order` is supported on only `order+1`
+/// consecutive knot spans, so every other basis value is exactly `0.0` (and dropped by the filter).
+/// Pushes `(index, weight)` pairs (ascending index) into `out`.
+fn bspline_local_support(len: usize, x: f64, order: usize, out: &mut Vec<(usize, f64)>) {
+    let total = len + order + 1;
+    let knot = |j: usize| uniform_knot_at(j, len, order);
+    // Degree-0 span: the unique i0 in [0, len) with knot[i0] <= x < knot[i0+1] (or the right-edge
+    // special case x == knot[i0+1] && i0+1 == total-order-1) — exactly the index where
+    // eval_bspline_basis_all's degree-0 loop writes 1.0. Binary-searched on the non-decreasing knots.
+    let (mut lo_b, mut hi_b) = (0usize, len);
+    while lo_b < hi_b {
+        let mid = (lo_b + hi_b) / 2;
+        if knot(mid) <= x {
+            lo_b = mid + 1;
+        } else {
+            hi_b = mid;
+        }
+    }
+    if lo_b == 0 {
+        return;
+    }
+    let i0 = lo_b - 1; // largest index with knot(i0) <= x
+    let kc1 = knot(i0 + 1);
+    let matches = (x < kc1) || (x == kc1 && i0 + 1 == total - order - 1);
+    if !matches {
+        return;
+    }
+
+    // Windowed Cox–de Boor over the only possibly-nonzero indices [i0-order ..= i0]; the i0+1 slot
+    // is the always-zero `prev[i+1]` sentinel. Same arithmetic/guards as eval_bspline_basis_all.
+    let win_lo = i0.saturating_sub(order);
+    let wlen = i0 + 2 - win_lo;
+    let mut basis = vec![0.0f64; wlen];
+    basis[i0 - win_lo] = 1.0;
+    for p in 1..=order {
+        let prev = basis.clone();
+        for ai in win_lo..=i0 {
+            let j = ai - win_lo;
+            let mut val = 0.0;
+            if ai + p < total {
+                let denom_left = knot(ai + p) - knot(ai);
+                if denom_left > 0.0 {
+                    val += (x - knot(ai)) / denom_left * prev[j];
+                }
+            }
+            if ai + p + 1 < total && ai + 1 < len {
+                let denom_right = knot(ai + p + 1) - knot(ai + 1);
+                if denom_right > 0.0 {
+                    val += (knot(ai + p + 1) - x) / denom_right * prev[j + 1];
+                }
+            }
+            basis[j] = val;
+        }
+    }
+    for ai in win_lo..=i0 {
+        let w = basis[ai - win_lo];
+        if w.abs() > 1e-12 {
+            out.push((ai, w));
+        }
+    }
+}
+
 fn eval_bspline_basis_all(knots: &[f64], x: f64, order: usize, len: usize) -> Vec<f64> {
     let mut basis = vec![0.0; len];
     for i in 0..len {
@@ -1360,14 +1438,12 @@ fn sample_interpolated(
                 ));
                 continue;
             }
-            let knots = uniform_interpolation_knots(coeff_len, effective_order);
-            let weights = eval_bspline_basis_all(&knots, spline_coord, effective_order, coeff_len);
-            support.extend(
-                weights
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(_, weight)| weight.abs() > 1e-12),
-            );
+            // Compact-support evaluation: BYTE-IDENTICAL to filtering the full O(len·order)
+            // eval_bspline_basis_all but O(order²) with no per-pixel knot/basis allocation. The old
+            // path made affine_transform/map_coordinates/geometric_transform with
+            // Constant/Wrap order∈{1,2,4,5} ~8-18× slower than scipy (the cardinal fast paths only
+            // covered Nearest/Reflect/Mirror and Constant-order-3); this routes the rest here.
+            bspline_local_support(coeff_len, spline_coord, effective_order, support);
             if support.is_empty() {
                 return cval;
             }
@@ -11040,6 +11116,55 @@ fn compute_structure_offsets(struct_shape: &[usize], struct_data: &[f64]) -> Vec
 mod tests {
     use super::*;
     use std::sync::atomic::Ordering as AtomOrd;
+
+    /// `bspline_local_support` must be BYTE-IDENTICAL to filtering the full
+    /// `eval_bspline_basis_all` (the path it replaces in `sample_interpolated`), so the affine /
+    /// map_coordinates / geometric_transform results are unchanged — only faster.
+    #[test]
+    fn bspline_local_support_byte_identical_to_full_eval() {
+        let mut s = 0x243f6a8885a308d3u64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let mut checked = 0usize;
+        for _ in 0..20_000 {
+            let order = 1 + (rng() % 5) as usize; // 1..=5
+            let len = (order + 1) + (rng() % 80) as usize;
+            // x sweeps the full valid domain [0, len-1] plus exact integer/knot positions.
+            let x = match rng() % 4 {
+                0 => (rng() % (len as u64)) as f64, // exact integer (knot-ish)
+                1 => (len - 1) as f64,              // right boundary special case
+                2 => 0.0,                           // left boundary
+                _ => (rng() as f64 / u64::MAX as f64) * (len - 1) as f64,
+            };
+            let knots = uniform_interpolation_knots(len, order);
+            let full: Vec<(usize, f64)> = eval_bspline_basis_all(&knots, x, order, len)
+                .into_iter()
+                .enumerate()
+                .filter(|(_, w)| w.abs() > 1e-12)
+                .collect();
+            let mut loc = Vec::new();
+            bspline_local_support(len, x, order, &mut loc);
+            assert_eq!(
+                loc.len(),
+                full.len(),
+                "support count mismatch len={len} order={order} x={x}"
+            );
+            for ((il, wl), (if_, wf)) in loc.iter().zip(full.iter()) {
+                assert_eq!(il, if_, "index mismatch len={len} order={order} x={x}");
+                assert_eq!(
+                    wl.to_bits(),
+                    wf.to_bits(),
+                    "weight bits mismatch len={len} order={order} x={x}: {wl} vs {wf}"
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked > 19_000, "expected near-full coverage, got {checked}");
+    }
 
     /// HGW must be bit-for-bit identical to the legacy monotonic-deque path across
     /// dimensions, window sizes, origins, boundary modes, and adversarial data

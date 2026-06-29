@@ -1784,3 +1784,18 @@ Measured before chasing (512×512): fsci median_filter 5×5 = 4.05 ms vs scipy 8
 is already running-sum O(n) (has an explicit "pre running-sum reference, A/B only" path). grey_erosion/dilation
 already van Herk; generic_filter already inlines a Rust closure (Sync, parallel core) vs scipy's per-window
 Python callback (212 ms @ 256² for np.ptp). The ndimage filter surface is fully dominant; don't re-chase.
+
+## 2026-06-29 — AmberKestrel (cc): ndimage geometric-transform compact-support B-spline (FLIP 7.8× loss → 1.85× win)
+
+**Lever:** `sample_interpolated`'s generic fall-through built a length-`len` knot vector AND evaluated ALL `len` (~512) B-spline basis functions (with per-degree clones) PER PIXEL PER AXIS, then filtered to the ~`order+1` nonzero ones — O(len·order) + ~3 heap allocs/pixel/axis. B-splines have compact support `order+1`, so every other basis value is exactly 0.0. Added `bspline_local_support` (closed-form `uniform_knot_at` + binary-searched degree-0 span + windowed Cox–de Boor over only the supported indices) = O(order²), ZERO per-pixel allocation. The cardinal fast paths only covered Nearest/Reflect/Mirror (1-5) and Constant/Wrap at order 3; **Constant/Wrap order∈{1,2,4,5}** (scipy's DEFAULT mode is 'constant') fell through to the slow path.
+
+**BYTE-IDENTICAL** to filtering the full `eval_bspline_basis_all` — proven by `bspline_local_support_byte_identical_to_full_eval` (20 000 random len/order/x incl. integer+boundary positions, `.to_bits()` equality). Full fsci-ndimage conformance suite GREEN.
+
+**Measured same-box, 512×512, affine_transform** (scipy.ndimage o1=7.64ms, o3=19.56ms):
+| mode/order | before (fsci) | after (fsci) | self | vs scipy |
+|---|---|---|---|---|
+| Constant o1 | 59.45 ms | **4.13 ms** | 14.4× | **1.85× FASTER** (was 7.8× SLOWER) |
+| Constant o2 | 139.36 ms | 60.94 ms | 2.3× | (prefilter-bound, separate) |
+| Constant o3 | 13.19 ms | 13.19 ms | — | 1.48× faster (unchanged path) |
+
+Marquee flip: **Constant order=1 affine 7.8× LOSS → 1.85× WIN** (same fast path now serves map_coordinates / geometric_transform / shift / rotate, all sharing `sample_interpolated`). Backlog: Constant o2 prefilter (per-line `spline_coefficients_for_line`), Reflect o1 (16.7ms).
