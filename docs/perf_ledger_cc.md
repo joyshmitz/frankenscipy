@@ -1187,3 +1187,23 @@ bit-identically (incl. a tied column), symmetric, ragged-input rejected. Pure ad
 deletions) — no existing path changed. This is the "all-pairs over an O(n log n) per-pair kernel, tau-only,
 parallel across pairs" lever; generalizes to any all-pairs statistic scipy makes users Python-loop
 (weightedtau matrix, somersd matrix, pairwise distance-correlation). fsci-stats conformance GREEN.
+
+### ✅✅ stats: weightedtau_matrix (all-pairs weighted Kendall tau) — 108-222x faster than scipy + factored the all-pairs primitive
+Extends the all-pairs primitive to scipy's OTHER matrix-less rank correlation. Factored the parallel-
+across-pairs logic into `all_pairs_symmetric_matrix(variables, pair_stat)` (kendalltau_matrix refactored
+onto it, byte-identical — conformance test unchanged & green); added `weightedtau_matrix` = the same
+helper over `weightedtau` (which returns f64 directly, no p-value). scipy has NO vectorized all-pairs
+weighted tau → users loop `scipy.stats.weightedtau` in Python, and weightedtau is SLOWER per-call than
+kendalltau (hyperbolic weighting), so the gap is even larger.
+
+**SAME-BOX head-to-head (fsci weightedtau_matrix vs scipy Python weightedtau-loop, both this box):**
+| matrix (m × n)   | pairs  | scipy        | fsci      | speedup     |
+|------------------|--------|--------------|-----------|-------------|
+| m=40,  n=400     | 780    | 648.3 ms     | 5.97 ms   | **108.6×**  |
+| m=100, n=1000    | 4 950  | 10 462.9 ms  | 47.09 ms  | **222.2×**  |
+
+(10.5 SECONDS in scipy for a 100×100 weighted-tau matrix.) Conformance: weightedtau_matrix upper-triangle
++ diagonal bit-identical to per-pair `weightedtau` (matrix symmetric BY CONSTRUCTION — the helper mirrors
+the upper triangle; NOTE weightedtau is mathematically but NOT bit-symmetric across arg order due to its
+Fenwick accumulation sorting by the first arg, so only i<=j is asserted per-pair). The `all_pairs_symmetric_matrix`
+helper now backs both matrices and any future one (somersd/distance-correlation). fsci-stats GREEN.

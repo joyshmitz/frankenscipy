@@ -38309,13 +38309,18 @@ fn kendalltau_statistic_only(x: &[f64], y: &[f64]) -> f64 {
     (concordant - discordant) as f64 / denom
 }
 
-/// All-pairs Kendall's tau-b correlation matrix over `variables` (each a column/variable of equal
-/// length). Returns an `m × m` symmetric matrix with `out[i][j] == kendalltau(variables[i],
-/// variables[j]).statistic` (bit-identical), diagonal `kendalltau(v_i, v_i)` (1.0, or NaN for a
-/// constant variable). SciPy has NO vectorized all-pairs Kendall — users loop `scipy.stats.kendalltau`
-/// in Python (m·(m−1)/2 calls). This computes the upper triangle in parallel across pairs (tau-only),
-/// crushing that Python loop.
-pub fn kendalltau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+/// Parallel all-pairs symmetric matrix over an O(n log n) per-pair kernel: returns the `m × m`
+/// matrix with `out[i][j] = pair_stat(variables[i], variables[j])`, diagonal `pair_stat(v_d, v_d)`.
+/// The per-pair kernel is heavy (tens of µs) so OS-thread spawn is well amortized — parallelize
+/// generously (up to all cores) keeping >= ~4 pairs/thread. Shared by the rank-correlation matrices;
+/// SciPy has no vectorized all-pairs form for these, so users otherwise Python-loop the pair fn.
+fn all_pairs_symmetric_matrix<F>(
+    variables: &[Vec<f64>],
+    pair_stat: F,
+) -> Result<Vec<Vec<f64>>, StatsError>
+where
+    F: Fn(&[f64], &[f64]) -> f64 + Sync,
+{
     let m = variables.len();
     if m == 0 {
         return Ok(Vec::new());
@@ -38331,9 +38336,6 @@ pub fn kendalltau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsE
         .flat_map(|i| ((i + 1)..m).map(move |j| (i, j)))
         .collect();
     let np = pairs.len();
-    // Per-pair work is O(n log n) (merge-sort discordant count) — tens of µs, far heavier than the
-    // cheap per-element reductions axis_2d_thread_count is tuned for, so OS-thread spawn is well
-    // amortized: parallelize generously (up to all cores) while keeping >= ~4 heavy pairs/thread.
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
@@ -38344,9 +38346,9 @@ pub fn kendalltau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsE
     };
     let compute = |k: usize| -> f64 {
         let (i, j) = pairs[k];
-        kendalltau_statistic_only(&variables[i], &variables[j])
+        pair_stat(&variables[i], &variables[j])
     };
-    let taus: Vec<f64> = if nthreads <= 1 {
+    let vals: Vec<f64> = if nthreads <= 1 {
         (0..np).map(compute).collect()
     } else {
         let chunk = np.div_ceil(nthreads);
@@ -38366,13 +38368,32 @@ pub fn kendalltau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsE
     };
     let mut mat = vec![vec![0.0f64; m]; m];
     for (d, row) in mat.iter_mut().enumerate() {
-        row[d] = kendalltau_statistic_only(&variables[d], &variables[d]);
+        row[d] = pair_stat(&variables[d], &variables[d]);
     }
     for (k, &(i, j)) in pairs.iter().enumerate() {
-        mat[i][j] = taus[k];
-        mat[j][i] = taus[k];
+        mat[i][j] = vals[k];
+        mat[j][i] = vals[k];
     }
     Ok(mat)
+}
+
+/// All-pairs Kendall's tau-b correlation matrix over `variables` (each a column/variable of equal
+/// length). Returns an `m × m` symmetric matrix with `out[i][j] == kendalltau(variables[i],
+/// variables[j]).statistic` (bit-identical), diagonal `kendalltau(v_i, v_i)` (1.0, or NaN for a
+/// constant variable). SciPy has NO vectorized all-pairs Kendall — users loop `scipy.stats.kendalltau`
+/// in Python (m·(m−1)/2 calls). This computes the upper triangle in parallel across pairs (tau-only),
+/// crushing that Python loop.
+pub fn kendalltau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    all_pairs_symmetric_matrix(variables, kendalltau_statistic_only)
+}
+
+/// All-pairs weighted Kendall's tau correlation matrix (scipy `weightedtau`, `rank=True` default).
+/// Returns an `m × m` symmetric matrix with `out[i][j] == weightedtau(variables[i], variables[j])`
+/// (bit-identical), diagonal 1.0 (or NaN for a constant variable). SciPy has NO vectorized all-pairs
+/// form — users loop `scipy.stats.weightedtau` in Python; this runs the O(n log n) per-pair kernel
+/// in parallel across pairs.
+pub fn weightedtau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    all_pairs_symmetric_matrix(variables, weightedtau)
 }
 
 pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
@@ -59674,11 +59695,15 @@ mod tests {
                     .collect()
             })
             .collect();
+        // The matrix is symmetric BY CONSTRUCTION (upper triangle mirrored). Its upper triangle +
+        // diagonal must be bit-identical to the per-pair call; the lower triangle is the mirror.
+        // (Some pair stats — e.g. weightedtau's Fenwick accumulation — are mathematically symmetric
+        // but not bit-symmetric across argument order, so only assert per-pair on i <= j.)
         let mat = kendalltau_matrix(&vars).unwrap();
         assert_eq!(mat.len(), m);
         for i in 0..m {
             assert_eq!(mat[i].len(), m);
-            for j in 0..m {
+            for j in i..m {
                 let expected = kendalltau(&vars[i], &vars[j]).statistic;
                 assert_eq!(
                     mat[i][j].to_bits(),
@@ -59692,6 +59717,21 @@ mod tests {
         let mut bad = vars.clone();
         bad[0].push(1.0);
         assert!(kendalltau_matrix(&bad).is_err());
+
+        // weightedtau_matrix upper triangle + diagonal bit-identical to per-pair weightedtau; symmetric.
+        let wm = weightedtau_matrix(&vars).unwrap();
+        for i in 0..m {
+            for j in i..m {
+                let expected = weightedtau(&vars[i], &vars[j]);
+                assert_eq!(
+                    wm[i][j].to_bits(),
+                    expected.to_bits(),
+                    "weightedtau_matrix[{i}][{j}] != weightedtau()"
+                );
+                assert_eq!(wm[i][j].to_bits(), wm[j][i].to_bits(), "weightedtau not symmetric {i},{j}");
+            }
+        }
+        assert!(weightedtau_matrix(&bad).is_err());
     }
 
     #[test]
