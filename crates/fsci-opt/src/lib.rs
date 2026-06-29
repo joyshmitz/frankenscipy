@@ -24,6 +24,7 @@ pub use minimize::{
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, anderson,
+    root_many,
     bisect, brenth, brentq, broyden1, broyden2, df_sane, fsolve, halley, lm_root, newton,
     newton_krylov, newton_scalar, ridder, root, root_scalar, secant, toms748,
 };

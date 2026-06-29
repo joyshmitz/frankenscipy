@@ -1465,6 +1465,73 @@ where
     }
 }
 
+/// Batched nonlinear-system solving: solve `func(x, params) = 0` for MANY parameter sets
+/// (`param_rows`), one [`MultivariateRootResult`] per set, all from the shared start `x0`.
+/// This is the vmap-over-solver primitive SciPy lacks — a parameter sweep / equilibrium scan
+/// loops `root` in Python, calling the Python residual (and Jacobian) per iteration, N solves
+/// SERIALLY; here the N independent solves are fanned across cores and the residual is an
+/// inlined Rust closure (callback lever × N-way parallel). Result `i` is byte-identical to
+/// `root(|x| func(x, &param_rows[i]), x0, options)`.
+///
+/// Common for steady-state / equilibrium analysis across a parameter grid.
+pub fn root_many<F>(
+    func: F,
+    x0: &[f64],
+    param_rows: &[Vec<f64>],
+    options: MultivariateRootOptions,
+) -> Vec<Result<MultivariateRootResult, OptError>>
+where
+    F: Fn(&[f64], &[f64]) -> Vec<f64> + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let func_ref = &func;
+    let opts_ref = &options;
+    let solve_one = move |params: &[f64]| {
+        let residual = |x: &[f64]| func_ref(x, params);
+        root(residual, x0, opts_ref.clone())
+    };
+
+    // Each solve is an independent nonlinear-system solve → fan whole parameter sets across
+    // cores, capped by the row count; a tiny sweep stays serial.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<MultivariateRootResult, OptError>>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || {
+                        (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("root_many worker panicked"))
+                .collect()
+        });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 /// Broyden's first method for solving F(x) = 0.
 ///
 /// Quasi-Newton method that maintains an approximate Jacobian B and updates it
@@ -2415,7 +2482,7 @@ mod tests {
 
     use super::{
         MultivariateRootMethod, MultivariateRootOptions, anderson, broyden1, broyden2, fsolve,
-        lm_root, root,
+        lm_root, root, root_many,
     };
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, df_sane, halley,
@@ -3328,6 +3395,50 @@ mod tests {
         for (i, &v) in r.x.iter().enumerate() {
             assert!((v - 1.0).abs() < 1e-6, "x[{i}]={v}, expected 1");
         }
+    }
+
+    #[test]
+    fn root_many_byte_identical_to_per_param() {
+        // Parameter sweep over a well-conditioned 3-equation system (Jacobian at [1,1,1] is
+        // the SPD [[2,1,1],[1,2,1],[1,1,2]]). The batched solve must equal looping root per
+        // parameter, bit-for-bit, and these parameters converge to a genuine root.
+        let sys = |x: &[f64], p: &[f64]| {
+            vec![
+                x[0] * x[0] + x[1] + x[2] - p[0],
+                x[0] + x[1] * x[1] + x[2] - p[1],
+                x[0] + x[1] + x[2] * x[2] - p[2],
+            ]
+        };
+        let mut s = 5u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            2.5 + 2.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 12usize; // crosses the serial->parallel gate
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng(), rng(), rng()]).collect();
+        let x0 = [1.0, 1.0, 1.0];
+        let opts = MultivariateRootOptions::default();
+
+        let batched = root_many(&sys, &x0, &params, opts.clone());
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let single = root(|x: &[f64]| sys(x, p), &x0, opts.clone()).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(many.x.len(), single.x.len());
+            for (a, b) in many.x.iter().zip(single.x.iter()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "x mismatch param {i}");
+            }
+            for (a, b) in many.fun.iter().zip(single.fun.iter()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "fun mismatch param {i}");
+            }
+        }
+        // The sweep exercises genuine converging solves, not just identical failures.
+        let n_conv = batched
+            .iter()
+            .filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false))
+            .count();
+        assert!(n_conv >= nrows / 2, "expected most to converge, got {n_conv}/{nrows}");
+        assert!(root_many(&sys, &x0, &[], opts).is_empty());
     }
 
     #[test]

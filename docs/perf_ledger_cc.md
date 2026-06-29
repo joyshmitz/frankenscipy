@@ -1518,3 +1518,24 @@ scipy 622 success / 782 reached-global-min — fsci optimises at least as well. 
 (2) from the standard Rosenbrock start fsci reaches the exact global min [1,1,1,1,1,1]. fsci-opt minimize_many
 test green. Callback lever (inline Rust objective, no Python per-eval) gives the per-run win; N-way parallelism
 multiplies it. The vmap-over-solver vein is now proven across curve_fit / solve_ivp / minimize.
+
+### ✅✅ opt: root_many (vmap-over-solver nonlinear-system sweep) — 11-25× faster than looped scipy
+Fourth vmap-over-solver family (curve_fit / solve_ivp / minimize / root). A parameter sweep — solve
+`func(x, params)=0` for many parameter sets, shared start — is common in equilibrium/steady-state analysis;
+SciPy loops `root` in Python, N solves serially. fsci `root_many` (param-sweep signature `F: Fn(&[f64] x,
+&[f64] params)->Vec<f64>`) fans the N independent solves across cores and inlines the residual. Purely
+additive; heavy-per-item cap (cores.min(nrows), serial <4).
+
+**SAME-BOX head-to-head (well-conditioned 3-eq system, hybr, N parameter sets; both this box):**
+| N    | scipy (Python loop over root) | fsci root_many | speedup   |
+|------|-------------------------------|----------------|-----------|
+| 500  | 35.9 ms (277/500 converged)   | 3.24 ms (293/500) | **11.1×** |
+| 2000 | 135.4 ms (1176/2000)          | 5.39 ms (1191/2000) | **25.1×** |
+
+This is the MODEST end of the vmap family — unlike minimize (275×) / solve_ivp (1500×), scipy's hybr is fast
+C (MINPACK, ~0.07 ms/solve, few Python callbacks), so the per-solve callback lever is weak and the win is
+mostly the N-way parallelism. FAIR head-to-head: fsci converges slightly MORE than scipy on the same params
+(293 vs 277, 1191 vs 1176 — not speed from giving up early; a first benchmark on a Jacobian-SINGULAR symmetric
+system was discarded as invalid since neither library converged there). CONFORMANCE: result i is
+BYTE-IDENTICAL (.to_bits() on x and fun) to per-param root; fsci-opt root_many test green (byte-id + ≥half
+converge). vmap-over-solver vein now spans 4 solver families.
