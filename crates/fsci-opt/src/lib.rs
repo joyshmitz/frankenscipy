@@ -4344,16 +4344,27 @@ pub fn lsq_linear(a: &[Vec<f64>], b: &[f64], lb: &[f64], ub: &[f64]) -> Result<V
             });
         }
     }
-    // Gram = AᵀA, atb = Aᵀb.
+    // Gram = AᵀA, atb = Aᵀb. Accumulate by RANK-1 update over a contiguous row-major copy of A:
+    // `gram[j1][.] += a_i[j1] · a_i[.]` is a contiguous AXPY the compiler vectorizes, vs the old
+    // per-pair `Σ_i row[j1]·row[j2]` that strided TWO columns through the `Vec<Vec>` heap rows
+    // (a cache miss per element, O(n²·m) of them — the dominant cost for this routine). ~1e-13
+    // reassociation only; lsq_linear's bounded LS has a unique minimizer (full column rank), so
+    // the optimum is unchanged (the Gram only feeds the subproblem solves and the KKT gradient).
+    let a_flat: Vec<f64> = a.iter().flat_map(|row| row.iter().copied()).collect();
     let mut gram = vec![vec![0.0_f64; n]; n];
-    for j1 in 0..n {
-        for j2 in 0..n {
-            gram[j1][j2] = a.iter().map(|row| row[j1] * row[j2]).sum();
+    let mut atb = vec![0.0_f64; n];
+    for i in 0..m {
+        let ai = &a_flat[i * n..i * n + n];
+        let bi = b[i];
+        for j1 in 0..n {
+            let v1 = ai[j1];
+            let grow = &mut gram[j1];
+            for (g, &v2) in grow.iter_mut().zip(ai.iter()) {
+                *g += v1 * v2;
+            }
+            atb[j1] += v1 * bi;
         }
     }
-    let atb: Vec<f64> = (0..n)
-        .map(|j| a.iter().zip(b).map(|(r, &bi)| r[j] * bi).sum())
-        .collect();
 
     // State: -1 = at lower, +1 = at upper, 0 = free. Start each variable at a bound.
     let mut state = vec![0i8; n];
@@ -4393,7 +4404,15 @@ pub fn lsq_linear(a: &[Vec<f64>], b: &[f64], lb: &[f64], ub: &[f64]) -> Result<V
                             .sum::<f64>()
                 })
                 .collect();
-            let Some(z) = dense_spd_solve(&sub_gram, &sub_rhs) else {
+            // `sub_gram` is a principal submatrix of AᵀA → SPD on an independent free set, so
+            // Cholesky solves it in ~⅓ the flops of the full Gauss-Jordan `dense_spd_solve` (which
+            // also re-allocates a Vec<Vec> augmented matrix per call). Fall back to the pivoting
+            // Gauss-Jordan on a rank-deficient free set (Cholesky hits a non-positive pivot →
+            // None), preserving the original break-on-singular behavior. ~1e-13 difference; the
+            // bounded-LS minimizer is unique so the converged x is unchanged.
+            let Some(z) = cholesky_solve_spd(&sub_gram, &sub_rhs)
+                .or_else(|| dense_spd_solve(&sub_gram, &sub_rhs))
+            else {
                 break;
             };
             // Step toward z; if any free var would cross a bound, clamp the

@@ -1858,3 +1858,18 @@ sobel was the lone common ndimage filter still losing to scipy; now all of corre
 | + parallel Gram | **36.76 ms** | **1.25× slower** (3.0× self-speedup) |
 
 Closed most of a 3.75× loss; the residual ~1.25× is scipy's Householder-QR Fortran vs fsci's Gram-based scalar inner loops (engineering wall). isotonic_regression measured at ~parity (28 vs 24ms); cumulative_simpson/trapezoid/simpson all WIN (7.2×/3.5×/2.2×).
+
+## 2026-06-29 — AmberKestrel (cc): lsq_linear Gram rank-1 + Cholesky subproblem (1.5× self, narrows loss)
+
+**Lever (same family as nnls):** `lsq_linear` (bounded LS active set) had (1) a cache-hostile Gram build — `gram[j1][j2] = Σ_i row[j1]·row[j2]` strided TWO columns through the `Vec<Vec>` heap rows (cache miss per element, O(n²·m)); replaced with a contiguous RANK-1 update over a row-major copy of A. (2) The free-subproblem solve used full Gauss-Jordan (`dense_spd_solve`, O(p³) + Vec<Vec> realloc per call) on what is an SPD principal submatrix of AᵀA; swapped to `cholesky_solve_spd` (~⅓ flops) with the Gauss-Jordan as the rank-deficient fallback.
+
+**Correctness:** bounded-LS minimizer is unique (full column rank) → converged `x` unchanged (~1e-13). `lsq_linear` + `nnls` suites GREEN (3+3).
+
+**Measured same-box, 600×300 box-constrained** (scipy.optimize.lsq_linear: trf 249.46 ms, bvls 160.04 ms):
+| stage | time |
+|---|---|
+| before | 441.30 ms (1.77× slower than trf, 2.76× than bvls) |
+| + rank-1 Gram | 342.33 ms |
+| + Cholesky subproblem | **294.33 ms** (1.18× of trf, 1.84× of bvls) |
+
+1.5× self-speedup, narrowing the loss. REMAINING LEVER (not yet done — higher risk): the inner loop still RE-FACTORS the free Gram from scratch each iteration (O(n⁴)); an incrementally-maintained Cholesky with rank-1 add on KKT-free + DOWN-DATE on inner-fix would reach O(n³) ≈ scipy. nnls already has the add/refactor helpers (`nnls_chol_*`); lsq_linear needs the downdate (removals dominate here).
