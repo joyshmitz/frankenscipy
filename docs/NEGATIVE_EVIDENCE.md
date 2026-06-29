@@ -11300,3 +11300,34 @@ n due to the per-call chirp rebuild.
   (hilbert FFT, savgol par_index_fill) — but it's a WIN if you can force the per-line op SERIAL. Savgol's
   parallelism was controllable (own helper); the FFT's was not (ignores WorkerPolicy). 5 vein ships now
   (sosfilt/filtfilt/sosfiltfilt/decimate/savgol 2-D). This overturns the earlier "FIR ops low-EV" note.
+
+## 2026-06-28 - LANDED WIN (AmberForge): resample_poly_axis_2d (multi-channel polyphase resampling) — 9.3-11.1x FASTER than scipy
+
+- Agent: AmberForge. 6th ship of the multi-channel vein. fsci's `resample_poly` was 1-D only; scipy takes an
+  axis (single-threaded polyphase FIR). Added `resample_poly_axis_2d(x, up, down, axis)` parallel across lines
+  (output length differs from input, so bespoke per-axis assembly, not the shared apply_filter driver).
+- **The catch (DOUBLE oversubscription):** the 1-D `resample_poly` self-parallelizes its polyphase compute —
+  and via TWO mechanisms, not one: a `par_index_fill` path AND a hand-rolled `std::thread::scope` block (each
+  reading `available_parallelism()` directly). Naively fanning out across lines nested 64×64 threads → first
+  cut was **6.9x SLOWER** (2378ms vs scipy 345ms for 1000×10000; pattern was inverted — the smaller workload
+  took LONGER, the oversubscription tell).
+- **The fix (general, reusable):** a thread-local `PAR_INDEX_FILL_SERIAL` flag set by
+  `with_serial_par_index_fill` around each per-line call in the parallel-across-lines branch. BOTH internal
+  parallel passes (`par_index_fill` and the hand-rolled `thread::scope`) check it and run serial when set —
+  keeping exactly one parallelism level. When there are too few lines to fan out, the flag stays unset so the
+  per-line op keeps its own parallelism (cores still used). Output is byte-identical either way (the passes
+  are order-preserving), default behavior unchanged (flag only set inside the 2-D parallel branch).
+- **MEASURED vs scipy.signal.resample_poly (up=3, down=2, axis=-1, best-of-5):**
+
+  | channels × length | first cut (oversubscribed) | FIXED | scipy | speedup |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 1000 × 10000 | 2378 ms | 31.0 ms | 344.9 ms | **11.1x** |
+  | 2000 × 10000 | — | 46.9 ms | 455.8 ms | **9.7x** |
+  | 256 × 100000 | 660 ms | 65.1 ms | 604.5 ms | **9.3x** |
+
+  BYTE-IDENTICAL to per-line 1-D `resample_poly` (test `resample_poly_axis_2d_matches_per_line`, axis=-1 and
+  0, output-length change checked). Numerical oracle vs scipy 2-D: max abs diff **3.1e-15**. fsci-signal 659/0.
+- LESSON: a self-parallelizing per-line op can hide MULTIPLE parallel mechanisms (par_index_fill + raw
+  thread::scope) — gate them ALL with one thread-local serial flag, which is more general than the per-function
+  serial-apply used for savgol. 6 vein ships now (sosfilt/filtfilt/sosfiltfilt/decimate/savgol/resample_poly
+  2-D). The thread-local serial flag now covers the whole crate's internal parallel passes.

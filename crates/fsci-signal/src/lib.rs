@@ -510,6 +510,36 @@ pub fn savgol_filter_mode(
     Ok(result)
 }
 
+thread_local! {
+    /// When true on the current thread, `par_index_fill` runs SERIALLY. Set via
+    /// [`with_serial_par_index_fill`] so a function that internally uses
+    /// `par_index_fill` can be called from inside an OUTER parallel loop (per-line in
+    /// a multi-channel `*_axis_2d` transform) without nesting a second level of
+    /// parallelism (which oversubscribes the cores and flattens the win).
+    static PAR_INDEX_FILL_SERIAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with `par_index_fill` forced serial on the calling thread, restored
+/// afterward (panic-safe via a drop guard). Output is unchanged (`par_index_fill` is
+/// order-preserving, so serial and parallel are byte-identical) — only the worker
+/// count changes. Used by the `*_axis_2d` drivers to keep exactly one parallelism
+/// level when the per-line op self-parallelizes (e.g. resample_poly).
+fn with_serial_par_index_fill<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PAR_INDEX_FILL_SERIAL.with(|c| c.set(self.0));
+        }
+    }
+    let prev = PAR_INDEX_FILL_SERIAL.with(|c| {
+        let p = c.get();
+        c.set(true);
+        p
+    });
+    let _restore = Restore(prev);
+    f()
+}
+
 /// Fill `result[0..n]` in parallel from a per-index closure, with a WORK-gated thread count
 /// (>=4096 indices/thread, capped at available cores) so small signals stay serial. Order-preserved,
 /// so byte-identical to the serial `(0..n).map(f).collect()`.
@@ -517,7 +547,7 @@ fn par_index_fill<F>(n: usize, f: F) -> Vec<f64>
 where
     F: Fn(usize) -> f64 + Sync,
 {
-    let nthreads = if n < 4096 {
+    let nthreads = if n < 4096 || PAR_INDEX_FILL_SERIAL.with(|c| c.get()) {
         1
     } else {
         std::thread::available_parallelism()
@@ -16018,6 +16048,132 @@ pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, Sign
     resample_poly_with_padtype(x, up, down, None, None)
 }
 
+/// Apply `resample_poly` across one axis of a rectangular 2-D input.
+///
+/// Matches `scipy.signal.resample_poly(x, up, down, axis=...)` (default Kaiser-window
+/// polyphase FIR, `padtype="constant"`). Each line is resampled independently —
+/// BIT-IDENTICAL to per-line 1-D `resample_poly`. scipy applies it single-threaded
+/// along the axis, so fanning out across cores wins.
+///
+/// The 1-D `resample_poly` self-parallelizes internally (`par_index_fill`). When the
+/// across-lines fan-out is active (many lines) each per-line op is forced SERIAL
+/// (`with_serial_par_index_fill`) to keep exactly one parallelism level; when there
+/// are too few lines to fan out, the per-line `par_index_fill` is left parallel so
+/// the cores are still used. Either way the bits are identical (order-preserving).
+pub fn resample_poly_axis_2d(
+    x: &[Vec<f64>],
+    up: usize,
+    down: usize,
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, SignalError> {
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cols = x[0].len();
+    if x.iter().any(|row| row.len() != cols) {
+        return Err(SignalError::InvalidInputShape {
+            detail: "x must be a rectangular 2-D matrix".to_string(),
+        });
+    }
+    let nfilt = up.max(down).max(1);
+    match axis {
+        -1 | 1 => {
+            let nthreads = lfilter_axis_thread_count(x.len(), cols, nfilt);
+            if nthreads <= 1 {
+                // One parallelism level: let each line's `par_index_fill` use the cores.
+                return x.iter().map(|row| resample_poly(row, up, down)).collect();
+            }
+            // Many lines: fan out across rows; force each line's internal pass serial.
+            let chunk = x.len().div_ceil(nthreads);
+            let chunk_results: Vec<Result<Vec<Vec<f64>>, SignalError>> =
+                std::thread::scope(|scope| {
+                    x.chunks(chunk)
+                        .map(|rows| {
+                            scope.spawn(move || {
+                                rows.iter()
+                                    .map(|row| {
+                                        with_serial_par_index_fill(|| resample_poly(row, up, down))
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|h| h.join().expect("resample row chunk panicked"))
+                        .collect()
+                });
+            let mut y = Vec::with_capacity(x.len());
+            for chunk_result in chunk_results {
+                y.extend(chunk_result?);
+            }
+            Ok(y)
+        }
+        0 => {
+            let nrows = x.len();
+            let nthreads = lfilter_axis_thread_count(cols, nrows, nfilt);
+            // Each column resamples to the SAME `out_len` (same input length), but
+            // `out_len != nrows`, so build the output as `out_len` rows x `cols`.
+            let columns: Vec<(usize, Vec<Vec<f64>>)> = if nthreads <= 1 {
+                let mut block = Vec::with_capacity(cols);
+                for col in 0..cols {
+                    let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+                    block.push(resample_poly(&column, up, down)?);
+                }
+                vec![(0, block)]
+            } else {
+                let chunk = cols.div_ceil(nthreads);
+                let blocks: Vec<Result<(usize, Vec<Vec<f64>>), SignalError>> =
+                    std::thread::scope(|scope| {
+                        (0..cols)
+                            .step_by(chunk)
+                            .map(|col0| {
+                                scope.spawn(move || {
+                                    let col1 = (col0 + chunk).min(cols);
+                                    let mut block = Vec::with_capacity(col1 - col0);
+                                    for col in col0..col1 {
+                                        let column: Vec<f64> =
+                                            x.iter().map(|row| row[col]).collect();
+                                        block.push(with_serial_par_index_fill(|| {
+                                            resample_poly(&column, up, down)
+                                        })?);
+                                    }
+                                    Ok((col0, block))
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .map(|h| h.join().expect("resample col chunk panicked"))
+                            .collect()
+                    });
+                let mut cols_out = Vec::with_capacity(blocks.len());
+                for b in blocks {
+                    cols_out.push(b?);
+                }
+                cols_out
+            };
+            let out_len = columns
+                .iter()
+                .flat_map(|(_, b)| b.first())
+                .map(|c| c.len())
+                .next()
+                .unwrap_or(0);
+            let mut y = vec![vec![0.0; cols]; out_len];
+            for (col0, block) in columns {
+                for (offset, resampled) in block.into_iter().enumerate() {
+                    let col = col0 + offset;
+                    for (row_idx, value) in resampled.into_iter().enumerate() {
+                        y[row_idx][col] = value;
+                    }
+                }
+            }
+            Ok(y)
+        }
+        other => Err(SignalError::InvalidArgument(format!(
+            "axis must be 0, 1, or -1 for 2-D resampling, got {other}"
+        ))),
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ResamplePolyPadMode {
     Constant(f64),
@@ -16220,7 +16376,10 @@ pub fn resample_poly_with_padtype(
 
     let taps_per_out = n_taps / up + 1;
     let work = (n_out as u64).saturating_mul(taps_per_out as u64);
-    let nthreads = if work < 1 << 16 || n_out < 64 {
+    // `PAR_INDEX_FILL_SERIAL` (set by an outer `*_axis_2d` fan-out) forces this
+    // hand-rolled polyphase parallel pass serial too, so the per-line call adds no
+    // second parallelism level when invoked from inside the across-lines fan-out.
+    let nthreads = if work < 1 << 16 || n_out < 64 || PAR_INDEX_FILL_SERIAL.with(|c| c.get()) {
         1
     } else {
         std::thread::available_parallelism()
@@ -23493,6 +23652,46 @@ mod tests {
 
         assert!(decimate_axis_2d(&x, 1, -1).is_err()); // q < 2
         assert!(decimate_axis_2d(&x, q, 3).is_err()); // bad axis
+    }
+
+    #[test]
+    fn resample_poly_axis_2d_matches_per_line() {
+        // 2-D resample_poly must be BIT-IDENTICAL to per-line 1-D resample_poly.
+        // Sized past the parallel gate; output length differs from input length.
+        let rows = 48usize;
+        let cols = 8192usize;
+        let (up, down) = (3usize, 2usize);
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| ((r * 17 + c) as f64 * 0.011).sin() * 3.0 + (c as f64 * 0.003).cos())
+                    .collect()
+            })
+            .collect();
+
+        // axis = -1 (rows)
+        let par = resample_poly_axis_2d(&x, up, down, -1).expect("resample_axis_2d rows");
+        let serial: Vec<Vec<f64>> = x
+            .iter()
+            .map(|row| resample_poly(row, up, down).expect("resample row"))
+            .collect();
+        assert_eq!(par, serial, "resample_poly_axis_2d axis=-1");
+
+        // axis = 0 (columns) — output has the resampled number of rows
+        let par0 = resample_poly_axis_2d(&x, up, down, 0).expect("resample_axis_2d cols");
+        let out_len = resample_poly(&x.iter().map(|r| r[0]).collect::<Vec<_>>(), up, down)
+            .unwrap()
+            .len();
+        assert_eq!(par0.len(), out_len, "resample axis=0 row count");
+        for col in 0..cols {
+            let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+            let resampled = resample_poly(&column, up, down).expect("resample col");
+            for (r, &value) in resampled.iter().enumerate() {
+                assert_eq!(par0[r][col], value, "resample axis=0 col {col} row {r}");
+            }
+        }
+
+        assert!(resample_poly_axis_2d(&x, up, down, 9).is_err());
     }
 
     #[test]
