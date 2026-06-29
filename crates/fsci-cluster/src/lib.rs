@@ -3109,23 +3109,74 @@ pub fn gaussian_mixture(
         }
         old_ll = log_likelihood;
 
-        // M-step: weighted moments.
-        for c in 0..k {
+        // M-step: weighted moments. Two byte-identical restructurings of the original
+        // `for c { for j { Σ_i (mean); Σ_i (var) } }`:
+        //  1. Loop interchange — accumulate the whole mean/var VECTORS in a single pass over
+        //     i per component (contiguous `row[j]` access), turning 2·k·d strided passes over
+        //     the data into 2·k contiguous ones (each output sum stays in the same i order).
+        //  2. Fan the k independent components across cores (each computed by identical
+        //     arithmetic on its own thread → byte-identical; disjoint output slots).
+        let m_compute = |c: usize, w_out: &mut f64, m_out: &mut [f64], cov_out: &mut [f64]| {
             let nk: f64 = resp.iter().map(|r| r[c]).sum::<f64>().max(FLOOR);
-            weights[c] = nk / n as f64;
-            for j in 0..d {
-                let mut mean = 0.0;
-                for (i, row) in data.iter().enumerate() {
-                    mean += resp[i][c] * row[j];
+            *w_out = nk / n as f64;
+            m_out.iter_mut().for_each(|v| *v = 0.0);
+            for (i, row) in data.iter().enumerate() {
+                let g = resp[i][c];
+                for (mv, &rv) in m_out.iter_mut().zip(row) {
+                    *mv += g * rv;
                 }
-                mean /= nk;
-                means[c][j] = mean;
-                let mut var = 0.0;
-                for (i, row) in data.iter().enumerate() {
-                    var += resp[i][c] * (row[j] - mean).powi(2);
-                }
-                covariances[c][j] = var / nk + reg_covar;
             }
+            for mv in m_out.iter_mut() {
+                *mv /= nk;
+            }
+            cov_out.iter_mut().for_each(|v| *v = 0.0);
+            for (i, row) in data.iter().enumerate() {
+                let g = resp[i][c];
+                for ((vv, &rv), &mv) in cov_out.iter_mut().zip(row).zip(m_out.iter()) {
+                    let diff = rv - mv;
+                    *vv += g * (diff * diff);
+                }
+            }
+            for vv in cov_out.iter_mut() {
+                *vv = *vv / nk + reg_covar;
+            }
+        };
+        let mwork = (n as u64).saturating_mul(d as u64);
+        let nthreads_m = if mwork < (1 << 16) || k < 2 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(|c| c.get())
+                .unwrap_or(1)
+                .min(k)
+        };
+        if nthreads_m <= 1 {
+            for c in 0..k {
+                let (w_slot, m_slot, cov_slot) = (&mut weights[c], &mut means[c], &mut covariances[c]);
+                m_compute(c, w_slot, m_slot, cov_slot);
+            }
+        } else {
+            let per = k.div_ceil(nthreads_m);
+            let m_compute = &m_compute;
+            std::thread::scope(|scope| {
+                for (((w_ch, m_ch), cov_ch), base) in weights
+                    .chunks_mut(per)
+                    .zip(means.chunks_mut(per))
+                    .zip(covariances.chunks_mut(per))
+                    .zip((0..k).step_by(per))
+                {
+                    scope.spawn(move || {
+                        for (lc, ((w_out, m_out), cov_out)) in w_ch
+                            .iter_mut()
+                            .zip(m_ch.iter_mut())
+                            .zip(cov_ch.iter_mut())
+                            .enumerate()
+                        {
+                            m_compute(base + lc, w_out, m_out, cov_out);
+                        }
+                    });
+                }
+            });
         }
     }
 

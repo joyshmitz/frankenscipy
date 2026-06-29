@@ -2009,3 +2009,17 @@ Same-box (max_iter=50, tol=0, reg_covar=1e-6):
 | n=10000 d=20 k=10 | 2841 ms | **420 ms** (6.8× self) | 1182 ms | 2.40× SLOWER → **2.81× FASTER** |
 
 Conformance 142/142 GREEN (both gaussian_mixture tests pass). LESSON: when an iterative algo has BOTH an E-step and an M-step, check BOTH for parallelism — a parallel E-step can mask a serial M-step that then dominates (Amdahl). The M-step's per-component covariance is the classic "independent per-group O(work) reduction" → fan groups across cores, byte-identical. CANDIDATES with the same shape: other full-covariance EM (bayesian GMM), per-class scatter matrices (LDA/QDA fit), per-cluster covariance in any mixture model.
+
+## 2026-06-29 — AmberKestrel (cc): gaussian_mixture (DIAGONAL) M-step — loop-interchange + per-component parallel, flips a 4× LOSS to a 4-6× WIN (16× self, byte-identical)
+
+The diagonal GMM was a documented WIN at small d (memory yw7ts: 4-11× at n≤20k) but a measured LOSS at scale: n=20000/d=50/k=12 fsci 3780ms vs sklearn 942ms = **4.01× slower**; n=50000/d=30/k=10 6059ms vs sklearn 2441ms = 2.48× slower. ROOT CAUSE: the M-step loop nest was `for c { for j { Σ_i mean; Σ_i var } }` = **2·k·d strided passes over the data** (each element read 2kd times, column-strided in a row-major buffer = cache-pathological). Two byte-identical fixes:
+1. **Loop interchange** — accumulate the whole mean/var vectors in ONE pass over i per component (contiguous `row[j]`), turning 2·k·d strided passes into 2·k contiguous ones (d× fewer; each output sum keeps the same i-ascending order → byte-identical; var uses `g*(diff*diff)` to match `resp*diff.powi(2)` exactly).
+2. **Fan the k independent components across cores** (same lever as gaussian_mixture_full c3e8887a).
+
+Same-box (max_iter=50, tol=0, reg_covar=1e-6):
+| size | ORIG | new | sklearn | flip |
+|---|---|---|---|---|
+| n=20000 d=50 k=12 | 3780 ms | **227 ms** (16.7× self) | 942 ms | 4.01× SLOWER → **4.15× FASTER** |
+| n=50000 d=30 k=10 | 6059 ms | **382 ms** (15.9× self) | 2441 ms | 2.48× SLOWER → **6.39× FASTER** |
+
+Conformance 142/142 GREEN. LESSON (compounds the GMM-full one): the loop interchange was the BIGGER lever here (d× cache-pass reduction), parallelism stacked on top. AUDIT any `for group { for feature { for sample } }` moment/covariance accumulation — the sample loop belongs INNERMOST-but-vectorized (contiguous feature access), not re-scanned per feature. grep `for j .. { for i .. { .*\[i\]\[c\].*\[j\] } }`-shaped nests.
