@@ -1843,3 +1843,18 @@ HGW is ~O(1) work/element (memory-bandwidth-bound); the serial pass already satu
 | prewitt ax0 | ~4.7 ms (same pattern) | **2.43 ms** | **~parity** (scipy 2.57, was ~1.8× slower) |
 
 sobel was the lone common ndimage filter still losing to scipy; now all of correlate (2.98×)/uniform (3.04×)/gaussian (3.92×)/laplace (2.42×)/sobel (1.86×) WIN. Generalizable: any derivative/separable filter calling general N-D `correlate` with a 1-D kernel → swap to `correlate1d`.
+
+## 2026-06-29 — AmberKestrel (cc): nnls incremental Cholesky + parallel Gram (3.0× self, closes 3.75× loss → 1.25×)
+
+**Lever:** `nnls` (Lawson–Hanson active set) re-built and re-factored the FULL passive-set Gram submatrix (Cholesky from scratch) on EVERY inner solve = O(Σp³) ≈ O(n⁴) for n columns entering. Replaced with an INCREMENTALLY-maintained Cholesky factor (`lflat`, strided): a variable ENTERING the passive set is an O(p²) rank-1 column add (`nnls_chol_add_col`); the rare REMOVAL triggers an O(p³) refactor → O(n³) overall. Rank-deficient passive column (non-positive Schur pivot) flips `use_slow`, reverting to the proven gather + Cholesky/pivot solve. PLUS the dominant O(m·n²) Gram precompute (AᵀA) fanned across cores as a partial-Gram REDUCTION (gated; small problems stay serial/byte-identical).
+
+**Correctness:** NNLS minimizer is unique, so `x` is unchanged — `nnls_matches_scipy_reference_values` + metamorphic `mr_nnls` GREEN (3 nnls tests + meta pass). Parallel Gram is ~1e-13 reassociation (gradient only RANKS the entering variable; strictly convex), not bit-identical, but the unique optimum is invariant.
+
+**Measured same-box, 800×400** (scipy.optimize.nnls 29.45 ms):
+| stage | time | vs scipy |
+|---|---|---|
+| before | 110.33 ms | 3.75× SLOWER |
+| + incremental Cholesky | 43.57 ms | 1.48× slower |
+| + parallel Gram | **36.76 ms** | **1.25× slower** (3.0× self-speedup) |
+
+Closed most of a 3.75× loss; the residual ~1.25× is scipy's Householder-QR Fortran vs fsci's Gram-based scalar inner loops (engineering wall). isotonic_regression measured at ~parity (28 vs 24ms); cumulative_simpson/trapezoid/simpson all WIN (7.2×/3.5×/2.2×).

@@ -3863,6 +3863,92 @@ where
 ///
 /// Uses the active-set method (Lawson-Hanson algorithm).
 /// Matches `scipy.optimize.nnls`.
+/// Full Cholesky factorization of the passive-set Gram submatrix `gram[pidx, pidx]` into the
+/// strided lower-triangular buffer `lflat` (stride `n`: `L[i][j] = lflat[i*n + j]`, `j ≤ i`).
+/// Returns `false` on a non-positive pivot (rank-deficient passive set → caller falls back).
+/// O(p³); used only when a variable LEAVES the passive set (rare), so the active-set buildup stays
+/// O(n³) overall instead of the old re-factor-every-iteration O(n⁴).
+fn nnls_chol_refactor(gram: &[f64], n: usize, pidx: &[usize], lflat: &mut [f64]) -> bool {
+    let p = pidx.len();
+    for i in 0..p {
+        let gi = pidx[i] * n;
+        for j in 0..=i {
+            let mut sum = gram[gi + pidx[j]];
+            for k in 0..j {
+                sum -= lflat[i * n + k] * lflat[j * n + k];
+            }
+            if i == j {
+                if sum <= 0.0 {
+                    return false;
+                }
+                lflat[i * n + i] = sum.sqrt();
+            } else {
+                lflat[i * n + j] = sum / lflat[j * n + j];
+            }
+        }
+    }
+    true
+}
+
+/// Extend the Cholesky factor `lflat` (currently `p×p` for `pidx`) by one column for the new
+/// passive index `jnew` (rank-1 update). Writes the new row `p` in place. Returns `false` if the
+/// new column is (numerically) dependent on the passive set (non-positive Schur pivot). O(p²).
+fn nnls_chol_add_col(gram: &[f64], n: usize, pidx: &[usize], jnew: usize, lflat: &mut [f64]) -> bool {
+    let p = pidx.len();
+    // Forward-solve L v = gram[pidx, jnew]; store v directly into the new row (row p).
+    for k in 0..p {
+        let mut s = gram[pidx[k] * n + jnew];
+        for t in 0..k {
+            s -= lflat[k * n + t] * lflat[p * n + t];
+        }
+        lflat[p * n + k] = s / lflat[k * n + k];
+    }
+    let mut dd = gram[jnew * n + jnew];
+    for k in 0..p {
+        dd -= lflat[p * n + k] * lflat[p * n + k];
+    }
+    if dd <= 0.0 {
+        return false;
+    }
+    lflat[p * n + p] = dd.sqrt();
+    true
+}
+
+/// Solve `L Lᵀ s = rhs` for the `p×p` strided lower-triangular factor `lflat` (forward then back
+/// substitution). `y` is scratch of length ≥ p. O(p²).
+fn nnls_chol_solve(lflat: &[f64], n: usize, p: usize, rhs: &[f64], s: &mut [f64], y: &mut [f64]) {
+    for i in 0..p {
+        let mut acc = rhs[i];
+        for j in 0..i {
+            acc -= lflat[i * n + j] * y[j];
+        }
+        y[i] = acc / lflat[i * n + i];
+    }
+    for i in (0..p).rev() {
+        let mut acc = y[i];
+        for j in (i + 1)..p {
+            acc -= lflat[j * n + i] * s[j];
+        }
+        s[i] = acc / lflat[i * n + i];
+    }
+}
+
+/// Accumulate one observation's rank-1 contribution into the UPPER triangle of a partial Gram
+/// matrix `g` (row-major n×n) and `Aᵀb` accumulator `ab`. Shared by the serial and parallel-
+/// reduction Gram precompute in `nnls`.
+#[inline]
+fn nnls_gram_accumulate(g: &mut [f64], ab: &mut [f64], ai: &[f64], bi: f64, n: usize) {
+    for (j1, &v1) in ai.iter().enumerate() {
+        let grow = &mut g[j1 * n + j1..j1 * n + n];
+        for (gg, &v2) in grow.iter_mut().zip(ai[j1..].iter()) {
+            *gg += v1 * v2;
+        }
+    }
+    for (abj, &v) in ab.iter_mut().zip(ai.iter()) {
+        *abj += v * bi;
+    }
+}
+
 pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
     let m = a.len();
     if m == 0 {
@@ -3919,45 +4005,92 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
     // `gram[j1][j2] = Σ a_i[j1]·a_i[j2]` exactly (f64 multiply is commutative and
     // the `i` order is unchanged), and the diagonal/upper terms are summed in the
     // same order as the full sweep.
+    // Gram stored as a contiguous row-major n×n buffer (`gram[j1*n + j2]`) — flat for the strided
+    // incremental Cholesky and a cache-friendly gradient sweep.
     let a_flat: Vec<f64> = a.iter().flat_map(|row| row.iter().copied()).collect();
-    let mut gram = vec![vec![0.0; n]; n];
+    let mut gram = vec![0.0; n * n];
     let mut atb = vec![0.0; n];
-    for (i, &bi) in b.iter().enumerate() {
-        let ai = &a_flat[i * n..i * n + n];
-        for (j1, &v1) in ai.iter().enumerate() {
-            let grow = &mut gram[j1][j1..];
-            for (g, &v2) in grow.iter_mut().zip(ai[j1..].iter()) {
-                *g += v1 * v2;
-            }
+    // The Gram precompute AᵀA is O(m·n²), the dominant cost for tall A. Fan the row sum across
+    // cores as a partial-Gram REDUCTION (each thread accumulates a private Gram over a row chunk,
+    // then merge in chunk order). Not bit-identical to the serial sum (~1e-13 reassociation), but
+    // NNLS is strictly convex: the gradient only RANKS which variable enters, so the unique
+    // minimizer is unchanged. Small problems stay serial (byte-identical) below the gate.
+    let work = (m as u64).saturating_mul(n as u64).saturating_mul(n as u64);
+    let nthreads = if work < (1 << 22) || m < 4 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(m)
+            .min(16)
+    };
+    if nthreads <= 1 {
+        for (ai, &bi) in a_flat.chunks(n).zip(b.iter()) {
+            nnls_gram_accumulate(&mut gram, &mut atb, ai, bi, n);
         }
-        for (atbj, &v) in atb.iter_mut().zip(ai.iter()) {
-            *atbj += v * bi;
+    } else {
+        let chunk = m.div_ceil(nthreads);
+        let partials: Vec<(Vec<f64>, Vec<f64>)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = a_flat
+                .chunks(chunk * n)
+                .zip(b.chunks(chunk))
+                .map(|(arows, brows)| {
+                    scope.spawn(move || {
+                        let mut g = vec![0.0; n * n];
+                        let mut ab = vec![0.0; n];
+                        for (ai, &bi) in arows.chunks(n).zip(brows.iter()) {
+                            nnls_gram_accumulate(&mut g, &mut ab, ai, bi, n);
+                        }
+                        (g, ab)
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for (g, ab) in &partials {
+            for (dst, &src) in gram.iter_mut().zip(g.iter()) {
+                *dst += src;
+            }
+            for (dst, &src) in atb.iter_mut().zip(ab.iter()) {
+                *dst += src;
+            }
         }
     }
     for j1 in 0..n {
         for j2 in (j1 + 1)..n {
-            gram[j2][j1] = gram[j1][j2];
+            gram[j2 * n + j1] = gram[j1 * n + j2];
         }
     }
 
+    // Lawson–Hanson active set with an INCREMENTALLY-MAINTAINED Cholesky factor of the passive-set
+    // Gram submatrix (`lflat`, strided). A variable ENTERING the passive set is an O(p²) rank-1
+    // column add (`nnls_chol_add_col`); the rare REMOVAL triggers an O(p³) refactor. The old code
+    // rebuilt+re-factored the full p×p submatrix on EVERY inner solve (O(n⁴) for n columns); this
+    // is O(n³). `pidx` is the passive set in factorization order. A rank-deficient passive column
+    // (non-positive Schur pivot) flips `use_slow`, reverting to the proven gather + Cholesky /
+    // pivoting solve for the rest of the run. NNLS has a unique minimizer, so the returned `x` is
+    // unchanged (only the path differs).
+    let mut pidx: Vec<usize> = Vec::new();
+    let mut lflat = vec![0.0; n * n];
+    let mut use_slow = false;
+    let mut w = vec![0.0; n];
+    let mut rhs = vec![0.0; n];
+    let mut s = vec![0.0; n];
+    let mut ybuf = vec![0.0; n];
+
     for _ in 0..3 * n {
-        // Gradient w = Aᵀ(b − Ax) = Aᵀb − (AᵀA)x = atb − gram·x. Using the
-        // precomputed Gram/Aᵀb makes this O(n²) per outer step and never re-touches
-        // the (cache-unfriendly `Vec<Vec>`) `A`, vs the old O(2·m·n) re-form of
-        // `Ax` then `Aᵀ(·)`. ~1e-15 reassociation only; NNLS is strictly convex so
-        // the unique minimizer is unchanged (the gradient only ranks which variable
-        // enters the passive set).
-        let mut w = vec![0.0; n];
+        // Gradient w = Aᵀb − (AᵀA)x = atb − gram·x (O(n²); contiguous row sweep).
         for j in 0..n {
             let mut acc = atb[j];
-            let grow = &gram[j];
+            let grow = &gram[j * n..j * n + n];
             for k in 0..n {
                 acc -= grow[k] * x[k];
             }
             w[j] = acc;
         }
 
-        // Find max w[j] among active (non-passive) variables
+        // Variable with the largest gradient among the active (non-passive) set enters.
         let mut max_w = f64::NEG_INFINITY;
         let mut max_j = 0;
         for j in 0..n {
@@ -3966,75 +4099,85 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
                 max_j = j;
             }
         }
-
         if max_w <= 1e-10 {
             break; // optimality reached
         }
 
         passive[max_j] = true;
+        if !use_slow {
+            if nnls_chol_add_col(&gram, n, &pidx, max_j, &mut lflat) {
+                pidx.push(max_j);
+            } else {
+                use_slow = true; // dependent column → fall back to the gather/pivot solve
+            }
+        }
 
-        // Solve unconstrained least squares on passive set
+        // Solve the unconstrained LS on the passive set; drop any variable that goes ≤ 0.
         loop {
-            let passive_indices: Vec<usize> = (0..n).filter(|&j| passive[j]).collect();
-            let p = passive_indices.len();
-
+            if use_slow {
+                pidx = (0..n).filter(|&j| passive[j]).collect();
+            }
+            let p = pidx.len();
             if p == 0 {
                 break;
             }
 
-            // Build sub-problem A_P·s_P = b by GATHERING from the precomputed
-            // Gram / Aᵀb — bit-identical to recomputing each Σ_i in place.
-            let mut ata = vec![vec![0.0; p]; p];
-            let mut atb_sub = vec![0.0; p];
-
-            for (pi, &ji) in passive_indices.iter().enumerate() {
-                for (pj, &jj) in passive_indices.iter().enumerate() {
-                    ata[pi][pj] = gram[ji][jj];
+            if use_slow {
+                let mut ata = vec![vec![0.0; p]; p];
+                let mut atb_sub = vec![0.0; p];
+                for (pi, &ji) in pidx.iter().enumerate() {
+                    for (pj, &jj) in pidx.iter().enumerate() {
+                        ata[pi][pj] = gram[ji * n + jj];
+                    }
+                    atb_sub[pi] = atb[ji];
                 }
-                atb_sub[pi] = atb[ji];
+                let s_p = cholesky_solve_spd(&ata, &atb_sub)
+                    .unwrap_or_else(|| solve_small_system(&ata, &atb_sub));
+                s[..p].copy_from_slice(&s_p);
+            } else {
+                for (k, &ji) in pidx.iter().enumerate() {
+                    rhs[k] = atb[ji];
+                }
+                nnls_chol_solve(&lflat, n, p, &rhs[..p], &mut s[..p], &mut ybuf[..p]);
             }
 
-            // Solve ata · s = atb_sub. `ata` is a principal submatrix of AᵀA, so
-            // SPD whenever the passive columns are independent — Cholesky solves it
-            // in ~⅓ the flops of the Gauss-Jordan `solve_small_system` and skips
-            // pivoting. Fall back to the pivoting solver on the rare rank-deficient
-            // passive set (Cholesky hits a non-positive pivot and returns None).
-            let s_p = cholesky_solve_spd(&ata, &atb_sub)
-                .unwrap_or_else(|| solve_small_system(&ata, &atb_sub));
-
-            // Check for negative elements
             let mut all_positive = true;
-            for (pi, &si) in s_p.iter().enumerate() {
-                if si <= 0.0 && passive[passive_indices[pi]] {
+            for &si in &s[..p] {
+                if si <= 0.0 {
                     all_positive = false;
                     break;
                 }
             }
-
             if all_positive {
-                for (pi, &ji) in passive_indices.iter().enumerate() {
-                    x[ji] = s_p[pi];
+                for (k, &ji) in pidx.iter().enumerate() {
+                    x[ji] = s[k];
                 }
                 break;
             }
 
-            // Find alpha and move variables back to active set
+            // Step toward the unconstrained solution until the first variable hits 0.
             let mut alpha = f64::INFINITY;
-            for (pi, &ji) in passive_indices.iter().enumerate() {
-                if s_p[pi] <= 0.0 {
-                    let denom = x[ji] - s_p[pi];
+            for (k, &ji) in pidx.iter().enumerate() {
+                if s[k] <= 0.0 {
+                    let denom = x[ji] - s[k];
                     if denom > 0.0 {
-                        let a_val = x[ji] / denom;
-                        alpha = alpha.min(a_val);
+                        alpha = alpha.min(x[ji] / denom);
                     }
                 }
             }
-
-            for (pi, &ji) in passive_indices.iter().enumerate() {
-                x[ji] += alpha * (s_p[pi] - x[ji]);
+            for (k, &ji) in pidx.iter().enumerate() {
+                x[ji] += alpha * (s[k] - x[ji]);
                 if x[ji].abs() < 1e-15 {
                     x[ji] = 0.0;
                     passive[ji] = false;
+                }
+            }
+
+            // A variable left the passive set → rebuild `pidx` and re-factor (rare, O(p³)).
+            if !use_slow {
+                pidx = (0..n).filter(|&j| passive[j]).collect();
+                if !nnls_chol_refactor(&gram, n, &pidx, &mut lflat) {
+                    use_slow = true;
                 }
             }
         }
