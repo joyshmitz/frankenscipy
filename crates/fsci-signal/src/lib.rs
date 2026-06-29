@@ -10211,6 +10211,109 @@ pub fn welch(
     })
 }
 
+/// Multi-channel Welch PSD result: shared frequency bins + one PSD per line.
+#[derive(Debug, Clone)]
+pub struct SpectralResult2d {
+    /// Frequency bins (shared across all lines).
+    pub frequencies: Vec<f64>,
+    /// Power spectral density estimate per line (`lines x n_freqs`).
+    pub psd: Vec<Vec<f64>>,
+}
+
+/// Apply `welch` (Welch PSD) across one axis of a rectangular 2-D input.
+///
+/// Matches `scipy.signal.welch(x, fs, window, nperseg, noverlap, axis=...)`, returning
+/// the shared frequency bins plus one PSD per line. Each line is estimated independently
+/// — BIT-IDENTICAL to per-line 1-D `welch`. scipy runs this single-threaded along the
+/// axis; the across-lines fan-out over cores wins. The per-segment FFTs are small
+/// (`nperseg`, far below the FFT self-parallel threshold), and welch's own across-frames
+/// parallelism is forced serial inside the fan-out (`with_serial_par_index_fill` →
+/// `stft_frame_thread_count` returns 1), so there is exactly one parallelism level.
+pub fn welch_axis_2d(
+    x: &[Vec<f64>],
+    fs: f64,
+    window: Option<&str>,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+    axis: isize,
+) -> Result<SpectralResult2d, SignalError> {
+    if x.is_empty() {
+        return Ok(SpectralResult2d {
+            frequencies: Vec::new(),
+            psd: Vec::new(),
+        });
+    }
+    let cols = x[0].len();
+    if x.iter().any(|row| row.len() != cols) {
+        return Err(SignalError::InvalidInputShape {
+            detail: "x must be a rectangular 2-D matrix".to_string(),
+        });
+    }
+
+    // Resolve the channel set: rows (axis -1/1) or columns (axis 0).
+    let (n_lines, line_len): (usize, usize) = match axis {
+        -1 | 1 => (x.len(), cols),
+        0 => (cols, x.len()),
+        other => {
+            return Err(SignalError::InvalidArgument(format!(
+                "axis must be 0, 1, or -1 for 2-D welch, got {other}"
+            )));
+        }
+    };
+    let by_columns = axis == 0;
+    // Welch per-line work ~ frames * log2(nperseg); use a small per-element weight.
+    let nthreads = lfilter_axis_thread_count(n_lines, line_len, 8);
+
+    let welch_line = |idx: usize| -> Result<SpectralResult, SignalError> {
+        if by_columns {
+            let column: Vec<f64> = x.iter().map(|row| row[idx]).collect();
+            welch(&column, fs, window, nperseg, noverlap)
+        } else {
+            welch(&x[idx], fs, window, nperseg, noverlap)
+        }
+    };
+
+    let results: Vec<SpectralResult> = if nthreads <= 1 {
+        // One parallelism level: let each line's frame loop use the cores.
+        (0..n_lines)
+            .map(&welch_line)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        // Many lines: fan out across lines, forcing each line's frame loop serial.
+        let chunk = n_lines.div_ceil(nthreads);
+        let welch_line = &welch_line;
+        let chunk_results: Vec<Result<Vec<SpectralResult>, SignalError>> =
+            std::thread::scope(|scope| {
+                (0..n_lines)
+                    .step_by(chunk)
+                    .map(|l0| {
+                        scope.spawn(move || {
+                            let l1 = (l0 + chunk).min(n_lines);
+                            (l0..l1)
+                                .map(|i| with_serial_par_index_fill(|| welch_line(i)))
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("welch line chunk panicked"))
+                    .collect()
+            });
+        let mut all = Vec::with_capacity(n_lines);
+        for chunk_result in chunk_results {
+            all.extend(chunk_result?);
+        }
+        all
+    };
+
+    let frequencies = results
+        .first()
+        .map(|r| r.frequencies.clone())
+        .unwrap_or_default();
+    let psd = results.into_iter().map(|r| r.psd).collect();
+    Ok(SpectralResult2d { frequencies, psd })
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // FIR Filter Design
 // ══════════════════════════════════════════════════════════════════════
@@ -14354,6 +14457,11 @@ pub struct StftResult {
 // enough frames carrying enough total FFT work to amortise thread spawn (each frame
 // is an O(nperseg log nperseg) rfft), then scale with cores capped at frame_count/2.
 fn stft_frame_thread_count(frame_count: usize, nperseg: usize) -> usize {
+    // An outer `*_axis_2d` fan-out forces the per-line frame loop serial (one
+    // parallelism level) via the shared thread-local — same as par_index_fill.
+    if PAR_INDEX_FILL_SERIAL.with(|c| c.get()) {
+        return 1;
+    }
     // FFT flops per frame ~ nperseg*log2(nperseg); only parallelise when the total
     // clearly amortises thread spawn (cheap small-nperseg STFTs run faster serial).
     let logn = (nperseg.max(2) as u64).ilog2() as u64;
@@ -23672,6 +23780,41 @@ mod tests {
 
         assert!(decimate_axis_2d(&x, 1, -1).is_err()); // q < 2
         assert!(decimate_axis_2d(&x, q, 3).is_err()); // bad axis
+    }
+
+    #[test]
+    fn welch_axis_2d_matches_per_line() {
+        // 2-D welch must be BIT-IDENTICAL to per-line 1-D welch (shared freqs + per-line psd).
+        let rows = 48usize;
+        let cols = 8192usize;
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| ((r * 7 + c) as f64 * 0.05).sin() * 2.0 + ((c) as f64 * 0.31).cos())
+                    .collect()
+            })
+            .collect();
+
+        // axis = -1 (rows)
+        let par = welch_axis_2d(&x, 1.0, Some("hann"), Some(256), None, -1).expect("welch rows");
+        let serial: Vec<SpectralResult> = x
+            .iter()
+            .map(|row| welch(row, 1.0, Some("hann"), Some(256), None).expect("welch row"))
+            .collect();
+        assert_eq!(par.frequencies, serial[0].frequencies, "welch freqs");
+        for (r, sr) in serial.iter().enumerate() {
+            assert_eq!(par.psd[r], sr.psd, "welch_axis_2d axis=-1 row {r}");
+        }
+
+        // axis = 0 (columns)
+        let par0 = welch_axis_2d(&x, 1.0, Some("hann"), Some(256), None, 0).expect("welch cols");
+        for col in 0..cols {
+            let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+            let sc = welch(&column, 1.0, Some("hann"), Some(256), None).expect("welch col");
+            assert_eq!(par0.psd[col], sc.psd, "welch_axis_2d axis=0 col {col}");
+        }
+
+        assert!(welch_axis_2d(&x, 1.0, Some("hann"), Some(256), None, 9).is_err());
     }
 
     #[test]

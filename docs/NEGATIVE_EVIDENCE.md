@@ -11357,3 +11357,32 @@ n due to the per-call chirp rebuild.
   lstsq, the 24x linear gap) AND (2) raw core count (the 3.2x constant gap, where fsci-serial actually loses).
   A light per-element op can still parallelize WELL when there are ~2-3 passes of real work per element (5.2x
   on 64 cores) — the label-mean regression was a 1-bump scatter-add, lighter still. 7 vein ships now.
+
+## 2026-06-28 - LANDED WIN (AmberForge): welch_axis_2d (multi-channel Welch PSD) — 2.15-3.9x FASTER than scipy
+
+- Agent: AmberForge. 8th ship of the multi-channel vein, first FFT-based one to LAND (hilbert was blocked by
+  the FFT self-parallel wall; welch dodges it). fsci's `welch` was 1-D only; scipy takes an axis (single-
+  threaded). Added `welch_axis_2d(x, fs, window, nperseg, noverlap, axis)` returning shared freqs + one PSD
+  per line (`SpectralResult2d`), parallel across lines.
+- WHY welch dodges the hilbert FFT wall: welch's per-segment FFTs are SMALL (`nperseg`=256, far below the
+  fsci FFT self-parallel threshold of 1<<16), so they stay serial — no oversubscription even for long
+  signals. welch's OWN across-frames parallelism (a hand-rolled thread::scope gated by
+  `stft_frame_thread_count`) is forced serial inside the fan-out by gating `stft_frame_thread_count` with the
+  shared `PAR_INDEX_FILL_SERIAL` thread-local (which now also covers spectrogram/coherence/csd for future
+  2-D variants). One parallelism level.
+- **MEASURED vs scipy.signal.welch (nperseg=256, hann, axis=-1, best-of-5):**
+
+  | channels × length | fsci welch_2d | scipy | speedup |
+  | ---: | ---: | ---: | ---: |
+  | 1000 × 10000 | 133.3 ms | 519.3 ms | **3.9x** |
+  | 256 × 100000 | 391.5 ms | 841.6 ms | **2.15x** |
+
+  More modest than the non-FFT ships (detrend 24x, resample 11x) because welch is FFT-bound: fsci's small
+  256-pt rfft is ~16x slower per-core than pocketfft, so the 64-core fan-out recovers it to 2.15-3.9x rather
+  than 10-25x. Still a clean win. BYTE-IDENTICAL to per-line 1-D `welch` (test
+  `welch_axis_2d_matches_per_line`, axis=-1 and 0). Numerical oracle vs scipy: PSD max abs diff **1.7e-13**,
+  freqs EXACT (0.0). fsci-signal 661/0.
+- LESSON: FFT-based per-line ops CAN join the vein when the FFTs are SMALL (segmented: welch/spectrogram/csd
+  use nperseg-sized FFTs < 1<<16 → serial → no oversubscription). The wall is only for ops doing ONE big FFT
+  of the whole line (hilbert/periodogram at L>=1<<16). 8 vein ships now. The stft_frame_thread_count gate
+  opens csd/coherence/spectrogram 2-D as low-risk follow-ons.
