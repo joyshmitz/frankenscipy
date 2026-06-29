@@ -1245,3 +1245,23 @@ not done): speed fsci's ks_2samp pvalue at large n (likely an exact/series path 
 asymptotic), or offer a statistic-only `ks_2samp_statistic_matrix` (the D stat is O(n log n), would be
 50-100×). Conformance: `ks_2samp_matrix` upper-triangle + diagonal bit-identical to per-pair ks_2samp
 (both stat & pvalue), symmetric, ragged rejected. fsci-stats GREEN.
+
+### ✅✅ stats: mannwhitneyu_matrix (all-pairs Mann–Whitney U test) — 113-131x faster than scipy
+The strongest two-sample-test matrix (the ks follow-on). fsci's `mannwhitneyu` reports the smaller U
+(order-independent) and a normal-approximation p-value (CHEAP, unlike ks_2samp's heavy exact pvalue) — so
+both outputs are symmetric and it's a ONE-LINER over the `all_pairs_two_symmetric_matrices` tuple helper.
+SciPy has NO vectorized all-pairs form — pairwise rank-sum comparison means looping
+`scipy.stats.mannwhitneyu` in Python.
+
+**SAME-BOX head-to-head (fsci mannwhitneyu_matrix vs scipy Python mannwhitneyu-loop, both this box):**
+| matrix (m × n)  | pairs  | scipy      | fsci      | speedup    |
+|-----------------|--------|------------|-----------|------------|
+| m=40,  n=400    | 780    | 407.1 ms   | 3.61 ms   | **112.9×** |
+| m=100, n=1000   | 4 950  | 3 130.2 ms | 23.94 ms  | **130.8×** |
+
+Confirms the memory prediction: where ks_2samp_matrix was capped at 8× by fsci's heavy ks pvalue,
+mannwhitneyu's normal-approx pvalue keeps the per-pair kernel light → the full all-pairs speedup. Returns
+`(U_matrix, pvalue_matrix)`. Conformance: upper-triangle + diagonal bit-identical to per-pair mannwhitneyu
+(both stat & pvalue), symmetric, ragged rejected. The tuple helper now backs ks + mannwhitneyu; the
+`all_pairs_*` family covers 6 matrices total (kendall/weightedtau/wasserstein/energy/ks/mannwhitneyu).
+fsci-stats GREEN.

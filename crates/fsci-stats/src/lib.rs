@@ -38499,6 +38499,21 @@ pub fn ks_2samp_matrix(
     })
 }
 
+/// All-pairs two-sided Mann–Whitney U test over `samples`. Returns `(statistic, pvalue)` matrices,
+/// both `m × m` symmetric, with `out.0[i][j] == mannwhitneyu(samples[i], samples[j]).statistic` and
+/// `out.1[i][j] ==` its p-value (bit-identical on the upper triangle). fsci's `mannwhitneyu` reports the
+/// smaller U (order-independent) and a normal-approximation p-value, so both are symmetric. SciPy has NO
+/// vectorized all-pairs form — pairwise rank-sum comparison (a common multiple-comparison workflow) means
+/// looping `scipy.stats.mannwhitneyu` in Python; this runs the O(n log n) per-pair kernel in parallel.
+pub fn mannwhitneyu_matrix(
+    samples: &[Vec<f64>],
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+    all_pairs_two_symmetric_matrices(samples, |a, b| {
+        let r = mannwhitneyu(a, b);
+        (r.statistic, r.pvalue)
+    })
+}
+
 pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
     let n = x.len();
     if n < 2 || x.len() != y.len() {
@@ -59881,6 +59896,19 @@ mod tests {
             }
         }
         assert!(ks_2samp_matrix(&bad).is_err());
+
+        // mannwhitneyu_matrix: (U, pvalue) matrices, upper triangle + diagonal bit-identical to per-pair.
+        let (mwu, mwp) = mannwhitneyu_matrix(&samples).unwrap();
+        for i in 0..m {
+            for j in i..m {
+                let r = mannwhitneyu(&samples[i], &samples[j]);
+                assert_eq!(mwu[i][j].to_bits(), r.statistic.to_bits(), "mwu U[{i}][{j}]");
+                assert_eq!(mwp[i][j].to_bits(), r.pvalue.to_bits(), "mwu p[{i}][{j}]");
+                assert_eq!(mwu[i][j].to_bits(), mwu[j][i].to_bits(), "mwu U not symmetric {i},{j}");
+                assert_eq!(mwp[i][j].to_bits(), mwp[j][i].to_bits(), "mwu p not symmetric {i},{j}");
+            }
+        }
+        assert!(mannwhitneyu_matrix(&bad).is_err());
     }
 
     #[test]
