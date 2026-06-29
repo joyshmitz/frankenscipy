@@ -11516,3 +11516,29 @@ n due to the per-call chirp rebuild.
 - LESSON: the parallel-across-lines lever generalizes BEYOND fsci-signal. Target any 1-D-only fsci fn whose
   scipy counterpart takes an `axis` and loops/serial-sorts per line. Next candidates in fsci-stats:
   scipy.stats functions with axis + heavy per-line work (mode/iqr/median_abs_deviation/gstd over many rows).
+
+## 2026-06-28 - LANDED WINS (AmberForge): 6 scipy.stats axis-reducers (skew/kurtosis/MAD/iqr/variation/trim_mean) — 27-145x FASTER than scipy
+
+- Agent: AmberForge. Same lever as rankdata_axis_2d (parallel-across-lines, fsci-stats), batched via ONE
+  generic `reduce_axis_2d` helper (per-line scalar reducer, fanned out across lines). fsci had all six as 1-D
+  scalar fns; scipy.stats applies them along an axis through the slow `_axis_nan_policy` per-line path.
+- **MEASURED vs scipy.stats <fn>(x, axis=-1), 2000×10000, best-of-5:**
+
+  | fn | fsci | scipy | speedup |
+  | --- | ---: | ---: | ---: |
+  | skew | 5.6 ms | 815 ms | **145x** |
+  | kurtosis | 6.1 ms | 782 ms | **128x** |
+  | median_abs_deviation | 8.2 ms | 857 ms | **104x** |
+  | iqr | 7.1 ms | 328 ms | **46x** |
+  | variation | 6.1 ms | 231 ms | **38x** |
+  | trim_mean | 17.1 ms | 460 ms | **27x** |
+
+  All match scipy to MACHINE PRECISION (max abs diff 2e-14 … 5e-13; skew bias=True, kurtosis Fisher+biased,
+  MAD scale=1.0, variation ddof=0 all confirmed). BYTE-IDENTICAL to per-line 1-D (test
+  `reduce_axis_2d_family_matches_per_line`, all six, axis=-1 and 0 for skew). fsci-stats 1998/0.
+- WHY huge: scipy's per-line cost here is INFLATED by the `_axis_nan_policy` decorator's per-row handling
+  (even simple moments like skew take 815ms on 2e7 elts vs raw-numpy ~50ms), so fsci wins on BOTH a tighter
+  per-line reduction AND the 64-core fan-out. fsci-stats now has 7 axis-2D wins (rankdata + these 6).
+- REMAINING fsci-stats candidates (scipy axis slow): mode (1788 ms — biggest, but degenerate on continuous
+  data / returns mode+count, needs care), gstd (535 ms — positive-only geometric), scoreatpercentile (222 ms),
+  entropy (377 ms). The `reduce_axis_2d` helper makes any scalar-per-line reducer a one-line wrapper.

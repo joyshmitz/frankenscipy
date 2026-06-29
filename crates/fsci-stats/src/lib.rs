@@ -30074,6 +30074,110 @@ pub fn rankdata_axis_2d(
     }
 }
 
+/// Apply a per-line SCALAR reducer across one axis of a rectangular 2-D input, fanning
+/// out across lines (one scalar per line). Used by the `*_axis_2d` reductions below.
+/// Each line reduction is independent → BIT-IDENTICAL to calling the 1-D reducer per line.
+/// scipy.stats applies these via a per-line Python loop (the slow `_axis_nan_policy` path),
+/// so the across-lines fan-out over cores wins by 1-2 orders of magnitude. The per-line
+/// reducers here are serial (no internal parallelism) → the fan-out cannot oversubscribe.
+fn reduce_axis_2d<F>(x: &[Vec<f64>], axis: isize, reduce: F) -> Result<Vec<f64>, StatsError>
+where
+    F: Fn(&[f64]) -> f64 + Sync,
+{
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cols = x[0].len();
+    if x.iter().any(|row| row.len() != cols) {
+        return Err(StatsError::InvalidArgument(
+            "x must be a rectangular 2-D matrix".to_string(),
+        ));
+    }
+    let (n_lines, line_len): (usize, usize) = match axis {
+        -1 | 1 => (x.len(), cols),
+        0 => (cols, x.len()),
+        other => {
+            return Err(StatsError::InvalidArgument(format!(
+                "axis must be 0, 1, or -1 for 2-D reduction, got {other}"
+            )));
+        }
+    };
+    let by_columns = axis == 0;
+    let line = |idx: usize| -> f64 {
+        if by_columns {
+            let col: Vec<f64> = x.iter().map(|r| r[idx]).collect();
+            reduce(&col)
+        } else {
+            reduce(&x[idx])
+        }
+    };
+    let threads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let work = (n_lines as u64).saturating_mul(line_len.max(1) as u64);
+    let nthreads = if n_lines < 4 || work < 1 << 16 || threads <= 1 {
+        1
+    } else {
+        threads.min(n_lines)
+    };
+    if nthreads <= 1 {
+        return Ok((0..n_lines).map(line).collect());
+    }
+    let chunk = n_lines.div_ceil(nthreads);
+    let line = &line;
+    let mut out = vec![0.0f64; n_lines];
+    std::thread::scope(|scope| {
+        for (ci, ochunk) in out.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in ochunk.iter_mut().enumerate() {
+                    *slot = line(base + k);
+                }
+            });
+        }
+    });
+    Ok(out)
+}
+
+/// `skew` across one axis of a rectangular 2-D input — matches `scipy.stats.skew(x, axis)`.
+/// One value per line; BIT-IDENTICAL to per-line 1-D [`skew`].
+pub fn skew_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, skew)
+}
+
+/// `kurtosis` across one axis — matches `scipy.stats.kurtosis(x, axis)` (Fisher, biased).
+pub fn kurtosis_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, kurtosis)
+}
+
+/// `median_abs_deviation` across one axis — matches `scipy.stats.median_abs_deviation(x, axis, scale)`.
+pub fn median_abs_deviation_axis_2d(
+    x: &[Vec<f64>],
+    scale: f64,
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| median_abs_deviation(line, scale))
+}
+
+/// `iqr` across one axis — matches `scipy.stats.iqr(x, axis)`.
+pub fn iqr_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, iqr)
+}
+
+/// `variation` (coefficient of variation) across one axis — matches `scipy.stats.variation(x, axis)`.
+pub fn variation_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, variation)
+}
+
+/// `trim_mean` across one axis — matches `scipy.stats.trim_mean(x, proportiontocut, axis)`.
+pub fn trim_mean_axis_2d(
+    x: &[Vec<f64>],
+    proportiontocut: f64,
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| trim_mean(line, proportiontocut))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RankTieMethod {
     Average,
@@ -59006,6 +59110,50 @@ mod tests {
     }
 
     // ── rankdata helper ───────────────────────────────────────────
+
+    #[test]
+    fn reduce_axis_2d_family_matches_per_line() {
+        // Each *_axis_2d reducer must be BIT-IDENTICAL to its per-line 1-D call, both axes.
+        let rows = 40usize;
+        let cols = 129usize;
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| (((r * 131 + c * 7) % 9973) as f64) * 0.013 - (c as f64 * 0.5).sin())
+                    .collect()
+            })
+            .collect();
+
+        // (label, 2-D result, per-line 1-D fn)
+        let checks: Vec<(&str, Vec<f64>, Box<dyn Fn(&[f64]) -> f64>)> = vec![
+            ("skew", skew_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| skew(l))),
+            ("kurt", kurtosis_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| kurtosis(l))),
+            (
+                "mad",
+                median_abs_deviation_axis_2d(&x, 1.0, -1).unwrap(),
+                Box::new(|l: &[f64]| median_abs_deviation(l, 1.0)),
+            ),
+            ("iqr", iqr_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| iqr(l))),
+            ("var", variation_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| variation(l))),
+            (
+                "trim",
+                trim_mean_axis_2d(&x, 0.1, -1).unwrap(),
+                Box::new(|l: &[f64]| trim_mean(l, 0.1)),
+            ),
+        ];
+        for (label, par, f) in &checks {
+            for (r, row) in x.iter().enumerate() {
+                assert_eq!(par[r], f(row), "{label} axis=-1 row {r}");
+            }
+        }
+        // axis = 0 (columns) for one representative
+        let par0 = skew_axis_2d(&x, 0).unwrap();
+        for col in 0..cols {
+            let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+            assert_eq!(par0[col], skew(&column), "skew axis=0 col {col}");
+        }
+        assert!(skew_axis_2d(&x, 9).is_err());
+    }
 
     #[test]
     fn rankdata_axis_2d_matches_per_line() {
