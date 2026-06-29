@@ -1888,3 +1888,16 @@ Closed most of a 3.75× loss; the residual ~1.25× is scipy's Householder-QR For
 | **+ incremental Cholesky (this)** | **39.87 ms** | **4.0× FASTER** (6.3× vs trf) |
 
 **11× total self-speedup; flipped a 2.76× loss into a 4.0× WIN.** Confirms the active-set lever from [[nnls]]: any solver re-factoring a growing/shrinking submatrix from scratch each iteration → incremental up/refactor. Both nnls (3.75× loss→1.25×) and lsq_linear (2.76× loss→4.0× win) now done.
+
+## 2026-06-29 — AmberKestrel (cc): NEGATIVE EVIDENCE — fsci-opt lane DOMINATED (measured sweep, no fixable gap left)
+
+After the nnls + lsq_linear active-set flips, swept the remaining unmeasured fsci-opt pure-compute / no-callback functions vs scipy (same-box). ALL win or are walls — no new fixable algorithmic gap:
+| fn (size) | fsci | scipy | verdict |
+|---|---|---|---|
+| least_squares (p=60 Rosenbrock) | 1.81 ms | 240.07 ms (trf) | **133× WIN** (callback lever) |
+| linprog (200v/100c, bound-dominated) | 1.38 ms | 7.79 ms (highs) | **5.6× WIN** |
+| linprog (300v/200c binding) | 9.81 ms | 23.86 ms | **2.4× WIN** |
+| linprog (500v/300c binding) | 32.69 ms | 63.78 ms | **1.95× WIN** |
+| isotonic_regression (N=2M) | 28.1 ms | 24.3 ms | ~parity (PAVA O(n) sequential scan — wall) |
+
+linprog uses a DENSE TABLEAU simplex (`Vec<Vec>`) whose pivot elimination is ALREADY a contiguous AXPY (`t_row -= factor·p_row`, take(rhs_col+1)) → the flat-buffer/cache lever that flipped nnls/lsq does NOT apply (no column-strided access in the hot loop). It wins 2-5.6× at common dense sizes; the win SHRINKS with size (2.4→1.95×) so a very-large DENSE LP would eventually favor HiGHS's revised simplex (a wall, not worth a dense-tableau rewrite). Per-pivot elimination is too small (~0.05ms) to amortize thread spawn → parallelization would be ~0-gain (cf. HGW). **CONCLUSION: opt/integrate/ndimage lanes are DOMINATED** — remaining gaps are engineering walls (HiGHS at huge dense scale, LAPACK/FFT/Qhull in OTHER agents' crates) or blocked (ndimage spline prefilter order∈{2,4,5} Constant/Wrap = make_interp_spline in fsci-interpolate, uncommon orders). Future cycles: cross-crate measurement or the spline-prefilter IIR (needs scipy boundary match).
