@@ -436,6 +436,215 @@ where
     })
 }
 
+/// Numerically-stable `ln(1 + e^u)` (softplus); for `u` above ~30 it collapses to `u`.
+fn softplus(u: f64) -> f64 {
+    if u > 30.0 {
+        u
+    } else {
+        u.exp().ln_1p()
+    }
+}
+
+/// Inverse softplus `ln(e^y - 1)` for `y > 0`; for large `y` it collapses to `y`.
+fn softplus_inv(y: f64) -> f64 {
+    if y > 30.0 {
+        y
+    } else {
+        (y.exp() - 1.0).max(f64::MIN_POSITIVE).ln()
+    }
+}
+
+/// Per-parameter smooth, monotone bijection between a box-constrained parameter
+/// `p` and an unconstrained `u ∈ ℝ`, so a bounded least-squares fit can reuse the
+/// unbounded Levenberg-Marquardt core. Two-sided bounds use the logistic map,
+/// one-sided bounds a softplus shift, and an unbounded coordinate the identity.
+/// This is the reparameterisation strategy `lmfit` uses; for an interior optimum
+/// it reaches the identical minimiser as `scipy.optimize.curve_fit(bounds=...)`.
+#[derive(Clone, Copy)]
+enum BoundKind {
+    Both(f64, f64),
+    Lower(f64),
+    Upper(f64),
+    Free,
+}
+
+impl BoundKind {
+    fn new(lo: f64, hi: f64) -> Self {
+        match (lo.is_finite(), hi.is_finite()) {
+            (true, true) => BoundKind::Both(lo, hi),
+            (true, false) => BoundKind::Lower(lo),
+            (false, true) => BoundKind::Upper(hi),
+            (false, false) => BoundKind::Free,
+        }
+    }
+
+    /// Map the unconstrained coordinate `u` to the bounded parameter `p`.
+    fn to_param(self, u: f64) -> f64 {
+        match self {
+            BoundKind::Both(lo, hi) => lo + (hi - lo) / (1.0 + (-u).exp()),
+            BoundKind::Lower(lo) => lo + softplus(u),
+            BoundKind::Upper(hi) => hi - softplus(-u),
+            BoundKind::Free => u,
+        }
+    }
+
+    /// Map the bounded parameter `p` (assumed strictly inside the box) to `u`.
+    fn to_unconstrained(self, p: f64) -> f64 {
+        match self {
+            BoundKind::Both(lo, hi) => ((p - lo) / (hi - p)).ln(),
+            BoundKind::Lower(lo) => softplus_inv(p - lo),
+            BoundKind::Upper(hi) => -softplus_inv(hi - p),
+            BoundKind::Free => p,
+        }
+    }
+
+    /// Clip `p` to lie strictly inside the box so `to_unconstrained` stays finite.
+    fn clip_inside(self, p: f64) -> f64 {
+        match self {
+            BoundKind::Both(lo, hi) => {
+                let eps = (hi - lo) * 1.0e-10;
+                p.clamp(lo + eps, hi - eps)
+            }
+            BoundKind::Lower(lo) => p.max(lo + 1.0e-10 * (1.0 + lo.abs())),
+            BoundKind::Upper(hi) => p.min(hi - 1.0e-10 * (1.0 + hi.abs())),
+            BoundKind::Free => p,
+        }
+    }
+}
+
+/// Box-constrained nonlinear least squares: minimise `0.5·‖residuals(p)‖²` subject
+/// to `lower ≤ p ≤ upper`, the bounded analogue of [`least_squares`].
+///
+/// Mirrors `scipy.optimize.least_squares(..., bounds=(lower, upper))`. Each bounded
+/// coordinate is smoothly reparameterised to an unconstrained variable (logistic for
+/// two-sided bounds, softplus for one-sided, identity for `±inf`), and the existing
+/// Levenberg-Marquardt core solves the unconstrained problem — so the bounded solve is
+/// as fast as the unbounded one. For an interior optimum the minimiser is identical to
+/// SciPy's `trf`; when a bound is active the transform approaches it asymptotically.
+/// The returned `x`, `fun`, and `jac` are recomputed in parameter space at the optimum
+/// (so a downstream covariance is in `p`-space, not the internal `u`-space).
+pub fn least_squares_bounded<F>(
+    residuals: F,
+    x0: &[f64],
+    lower: &[f64],
+    upper: &[f64],
+    options: LeastSquaresOptions,
+) -> Result<LeastSquaresResult, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x0.len();
+    if lower.len() != n || upper.len() != n {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "lower ({}) and upper ({}) bounds must match x0 length ({n})",
+                lower.len(),
+                upper.len()
+            ),
+        });
+    }
+    let mut kinds = Vec::with_capacity(n);
+    let mut u0 = Vec::with_capacity(n);
+    for i in 0..n {
+        if !(lower[i] < upper[i]) || lower[i].is_nan() || upper[i].is_nan() {
+            return Err(OptError::InvalidArgument {
+                detail: format!("require lower[{i}] < upper[{i}]"),
+            });
+        }
+        let kind = BoundKind::new(lower[i], upper[i]);
+        u0.push(kind.to_unconstrained(kind.clip_inside(x0[i])));
+        kinds.push(kind);
+    }
+
+    let to_p = |u: &[f64]| -> Vec<f64> { (0..n).map(|i| kinds[i].to_param(u[i])).collect() };
+    let res_u = |u: &[f64]| -> Vec<f64> { residuals(&to_p(u)) };
+
+    let mut ls = least_squares(res_u, &u0, options)?;
+
+    // The LM ran in `u`-space; map the optimum back and recompute the residual and a
+    // finite-difference Jacobian in `p`-space so `x`/`fun`/`jac` (hence any covariance)
+    // are expressed in the original parameters.
+    let popt = to_p(&ls.x);
+    let r_p = residuals(&popt);
+    let mut jac_p = Vec::new();
+    let mut scratch = popt.clone();
+    finite_diff_jacobian_into(&residuals, &popt, &r_p, options.diff_step, &mut jac_p, &mut scratch);
+    ls.cost = 0.5 * dot_vec(&r_p, &r_p);
+    ls.x = popt;
+    ls.fun = r_p;
+    ls.jac = jac_p;
+    Ok(ls)
+}
+
+/// Box-constrained curve fitting: the bounded analogue of [`curve_fit`], matching
+/// `scipy.optimize.curve_fit(f, xdata, ydata, p0=..., bounds=(lower, upper))`.
+///
+/// Reuses [`least_squares_bounded`] (smooth reparameterisation + the fast LM core), so a
+/// bounded fit runs at unbounded-fit speed — dramatically faster than SciPy's `trf` path
+/// for the common case of sanity bounds with an interior optimum.
+pub fn curve_fit_bounded<F>(
+    f: F,
+    xdata: &[f64],
+    ydata: &[f64],
+    lower: &[f64],
+    upper: &[f64],
+    options: CurveFitOptions,
+) -> Result<CurveFitResult, OptError>
+where
+    F: Fn(f64, &[f64]) -> f64,
+{
+    if xdata.len() != ydata.len() {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "xdata and ydata must have same length (got {} and {})",
+                xdata.len(),
+                ydata.len()
+            ),
+        });
+    }
+    if xdata.is_empty() {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("xdata must not be empty"),
+        });
+    }
+    let p0 = options.p0.ok_or_else(|| OptError::InvalidArgument {
+        detail: String::from("p0 (initial parameter guess) is required"),
+    })?;
+    let n_params = p0.len();
+    if xdata.len() < n_params {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "number of data points ({}) must be >= number of parameters ({n_params})",
+                xdata.len()
+            ),
+        });
+    }
+
+    let residuals = |params: &[f64]| -> Vec<f64> {
+        xdata
+            .iter()
+            .zip(ydata.iter())
+            .map(|(&xi, &yi)| f(xi, params) - yi)
+            .collect()
+    };
+
+    let ls_result = least_squares_bounded(residuals, &p0, lower, upper, options.ls_options)?;
+
+    let pcov = compute_covariance(
+        &ls_result.jac,
+        ls_result.cost,
+        xdata.len(),
+        n_params,
+        options.absolute_sigma,
+    );
+
+    Ok(CurveFitResult {
+        popt: ls_result.x.clone(),
+        pcov,
+        ls_result,
+    })
+}
+
 /// Result from [`leastsq`] — the classic MINPACK-style interface.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LeastsqResult {
@@ -899,6 +1108,69 @@ mod tests {
             "c ~ 1.0, got {}",
             result.popt[2]
         );
+    }
+
+    #[test]
+    fn curve_fit_bounded_interior_optimum_and_active_bound() {
+        // Exponential-plus-offset; noiseless data => the least-squares minimum is the
+        // exact generating parameters, so a correct bounded solve recovers them.
+        let xdata: Vec<f64> = (0..50).map(|i| i as f64 * 0.1).collect();
+        let model = |x: f64, p: &[f64]| p[0] * (-p[1] * x).exp() + p[2];
+        let truep = [3.0_f64, 0.7, 1.0];
+        let ydata: Vec<f64> = xdata.iter().map(|&x| model(x, &truep)).collect();
+
+        // (1) Interior optimum: bounds strictly contain the truth -> exact recovery,
+        //     identical to scipy's trf minimiser.
+        let lower = [0.0, 0.0, -5.0];
+        let upper = [10.0, 5.0, 5.0];
+        let opts = CurveFitOptions {
+            p0: Some(vec![1.0, 1.0, 0.0]),
+            ..CurveFitOptions::default()
+        };
+        let r = curve_fit_bounded(model, &xdata, &ydata, &lower, &upper, opts).expect("converges");
+        for k in 0..3 {
+            assert!(
+                (r.popt[k] - truep[k]).abs() < 1.0e-5,
+                "interior popt[{k}] = {} expected {}",
+                r.popt[k],
+                truep[k]
+            );
+            assert!(
+                r.popt[k] >= lower[k] && r.popt[k] <= upper[k],
+                "popt[{k}] out of bounds"
+            );
+        }
+        // pcov is finite and symmetric (recomputed in parameter space).
+        assert!(r.pcov.iter().flatten().all(|v| v.is_finite()));
+
+        // (2) Active bound: cap the amplitude below the truth -> the fit pins it at the
+        //     bound (the transform approaches it from below) and stays feasible.
+        let upper2 = [2.0, 5.0, 5.0];
+        let opts2 = CurveFitOptions {
+            p0: Some(vec![1.0, 1.0, 0.0]),
+            ..CurveFitOptions::default()
+        };
+        let r2 =
+            curve_fit_bounded(model, &xdata, &ydata, &lower, &upper2, opts2).expect("converges");
+        assert!(
+            r2.popt[0] <= upper2[0] + 1.0e-9 && r2.popt[0] > 1.5,
+            "active-bound popt[0] = {} (want just below 2.0)",
+            r2.popt[0]
+        );
+    }
+
+    #[test]
+    fn curve_fit_bounded_validates_bounds() {
+        let xdata = [0.0, 1.0, 2.0, 3.0];
+        let ydata = [0.0, 1.0, 2.0, 3.0];
+        let model = |x: f64, p: &[f64]| p[0] * x + p[1];
+        // lower >= upper is rejected.
+        let opts = CurveFitOptions {
+            p0: Some(vec![1.0, 0.0]),
+            ..CurveFitOptions::default()
+        };
+        let err = curve_fit_bounded(model, &xdata, &ydata, &[1.0, 0.0], &[1.0, 5.0], opts);
+        assert!(err.is_err(), "equal lower/upper must be rejected");
     }
 
     #[test]

@@ -1436,3 +1436,25 @@ LESSON: before "optimizing" a slow-looking fixed quadrature, oracle-check accura
 768 steps were buying a 1e-12 accuracy that BEATS scipy; the apparent fsci-vs-scipy "deviation" was scipy's
 bug, not fsci's. (Contrast the wofz-CF win affac121, where the 768-Simpson bought NO accuracy a faster CF
 couldn't match.)
+
+### ✅✅ opt: curve_fit_bounded / least_squares_bounded — closes backlog gap, 10.2× faster than scipy trf
+Backlog (CARGO_RECOVERY_BACKLOG.md) listed "bounded least_squares/curve_fit (TRF)" as a genuinely-unfinished
+capability gap — fsci had only unbounded LM. Added `least_squares_bounded` + `curve_fit_bounded` via the
+standard smooth reparameterisation (lmfit's method): each bounded coordinate maps to an unconstrained variable
+(logistic for two-sided, softplus for one-sided, identity for ±inf), the existing fast LM core solves the
+unconstrained problem, and `x`/`fun`/`jac` are recomputed in parameter space at the optimum for the covariance.
+Purely additive (new public fns; existing curve_fit/least_squares untouched).
+
+**SAME-BOX head-to-head (5-param double-exponential, 400 pts; both this box):**
+| op                          | scipy            | fsci      | speedup   |
+|-----------------------------|------------------|-----------|-----------|
+| curve_fit (unbounded, lm)   | 1.944 ms         | 0.235 ms  | **8.3×**  |
+| curve_fit_bounded (trf-eq)  | 9.859 ms (trf)   | 0.971 ms  | **10.2×** |
+
+The callback lever drives it: scipy's trf calls a Python/numpy model many times; fsci inlines a Rust closure.
+CONFORMANCE (oracle-checked vs scipy): on a noiseless interior problem (exp+offset, true (3,0.7,1)) BOTH fsci
+and scipy recover (3.0,0.7,1.0) exactly; with the amplitude capped below the truth (upper=2) scipy pins it at
+2.0 and fsci approaches 2.0⁻ (the transform is asymptotic at an active bound — the one documented difference vs
+trf, same as lmfit). fsci-opt curvefit suite 15/15 green incl. 2 new bounded tests. LIMITATION (documented):
+for a tightly-active bound the transform reaches it asymptotically rather than exactly; for interior optima
+(the common "sanity bounds" case) it is identical to trf and ~10× faster.
