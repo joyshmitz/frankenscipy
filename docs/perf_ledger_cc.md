@@ -1758,3 +1758,29 @@ per-param solve_bvp; (2) NUMERICAL vs scipy: fsci y0(0.573)=0.4258989360 == scip
 collocation tolerance — fsci solve_bvp independently matches scipy). new solve_bvp_many test green. The
 vmap-over-solver vein now spans TEN solver families (curve_fit/solve_ivp/minimize/root/quad/dblquad/tplquad/
 nquad/brentq/solve_bvp).
+
+### ✅✅✅ opt: minimize_scalar_many (vmap-over-solver 1-D minimization sweep) — 69-236× faster than looped scipy
+Eleventh vmap-over-solver family, completing the clean vmap set. A 1-D minimization SWEEP (calibrate a
+1-parameter model per channel, find the mode/MLE per series, minimize a per-case cost) loops `minimize_scalar`
+in Python, N Brent solves SERIALLY. fsci `minimize_scalar_many` (param-sweep `F: Fn(f64 x, &[f64] params)->f64`,
+shared bracket) fans the N independent solves across cores and inlines the objective. Purely additive;
+heavy-per-item cap (cores.min(nrows), serial <4).
+
+**SAME-BOX head-to-head (f(x,p)=(x−p0)²+0.5cos(p1·x)+e^{0.3x}, bracket [−10,10]; both this box):**
+| N    | scipy (Python loop over minimize_scalar) | fsci minimize_scalar_many | speedup  |
+|------|------------------------------------------|---------------------------|----------|
+| 2000 | 160.0 ms                                 | 2.327 ms (2000/2000 ok)   | **68.8×** |
+| 8000 | 643.0 ms                                 | 2.726 ms (8000/8000 ok)   | **236×**  |
+
+Predicted "modest" but came in BIG (like brentq_many): the cos+exp objective is expensive enough per eval that
+scipy's Python-callback cost dominates even though Brent is fast C. CONFORMANCE two ways: (1) result i
+BYTE-IDENTICAL (.to_bits() on x/fun/success) to per-param minimize_scalar; (2) NUMERICAL vs scipy: fsci
+x*(p=[1,2])=1.1563726803 == scipy 1.1563726811631612 (~1e-9, Brent xatol). new test green. vmap-over-solver
+vein now ELEVEN families.
+
+### (negative evidence) ndimage rank/morphology filters already dominate scipy — no work needed
+Measured before chasing (512×512): fsci median_filter 5×5 = 4.05 ms vs scipy 81.1 ms (**20×**), rank_filter
+3.43 vs 66.9 (**19.5×**), percentile_filter 3.21 vs 81.2 (**25×**) — already parallel quickselect. uniform_filter1d
+is already running-sum O(n) (has an explicit "pre running-sum reference, A/B only" path). grey_erosion/dilation
+already van Herk; generic_filter already inlines a Rust closure (Sync, parallel core) vs scipy's per-window
+Python callback (212 ms @ 256² for np.ptp). The ndimage filter surface is fully dominant; don't re-chase.

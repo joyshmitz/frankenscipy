@@ -3044,6 +3044,65 @@ where
     })
 }
 
+/// Batched 1-D minimization: minimize `f(x, params)` over a shared `bracket` for MANY parameter
+/// sets, one [`MinimizeScalarResult`] per set. This is the vmap-over-solver primitive for scalar
+/// minimization — a 1-D minimization SWEEP (calibrate a 1-parameter model per channel, find the
+/// mode/MLE per series, minimize a per-case cost) loops `minimize_scalar` in Python, N Brent solves
+/// SERIALLY. fsci `minimize_scalar_many` (param-sweep `F: Fn(f64 x, &[f64] params)->f64`) fans the N
+/// independent solves across cores and inlines the objective. Result `i` is byte-identical to
+/// `minimize_scalar(|x| f(x, &param_rows[i]), bracket, options)`.
+pub fn minimize_scalar_many<F>(
+    f: F,
+    bracket: (f64, f64),
+    param_rows: &[Vec<f64>],
+    options: MinimizeScalarOptions,
+) -> Vec<Result<MinimizeScalarResult, OptError>>
+where
+    F: Fn(f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let f_ref = &f;
+    let solve_one = move |params: &[f64]| minimize_scalar(|x| f_ref(x, params), bracket, options);
+
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<MinimizeScalarResult, OptError>>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || {
+                        (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("minimize_scalar_many worker panicked"))
+                .collect()
+        });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // TNC (Truncated Newton Constrained)
 // ══════════════════════════════════════════════════════════════════════
@@ -3792,7 +3851,7 @@ mod tests {
     use crate::{
         Bound, ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptCaspProblem, OptError,
         OptimizeMethod, OptimizeResult, bfgs, cg_pr_plus, get_optimize_traces, minimize,
-        minimize_many, minimize_scalar, powell, select_minimize_method,
+        minimize_many, minimize_scalar, minimize_scalar_many, powell, select_minimize_method,
     };
 
     #[derive(Debug, Serialize)]
@@ -4860,6 +4919,34 @@ mod tests {
             &result,
             122,
         );
+    }
+
+    #[test]
+    fn minimize_scalar_many_byte_identical_to_per_param() {
+        // 1-D minimization sweep: minimize (x - p0)^2 + p1 over a shared bracket for many params.
+        // The batched solve must equal looping minimize_scalar per parameter, bit-for-bit.
+        let f = |x: f64, p: &[f64]| (x - p[0]) * (x - p[0]) + p[1];
+        let bracket = (-10.0, 10.0);
+        let opts = MinimizeScalarOptions::default();
+        let mut s = 13u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            -5.0 + 10.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 16usize; // crosses the serial->parallel gate
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng(), rng().abs()]).collect();
+
+        let batched = minimize_scalar_many(f, bracket, &params, opts);
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let single = minimize_scalar(|x| f(x, p), bracket, opts).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(many.x.to_bits(), single.x.to_bits(), "x mismatch param {i}");
+            assert_eq!(many.fun.to_bits(), single.fun.to_bits(), "fun mismatch param {i}");
+            assert_eq!(many.success, single.success, "success mismatch param {i}");
+        }
+        assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.success).unwrap_or(false)).count() == nrows);
+        assert!(minimize_scalar_many(f, bracket, &[], opts).is_empty());
     }
 
     #[test]
