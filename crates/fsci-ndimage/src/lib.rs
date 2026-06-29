@@ -4328,6 +4328,31 @@ pub fn histogram(
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<Vec<Vec<usize>>, NdimageError> {
+    // Fast streaming path: a one-based-contiguous index uses a parallel privatized per-label
+    // histogram (byte-identical, integer counts), skipping the per-group Vec materialization.
+    // The validation short-circuit (all-zero histograms) must match the group path's semantics.
+    if let (Some(labels), Some(index)) = (labels, index) {
+        if input.shape == labels.shape {
+            if let Some(label_count) = measurement_one_based_contiguous_index_len(index) {
+                if nbins == 0
+                    || !min_val.is_finite()
+                    || !max_val.is_finite()
+                    || max_val <= min_val
+                    || input.data.iter().any(|value| !value.is_finite())
+                {
+                    return Ok(vec![vec![0usize; nbins]; label_count]);
+                }
+                return Ok(measurement_one_based_histogram(
+                    &input.data,
+                    &labels.data,
+                    label_count,
+                    min_val,
+                    max_val,
+                    nbins,
+                ));
+            }
+        }
+    }
     let groups = measurement_label_groups(input, labels, index)?;
     let mut histograms = vec![vec![0usize; nbins]; groups.len()];
     if nbins == 0
@@ -6175,6 +6200,74 @@ fn measurement_one_based_minmax(
 
     (0..label_count)
         .map(|k| if counts[k] == 0 { 0.0 } else { ext[k] })
+        .collect()
+}
+
+/// Per-label histogram over the one-based-contiguous fast path, as a parallel privatized
+/// reduction: each worker fills a private flat `[label_count × nbins]` count table over a
+/// contiguous chunk, then the tables are summed. Counts are integers, so the merge is
+/// BYTE-IDENTICAL to the serial group-path fill (same bin assignment + `[min,max]` filter).
+/// Caller guarantees `nbins >= 1`, finite `min<max`, and finite input.
+fn measurement_one_based_histogram(
+    data: &[f64],
+    labels: &[f64],
+    label_count: usize,
+    min_val: f64,
+    max_val: f64,
+    nbins: usize,
+) -> Vec<Vec<usize>> {
+    let bin_width = (max_val - min_val) / nbins as f64;
+    let scan = |d: &[f64], l: &[f64]| -> Vec<usize> {
+        let mut h = vec![0usize; label_count * nbins];
+        for (&value, &label_value) in d.iter().zip(l) {
+            if value < min_val || value > max_val {
+                continue;
+            }
+            if let Some(pos) = measurement_one_based_label_pos(label_count, label_value) {
+                let bin = (((value - min_val) / bin_width).floor() as usize).min(nbins - 1);
+                h[pos * nbins + bin] += 1;
+            }
+        }
+        h
+    };
+
+    let n = data.len();
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(n / 128_000);
+    let flat = if nthreads <= 1 {
+        scan(data, labels)
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let partials: Vec<Vec<usize>> = std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= n {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(n);
+                    let d = &data[lo..hi];
+                    let l = &labels[lo..hi];
+                    Some(scope.spawn(move || scan(d, l)))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("histogram-scatter worker panicked"))
+                .collect()
+        });
+        let mut h = vec![0usize; label_count * nbins];
+        for p in partials {
+            for (acc, v) in h.iter_mut().zip(p) {
+                *acc += v;
+            }
+        }
+        h
+    };
+
+    (0..label_count)
+        .map(|pos| flat[pos * nbins..(pos + 1) * nbins].to_vec())
         .collect()
 }
 
@@ -14183,6 +14276,45 @@ mod tests {
         }
         // Label 7 saw a NaN → NaN.
         assert!(gmin[6].is_nan() && gmax[6].is_nan());
+    }
+
+    #[test]
+    fn histogram_one_based_fast_path_byte_identical_to_serial() {
+        // Crosses the parallel gate; histogram counts are integers so the privatized parallel
+        // path must be exactly equal to a serial reference. min/max in (0,1) so some values
+        // fall outside [min,max] and exercise the filter.
+        let n = 300_000usize;
+        let k = 64usize;
+        let nbins = 16usize;
+        let (min_val, max_val) = (0.2_f64, 0.8_f64);
+        let mut s = 0xc0ffee_1234_5678u64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let vals: Vec<f64> = (0..n)
+            .map(|_| (rng() >> 11) as f64 / (1u64 << 53) as f64)
+            .collect();
+        let labels: Vec<f64> = (0..n).map(|_| (1 + (rng() % k as u64)) as f64).collect();
+        let index: Vec<usize> = (1..=k).collect();
+        let input = NdArray::new(vals.clone(), vec![n]).unwrap();
+        let lab = NdArray::new(labels.clone(), vec![n]).unwrap();
+
+        let got = histogram(&input, min_val, max_val, nbins, Some(&lab), Some(&index)).unwrap();
+
+        let bw = (max_val - min_val) / nbins as f64;
+        let mut want = vec![vec![0usize; nbins]; k];
+        for (&v, &lv) in vals.iter().zip(&labels) {
+            if v < min_val || v > max_val {
+                continue;
+            }
+            let pos = (lv as usize) - 1;
+            let bin = (((v - min_val) / bw).floor() as usize).min(nbins - 1);
+            want[pos][bin] += 1;
+        }
+        assert_eq!(got, want);
     }
 
     #[test]

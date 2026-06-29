@@ -1669,3 +1669,24 @@ injected NaN) + `minimum_maximum_empty_label_returns_zero` + all existing scipy 
 unchanged). Gated cores.min(n/128_000). Label-reduction vein now COMPLETE: mean/sum/variance/std/min/max all
 streaming privatized-histograms; median (scipy 44-118 ms) needs the full group (can't stream) — left on the
 group path.
+
+### ✅✅✅ ndimage: histogram(labels,index) streaming per-label privatized histogram — 12-19× FASTER than scipy (BYTE-IDENTICAL)
+The privatized-histogram lever applied to its CANONICAL use: `ndimage.histogram(input,min,max,bins,labels,index)`
+returns a per-label bin-count histogram. scipy's is GLACIAL (24-79 ms — it loops np.histogram per label in
+Python); fsci was on the group-materialization path (Vec<Vec<f64>> per label) so already won 3.5-3.9×. Replaced
+with a single-pass parallel privatized reduction: each worker fills a private flat `[label_count × nbins]` count
+table over a contiguous chunk, tables summed once. Counts are integers → BYTE-IDENTICAL to the serial fill.
+
+**SAME-BOX head-to-head (one-based index, nbins=32; both this box):**
+| N      | K    | scipy     | fsci before | fsci after | vs scipy  | self-speedup |
+|--------|------|-----------|-------------|------------|-----------|--------------|
+| 262144 | 1024 | 24379 us  | 6887 us     | 1984 us    | **12.3×** | 3.5× |
+| 589824 | 4096 | 79060 us  | 20281 us    | 4101 us    | **19.3×** | 4.9× |
+
+Self-speedup is below the scalar reductions (min/max ~20×) because the K×nbins privatized table (1 MB at
+K=4096/nbins=32) is cache-heavier than a K-float table; for typical small K it fits L1/L2 and is much faster.
+Preserves the validation short-circuit exactly (nbins=0 / non-finite min,max / max<=min / any non-finite input →
+all-zero histograms) and the `[min,max]` inclusion filter. CONFORMANCE: BYTE-IDENTICAL (`assert_eq!` on the full
+Vec<Vec<usize>>) to a serial reference incl. out-of-range filtering; 253/0 fsci-ndimage tests green incl. new
+`histogram_one_based_fast_path_byte_identical_to_serial`. Gated cores.min(n/128_000). The ndimage label-stat
+suite is now fully streaming except median (needs the full group — a quantile can't stream).
