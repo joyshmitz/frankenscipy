@@ -11627,3 +11627,29 @@ Complex64=(f64,f64) tuple is needed (sidesteps the forbid(unsafe) AoS blocker th
 per perf_fft_radix4_stage_fusion). Bit-identical PER LANE to the scalar radix-2 path (like pdist
 SIMD-across-pairs). Estimated 2-3× on the per-row kernel → enough to beat scipy workers=-1. Multi-turn
 build (bit-reversal + radix butterflies on SoA tiles + tolerance/property test); deferred this iteration.
+
+## SIMD-across-rows batched FFT — PROTOTYPED, INTEGRATED, MEASURED, REVERTED (bandwidth-bound dead-end), AmberKestrel 2026-06-29
+Last iteration I documented "SIMD-across-rows batched FFT" as the radical lever to flip fft_axis2d/dct_axis2d
+to clean wins vs scipy workers=-1. This iteration I built it and it REGRESSED — reverted.
+
+- Approach: process 4 independent rows per `std::simd::Simd<f64,4>` lane (lane = row); build separate re/im
+  SoA tiles of f64x4 (sidesteps the AoS-tuple `forbid(unsafe)` blocker), radix-2 DIT with scalar twiddles
+  splatted. Confirmed BIT-IDENTICAL to fsci's scalar fft (max_err == 0.0; fsci's radix-4 fusion equals the
+  radix-2 sweep bit-for-bit, so the existing bit-identical conformance test passed with the SIMD path on).
+- Prototype (cache-HOT, same 4 rows ×256, no alloc churn): 1.25-1.36× FASTER single-threaded — MISLEADING.
+- Integrated into fft_axis2d (real cache-COLD data, parallel across 4-row groups): REGRESSED —
+  fft_axis2d 4096 9.06→11.55 ms, 8192 9.23→15.73 ms (≈1.7× SLOWER).
+- ROOT CAUSE (the decisive insight): at these ncols (2048-8192, each row's 128 KB tile is OUT of L2) the
+  batched FFT is MEMORY-BANDWIDTH-BOUND, not compute-bound. radix-2 does log2(n) passes vs fsci's scalar
+  radix-4's log2(n)/2 passes → radix-2 streams ~2× the bytes (measured ~1.6 GB vs ~832 MB at 1000×8192).
+  SIMD multiplies ARITHMETIC throughput 4×, but arithmetic is not the bottleneck — bytes are. So radix-2
+  SIMD pays the 2× traffic for no benefit and LOSES. A radix-4 SIMD-across-rows would match the scalar
+  pass count, but in a bandwidth-bound regime its 4× arithmetic still buys ~nothing → at best PARITY with
+  the existing scalar radix-4, NOT a Score≥2 win. The SoA-tile interleave/de-interleave adds further
+  traffic.
+- CONCLUSION: SIMD-across-rows for batched FFT is a DEAD END at realistic (out-of-cache) sizes. The
+  batched-FFT kernel wall is BANDWIDTH (already near-optimal in fsci's streaming radix-4), not arithmetic
+  — exactly the wall perf_fft_radix4_stage_fusion documents for the 1-D large-N case, and SIMD doesn't move
+  bandwidth. Overturns the "START HERE next fsci-fft turn" note. fft_axis2d/dct_axis2d remain shipped as
+  win-vs-default (workers=1); beating scipy workers=-1 on the batched FFT family is NOT achievable via the
+  safe-Rust kernel and is the pocketfft hand-tuned-C-SIMD wall. Do NOT re-chase.
