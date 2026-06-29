@@ -11414,3 +11414,27 @@ n due to the per-call chirp rebuild.
   fitting nperseg.
 - 10 vein ships now (sosfilt/filtfilt/sosfiltfilt/decimate/savgol/resample_poly/detrend/welch/csd/coherence
   2-D). spectrogram_axis_2d remains (3-D output); the gate is already open.
+
+## 2026-06-28 - REVERTED (AmberForge): spectrogram_axis_2d FAST (3.8-4.0x) but blocked by a fsci 1-D spectrogram scipy-deviation
+
+- Agent: AmberForge. Built `spectrogram_axis_2d` (3-D output channels×time×freq) via a new generic
+  `spectral_line_axis_2d` driver — same recipe as welch. It was a MEASURED SPEED win: 76ms vs scipy 303ms
+  (1000×10000) and 214ms vs 811ms (256×100000) = **3.8-4.0x faster**, and BIT-IDENTICAL to per-line 1-D
+  `spectrogram` (test passed, 663/0).
+- BUT the scipy NUMERICAL oracle FAILED (max abs diff **8.52**): fsci's 1-D `spectrogram` itself deviates from
+  scipy. Root cause isolated: scipy.signal.spectrogram defaults to `detrend='constant'` (per-segment mean
+  removal); fsci's spectrogram calls `stft` directly with NO detrend. Confirmed by comparing against scipy
+  `detrend=False`: diff drops 8.52 → 0.33. The residual **0.33** (even with detrend off) is a SECOND, deeper
+  STFT-path difference (boundary/segment handling), not just detrend.
+- Since the 2-D faithfully reproduces the (non-conformant) 1-D, it is NOT a valid "Nx faster than scipy" win —
+  the outputs don't match scipy. REVERTED clean (empty diff, 662/0). NOT shipped.
+- ACTIONABLE (fsci 1-D conformance gap, filed here): fsci `spectrogram` claims "Matches
+  scipy.signal.spectrogram" in its doc but differs by up to 8.52 — it needs (1) per-segment
+  `detrend='constant'` like fsci's own `welch`/`periodogram` path already applies, AND (2) the residual ~0.33
+  STFT-boundary difference resolved. NOTE the contrast: fsci `welch` matches scipy (1.7e-13) because its
+  periodogram path detrends; `spectrogram` uses the raw stft path and does not. Once 1-D is scipy-conformant,
+  re-add `spectrogram_axis_2d` (the 3.8-4.0x fan-out + the generic `spectral_line_axis_2d` driver) — it's a
+  ready win waiting on the 1-D fix.
+- Vein status: 10 LANDED ships stand (sosfilt/filtfilt/sosfiltfilt/decimate/savgol/resample_poly/detrend/
+  welch/csd/coherence 2-D). spectrogram is the first vein candidate blocked by a 1-D CORRECTNESS gap rather
+  than a perf wall.
