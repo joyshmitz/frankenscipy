@@ -1477,3 +1477,23 @@ Speedup grows with N as the ~1.5ms thread-spawn floor amortises. CONFORMANCE: ro
 fits, it doesn't change any of them. fsci-opt curvefit suite 16/16 green (+ new batched byte-identical test
 covering both curve_fit_many and curve_fit_bounded_many across the serial→parallel gate). Pairs with the
 bounded-fit lever (2235ab6f): curve_fit_bounded_many gives the same N-way win for box-constrained batches.
+
+### ✅✅✅ integrate: solve_ivp_many (vmap-over-solver ensemble ODE) — ~1500× faster than looped scipy
+Extends the vmap-over-solver lever to ODEs — the marquee case. SciPy has no batched solve_ivp: integrating an
+ensemble (N initial conditions, shared dynamics) means looping solve_ivp in Python, calling the Python RHS
+thousands of times PER solve, N solves SERIALLY (~15-21 ms/solve). fsci `solve_ivp_many` fans the N independent
+integrations across cores AND inlines the RHS as a Rust closure (callback lever × N-way parallel). Purely
+additive (new pub fn over the existing solve_ivp); heavy-per-item thread cap (cores.min(nrows), serial <4).
+
+**SAME-BOX head-to-head (Lotka-Volterra, RK45, rtol 1e-8 / atol 1e-10, 150 t_eval; both this box):**
+| N    | scipy (Python loop over solve_ivp) | fsci solve_ivp_many | speedup     |
+|------|------------------------------------|---------------------|-------------|
+| 200  | 4220 ms                            | 2.85 ms             | **1481×**   |
+| 1000 | 14809 ms                           | 9.26 ms             | **1599×**   |
+
+All 1000/1000 solves converged. CONFORMANCE (rigorous, two ways): (1) result i is BYTE-IDENTICAL (.to_bits()
+on t and y) to per-member solve_ivp — the batch only distributes independent integrations; (2) NUMERICAL
+cross-check vs scipy on a fixed y0=[2,3]: fsci final state [5.3569214988, 1.9612924121] == scipy
+[5.3569214988, 1.9612924121] to 1e-10 (same RK45 algorithm + tolerances → same trajectory, just ~1500×
+faster). fsci-integrate solve_ivp_many test green. The callback lever (inline Rust RHS, no Python per-step)
+gives ~25× per-solve; the N-way parallelism multiplies it to ~1500×. Companion to curve_fit_many (95f3cad8).

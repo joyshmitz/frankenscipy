@@ -880,6 +880,73 @@ where
     solve_ivp_impl(fun, options, Some(audit_ledger))
 }
 
+/// Batched ODE integration: integrate the SAME dynamics `fun` from MANY initial conditions
+/// (`y0_rows`), one [`SolveIvpResult`] per row. This is the vmap-over-solver primitive SciPy
+/// lacks — there you loop `solve_ivp` in Python, calling the Python RHS thousands of times per
+/// solve, N solves SERIALLY; here the N independent integrations are fanned across cores and the
+/// RHS is an inlined Rust closure (callback lever × N-way parallel). Result `i` is identical to
+/// `solve_ivp(&mut |t, y| fun(t, y), &opts)` with `opts.y0 = &y0_rows[i]`.
+///
+/// `template` supplies the shared `t_span` / `method` / `t_eval` / tolerances; its `y0` field is
+/// ignored (overridden per row). Common for parameter sweeps and ensemble simulation.
+pub fn solve_ivp_many<'a, F>(
+    fun: F,
+    y0_rows: &'a [Vec<f64>],
+    template: &SolveIvpOptions<'a>,
+) -> Vec<Result<SolveIvpResult, IntegrateValidationError>>
+where
+    F: Fn(f64, &[f64]) -> Vec<f64> + Sync,
+{
+    let nrows = y0_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let fun_ref = &fun;
+    let solve_one = move |y0: &'a [f64]| -> Result<SolveIvpResult, IntegrateValidationError> {
+        let mut opts = template.clone();
+        opts.y0 = y0;
+        let mut local = |t: f64, y: &[f64]| fun_ref(t, y);
+        solve_ivp(&mut local, &opts)
+    };
+
+    // Each integration is an independent, expensive (~ms) adaptive solve → fan whole rows
+    // across cores, capped by the row count; a tiny ensemble stays serial.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return y0_rows.iter().map(|y0| solve_one(y0)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<SolveIvpResult, IntegrateValidationError>>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || {
+                        (lo..hi).map(|i| solve_one(&y0_rows[i])).collect::<Vec<_>>()
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("solve_ivp_many worker panicked"))
+                .collect()
+        });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 fn solve_ivp_impl<F>(
     fun: &mut F,
     options: &SolveIvpOptions<'_>,
@@ -1079,6 +1146,52 @@ mod tests {
             (y_final - expected).abs() < 1e-4,
             "y(10) = {y_final}, expected ≈ {expected}"
         );
+    }
+
+    #[test]
+    fn solve_ivp_many_byte_identical_to_per_member() {
+        // Ensemble of Lotka-Volterra initial conditions, shared dynamics. The batched
+        // result must equal looping solve_ivp per row, bit-for-bit (each solve is an
+        // independent deterministic adaptive integration).
+        let (a, b, c, d) = (1.5_f64, 1.0, 3.0, 1.0);
+        let rhs = |_t: f64, y: &[f64]| vec![a * y[0] - b * y[0] * y[1], -c * y[1] + d * y[0] * y[1]];
+        let t_eval: Vec<f64> = (0..60).map(|i| i as f64 * 10.0 / 59.0).collect();
+        let mut s = 99u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            1.0 + 4.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 12usize; // crosses the serial->parallel gate
+        let y0_rows: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng(), rng()]).collect();
+        let template = SolveIvpOptions {
+            t_span: (0.0, 10.0),
+            y0: &[0.0, 0.0], // overridden per row
+            method: SolverKind::Rk45,
+            t_eval: Some(&t_eval),
+            rtol: 1e-8,
+            atol: ToleranceValue::Scalar(1e-10),
+            ..SolveIvpOptions::default()
+        };
+
+        let batched = solve_ivp_many(&rhs, &y0_rows, &template);
+        assert_eq!(batched.len(), nrows);
+        for (i, y0) in y0_rows.iter().enumerate() {
+            let mut single_opts = template.clone();
+            single_opts.y0 = y0;
+            let single = solve_ivp(&mut |t, y| rhs(t, y), &single_opts).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(many.t.len(), single.t.len());
+            for (a, b) in many.t.iter().zip(single.t.iter()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "t mismatch row {i}");
+            }
+            assert_eq!(many.y.len(), single.y.len());
+            for (ry, sy) in many.y.iter().zip(single.y.iter()) {
+                for (a, b) in ry.iter().zip(sy.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "y mismatch row {i}");
+                }
+            }
+        }
+        assert!(solve_ivp_many(&rhs, &[], &template).is_empty());
     }
 
     #[test]
