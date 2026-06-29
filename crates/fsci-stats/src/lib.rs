@@ -38613,6 +38613,144 @@ pub fn brunnermunzel_matrix(
     })
 }
 
+/// Parallel CROSS all-pairs: a rectangular `m × k` matrix with `out[i][j] = pair_stat(a[i], b[j])` for two
+/// groups of 1-D samples (e.g. `m` controls vs `k` treatments). Unlike the square self-pair helpers there
+/// is no symmetry or diagonal, and the two groups (and individual samples) may have DIFFERENT lengths —
+/// two-sample distances/tests accept ragged inputs. Parallel across all `m·k` pairs. Empty groups → empty.
+fn all_pairs_cross_matrix<F>(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    pair_stat: F,
+) -> Result<Vec<Vec<f64>>, StatsError>
+where
+    F: Fn(&[f64], &[f64]) -> f64 + Sync,
+{
+    let (m, k) = (a.len(), b.len());
+    if m == 0 || k == 0 {
+        return Ok(vec![Vec::new(); m]);
+    }
+    if a.iter().chain(b.iter()).any(|v| v.is_empty()) {
+        return Err(StatsError::InvalidArgument(
+            "all samples must be non-empty".to_string(),
+        ));
+    }
+    let np = m * k;
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if np < 8 || cores <= 1 {
+        1
+    } else {
+        cores.min((np / 4).max(1))
+    };
+    let compute = |idx: usize| -> f64 { pair_stat(&a[idx / k], &b[idx % k]) };
+    let flat: Vec<f64> = if nthreads <= 1 {
+        (0..np).map(compute).collect()
+    } else {
+        let chunk = np.div_ceil(nthreads);
+        let compute = &compute;
+        let mut out = vec![0.0f64; np];
+        std::thread::scope(|scope| {
+            for (ci, ochunk) in out.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (o, slot) in ochunk.iter_mut().enumerate() {
+                        *slot = compute(base + o);
+                    }
+                });
+            }
+        });
+        out
+    };
+    Ok(flat.chunks(k).map(|row| row.to_vec()).collect())
+}
+
+/// Cross variant of [`all_pairs_cross_matrix`] for two-output kernels (a test's `(statistic, pvalue)`),
+/// returning two rectangular `m × k` matrices.
+fn all_pairs_cross_two_matrices<F>(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    pair_stat: F,
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError>
+where
+    F: Fn(&[f64], &[f64]) -> (f64, f64) + Sync,
+{
+    let (m, k) = (a.len(), b.len());
+    if m == 0 || k == 0 {
+        return Ok((vec![Vec::new(); m], vec![Vec::new(); m]));
+    }
+    if a.iter().chain(b.iter()).any(|v| v.is_empty()) {
+        return Err(StatsError::InvalidArgument(
+            "all samples must be non-empty".to_string(),
+        ));
+    }
+    let np = m * k;
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if np < 8 || cores <= 1 {
+        1
+    } else {
+        cores.min((np / 4).max(1))
+    };
+    let compute = |idx: usize| -> (f64, f64) { pair_stat(&a[idx / k], &b[idx % k]) };
+    let flat: Vec<(f64, f64)> = if nthreads <= 1 {
+        (0..np).map(compute).collect()
+    } else {
+        let chunk = np.div_ceil(nthreads);
+        let compute = &compute;
+        let mut out = vec![(0.0f64, 0.0f64); np];
+        std::thread::scope(|scope| {
+            for (ci, ochunk) in out.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (o, slot) in ochunk.iter_mut().enumerate() {
+                        *slot = compute(base + o);
+                    }
+                });
+            }
+        });
+        out
+    };
+    let stat = flat.chunks(k).map(|r| r.iter().map(|p| p.0).collect()).collect();
+    let pval = flat.chunks(k).map(|r| r.iter().map(|p| p.1).collect()).collect();
+    Ok((stat, pval))
+}
+
+/// Cross all-pairs Wasserstein-1 distance: `m × k` with `out[i][j] = wasserstein_distance(a[i], b[j])`.
+/// SciPy makes you double-loop two groups in Python; this fans out across all pairs.
+pub fn wasserstein_distance_cross(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    all_pairs_cross_matrix(a, b, wasserstein_distance)
+}
+
+/// Cross all-pairs energy distance: `m × k` with `out[i][j] = energy_distance(a[i], b[j])`.
+pub fn energy_distance_cross(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    all_pairs_cross_matrix(a, b, energy_distance)
+}
+
+/// Cross all-pairs two-sample KS test: `(statistic, pvalue)` matrices, each `m × k`, with
+/// `out.0[i][j] == ks_2samp(a[i], b[j]).statistic` and `out.1[i][j] ==` its p-value.
+pub fn ks_2samp_cross(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+    all_pairs_cross_two_matrices(a, b, |x, y| {
+        let r = ks_2samp(x, y);
+        (r.statistic, r.pvalue)
+    })
+}
+
+/// Cross all-pairs Mann–Whitney U test: `(statistic, pvalue)` matrices, each `m × k`.
+pub fn mannwhitneyu_cross(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+    all_pairs_cross_two_matrices(a, b, |x, y| {
+        let r = mannwhitneyu(x, y);
+        (r.statistic, r.pvalue)
+    })
+}
+
 pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
     let n = x.len();
     if n < 2 || x.len() != y.len() {
@@ -60067,6 +60205,32 @@ mod tests {
         }
         assert!(ranksums_matrix(&bad).is_err());
         assert!(brunnermunzel_matrix(&bad).is_err());
+
+        // CROSS matrices: rectangular m×k, out[i][j] bit-identical to pair_stat(a[i], b[j]); groups and
+        // samples may differ in length (distances/tests accept ragged inputs).
+        let ga: Vec<Vec<f64>> = (0..4).map(|s| (0..30).map(|t| ((s * 7 + t) as f64).sin()).collect()).collect();
+        let gb: Vec<Vec<f64>> = (0..3).map(|s| (0..25).map(|t| ((s * 5 + t + 1) as f64).cos()).collect()).collect();
+        let wc = wasserstein_distance_cross(&ga, &gb).unwrap();
+        let ec = energy_distance_cross(&ga, &gb).unwrap();
+        let (ksc_s, ksc_p) = ks_2samp_cross(&ga, &gb).unwrap();
+        let (mwc_s, mwc_p) = mannwhitneyu_cross(&ga, &gb).unwrap();
+        assert_eq!(wc.len(), 4);
+        assert_eq!(wc[0].len(), 3);
+        for i in 0..ga.len() {
+            for j in 0..gb.len() {
+                assert_eq!(wc[i][j].to_bits(), wasserstein_distance(&ga[i], &gb[j]).to_bits(), "wass cross {i},{j}");
+                assert_eq!(ec[i][j].to_bits(), energy_distance(&ga[i], &gb[j]).to_bits(), "energy cross {i},{j}");
+                let kr = ks_2samp(&ga[i], &gb[j]);
+                assert_eq!(ksc_s[i][j].to_bits(), kr.statistic.to_bits(), "ks cross stat {i},{j}");
+                assert_eq!(ksc_p[i][j].to_bits(), kr.pvalue.to_bits(), "ks cross p {i},{j}");
+                let mr = mannwhitneyu(&ga[i], &gb[j]);
+                assert_eq!(mwc_s[i][j].to_bits(), mr.statistic.to_bits(), "mwu cross stat {i},{j}");
+                assert_eq!(mwc_p[i][j].to_bits(), mr.pvalue.to_bits(), "mwu cross p {i},{j}");
+            }
+        }
+        let emptyrow: Vec<Vec<f64>> = vec![vec![1.0, 2.0], vec![]];
+        assert!(wasserstein_distance_cross(&emptyrow, &gb).is_err());
+        assert!(ks_2samp_cross(&ga, &emptyrow).is_err());
     }
 
     #[test]

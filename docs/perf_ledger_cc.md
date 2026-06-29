@@ -1306,3 +1306,27 @@ serial output was a path-dependent Monte-Carlo estimate, never a stable contract
 conformance test `permutation_test_matches_scipy_reference_values` (p≈0.1 ± 0.02) still passes. The trait
 bound tightened `F: Fn` → `F: Fn + Sync` (required for the fan-out; ordinary statistic closures satisfy
 it). fsci-stats GREEN.
+
+### ✅✅ stats: CROSS all-pairs distance/test matrices (two-group) — 24-278x faster than scipy
+A different SHAPE of the all-pairs primitive: rectangular `m × k` matrices comparing two GROUPS of 1-D
+samples (e.g. m controls vs k treatments — a common two-group multiple-comparison setup). No symmetry, no
+diagonal, and groups/samples may have DIFFERENT lengths (two-sample distances/tests accept ragged input).
+New helpers `all_pairs_cross_matrix` (f64) + `all_pairs_cross_two_matrices` (tuple). SciPy makes you
+double-loop the two groups in Python.
+
+**SAME-BOX head-to-head (fsci cross matrix vs scipy Python double-loop, both this box; m=50 k=50 n=500, 2500 pairs):**
+| function                | scipy      | fsci      | speedup    |
+|-------------------------|------------|-----------|------------|
+| wasserstein_distance_cross | 214.4 ms | 3.26 ms | **65.7×**  |
+| energy_distance_cross   | 229.7 ms   | 3.86 ms   | **59.6×**  |
+| ks_2samp_cross          | 845.5 ms   | 35.93 ms  | **23.5×**  |
+| mannwhitneyu_cross      | 1 257.4 ms | 4.52 ms   | **278.2×** |
+
+(ks is the weakest, consistent with the self-pairs finding — fsci's ks p-value is heavy per pair; mwu's
+normal-approx p-value is cheap → 278×.) Conformance: every `out[i][j]` bit-identical to the per-pair
+`wasserstein_distance/energy_distance/ks_2samp/mannwhitneyu`, ragged groups OK, empty sample rejected.
+
+MEASURED-ALREADY-WON this iteration (negative evidence, NOT re-shipped): fsci `gaussian_kde` evaluate_many
+12-38× (already parallel), `theilslopes` 9.7-18× + `siegelslopes` 9.3-62× (fast-path already optimal),
+`monte_carlo_test` 61× (already parallel). fsci-stats' big single-array gaps are closed; the open seam is
+the all-pairs/cross fan-out family. fsci-stats GREEN.
