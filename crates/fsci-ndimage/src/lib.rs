@@ -6097,6 +6097,87 @@ fn measurement_one_based_variance(data: &[f64], labels: &[f64], label_count: usi
         .collect()
 }
 
+/// Per-label minimum (`want_max=false`) or maximum over the one-based-contiguous fast path,
+/// as a parallel privatized-histogram reduction. min/max are associative, commutative, and
+/// exact, so the merged result is BYTE-IDENTICAL to the serial fold regardless of chunking.
+/// Matches the serial group path's conventions: a NaN in any element of a label propagates to
+/// NaN, and an empty label yields 0.0. Gated like the other label reductions.
+fn measurement_one_based_minmax(
+    data: &[f64],
+    labels: &[f64],
+    label_count: usize,
+    want_max: bool,
+) -> Vec<f64> {
+    let init = if want_max {
+        f64::NEG_INFINITY
+    } else {
+        f64::INFINITY
+    };
+    // NaN-propagating combine, identical to the serial fold (Rust's min/max ignore NaN, so the
+    // explicit check is what makes a single NaN poison the whole label).
+    let combine = |acc: f64, v: f64| -> f64 {
+        if acc.is_nan() || v.is_nan() {
+            f64::NAN
+        } else if want_max {
+            acc.max(v)
+        } else {
+            acc.min(v)
+        }
+    };
+    let scan = |d: &[f64], l: &[f64]| -> (Vec<f64>, Vec<usize>) {
+        let mut ext = vec![init; label_count];
+        let mut counts = vec![0usize; label_count];
+        for (&value, &label_value) in d.iter().zip(l) {
+            if let Some(pos) = measurement_one_based_label_pos(label_count, label_value) {
+                ext[pos] = combine(ext[pos], value);
+                counts[pos] += 1;
+            }
+        }
+        (ext, counts)
+    };
+
+    let n = data.len();
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(n / 128_000);
+    let (ext, counts) = if nthreads <= 1 {
+        scan(data, labels)
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let partials: Vec<(Vec<f64>, Vec<usize>)> = std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= n {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(n);
+                    let d = &data[lo..hi];
+                    let l = &labels[lo..hi];
+                    Some(scope.spawn(move || scan(d, l)))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("minmax-scatter worker panicked"))
+                .collect()
+        });
+        let mut ext = vec![init; label_count];
+        let mut counts = vec![0usize; label_count];
+        for (pe, pc) in partials {
+            for k in 0..label_count {
+                ext[k] = combine(ext[k], pe[k]);
+                counts[k] += pc[k];
+            }
+        }
+        (ext, counts)
+    };
+
+    (0..label_count)
+        .map(|k| if counts[k] == 0 { 0.0 } else { ext[k] })
+        .collect()
+}
+
 fn measurement_label_mean(
     input: &NdArray,
     labels: Option<&NdArray>,
@@ -6523,6 +6604,20 @@ pub fn minimum(
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<Vec<f64>, NdimageError> {
+    // Fast streaming path: byte-identical parallel privatized-histogram min over a
+    // one-based-contiguous index (min is associative/commutative/exact). Group fallback otherwise.
+    if let (Some(labels), Some(index)) = (labels, index) {
+        if input.shape == labels.shape {
+            if let Some(label_count) = measurement_one_based_contiguous_index_len(index) {
+                return Ok(measurement_one_based_minmax(
+                    &input.data,
+                    &labels.data,
+                    label_count,
+                    false,
+                ));
+            }
+        }
+    }
     Ok(measurement_label_groups(input, labels, index)?
         .iter()
         .map(|values| {
@@ -6550,6 +6645,20 @@ pub fn maximum(
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<Vec<f64>, NdimageError> {
+    // Fast streaming path: byte-identical parallel privatized-histogram max over a
+    // one-based-contiguous index (max is associative/commutative/exact). Group fallback otherwise.
+    if let (Some(labels), Some(index)) = (labels, index) {
+        if input.shape == labels.shape {
+            if let Some(label_count) = measurement_one_based_contiguous_index_len(index) {
+                return Ok(measurement_one_based_minmax(
+                    &input.data,
+                    &labels.data,
+                    label_count,
+                    true,
+                ));
+            }
+        }
+    }
     Ok(measurement_label_groups(input, labels, index)?
         .iter()
         .map(|values| {
@@ -14023,6 +14132,68 @@ mod tests {
             assert!((got_var[i] - want_var).abs() < 1e-9, "var label {i}");
             assert!((got_std[i] - want_var.sqrt()).abs() < 1e-9, "std label {i}");
         }
+    }
+
+    #[test]
+    fn minimum_maximum_one_based_fast_path_byte_identical_to_serial() {
+        // Large enough to cross the parallel gate. min/max are exact, so the parallel
+        // privatized-histogram result must be BYTE-IDENTICAL to a serial fold.
+        let n = 300_000usize;
+        let k = 64usize;
+        let mut s = 0x0bad_c0de_1337_d00du64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let mut vals: Vec<f64> = (0..n)
+            .map(|_| (rng() >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0)
+            .collect();
+        let labels: Vec<f64> = (0..n).map(|_| (1 + (rng() % k as u64)) as f64).collect();
+        // Inject a NaN into label 7's region to exercise NaN propagation.
+        for (i, &lv) in labels.iter().enumerate() {
+            if lv as usize == 7 {
+                vals[i] = f64::NAN;
+                break;
+            }
+        }
+        let index: Vec<usize> = (1..=k).collect();
+        let input = NdArray::new(vals.clone(), vec![n]).unwrap();
+        let lab = NdArray::new(labels.clone(), vec![n]).unwrap();
+
+        let gmin = minimum(&input, Some(&lab), Some(&index)).unwrap();
+        let gmax = maximum(&input, Some(&lab), Some(&index)).unwrap();
+
+        // Serial reference matching the production min/max fold semantics.
+        let mut rmin = vec![f64::INFINITY; k];
+        let mut rmax = vec![f64::NEG_INFINITY; k];
+        let mut cnt = vec![0usize; k];
+        for (&v, &lv) in vals.iter().zip(&labels) {
+            let p = (lv as usize) - 1;
+            cnt[p] += 1;
+            rmin[p] = if rmin[p].is_nan() || v.is_nan() { f64::NAN } else { rmin[p].min(v) };
+            rmax[p] = if rmax[p].is_nan() || v.is_nan() { f64::NAN } else { rmax[p].max(v) };
+        }
+        for i in 0..k {
+            let want_min = if cnt[i] == 0 { 0.0 } else { rmin[i] };
+            let want_max = if cnt[i] == 0 { 0.0 } else { rmax[i] };
+            assert_eq!(gmin[i].to_bits(), want_min.to_bits(), "min label {i}");
+            assert_eq!(gmax[i].to_bits(), want_max.to_bits(), "max label {i}");
+        }
+        // Label 7 saw a NaN → NaN.
+        assert!(gmin[6].is_nan() && gmax[6].is_nan());
+    }
+
+    #[test]
+    fn minimum_maximum_empty_label_returns_zero() {
+        // Index references a label with no pixels → 0.0 (scipy convention), preserved on the
+        // serial small-N fast path.
+        let data = NdArray::new(vec![3.0, 7.0, 2.0, 9.0], vec![4]).unwrap();
+        let labels = NdArray::new(vec![1.0, 1.0, 3.0, 3.0], vec![4]).unwrap();
+        let index = [1, 2, 3]; // label 2 is empty
+        assert_eq!(minimum(&data, Some(&labels), Some(&index)).unwrap(), vec![3.0, 0.0, 2.0]);
+        assert_eq!(maximum(&data, Some(&labels), Some(&index)).unwrap(), vec![7.0, 0.0, 9.0]);
     }
 
     #[test]

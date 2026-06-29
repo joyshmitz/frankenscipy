@@ -1646,3 +1646,26 @@ two-pass is ~1.3 ms. CONFORMANCE: deterministic same-data NUMERICAL cross-check 
 sum[0]=25806.4, var[0]=0.083191077066, std[0]=0.288428634268 == scipy to all 10-12 digits; 250/0 fsci-ndimage
 tests green incl. new `sum_variance_one_based_fast_path_matches_serial_reference` (two-pass, non-zero mean) +
 all existing scipy-fixture small-N tests (serial path byte-identical, no regression). Gated cores.min(n/128_000).
+
+### ✅✅✅ ndimage: minimum/maximum(labels,index) streaming fast path — 13-30× FASTER than scipy (BYTE-IDENTICAL)
+Completes the label-reduction sweep. `minimum`/`maximum`(labels,index) were on the slow group-materialization
+path. scipy's OWN labeled min/max are GLACIAL (9-24 ms — even slower than its variance), so fsci's group path
+already edged it (1.5×); the streaming privatized-histogram min/max CRUSHES it. Because min/max are associative,
+commutative AND EXACT, the parallel merge is BYTE-IDENTICAL to the serial fold — no tolerance (unlike
+sum/variance). NaN in any element of a label propagates to NaN; empty labels yield 0.0 (scipy convention), both
+preserved.
+
+**SAME-BOX head-to-head (one-based index; both this box):**
+| op      | N      | scipy     | fsci before | fsci after | vs scipy   | self-speedup |
+|---------|--------|-----------|-------------|------------|------------|--------------|
+| minimum | 262144 | 9112 us   | 5688 us     | 691 us     | **13.2×**  | 8.2×  |
+| minimum | 589824 | 24571 us  | 15942 us    | 838 us     | **29.3×**  | 19.0× |
+| maximum | 262144 | 9175 us   | 5992 us     | 682 us     | **13.5×**  | 8.8×  |
+| maximum | 589824 | 24010 us  | 16426 us    | 808 us     | **29.7×**  | 20.3× |
+
+CONFORMANCE: BYTE-IDENTICAL (.to_bits()) to the serial fold incl. NaN propagation + empty→0.0; 252/0
+fsci-ndimage tests green incl. new `minimum_maximum_one_based_fast_path_byte_identical_to_serial` (with an
+injected NaN) + `minimum_maximum_empty_label_returns_zero` + all existing scipy fixtures (serial small-N path
+unchanged). Gated cores.min(n/128_000). Label-reduction vein now COMPLETE: mean/sum/variance/std/min/max all
+streaming privatized-histograms; median (scipy 44-118 ms) needs the full group (can't stream) — left on the
+group path.
