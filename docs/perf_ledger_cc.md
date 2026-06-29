@@ -1815,3 +1815,17 @@ Marquee flip: **Constant order=1 affine 7.8× LOSS → 1.85× WIN** (same fast p
 | map_coordinates Mirror o1 | 15.88 ms | **3.02 ms** | 5.3× | **3.6× FASTER** |
 
 Two-step domination of the geometric-transform family: Constant o1 (compact-support, prior commit) + Reflect/Mirror o1 (this). All order-1 modes now WIN vs scipy. Backlog: Constant o2/o4/o5 prefilter (per-line make_interp_spline), Nearest o3 (~parity).
+
+## 2026-06-29 — AmberKestrel (cc): NEGATIVE EVIDENCE — grey_dilation/erosion HGW parallel-across-lines is ~0-gain (memory-bound), REVERTED
+
+Parallelized `minmax_along_axis_hgw` (van Herk–Gil-Werman flat min/max under grey_dilation/erosion/grey_opening): per-line factored helper `hgw_fill_line`, outer≥2 → `chunks_mut(slab)` across slabs, outer==1 → column-major transpose scratch + scatter (the exact `edt_axis_pass_parallel` pattern). min/max are exact+associative across independent lines → byte-identical by construction.
+
+**Same-process A/B (512×512, FSCI_HGW_SERIAL toggle), parallel vs serial:**
+| op (size) | parallel | serial | verdict |
+|---|---|---|---|
+| grey_dilation 5 | 6.86 ms | 6.85 ms | tie |
+| grey_dilation 9 | 6.25 ms | 5.57 ms | parallel SLOWER |
+| grey_erosion 5 | 6.30 ms | 5.82 ms | parallel SLOWER |
+| grey_erosion 9 | 6.38 ms | 5.78 ms | parallel SLOWER |
+
+HGW is ~O(1) work/element (memory-bandwidth-bound); the serial pass already saturates bandwidth, and the axis-0 transpose+scatter adds traffic → net ~0-gain to slight LOSS. REVERTED (working tree back to c911c3dc). grey_dilation/erosion sit at scipy PARITY (5.4-6.0ms vs scipy 5.5-6.05) and that is the memory wall, not a thread gap. DON'T re-chase parallelizing memory-bound separable min/max. (Contrast: EDT's lower-envelope transform is compute-heavier → its parallel pass DOES win 1.79×.) Remaining real ndimage gap = affine/map_coordinates Constant/Wrap order∈{2,4,5} prefilter (per-line make_interp_spline, scipy o2 18.6ms vs fsci 61ms) but the solver lives in fsci-interpolate (other-agent crate) and a reimplemented boundary-IIR is risky for uncommon orders.
