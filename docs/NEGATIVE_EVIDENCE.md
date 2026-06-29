@@ -11677,3 +11677,15 @@ sensitive implementation deferred to a dedicated turn (would lift an already-win
 Toolchain note: per-crate `cargo clean -p <crate>` CASCADED (getrandom→cc→autocfg→serde→shlex all stale-rustc);
 a full `cargo clean --release` was required and only cost 33 s — for a fully-stale `-cc` dir, full-clean beats
 chasing the cascade (verify no active build first: `find <target> -mmin -3`).
+
+## 2026-06-29 — AmberKestrel (cc): post-NMF cluster/ndimage gap hunt — the obvious "next NMF-style levers" are already closed
+
+After landing the NMF safe-pool win (93528288, flipped 6.9× loss → 1.46× win), hunted for the next biggest gap. The ledger flagged FA/PPCA/LDA as candidates for the same owned-band-pool lever; measured same-box, they DON'T apply:
+
+- **`factor_analysis` ALREADY WINS 3.9–4.65× vs sklearn** (n=1000/d=300/k=20: fsci 404ms/11it vs sklearn randomized 1880ms/14it; sklearn `svd_method='lapack'` is **14.8 s**, fsci 36× faster). n=2000/d=500/k=30: fsci 1435ms vs sklearn 5631ms = 3.9×. The NMF lever does NOT transfer: FA's per-iter cost is one `fsci_linalg::randomized_svd` (already fast), NOT a serial cross-band reduction matmul. `ppca` is closed-form (single randomized_svd, no EM loop). EM-loop vein is dominated — don't re-chase.
+
+- **`distance_transform_edt(return_indices)` is ALREADY PARALLEL** (scorecard `frankenscipy-edt-indices` shows 1.39× slower, "route to constant factor"). The 2D-indices fast path `edt_2d_felzenszwalb_with_indices` (lib.rs:7939) already fans the separable passes across `thread::scope` (lib.rs:8019/8033/8118). scipy same-box = 3.148ms (return_indices) — the 1.39× residual is a constant-factor inlined-C wall, not a missing-parallel gap. NOT a clean lever.
+
+- **Scorecard "Measured Losses" (Jun-27) cross-check (5th confirmation of the stale-scorecard rule):** the parallelizable-looking entries are stale/superseded — `gaussian_filter` 2D Reflect (.129/.130/6l77z "3.03× slower") flipped to 1.66–4.42× FASTER via the axpy col-pass (e767313d); `zoom` 2D linear (wm14d "2.05×") superseded by oi8hq win; `zeta` N10/B10 (1.35×) superseded by the affine recurrence (2.09× faster). The GENUINE residual losses are all constant-factor inlined-C walls, not Score≥2 algorithmic levers: `maximum/minimum_filter1d` 1D (2.3×, van Herk is already O(n) and a 1D sequential scan — no row axis to parallelize at n=65536×1), `jnjnp_zeros` (1.18–1.38× after ~8 attempts; sub-ms absolute, sequential Bessel root refinement), sparse `eigsh` small-k (1.30–1.90×, Lanczos/ARPACK wall).
+
+CONCLUSION: post-NMF, the accessible algorithmic gaps in the non-probe lanes (cluster/ndimage) are closed. Remaining losses are inlined-C constant-factor walls or already-parallel. The high-value lever this lane (safe owned-band pool for serial cross-band-reduction matmul-EM) is SPENT here — NMF was the one function with that exact structure AND a real loss. Next productive direction is a different primitive or a less-trodden crate, not these.
