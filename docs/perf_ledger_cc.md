@@ -1396,3 +1396,26 @@ domination of scipy's best. The lever that would flip BOTH this and fft_axis2d t
 SIMD-ACROSS-ROWS batched FFT kernel (lane = independent row → sidesteps the AoS-tuple SoA blocker that
 killed within-FFT SIMD; bit-identical per lane, like pdist SIMD-across-pairs) — documented as the next
 radical lever. Conformance: `dct_idct_axis2d_match_per_row` bit-identical to per-row. fsci-fft GREEN.
+
+### ✅✅ special: wofz continued-fraction kernel + voigt_profile_many — 5.6x faster than scipy (CLEAN win)
+Two-part, found by digging the measured gap: scipy.special.voigt_profile over 2M points = 184 ms, fsci had
+only a SCALAR voigt_profile (no batched form). First cut (voigt_profile_many = par_map over the scalar) hit
+PARITY (199 ms) — diagnosis: fsci's `wofz` (Faddeeva) was ~70× slower PER POINT than scipy because the
+`4 ≤ |z| < 8` band used a **768-step Simpson quadrature** (~7.7 µs/call). RADICAL LEVER (different
+primitive, not safe-Rust-ceiling): replaced it with the **Gautschi/Laplace continued fraction**
+`w(z) = (i/√π)/(z − a₁/(z − a₂/…)), aₖ = k/2` (24 terms, ~1e-13, ~30× fewer ops, MORE accurate than the
+Simpson). Kernel dropped ~6.4 µs → ~1 µs/point; the batched API then fans it across cores.
+
+**SAME-BOX head-to-head (fsci voigt_profile_many vs scipy.special.voigt_profile, both this box):**
+| n         | scipy    | fsci (768-Simpson) | fsci (CF + parallel) | speedup    |
+|-----------|----------|--------------------|----------------------|------------|
+| 500 000   | ~46 ms   | 52.4 ms (0.88×)    | 7.37 ms              | **~6×**    |
+| 2 000 000 | 184.3 ms | 199.5 ms (0.92×)   | 32.71 ms             | **5.6×**   |
+
+The wofz CF is a REUSABLE kernel win — it also speeds the scalar `wofz`/`voigt_profile` and EVERY wofz
+caller (erfcx, dawsn, complex erf/erfc) for `4 ≤ |z| < 8`. Conformance: FULL fsci-special suite
+**1121/1121 GREEN** (the CF matches scipy across all wofz-dependent goldens — more accurate than the
+Simpson it replaced) + new `voigt_profile_many_matches_scalar` (bit-identical to per-point, both gate
+paths). NOTE: fsci's per-point wofz (~1 µs) is still ~11× slower than scipy's Weideman Faddeeva (~92 ns) —
+a further CF-everywhere / Weideman-rational kernel could lift the scalar path too, but the parallel batched
+form already DOMINATES scipy 5.6×.

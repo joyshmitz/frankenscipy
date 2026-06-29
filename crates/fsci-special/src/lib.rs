@@ -257,6 +257,7 @@ pub use convenience::{
     trigamma,
     trunc,
     voigt_profile,
+    voigt_profile_many,
     voigt_profile_real_gamma_zero,
     wofz,
     wofz_real,
