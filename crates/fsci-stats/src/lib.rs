@@ -30231,6 +30231,93 @@ pub fn differential_entropy_axis_2d(
     reduce_axis_2d(x, axis, |line| differential_entropy(line, window_length, base))
 }
 
+/// `tmean` (trimmed mean) across one axis — matches `scipy.stats.tmean(x, limits, inclusive, axis)`.
+pub fn tmean_axis_2d(
+    x: &[Vec<f64>],
+    limits: (f64, f64),
+    inclusive: (bool, bool),
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| tmean(line, limits, inclusive))
+}
+
+/// `tvar` (trimmed variance) across one axis — matches `scipy.stats.tvar(x, limits, inclusive, axis, ddof)`.
+pub fn tvar_axis_2d(
+    x: &[Vec<f64>],
+    limits: (f64, f64),
+    inclusive: (bool, bool),
+    ddof: usize,
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| tvar(line, limits, inclusive, ddof))
+}
+
+/// `tstd` (trimmed standard deviation) across one axis —
+/// matches `scipy.stats.tstd(x, limits, inclusive, axis, ddof)`.
+pub fn tstd_axis_2d(
+    x: &[Vec<f64>],
+    limits: (f64, f64),
+    inclusive: (bool, bool),
+    ddof: usize,
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| tstd(line, limits, inclusive, ddof))
+}
+
+/// `tsem` (trimmed standard error of the mean) across one axis —
+/// matches `scipy.stats.tsem(x, limits, inclusive, axis, ddof)`.
+pub fn tsem_axis_2d(
+    x: &[Vec<f64>],
+    limits: (f64, f64),
+    inclusive: (bool, bool),
+    ddof: usize,
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| tsem(line, limits, inclusive, ddof))
+}
+
+// NOTE: no `tmin_axis_2d` — `scipy.stats.tmin` (a masked `np.min`) is unusually fast
+// (~1ms at 2000×512), faster than reduce_axis_2d's 64-thread spawn floor, so a parallel
+// fsci version is a slight LOSS at narrow columns. Omitted deliberately (see NEGATIVE_EVIDENCE).
+// `tmax` is kept because scipy.stats.tmax is ~3× slower than tmin and fsci wins it cleanly.
+
+/// `tmax` (trimmed maximum) across one axis — matches `scipy.stats.tmax(x, upperlimit, axis, inclusive)`.
+pub fn tmax_axis_2d(
+    x: &[Vec<f64>],
+    upperlimit: f64,
+    inclusive: bool,
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| tmax(line, upperlimit, inclusive))
+}
+
+/// `mode` (most common value) across one axis — matches the `mode` field of `scipy.stats.mode(x, axis)`.
+pub fn mode_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, mode)
+}
+
+/// `entropy` (Shannon entropy of a discrete distribution) across one axis —
+/// matches `scipy.stats.entropy(pk, base=base, axis=axis)`.
+pub fn entropy_axis_2d(x: &[Vec<f64>], base: Option<f64>, axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, |line| entropy(line, base))
+}
+
+/// `circmean` (circular mean over `[0, 2π)`) across one axis — matches `scipy.stats.circmean(x, axis)`.
+pub fn circmean_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, circmean)
+}
+
+/// `circvar` (circular variance over `[0, 2π)`) across one axis — matches `scipy.stats.circvar(x, axis)`.
+pub fn circvar_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, circvar)
+}
+
+/// `circstd` (circular standard deviation over `[0, 2π)`) across one axis —
+/// matches `scipy.stats.circstd(x, axis)`.
+pub fn circstd_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError> {
+    reduce_axis_2d(x, axis, circstd)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RankTieMethod {
     Average,
@@ -37308,13 +37395,20 @@ fn entropy_h_sum(pk: &[f64], total: f64) -> f64 {
         s
     };
     let n = pk.len();
+    // Short-circuit small inputs BEFORE probing parallelism: `available_parallelism()` is a
+    // `sched_getaffinity` syscall, and when `entropy` is called once per line by `entropy_axis_2d`
+    // (thousands of short lines), that per-call syscall dominates the (otherwise cheap) `ln` work.
+    // The serial `chunk_sum` is what we'd take here anyway.
+    if n < (1 << 16) {
+        return chunk_sum(pk);
+    }
     // Cap workers so each owns >=64k elements: the per-element `ln` is light, so a
     // 64-way split has too little work per chunk to amortize the thread spawn.
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
     let threads = cores.min((n / (1 << 16)).max(1)).min(16);
-    if n < (1 << 16) || threads <= 1 {
+    if threads <= 1 {
         return chunk_sum(pk);
     }
     let chunk = n.div_ceil(threads);
@@ -59209,6 +59303,40 @@ mod tests {
                 differential_entropy_axis_2d(&x, None, None, -1).unwrap(),
                 Box::new(|l: &[f64]| differential_entropy(l, None, None)),
             ),
+            (
+                "tmean",
+                tmean_axis_2d(&x, (0.2, 1.3), (true, true), -1).unwrap(),
+                Box::new(|l: &[f64]| tmean(l, (0.2, 1.3), (true, true))),
+            ),
+            (
+                "tvar",
+                tvar_axis_2d(&x, (0.2, 1.3), (true, true), 1, -1).unwrap(),
+                Box::new(|l: &[f64]| tvar(l, (0.2, 1.3), (true, true), 1)),
+            ),
+            (
+                "tstd",
+                tstd_axis_2d(&x, (0.2, 1.3), (true, true), 1, -1).unwrap(),
+                Box::new(|l: &[f64]| tstd(l, (0.2, 1.3), (true, true), 1)),
+            ),
+            (
+                "tsem",
+                tsem_axis_2d(&x, (0.2, 1.3), (true, true), 1, -1).unwrap(),
+                Box::new(|l: &[f64]| tsem(l, (0.2, 1.3), (true, true), 1)),
+            ),
+            (
+                "tmax",
+                tmax_axis_2d(&x, 1.3, true, -1).unwrap(),
+                Box::new(|l: &[f64]| tmax(l, 1.3, true)),
+            ),
+            ("mode", mode_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| mode(l))),
+            (
+                "entropy",
+                entropy_axis_2d(&x, None, -1).unwrap(),
+                Box::new(|l: &[f64]| entropy(l, None)),
+            ),
+            ("circmean", circmean_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| circmean(l))),
+            ("circvar", circvar_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| circvar(l))),
+            ("circstd", circstd_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| circstd(l))),
         ];
         for (label, par, f) in &checks {
             for (r, row) in x.iter().enumerate() {

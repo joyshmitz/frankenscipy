@@ -1078,3 +1078,38 @@ anyway). gmean_axis_2d 11.8→1.70 ms (6.9×), flipping the loss to a 3.18× win
 LESSON (generalizable): probing `available_parallelism()` inside a per-element scalar kernel is a hidden
 syscall tax when that kernel is the reduce-closure of an axis sweep — order the cheap serial-gate FIRST.
 fsci-stats GREEN (reduce_axis_2d_family + all gmean/gstd/hmean tests pass). Same-process A/B mandatory.
+
+### ✅✅ stats: 10 MORE axis-2D reducers (trimmed/circular/mode/entropy) + entropy syscall fix (2.5-71x faster than scipy)
+Third batch on the reduce_axis_2d vein. scipy's per-axis trimmed/circular/mode stats are catastrophically
+slow (Python masking + per-slice dispatch): tstd 51-112ms, tsem 48-102ms, mode 50-129ms, tvar 27-75ms,
+circmean/var/std 43-87ms, entropy 16-32ms. fsci's parallel-across-lines reducers run at ~1.5-3.4ms.
+Added (bit-identical to per-line, conformance in extended reduce_axis_2d_family test, 24 reducers total):
+tmean, tvar, tstd, tsem, tmax, mode, entropy, circmean, circvar, circstd.
+
+**SAME-BOX paired head-to-head (best-of-20, fsci binary + scipy.stats measured BACK-TO-BACK under same load):**
+| reducer  | 2000×512 (scipy/fsci → ×) | 500×4096 (scipy/fsci → ×)  |
+|----------|---------------------------|----------------------------|
+| tstd     | 51.27/1.46 → **35.1×**    | 112.32/1.59 → **70.8×**    |
+| tsem     | 47.59/1.54 → **30.9×**    | 102.44/1.56 → **65.5×**    |
+| mode     | 50.16/1.86 → **26.9×**    | 128.51/2.85 → **45.1×**    |
+| tvar     | 26.72/1.51 → **17.7×**    | 74.98/1.61 → **46.5×**     |
+| circmean | 43.72/2.37 → **18.4×**    | 86.50/3.38 → **25.6×**     |
+| circvar  | 43.05/2.31 → **18.6×**    | 85.98/3.31 → **26.0×**     |
+| circstd  | 44.12/2.46 → **17.9×**    | 85.87/3.26 → **26.3×**     |
+| entropy  | 15.99/1.69 → **9.5×**     | 31.88/1.71 → **18.7×**     |
+| tmean    | 5.26/1.63 → **3.2×**      | 16.45/1.77 → **9.3×**      |
+| tmax     | 3.80/1.53 → **2.5×**      | 8.19/1.58 → **5.2×**       |
+
+**SYSCALL-TAX LEVER PAID OUT A 3rd TIME (byte-identical):** `entropy` was initially a 12.23ms / 1.22×
+near-loss at 2000×512 — identical non-monotonic signature to gmean (1M elts slower than 2M). Root cause
+again: `entropy_h_sum` called `available_parallelism()` (sched_getaffinity syscall) on every line BEFORE
+its `n<1<<16` serial gate. Hoisted the gate above the syscall → entropy 12.23→1.69ms (7.7×), 1.22×→9.5×
+win. grep confirmed only gmean_log_sum + entropy_h_sum had the `|| threads<=1` pattern; class now closed.
+
+**tmin DELIBERATELY OMITTED:** `scipy.stats.tmin` is a masked `np.min`, unusually fast (~1.0-1.2ms),
+below reduce_axis_2d's ~1.5ms 64-thread-spawn floor → a parallel fsci tmin is a 0.72× LOSS at narrow
+columns (wins 2.1× at wide). Omitted to keep an all-wins batch (tmax kept — scipy.tmax is ~3× slower
+than tmin, fsci wins it). FOLLOW-ON LEVER (noted, not done): the ~1.5ms floor is pure 64-thread spawn
+overhead — ALL reducers hit it at 2000 lines regardless of op cost (tstd≈tmax≈1.5ms). Capping
+reduce_axis_2d's thread count for low total-work would lower the floor AND flip tmin; needs careful
+same-process A/B (risk of regressing the big-win heavy reducers). Deferred.

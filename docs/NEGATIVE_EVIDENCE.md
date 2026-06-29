@@ -11572,3 +11572,17 @@ n due to the per-call chirp rebuild.
   payoff; do it only with full budget + the golden (perf_solve_banded) as the byte-identity guard.
 - NET: fsci's banded story is already strong (beats scipy general sparse 3.5-4.6x; matches/within-1.7x of
   LAPACK banded). Do NOT re-chase the "sparse banded" framing — it's a phantom. Scratch bins removed.
+
+## 2026-06-29 - AmberKestrel (claude-code) - OMITTED (measured loss): tmin_axis_2d — scipy.stats.tmin is faster than reduce_axis_2d's thread-spawn floor at narrow columns
+- While shipping 10 axis-2D reducers (trimmed/circular/mode/entropy, 2.5-71x wins), `tmin_axis_2d` was
+  the lone LOSS: fsci 1.47-1.53ms vs scipy 1.01-1.23ms at 2000×512 = **0.72x** (wins 2.1x at 500×4096).
+- ROOT: scipy.stats.tmin is a masked `np.min` (~1ms, single-thread, no per-slice Python). fsci's
+  reduce_axis_2d parallelizes across 2000 lines, and the ~1.5ms FLOOR is pure 64-thread spawn/join
+  overhead — every reducer hits it at this shape (tstd≈tmax≈tmin≈1.5ms; compute is negligible vs spawn).
+  scipy's fast masked-min just beats that floor. fsci wins the OTHER cheap ops (tmax 2.5x) only because
+  scipy.stats.tmax is ~3x slower than tmin (scipy quirk), not because fsci is faster than at tmin.
+- DECISION: omitted tmin_axis_2d (kept tmax). All-wins batch preserved.
+- FOLLOW-ON LEVER (noted, NOT done): cap reduce_axis_2d's thread count when total work is low — the
+  64-thread spawn is overkill for 2000 short lines; ~8-16 threads would cut the floor toward ~0.3-0.5ms,
+  speeding ALL reducers AND flipping tmin to a win. Needs same-process A/B (risk: regressing the heavy
+  big-win reducers that DO use the cores). See [[perf_available_parallelism_per_call_syscall_tax]].
