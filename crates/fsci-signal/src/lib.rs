@@ -8404,6 +8404,15 @@ pub fn sosfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalError> {
         // historical per-section guard) and returns [b0, b1, b2, a1n, a2n].
         coeffs.push(normalize_sos_section(section)?);
     }
+    // Large single signals: the whole cascade is one constant-matrix linear
+    // recurrence, so flip the serial DF2T sweep to a chunked parallel associative
+    // scan (superposition). scipy's sosfilt is serial C ⇒ pure domination at large N.
+    // Below the gate, the serial sweep stays byte-identical (all unit tests use small N).
+    let nthreads = lfilter_scan_thread_count(x.len(), coeffs.len());
+    if nthreads >= 2 {
+        return Ok(sosfilt_scan_parallel(&coeffs, x, nthreads));
+    }
+
     let mut state = vec![[0.0f64; 2]; sos.len()];
     let mut signal = x.to_vec();
 
@@ -8421,6 +8430,141 @@ pub fn sosfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalError> {
     }
 
     Ok(signal)
+}
+
+/// One homogeneous (`x = 0`) cascade step of the SOS recurrence on the flat composite
+/// state `z` (length `2·nsec`, `z[2s]`/`z[2s+1]` = section `s` DF2T taps). Used to build
+/// the cascade's companion matrix `A` column-by-column via basis-vector probes.
+fn sosfilt_cascade_homog_step(coeffs: &[[f64; 5]], z: &[f64], out: &mut [f64]) {
+    let mut cur = 0.0f64;
+    for (s, c) in coeffs.iter().enumerate() {
+        let [b0, b1, b2, a1n, a2n] = *c;
+        let yi = b0 * cur + z[2 * s];
+        out[2 * s] = b1 * cur - a1n * yi + z[2 * s + 1];
+        out[2 * s + 1] = b2 * cur - a2n * yi;
+        cur = yi;
+    }
+}
+
+/// Build the `msz×msz` (`msz = 2·nsec`) row-major companion matrix `A` of the cascade
+/// recurrence `z_n = A·z_{n-1} + b·x_n`: column `j` is one homogeneous step applied to the
+/// `j`-th basis vector. Avoids hand-composing the per-section state-space blocks.
+fn sosfilt_build_companion(coeffs: &[[f64; 5]], msz: usize) -> Vec<f64> {
+    let mut a = vec![0.0f64; msz * msz];
+    let mut ej = vec![0.0f64; msz];
+    let mut col = vec![0.0f64; msz];
+    for j in 0..msz {
+        ej[j] = 1.0;
+        sosfilt_cascade_homog_step(coeffs, &ej, &mut col);
+        for i in 0..msz {
+            a[i * msz + j] = col[i];
+        }
+        ej[j] = 0.0;
+    }
+    a
+}
+
+/// Chunked parallel associative scan of the N-section SOS cascade over a single long
+/// signal (zero initial state, matching `sosfilt`). By linearity the output is the
+/// per-chunk zero-state response (computed independently, in parallel) plus the
+/// homogeneous response to each chunk's true entry state, recovered by a serial
+/// O(nthreads·(2·nsec)^2) boundary combine using `A^chunk`. Numerically equal to the
+/// serial cascade to ~1e-12 (superposition reassociates); validated against the serial
+/// reference by a tolerance property test, not byte identity.
+fn sosfilt_scan_parallel(coeffs: &[[f64; 5]], x: &[f64], nthreads: usize) -> Vec<f64> {
+    let n = x.len();
+    let p = nthreads;
+    let nsec = coeffs.len();
+    let msz = 2 * nsec;
+    let chunk = n / p;
+    let mut y = vec![0.0f64; n];
+
+    let bounds: Vec<(usize, usize)> = (0..p)
+        .map(|i| {
+            let s = i * chunk;
+            let e = if i == p - 1 { n } else { s + chunk };
+            (s, e)
+        })
+        .collect();
+
+    // ---- Pass 1 (parallel): per-chunk zero-state response + zero-state exit state. ----
+    let mut y_slices: Vec<&mut [f64]> = Vec::with_capacity(p);
+    {
+        let mut tail = y.as_mut_slice();
+        for &(s, e) in &bounds {
+            let (head, rest) = tail.split_at_mut(e - s);
+            y_slices.push(head);
+            tail = rest;
+        }
+    }
+    let exits: Vec<Vec<f64>> = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(p);
+        for (i, sl) in y_slices.into_iter().enumerate() {
+            let start = bounds[i].0;
+            let handle = scope.spawn(move || {
+                let xc = &x[start..start + sl.len()];
+                let mut z = vec![0.0f64; msz];
+                for (k, &xi) in xc.iter().enumerate() {
+                    let mut cur = xi;
+                    for (s, c) in coeffs.iter().enumerate() {
+                        let [b0, b1, b2, a1n, a2n] = *c;
+                        let yi = b0 * cur + z[2 * s];
+                        z[2 * s] = b1 * cur - a1n * yi + z[2 * s + 1];
+                        z[2 * s + 1] = b2 * cur - a2n * yi;
+                        cur = yi;
+                    }
+                    sl[k] = cur;
+                }
+                z
+            });
+            handles.push(handle);
+        }
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    // ---- Serial combine: entry state of each chunk via A^chunk (zero initial state). ----
+    let amat = lfilter_mat_pow(&sosfilt_build_companion(coeffs, msz), msz, chunk);
+    let mut entries: Vec<Vec<f64>> = Vec::with_capacity(p);
+    entries.push(vec![0.0f64; msz]);
+    for i in 1..p {
+        let mut s = lfilter_mat_vec(&amat, &entries[i - 1], msz);
+        for (sj, &ej) in s.iter_mut().zip(exits[i - 1].iter()) {
+            *sj += ej;
+        }
+        entries.push(s);
+    }
+
+    // ---- Pass 2 (parallel): add each chunk's homogeneous (x=0) response. ----
+    let mut y_slices2: Vec<&mut [f64]> = Vec::with_capacity(p);
+    {
+        let mut tail = y.as_mut_slice();
+        for &(s, e) in &bounds {
+            let (head, rest) = tail.split_at_mut(e - s);
+            y_slices2.push(head);
+            tail = rest;
+        }
+    }
+    let entries_ref = &entries;
+    std::thread::scope(|scope| {
+        for (i, sl) in y_slices2.into_iter().enumerate() {
+            scope.spawn(move || {
+                let mut z = entries_ref[i].clone();
+                for slot in sl.iter_mut() {
+                    let mut cur = 0.0f64;
+                    for (s, c) in coeffs.iter().enumerate() {
+                        let [b0, b1, b2, a1n, a2n] = *c;
+                        let yi = b0 * cur + z[2 * s];
+                        z[2 * s] = b1 * cur - a1n * yi + z[2 * s + 1];
+                        z[2 * s + 1] = b2 * cur - a2n * yi;
+                        cur = yi;
+                    }
+                    *slot += cur;
+                }
+            });
+        }
+    });
+
+    y
 }
 
 fn sosfilt_two_sections(
@@ -24120,6 +24264,45 @@ mod tests {
                 got.to_bits(),
                 want.to_bits(),
                 "two-section fusion changed sample {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn sosfilt_parallel_scan_matches_serial_reference() {
+        // Exercise the large-N chunked parallel associative scan path (gate is
+        // 1<<18 samples). Superposition reassociates the cascade, so this is a
+        // tolerance match (not byte-identical) to the serial reference / scipy.
+        for order in [6usize, 12, 18] {
+            let sos = butter_sos(order, &[0.2], FilterType::Lowpass).expect("butter_sos");
+            let n = (1usize << 18) + 7_321; // above the parallel gate, with a remainder chunk
+            let x: Vec<f64> = (0..n)
+                .map(|i| ((i as f64) * 0.12345).sin() + 0.3 * ((i as f64) * 0.97).cos())
+                .collect();
+            let y_par = sosfilt(&sos, &x).expect("parallel sosfilt");
+            // Serial section-major reference (zero initial state).
+            let mut st = vec![[0.0f64; 2]; sos.len()];
+            let mut y_ref = x.clone();
+            for samp in &mut y_ref {
+                let mut cur = *samp;
+                for (s, sec) in sos.iter().enumerate() {
+                    let a0 = sec[3];
+                    let (b0, b1, b2) = (sec[0] / a0, sec[1] / a0, sec[2] / a0);
+                    let (a1, a2) = (sec[4] / a0, sec[5] / a0);
+                    let yi = b0 * cur + st[s][0];
+                    st[s][0] = b1 * cur - a1 * yi + st[s][1];
+                    st[s][1] = b2 * cur - a2 * yi;
+                    cur = yi;
+                }
+                *samp = cur;
+            }
+            let mut max_abs = 0.0f64;
+            for (p, r) in y_par.iter().zip(&y_ref) {
+                max_abs = max_abs.max((p - r).abs());
+            }
+            assert!(
+                max_abs < 1e-9,
+                "order {order}: parallel sosfilt scan deviates {max_abs:.3e} from serial reference"
             );
         }
     }

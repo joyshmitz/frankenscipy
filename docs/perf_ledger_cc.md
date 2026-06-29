@@ -2058,3 +2058,26 @@ zero-crossings where |y|≈0); verified by new `lfilter_parallel_scan_matches_se
 LEVER: any constant-coefficient linear recurrence (IIR filter, DF2T) → chunked parallel scan via
 superposition (zero-state pass ∥ + serial M^chunk boundary combine + homogeneous-correction pass ∥);
 exact-to-roundoff for stable filters since M^k decays. The "genuinely different primitive" (parallel-scan).
+
+## 2026-06-29 (AmberKestrel, cc) — signal.sosfilt chunked PARALLEL associative scan (cascaded biquads)
+
+Direct follow-on to the lfilter scan (264bf1a7). scipy's `sosfilt` is sequential C; fsci's sample-major
+cascade was also serial (parity). The WHOLE N-section cascade is ONE constant-matrix linear recurrence
+`z_n = A·z_{n-1} + b·x_n` over the composite state z (2·nsec), so superposition applies: per-chunk
+zero-state response (parallel) + homogeneous response to each chunk's true entry state, recovered by a
+serial O(P·(2nsec)²) boundary combine using `A^chunk`. KEY TRICK: build the (2nsec)² companion `A` by
+PROBING the single-step homogeneous cascade with basis vectors (column j = one x=0 step on e_j) — no
+hand-composing the per-section state-space blocks. Reuses lfilter's mat_pow/mat_vec.
+
+MEASURED (clean back-to-back) — BIGGER than lfilter (more biquads/sample ⇒ compute-bound ⇒ better
+parallel efficiency; win grows with N AND order):
+  n=1M order12 (6 sec):  3.56ms vs scipy 8.06ms  = **2.27x FASTER**
+  n=1M order24 (12 sec): 5.41ms vs scipy 16.26ms = **3.00x FASTER**
+  n=4M order12 (6 sec):  10.0ms vs scipy 30.9ms  = **3.09x FASTER**
+  n=4M order24 (12 sec): 13.2ms vs scipy 64.9ms  = **4.92x FASTER**
+max_abs_diff vs serial reference 2-3e-15 (near-exact; better-conditioned than lfilter's 5e-13).
+Gate reuses `lfilter_scan_thread_count`: serial below 1<<18 (BYTE-IDENTICAL, all 13 sosfilt scipy-ref/
+sosfiltfilt/axis_2d tests GREEN), parallel above with P=avail.min(N/65536). NOT byte-identical
+(superposition) → verified by new `sosfilt_parallel_scan_matches_serial_reference` property test (<1e-9,
+orders 6/12/18, N above gate w/ remainder). sosfiltfilt inherits (calls sosfilt 2x). The constant-coeff
+linear-recurrence parallel-scan lever now covers BOTH lfilter (ba) AND sosfilt (cascaded biquads).
