@@ -1330,3 +1330,26 @@ MEASURED-ALREADY-WON this iteration (negative evidence, NOT re-shipped): fsci `g
 12-38× (already parallel), `theilslopes` 9.7-18× + `siegelslopes` 9.3-62× (fast-path already optimal),
 `monte_carlo_test` 61× (already parallel). fsci-stats' big single-array gaps are closed; the open seam is
 the all-pairs/cross fan-out family. fsci-stats GREEN.
+
+### ✅✅ stats: kendalltau_cross + weightedtau_cross (two-group cross-correlation) — 162-262x faster than scipy
+Completes the cross family for CORRELATION: rectangular `m × k` cross-correlation between two groups of
+variables (m features vs k targets — ubiquitous in genomics/finance: correlate every gene against every
+phenotype). Statistic-only (skips the per-pair p-value, the bulk of the cost) over `all_pairs_cross_matrix`.
+SciPy makes you double-loop `scipy.stats.kendalltau`/`weightedtau` in Python (weightedtau cross = 2.4 s!).
+
+**SAME-BOX head-to-head (fsci cross matrix vs scipy Python double-loop; m=50 k=50 n=500, 2500 pairs):**
+| function           | scipy      | fsci     | speedup    |
+|--------------------|------------|----------|------------|
+| kendalltau_cross   | 675.7 ms   | 4.18 ms  | **161.6×** |
+| weightedtau_cross  | 2 398.4 ms | 9.15 ms  | **262.1×** |
+
+Conformance: `out[i][j]` bit-identical to per-pair `kendalltau(.).statistic` / `weightedtau`, empty
+sample rejected. The all_pairs/cross fan-out family now covers 14 public matrices (self: kendall/wtau/
+wasserstein/energy/ks/mwu/ranksums/bm; cross: wasserstein/energy/ks/mwu/kendall/wtau). fsci-stats GREEN.
+
+NOTE (uncontended-crate survey this iteration, all MEASURED-ALREADY-WIN, NOT re-shipped): spatial `cdist`
+euclidean 10-13× (parallel + per-pair SIMD, all dims d=2..50); stats `gaussian_kde`/`theilslopes`/
+`siegelslopes`/`monte_carlo_test` already win (see prior entry). fsci's `RbfInterpolator` is the LEGACY
+`scipy.interpolate.Rbf` (kernel+epsilon, ≤4096 pts), NOT the modern `RBFInterpolator` — semantic mismatch,
+not a comparable gap. The accessible uncontended surface is saturated; remaining gaps sit in contended
+crates (linalg/signal/sparse — other agents' probes present) or known SIMD walls (FFT mid-pow2).

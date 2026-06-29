@@ -38751,6 +38751,20 @@ pub fn mannwhitneyu_cross(
     })
 }
 
+/// Cross all-pairs Kendall τ: `m × k` with `out[i][j] == kendalltau(a[i], b[j]).statistic` — the
+/// cross-correlation between two GROUPS of variables (e.g. m features vs k targets), each `a[i]`/`b[j]` a
+/// paired length-n observation vector. Statistic-only (skips the per-pair p-value, the bulk of the cost,
+/// exactly as [`kendalltau_matrix`]). SciPy makes you double-loop `scipy.stats.kendalltau`.
+pub fn kendalltau_cross(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    all_pairs_cross_matrix(a, b, kendalltau_statistic_only)
+}
+
+/// Cross all-pairs weighted Kendall τ: `m × k` with `out[i][j] == weightedtau(a[i], b[j])`. SciPy makes
+/// you double-loop `scipy.stats.weightedtau` (≈2.4 s for a 50×50 cross at n=500).
+pub fn weightedtau_cross(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    all_pairs_cross_matrix(a, b, weightedtau)
+}
+
 pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
     let n = x.len();
     if n < 2 || x.len() != y.len() {
@@ -60231,6 +60245,21 @@ mod tests {
         let emptyrow: Vec<Vec<f64>> = vec![vec![1.0, 2.0], vec![]];
         assert!(wasserstein_distance_cross(&emptyrow, &gb).is_err());
         assert!(ks_2samp_cross(&ga, &emptyrow).is_err());
+
+        // CROSS correlation (equal-length paired groups): bit-identical to per-pair kendalltau/weightedtau.
+        let ca: Vec<Vec<f64>> = (0..4).map(|s| (0..40).map(|t| ((s * 3 + t) as f64).sin()).collect()).collect();
+        let cb: Vec<Vec<f64>> = (0..3).map(|s| (0..40).map(|t| ((s * 2 + t + 1) as f64 * 0.5).cos()).collect()).collect();
+        let kc = kendalltau_cross(&ca, &cb).unwrap();
+        let wtc = weightedtau_cross(&ca, &cb).unwrap();
+        assert_eq!(kc.len(), 4);
+        assert_eq!(kc[0].len(), 3);
+        for i in 0..ca.len() {
+            for j in 0..cb.len() {
+                assert_eq!(kc[i][j].to_bits(), kendalltau(&ca[i], &cb[j]).statistic.to_bits(), "kendall cross {i},{j}");
+                assert_eq!(wtc[i][j].to_bits(), weightedtau(&ca[i], &cb[j]).to_bits(), "wtau cross {i},{j}");
+            }
+        }
+        assert!(kendalltau_cross(&ca, &emptyrow).is_err());
     }
 
     #[test]
