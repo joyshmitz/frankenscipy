@@ -11466,3 +11466,29 @@ n due to the per-call chirp rebuild.
   hoists the loop-invariant work is byte-identical and free. The wall win is FFT-capped, so it's modest — but
   the kernel ratio is clean 1.19x. (FFT-family axis-2D vein remains conformance-blocked: stft uses
   boundary=None/padded=False not scipy's default zeros/padded; spectrogram lacks detrend — both 1-D gaps.)
+
+## 2026-06-28 - LANDED (AmberForge): FIXED 1-D spectrogram scipy-conformance + re-added spectrogram_axis_2d (3.5-3.76x faster)
+
+- Agent: AmberForge. Unblocked last turn's filed blocker. fsci's 1-D `spectrogram` deviated from scipy by up
+  to 8.52 (it used the raw `stft` path = NO detrend) plus a times offset of 0.5. ROOT FIX: reimplement
+  spectrogram's per-segment PSD via the SAME detrending `periodogram_psd` kernel that `welch` uses (scipy's
+  default `detrend='constant'`), and center segments at `nperseg/2 + s·step` (scipy's spectrogram convention,
+  not the STFT's `(nperseg-1)/2`). Same FFT count as before (one rfft/segment) — no perf regression on 1-D.
+- **1-D conformance (vs scipy.signal.spectrogram, nperseg=256, noverlap=32, hann):**
+  sxx max abs diff 8.52 → **1.14e-13**; times 0.5 → **0.0**; freqs exact. The STFT-path "residual 0.33" from
+  last turn is GONE — it was an STFT-path artifact; the periodogram path matches scipy (the value welch
+  already achieves). Existing property tests (energy-tracks-frequency, dimensions) still pass; 663/0.
+- **Re-added `spectrogram_axis_2d` (now a VALID scipy-win) — MEASURED vs scipy (axis=-1, best-of-5):**
+
+  | channels × length | fsci spectrogram_2d | scipy | speedup |
+  | ---: | ---: | ---: | ---: |
+  | 1000 × 10000 | 80.8 ms | 303.5 ms | **3.76x** |
+  | 256 × 100000 | 231.5 ms | 811.0 ms | **3.50x** |
+
+  Parallel across lines (generic `spectral_line_axis_2d` driver), per-segment FFTs small (no FFT wall), inner
+  frame parallelism forced serial via the shared thread-local. BYTE-IDENTICAL to per-line 1-D `spectrogram`
+  (test `spectrogram_axis_2d_matches_per_line`, axis=-1 and 0).
+- LESSON: a "1-D conformance gap blocks the 2-D win" blocker (surfaced last turn) was fixable by ROUTING the
+  broken path (stft, no detrend) through the already-correct sibling kernel (periodogram, detrends) rather
+  than debugging the broken path's residual. When two sibling fns share math and ONE matches scipy, route the
+  other through it. 11 vein ships now; the FFT-family is fully harvested (welch/csd/coherence/spectrogram 2-D).

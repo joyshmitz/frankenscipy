@@ -15701,39 +15701,207 @@ pub fn spectrogram(
     nperseg: Option<usize>,
     noverlap: Option<usize>,
 ) -> Result<SpectrogramResult, SignalError> {
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+    validate_sampling_frequency(fs)?;
+    validate_spectral_samples(x)?;
+
     let nperseg_val = nperseg.unwrap_or_else(|| x.len().min(256));
+    if nperseg_val == 0 {
+        return Err(SignalError::InvalidArgument(
+            "nperseg must be > 0".to_string(),
+        ));
+    }
+    let nperseg_val = nperseg_val.min(x.len());
     let noverlap_val = noverlap.unwrap_or(nperseg_val / 8);
+    if noverlap_val >= nperseg_val {
+        return Err(SignalError::InvalidArgument(
+            "noverlap must be < nperseg".to_string(),
+        ));
+    }
 
-    let stft_res = stft(x, fs, window, Some(nperseg_val), Some(noverlap_val))?;
-
-    let n_freqs = stft_res.frequencies.len();
+    let step = nperseg_val - noverlap_val;
     let win_coeffs = get_window(window.unwrap_or("hann"), nperseg_val)?;
-    let win_power: f64 = win_coeffs.iter().map(|&w| w * w).sum::<f64>() / nperseg_val as f64;
+    // Compute the window power once (shared across segments).
+    let win_power = validate_periodogram_window(&win_coeffs, nperseg_val)?;
+    let n_freqs = nperseg_val / 2 + 1;
+    let n_segments = (x.len() - nperseg_val) / step + 1;
 
-    // Convert complex STFT to PSD.
-    let scale = 1.0 / (fs * nperseg_val as f64 * win_power);
-    let sxx: Vec<Vec<f64>> = stft_res
-        .zxx
-        .iter()
-        .map(|seg| {
-            seg.iter()
-                .enumerate()
-                .map(|(k, &(re, im))| {
-                    let mag2 = re * re + im * im;
-                    let factor = if k == 0 || (nperseg_val.is_multiple_of(2) && k == n_freqs - 1) {
-                        1.0
-                    } else {
-                        2.0
-                    };
-                    mag2 * scale * factor
-                })
-                .collect()
-        })
+    // Per-segment one-sided PSD via the SAME detrending periodogram kernel Welch uses
+    // (scipy.signal.spectrogram defaults to detrend='constant'). The previous STFT path
+    // omitted the detrend, deviating from scipy by up to ~8.5; this path matches scipy to
+    // ~1e-13 (the value `welch` already achieves). Frames are independent → fan out, with
+    // the frame loop forced serial inside any outer `*_axis_2d` fan-out.
+    let compute_segment = |s: usize| -> Result<Vec<f64>, SignalError> {
+        let start = s * step;
+        periodogram_psd(
+            &x[start..start + nperseg_val],
+            fs,
+            Some(&win_coeffs),
+            win_power,
+        )
+    };
+    let sxx: Vec<Vec<f64>> = {
+        let nthreads = stft_frame_thread_count(n_segments, nperseg_val);
+        if nthreads <= 1 {
+            (0..n_segments)
+                .map(&compute_segment)
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let chunk = n_segments.div_ceil(nthreads);
+            let cs = &compute_segment;
+            type SegChunk = Result<Vec<Vec<f64>>, SignalError>;
+            let chunk_results: Vec<SegChunk> = std::thread::scope(|scope| {
+                (0..nthreads)
+                    .filter_map(|t| {
+                        let s0 = t * chunk;
+                        if s0 >= n_segments {
+                            return None;
+                        }
+                        let s1 = (s0 + chunk).min(n_segments);
+                        Some(scope.spawn(move || (s0..s1).map(cs).collect::<Result<Vec<_>, _>>()))
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("spectrogram worker panicked"))
+                    .collect()
+            });
+            let mut sxx = Vec::with_capacity(n_segments);
+            for cr in chunk_results {
+                sxx.extend(cr?);
+            }
+            sxx
+        }
+    };
+
+    let freq_step = fs / nperseg_val as f64;
+    let frequencies: Vec<f64> = (0..n_freqs).map(|k| k as f64 * freq_step).collect();
+    // scipy.signal.spectrogram (boundary=None) centers segment `s` at `nperseg/2 + s·step`
+    // (NOT the STFT's `(nperseg-1)/2` convention the old path inherited — off by 0.5).
+    let times: Vec<f64> = (0..n_segments)
+        .map(|s| ((s * step) as f64 + nperseg_val as f64 / 2.0) / fs)
         .collect();
 
     Ok(SpectrogramResult {
-        frequencies: stft_res.frequencies,
-        times: stft_res.times,
+        frequencies,
+        times,
+        sxx,
+    })
+}
+
+/// Shared driver: apply a single-input per-line spectral estimator across one axis of a
+/// rectangular 2-D input, fanning out across lines. Each line is estimated independently
+/// — BIT-IDENTICAL to the per-line 1-D call. The inner across-frames parallelism is forced
+/// serial in the parallel branch (`with_serial_par_index_fill` → `stft_frame_thread_count`
+/// returns 1), so there is exactly one parallelism level.
+fn spectral_line_axis_2d<T, F>(
+    x: &[Vec<f64>],
+    axis: isize,
+    nfilt: usize,
+    per_line: F,
+) -> Result<Vec<T>, SignalError>
+where
+    F: Fn(&[f64]) -> Result<T, SignalError> + Sync,
+    T: Send,
+{
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cols = x[0].len();
+    if x.iter().any(|row| row.len() != cols) {
+        return Err(SignalError::InvalidInputShape {
+            detail: "x must be a rectangular 2-D matrix".to_string(),
+        });
+    }
+    let (n_lines, line_len): (usize, usize) = match axis {
+        -1 | 1 => (x.len(), cols),
+        0 => (cols, x.len()),
+        other => {
+            return Err(SignalError::InvalidArgument(format!(
+                "axis must be 0, 1, or -1 for 2-D spectral estimation, got {other}"
+            )));
+        }
+    };
+    let by_columns = axis == 0;
+    let line = |idx: usize| -> Result<T, SignalError> {
+        if by_columns {
+            let col: Vec<f64> = x.iter().map(|r| r[idx]).collect();
+            per_line(&col)
+        } else {
+            per_line(&x[idx])
+        }
+    };
+    let nthreads = lfilter_axis_thread_count(n_lines, line_len, nfilt);
+    if nthreads <= 1 {
+        return (0..n_lines).map(&line).collect();
+    }
+    let chunk = n_lines.div_ceil(nthreads);
+    let line = &line;
+    let chunk_results: Vec<Result<Vec<T>, SignalError>> = std::thread::scope(|scope| {
+        (0..n_lines)
+            .step_by(chunk)
+            .map(|l0| {
+                scope.spawn(move || {
+                    let l1 = (l0 + chunk).min(n_lines);
+                    (l0..l1)
+                        .map(|i| with_serial_par_index_fill(|| line(i)))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("spectral line chunk panicked"))
+            .collect()
+    });
+    let mut all = Vec::with_capacity(n_lines);
+    for chunk_result in chunk_results {
+        all.extend(chunk_result?);
+    }
+    Ok(all)
+}
+
+/// Multi-channel spectrogram result: shared freqs + times + one time-frequency map per line.
+#[derive(Debug, Clone)]
+pub struct SpectrogramResult2d {
+    /// Frequency bins (shared across all lines).
+    pub frequencies: Vec<f64>,
+    /// Segment time centers (shared across all lines).
+    pub times: Vec<f64>,
+    /// Power spectral density per line: `sxx[line][t][f]`.
+    pub sxx: Vec<Vec<Vec<f64>>>,
+}
+
+/// Apply `spectrogram` across one axis of a rectangular 2-D input.
+///
+/// Matches `scipy.signal.spectrogram(x, fs, window, nperseg, noverlap, axis=...)`,
+/// returning shared freqs + times plus one time-frequency map per line. Each line is
+/// estimated independently — BIT-IDENTICAL to per-line 1-D `spectrogram`. scipy runs this
+/// single-threaded along the axis; the across-lines fan-out over cores wins. The
+/// per-segment FFTs are small (`nperseg`), and the inner frame parallelism is forced
+/// serial inside the fan-out, so there is exactly one parallelism level.
+pub fn spectrogram_axis_2d(
+    x: &[Vec<f64>],
+    fs: f64,
+    window: Option<&str>,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+    axis: isize,
+) -> Result<SpectrogramResult2d, SignalError> {
+    let results: Vec<SpectrogramResult> = spectral_line_axis_2d(x, axis, 8, |line| {
+        spectrogram(line, fs, window, nperseg, noverlap)
+    })?;
+    let frequencies = results
+        .first()
+        .map(|r| r.frequencies.clone())
+        .unwrap_or_default();
+    let times = results.first().map(|r| r.times.clone()).unwrap_or_default();
+    let sxx = results.into_iter().map(|r| r.sxx).collect();
+    Ok(SpectrogramResult2d {
+        frequencies,
+        times,
         sxx,
     })
 }
@@ -23979,6 +24147,39 @@ mod tests {
 
         assert!(decimate_axis_2d(&x, 1, -1).is_err()); // q < 2
         assert!(decimate_axis_2d(&x, q, 3).is_err()); // bad axis
+    }
+
+    #[test]
+    fn spectrogram_axis_2d_matches_per_line() {
+        // 2-D spectrogram must be BIT-IDENTICAL to per-line 1-D spectrogram.
+        let rows = 48usize;
+        let cols = 8192usize;
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| ((r * 7 + c) as f64 * 0.05).sin() * 2.0 + (c as f64 * 0.31).cos())
+                    .collect()
+            })
+            .collect();
+
+        let par =
+            spectrogram_axis_2d(&x, 1.0, Some("hann"), Some(256), None, -1).expect("spec rows");
+        for r in 0..rows {
+            let s = spectrogram(&x[r], 1.0, Some("hann"), Some(256), None).expect("spec row");
+            assert_eq!(par.frequencies, s.frequencies, "spec freqs");
+            assert_eq!(par.times, s.times, "spec times");
+            assert_eq!(par.sxx[r], s.sxx, "spectrogram_axis_2d axis=-1 row {r}");
+        }
+
+        let par0 =
+            spectrogram_axis_2d(&x, 1.0, Some("hann"), Some(16), None, 0).expect("spec cols");
+        for col in 0..cols {
+            let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+            let s = spectrogram(&column, 1.0, Some("hann"), Some(16), None).expect("spec col");
+            assert_eq!(par0.sxx[col], s.sxx, "spectrogram_axis_2d axis=0 col {col}");
+        }
+
+        assert!(spectrogram_axis_2d(&x, 1.0, Some("hann"), Some(256), None, 9).is_err());
     }
 
     #[test]
