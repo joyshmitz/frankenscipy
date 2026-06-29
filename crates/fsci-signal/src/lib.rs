@@ -12122,6 +12122,26 @@ pub fn detrend(data: &[f64], dtype: DetrendType) -> Result<Vec<f64>, SignalError
     }
 }
 
+/// Apply `detrend` across one axis of a rectangular 2-D input.
+///
+/// Matches `scipy.signal.detrend(data, axis=..., type=...)` (single-segment, `bp=0`).
+/// Each line is detrended independently — BIT-IDENTICAL to per-line 1-D `detrend`.
+/// scipy's `type="linear"` solves a full lstsq single-threaded (slow); fsci uses the
+/// cheap closed-form per-line fit, fanned out across cores. The per-line op is serial
+/// (no internal parallelism), so the across-lines fan-out can't oversubscribe.
+pub fn detrend_axis_2d(
+    x: &[Vec<f64>],
+    dtype: DetrendType,
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, SignalError> {
+    // Per-element work weight: ~2 light passes (linear), ~1 (constant).
+    let nfilt = match dtype {
+        DetrendType::Linear => 2,
+        DetrendType::Constant => 1,
+    };
+    apply_filter_axis_2d(x, axis, nfilt, |line| detrend(line, dtype))
+}
+
 /// Shared symmetric exponential B-spline coefficient filter (Unser): a causal
 /// forward pass with the mirror-boundary initial condition followed by an
 /// anti-causal reverse pass, scaled by `gain`. Used by [`cspline1d`] (cubic,
@@ -23652,6 +23672,41 @@ mod tests {
 
         assert!(decimate_axis_2d(&x, 1, -1).is_err()); // q < 2
         assert!(decimate_axis_2d(&x, q, 3).is_err()); // bad axis
+    }
+
+    #[test]
+    fn detrend_axis_2d_matches_per_line() {
+        // 2-D detrend must be BIT-IDENTICAL to per-line 1-D detrend, both types/axes.
+        let rows = 64usize;
+        let cols = 4096usize;
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| ((r * 13 + c) as f64 * 0.01).sin() * 5.0 + c as f64 * 0.002 + r as f64)
+                    .collect()
+            })
+            .collect();
+
+        for dt in [DetrendType::Linear, DetrendType::Constant] {
+            // axis = -1 (rows)
+            let par = detrend_axis_2d(&x, dt, -1).expect("detrend_axis_2d rows");
+            let serial: Vec<Vec<f64>> = x
+                .iter()
+                .map(|row| detrend(row, dt).expect("detrend row"))
+                .collect();
+            assert_eq!(par, serial, "detrend_axis_2d axis=-1 {dt:?}");
+
+            // axis = 0 (columns)
+            let par0 = detrend_axis_2d(&x, dt, 0).expect("detrend_axis_2d cols");
+            for col in 0..cols {
+                let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+                let filtered = detrend(&column, dt).expect("detrend col");
+                for (r, &value) in filtered.iter().enumerate() {
+                    assert_eq!(par0[r][col], value, "detrend axis=0 {dt:?} col {col} row {r}");
+                }
+            }
+        }
+        assert!(detrend_axis_2d(&x, DetrendType::Linear, 9).is_err());
     }
 
     #[test]

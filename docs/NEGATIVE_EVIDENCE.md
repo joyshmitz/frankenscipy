@@ -11331,3 +11331,29 @@ n due to the per-call chirp rebuild.
   thread::scope) — gate them ALL with one thread-local serial flag, which is more general than the per-function
   serial-apply used for savgol. 6 vein ships now (sosfilt/filtfilt/sosfiltfilt/decimate/savgol/resample_poly
   2-D). The thread-local serial flag now covers the whole crate's internal parallel passes.
+
+## 2026-06-28 - LANDED WIN (AmberForge): detrend_axis_2d (multi-channel detrend) — 24-25x (linear) / 3.2-3.3x (constant) FASTER than scipy
+
+- Agent: AmberForge. 7th ship of the multi-channel vein, and the cleanest: fsci's per-line `detrend` is a
+  serial closed-form fit (no internal parallelism), so the across-lines fan-out reuses the shared
+  `apply_filter_axis_2d` driver directly (no thread-local needed). Output is same-length, so both axes fit.
+- KEY: scipy's `type="linear"` detrend solves a FULL lstsq single-threaded (slow); fsci uses the cheap
+  closed-form per-line slope/intercept fit, fanned out across cores → a 24-25x gap. `type="constant"` (mean
+  subtract) is lighter, but fsci SERIAL actually LOSES to scipy's optimized numpy (0.85x) — the across-lines
+  parallelism flips it to a 3.2-3.3x WIN. Parallel beats fsci-serial here (5.2x on 64 cores, sub-linear /
+  bandwidth-bound but a real gain), so unlike the label-mean scatter-add this light op does NOT regress.
+- **MEASURED vs scipy.signal.detrend (axis=-1, best-of-5):**
+
+  | channels × length | type | fsci parallel | fsci serial | scipy | speedup |
+  | ---: | --- | ---: | ---: | ---: | ---: |
+  | 1000 × 10000 | linear | 13.5 ms | 70.8 ms | 329.7 ms | **24.4x** |
+  | 256 × 100000 | linear | 34.0 ms | 162.9 ms | 862.2 ms | **25.4x** |
+  | 1000 × 10000 | constant | 13.4 ms | 50.8 ms | 43.4 ms | **3.2x** |
+  | 256 × 100000 | constant | 33.4 ms | 126.3 ms | 109.8 ms | **3.3x** |
+
+  BYTE-IDENTICAL to per-line 1-D `detrend` (test `detrend_axis_2d_matches_per_line`, both types, axis=-1 and
+  0). Numerical oracle vs scipy: linear max abs diff **4.8e-15**, constant **2.3e-15**. fsci-signal 660/0.
+- LESSON: the across-lines fan-out wins TWO ways — (1) a better per-line algorithm (closed-form vs scipy's
+  lstsq, the 24x linear gap) AND (2) raw core count (the 3.2x constant gap, where fsci-serial actually loses).
+  A light per-element op can still parallelize WELL when there are ~2-3 passes of real work per element (5.2x
+  on 64 cores) — the label-mean regression was a 1-bump scatter-add, lighter still. 7 vein ships now.
