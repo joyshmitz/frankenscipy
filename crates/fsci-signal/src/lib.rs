@@ -351,6 +351,80 @@ pub fn savgol_filter(
     savgol_filter_mode(x, window_length, polyorder, SavgolMode::Interp, 0.0)
 }
 
+/// Apply `savgol_filter` across one axis of a rectangular 2-D input.
+///
+/// Matches `scipy.signal.savgol_filter(x, window_length, polyorder, axis=...)`
+/// (default `mode="interp"`, `deriv=0`, `delta=1.0`). Each line is filtered with a
+/// small-kernel Savitzky-Golay FIR correlation independently — BIT-IDENTICAL to
+/// per-line 1-D `savgol_filter`. scipy applies it via single-threaded
+/// `ndimage.convolve1d`; the across-lines fan-out over cores wins. The per-line FIR
+/// is serial (small fixed kernel, no FFT), so it NEVER self-parallelizes and the
+/// fan-out can't oversubscribe (unlike FFT-based ops — see the reverted hilbert).
+pub fn savgol_filter_axis_2d(
+    x: &[Vec<f64>],
+    window_length: usize,
+    polyorder: usize,
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, SignalError> {
+    // Compute the SG coefficients ONCE (not per line) and apply each line SERIALLY:
+    // the 1-D `savgol_filter` self-parallelizes its interior correlation via
+    // `par_index_fill`, which would OVERSUBSCRIBE nested inside the across-lines
+    // fan-out (the hilbert lesson). A serial per-line apply + the parallel
+    // across-lines driver keeps exactly one level of parallelism.
+    let coeffs = savgol_coeffs(window_length, polyorder, 0)?;
+    apply_filter_axis_2d(x, axis, window_length.max(1), |line| {
+        savgol_apply_interp_serial(line, &coeffs, window_length, polyorder)
+    })
+}
+
+/// Serial Savitzky-Golay `mode="interp"` application with PRECOMPUTED `coeffs`.
+///
+/// Bit-identical to `savgol_filter` (whose interior correlation runs through the
+/// order-preserving `par_index_fill`, so serial vs parallel are bit-equal), but
+/// runs serially and skips the per-call coefficient solve — for use inside the
+/// across-lines fan-out of [`savgol_filter_axis_2d`].
+fn savgol_apply_interp_serial(
+    x: &[f64],
+    coeffs: &[f64],
+    window_length: usize,
+    polyorder: usize,
+) -> Result<Vec<f64>, SignalError> {
+    let n = x.len();
+    if window_length > n {
+        return Err(SignalError::InvalidWindowLength(
+            "window_length must not exceed signal length".to_string(),
+        ));
+    }
+    let half = window_length / 2;
+    let even_shift = usize::from(window_length.is_multiple_of(2));
+
+    // Interior: centered correlation (boundary regions overwritten below).
+    let mut result = vec![0.0_f64; n];
+    for (i, slot) in result.iter_mut().enumerate() {
+        let mut val = 0.0;
+        for (j, &c) in coeffs.iter().enumerate() {
+            let idx = i as i64 + j as i64 - half as i64 + even_shift as i64;
+            if idx >= 0 && idx < n as i64 {
+                val += c * x[idx as usize];
+            }
+        }
+        *slot = val;
+    }
+    // Boundary: polynomial edge fit (scipy's mode='interp').
+    if half > 0 {
+        let positions: Vec<f64> = (0..window_length).map(|k| k as f64).collect();
+        let left = polyfit(&positions, &x[0..window_length], polyorder)?;
+        for (i, slot) in result.iter_mut().take(half).enumerate() {
+            *slot = poly_eval(&left, i as f64);
+        }
+        let right = polyfit(&positions, &x[n - window_length..n], polyorder)?;
+        for i in (window_length - half)..window_length {
+            result[n - window_length + i] = poly_eval(&right, i as f64);
+        }
+    }
+    Ok(result)
+}
+
 /// Apply a Savitzky-Golay filter with an explicit boundary `mode`.
 ///
 /// Matches `scipy.signal.savgol_filter(x, window_length, polyorder, mode=mode,
@@ -23419,6 +23493,42 @@ mod tests {
 
         assert!(decimate_axis_2d(&x, 1, -1).is_err()); // q < 2
         assert!(decimate_axis_2d(&x, q, 3).is_err()); // bad axis
+    }
+
+    #[test]
+    fn savgol_filter_axis_2d_matches_per_line() {
+        // 2-D savgol must be BIT-IDENTICAL to per-line 1-D savgol_filter (independent
+        // lines). Sized past the parallel gate.
+        let rows = 64usize;
+        let cols = 4096usize;
+        let (window, poly) = (11usize, 3usize);
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| ((r * 31 + c) as f64 * 0.013).sin() * 7.0 + (c as f64 * 0.002).cos())
+                    .collect()
+            })
+            .collect();
+
+        // axis = -1 (rows)
+        let par = savgol_filter_axis_2d(&x, window, poly, -1).expect("savgol_axis_2d rows");
+        let serial: Vec<Vec<f64>> = x
+            .iter()
+            .map(|row| savgol_filter(row, window, poly).expect("savgol row"))
+            .collect();
+        assert_eq!(par, serial, "savgol_filter_axis_2d axis=-1");
+
+        // axis = 0 (columns)
+        let par0 = savgol_filter_axis_2d(&x, window, poly, 0).expect("savgol_axis_2d cols");
+        for col in 0..cols {
+            let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+            let filtered = savgol_filter(&column, window, poly).expect("savgol col");
+            for (r, &value) in filtered.iter().enumerate() {
+                assert_eq!(par0[r][col], value, "savgol axis=0 col {col} row {r}");
+            }
+        }
+
+        assert!(savgol_filter_axis_2d(&x, window, poly, 9).is_err());
     }
 
     #[test]

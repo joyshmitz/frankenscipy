@@ -11273,3 +11273,30 @@ n due to the per-call chirp rebuild.
 - VEIN STATUS: the multi-channel-filter vein's clean wins are the IIR/recurrence ops scipy serial-loops
   (sosfilt/filtfilt/sosfiltfilt/decimate 2-D, 4 ships). FFT-based ops (hilbert) hit the FFT-self-parallel +
   non-pow2-wall ceiling. `savgol_filter` (FIR conv, scipy batches via ndimage) likely similar — low EV.
+
+## 2026-06-28 - LANDED WIN (AmberForge): savgol_filter_axis_2d (multi-channel Savitzky-Golay) — 6.5-9.0x FASTER than scipy
+
+- Agent: AmberForge. 5th ship of the multi-channel vein. fsci's `savgol_filter` was 1-D only; scipy takes an
+  axis (applied via single-threaded `ndimage.convolve1d`). Added `savgol_filter_axis_2d(x, window, polyorder,
+  axis)` (default mode="interp", deriv=0) parallel across lines.
+- **The catch (the hilbert lesson, this time FIXABLE):** the 1-D `savgol_filter` SELF-PARALLELIZES its
+  interior correlation via `par_index_fill`, so naively calling it per line OVERSUBSCRIBED (64×64 threads) —
+  first cut was only 1.05-2.04x (273ms at 256×100000 ≈ parity). Unlike hilbert's FFT (which ignores
+  WorkerPolicy → uncontrollable), savgol's parallelism is a fsci-signal helper, so the fix is clean: compute
+  the SG coeffs ONCE (not per line) and apply each line SERIALLY (`savgol_apply_interp_serial`), keeping
+  exactly one level of parallelism (the across-lines driver).
+- **MEASURED vs scipy.signal.savgol_filter (axis=-1, polyorder=3, best-of-5):**
+
+  | channels × length × window | first cut (oversubscribed) | FIXED (serial-apply) | scipy | speedup |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 1000 × 10000 × 11 | 65.3 ms | 17.3 ms | 111.8 ms | **6.5x** |
+  | 2000 × 10000 × 31 | 135.7 ms | 30.9 ms | 276.9 ms | **9.0x** |
+  | 256 × 100000 × 21 | 273.3 ms | 36.9 ms | 286.4 ms | **7.8x** |
+
+  BYTE-IDENTICAL to per-line 1-D `savgol_filter` (test `savgol_filter_axis_2d_matches_per_line`, axis=-1 and
+  0; the serial apply is bit-equal to `par_index_fill`). Numerical oracle vs scipy 2-D: max abs diff
+  **4.5e-14**. fsci-signal 658/0.
+- LESSON / VEIN UPDATE: a per-line op that self-parallelizes oversubscribes a parallel-across-lines fan-out
+  (hilbert FFT, savgol par_index_fill) — but it's a WIN if you can force the per-line op SERIAL. Savgol's
+  parallelism was controllable (own helper); the FFT's was not (ignores WorkerPolicy). 5 vein ships now
+  (sosfilt/filtfilt/sosfiltfilt/decimate/savgol 2-D). This overturns the earlier "FIR ops low-EV" note.
