@@ -1915,3 +1915,11 @@ linprog uses a DENSE TABLEAU simplex (`Vec<Vec>`) whose pivot elimination is ALR
 | **fsci after** | **24.45 ms** | **12.7× FASTER** |
 
 **9.4× self-speedup.** Full fsci-cluster suite green (142 lib + 7+5 dbscan integration, 0 failed). Byte-identical by construction (grid query deterministic + order-independent). LEVER: a serial driver (BFS/DFS/label-prop) over an independent per-item query → precompute the queries in parallel, consume serially via mem::take; + Vec<i64> spatial-grid keys → fixed-size array keys (no alloc, faster hash) whenever the dim is bounded.
+
+## 2026-06-29 — AmberKestrel (cc): NEGATIVE EVIDENCE — NMF is a 5.7× gap; flat buffers get 2× but a real win needs a persistent pool (REVERTED)
+
+**Measured (fsci-cluster):** `nmf` (1000×300, k=20, 200 Lee–Seung MU iters) = **1005 ms vs sklearn 175 ms = 5.7× SLOWER** — a real gap (the only loss found in a cluster sweep; vq 3×, spectral 17×, dbscan 12.7× all WIN). Cause: the 6 GEMMs/iter delegate to the SERIAL `fsci_linalg::matmul` fed `Vec<Vec>` (cache-hostile row-pointer chase + fresh Vec<Vec> alloc ×6×200).
+
+**What worked (but isn't enough):** rewrote the loop on FLAT row-major buffers (reused across iters) with an ikj AXPY kernel → **509 ms = 2.0× self**, BUT still **2.9× SLOWER than sklearn** (property test green: shapes, ≥0, rec-err). The 2 dominant GEMMs are individually tiny (~6M flops) and the iteration is SEQUENTIAL, so per-call `thread::scope` spawn is pure overhead — a thread sweep confirmed EVERY T>1 is ≥ the T=1 serial time (T=8 → 1059 ms). So closing the gap to a WIN needs aggregated memory bandwidth via a PERSISTENT thread pool (spawn once, barrier fork-join the big GEMMs across all 1200 calls) or a BLAS-grade matmul.
+
+**REVERTED:** prototyped the barrier pool (workers write disjoint output row-bands via raw ptr; main runs small GEMMs) but it DEADLOCKED at some thread counts (barrier-count mismatch in the fork/join/terminate handshake) — unshippable, reverted to HEAD rather than leave broken concurrency. BACKLOG (clear path to a 2-3× WIN, ~50-100ms est. at the memory floor): persistent-pool-done-right (careful fork/join/stop barrier accounting + a correctness check vs the serial result) OR a parallel flat GEMM in fsci-linalg that NMF can call. Serial-flat alone (1005→509) is a real 2× but a still-loss → not landed as a "win".
