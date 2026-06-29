@@ -830,6 +830,73 @@ fn validate_sample_coordinates(x: &[f64]) -> Result<(), IntegrateValidationError
     }
 }
 
+/// Batched double integration: evaluate `I(params) = ∫_a^b ∫_{y_lo}^{y_hi} f(y, x, params) dy dx`
+/// for MANY parameter sets (`param_rows`) over a shared rectangle, one [`DblquadResult`] per set.
+/// This is the vmap-over-solver primitive SciPy lacks, and dblquad is the heaviest 1-D-callback case:
+/// the inner adaptive integral is re-run for each outer node, so each integral makes O(n²) Python
+/// integrand calls; a parameter sweep loops `dblquad` in Python, N integrals SERIALLY. fsci
+/// `dblquad_many` fans the N independent double integrations across cores and inlines the integrand
+/// as a Rust closure (callback lever × N-way parallel). Result `i` is byte-identical to
+/// `dblquad(|y, x| f(y, x, &param_rows[i]), a, b, |_| y_lo, |_| y_hi, options)`.
+pub fn dblquad_many<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    y_lo: f64,
+    y_hi: f64,
+    param_rows: &[Vec<f64>],
+    options: DblquadOptions,
+) -> Vec<Result<DblquadResult, IntegrateValidationError>>
+where
+    F: Fn(f64, f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let f_ref = &f;
+    let solve_one = move |params: &[f64]| {
+        dblquad(|y, x| f_ref(y, x, params), a, b, |_| y_lo, |_| y_hi, options)
+    };
+
+    // Each double integral is an independent, expensive (O(n²) integrand evals) solve → fan whole
+    // parameter sets across cores, capped by the row count; a tiny sweep stays serial.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<DblquadResult, IntegrateValidationError>>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || {
+                        (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("dblquad_many worker panicked"))
+                .collect()
+        });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 /// Integrate sampled data using the composite trapezoidal rule.
 ///
 /// Matches `scipy.integrate.trapezoid(y, x)` (formerly `trapz`).
@@ -3899,6 +3966,36 @@ mod tests {
         }
         assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() >= nrows / 2);
         assert!(quad_many(f, 0.0, 1.0, &[], opts).is_empty());
+    }
+
+    #[test]
+    fn dblquad_many_byte_identical_to_per_param() {
+        // Parameter sweep of a 2D Gaussian bump over the unit square.
+        let f = |y: f64, x: f64, p: &[f64]| (-p[0] * ((x - 0.5).powi(2) + (y - 0.5).powi(2))).exp();
+        let mut s = 8u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            5.0 + 35.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 10usize; // crosses the serial->parallel gate
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng()]).collect();
+        let opts = DblquadOptions::default();
+
+        let batched = dblquad_many(f, 0.0, 1.0, 0.0, 1.0, &params, opts);
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let single = dblquad(|y, x| f(y, x, p), 0.0, 1.0, |_| 0.0, |_| 1.0, opts).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(
+                many.integral.to_bits(),
+                single.integral.to_bits(),
+                "integral mismatch param {i}"
+            );
+            assert_eq!(many.error.to_bits(), single.error.to_bits(), "error mismatch param {i}");
+            assert_eq!(many.converged, single.converged, "converged mismatch param {i}");
+        }
+        assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() >= nrows / 2);
+        assert!(dblquad_many(f, 0.0, 1.0, 0.0, 1.0, &[], opts).is_empty());
     }
 
     #[test]

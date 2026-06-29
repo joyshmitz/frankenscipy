@@ -1560,3 +1560,23 @@ Speedup grows with N as parallelism amortises (all integrals converge). The call
 (.to_bits() on integral/error/converged) to per-param quad; (2) NUMERICAL cross-check vs scipy: fsci
 I(p=100,c=0.5,w=10)=0.039156400368 == scipy 0.039156400368 to 3.84e-13; (3) fsci-integrate quad_many test
 green. The vmap-over-solver vein now spans FIVE solver families.
+
+### ✅✅✅ integrate: dblquad_many (vmap-over-solver 2D-integral sweep) — 62.7-211× faster than looped scipy
+Sixth vmap-over-solver family — and the heaviest-callback integration case. dblquad's inner adaptive integral
+is RE-RUN for each outer node, so each 2-D integral makes O(n²) integrand calls; in SciPy those are all Python
+calls, and a parameter sweep loops dblquad in Python, N integrals SERIALLY. fsci `dblquad_many` (param-sweep
+`F: Fn(f64 y, f64 x, &[f64] params)->f64`, shared rectangle) fans the N independent double integrations across
+cores and inlines the integrand. Purely additive; heavy-per-item cap (cores.min(nrows), serial <4).
+
+**SAME-BOX head-to-head (∫_0^1∫_0^1 e^{-p((x-.5)²+(y-.5)²)}dy dx, N parameter sets; both this box):**
+| N   | scipy (Python loop over dblquad) | fsci dblquad_many | speedup   |
+|-----|----------------------------------|-------------------|-----------|
+| 100 | 135.5 ms                         | 2.16 ms (100/100 conv) | **62.7×** |
+| 400 | 544.4 ms                         | 2.58 ms (400/400 conv) | **211×**  |
+
+The strongest integration vmap win — the O(n²) per-integral callbacks make the inline-Rust lever far stronger
+than 1-D quad (14.5-61×). Speedup grows with N (parallelism amortises); all integrals converge. CONFORMANCE
+three ways: (1) result i BYTE-IDENTICAL (.to_bits() on integral/error/converged) to per-param dblquad;
+(2) NUMERICAL vs scipy: fsci I(p=20)=0.156588231977 == scipy 0.156588231977 to 2.87e-13; (3) new dblquad_many
+test green. The vmap-over-solver vein now spans SIX solver families (curve_fit/solve_ivp/minimize/root/quad/
+dblquad); win size tracks scipy's per-solve Python-callback density (dblquad O(n²) ⇒ 211×).
