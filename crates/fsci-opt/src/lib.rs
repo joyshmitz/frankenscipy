@@ -19,8 +19,8 @@ pub use linesearch::{
 };
 pub use minimize::{
     MinimizeScalarOptions, MinimizeScalarResult, OptCaspDecision, OptCaspProblem, bfgs, cg_pr_plus,
-    get_optimize_traces, lbfgsb, minimize, minimize_scalar, minimize_with_audit, nelder_mead,
-    newton_cg, powell, select_minimize_method, trust_exact,
+    get_optimize_traces, lbfgsb, minimize, minimize_many, minimize_scalar, minimize_with_audit,
+    nelder_mead, newton_cg, powell, select_minimize_method, trust_exact,
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, anderson,

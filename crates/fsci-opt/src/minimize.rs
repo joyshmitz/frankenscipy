@@ -164,6 +164,68 @@ where
     }
 }
 
+/// Batched minimisation: minimise the SAME objective `fun` from MANY starting points
+/// (`x0_rows`), one [`OptimizeResult`] per start. This is the vmap-over-solver primitive
+/// SciPy lacks — there a multistart / parameter sweep loops `minimize` in Python, calling the
+/// Python objective (and gradient) many times PER optimisation, N runs SERIALLY; here the N
+/// independent runs are fanned across cores and the objective is an inlined Rust closure
+/// (callback lever × N-way parallel). Result `i` is byte-identical to `minimize(fun,
+/// &x0_rows[i], options)` — the batch only distributes independent runs.
+///
+/// The canonical use is global optimisation by multistart: minimise from many random `x0`,
+/// then keep the lowest `fun`.
+pub fn minimize_many<F>(
+    fun: F,
+    x0_rows: &[Vec<f64>],
+    options: MinimizeOptions,
+) -> Vec<Result<OptimizeResult, OptError>>
+where
+    F: Fn(&[f64]) -> f64 + Sync,
+{
+    let nrows = x0_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let fun_ref = &fun;
+    let solve_one = move |x0: &[f64]| minimize(fun_ref, x0, options);
+
+    // Each minimisation is an independent, expensive solve (many obj/grad evals) → fan whole
+    // starts across cores, capped by the start count; a tiny batch stays serial.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return x0_rows.iter().map(|x0| solve_one(x0)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<OptimizeResult, OptError>>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= nrows {
+                    return None;
+                }
+                let hi = (lo + chunk).min(nrows);
+                Some(scope.spawn(move || {
+                    (lo..hi).map(|i| solve_one(&x0_rows[i])).collect::<Vec<_>>()
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("minimize_many worker panicked"))
+            .collect()
+    });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 pub fn minimize_with_audit<F>(
     fun: F,
     x0: &[f64],
@@ -3730,7 +3792,7 @@ mod tests {
     use crate::{
         Bound, ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptCaspProblem, OptError,
         OptimizeMethod, OptimizeResult, bfgs, cg_pr_plus, get_optimize_traces, minimize,
-        minimize_scalar, powell, select_minimize_method,
+        minimize_many, minimize_scalar, powell, select_minimize_method,
     };
 
     #[derive(Debug, Serialize)]
@@ -4816,6 +4878,48 @@ mod tests {
             search.f < 1.0,
             "best sampled point should improve the objective"
         );
+    }
+
+    #[test]
+    fn minimize_many_byte_identical_to_per_start() {
+        // Multistart over the 4-D Rosenbrock: the batched run must equal looping minimize
+        // per start, bit-for-bit (each run is an independent deterministic optimisation).
+        let rosen = |x: &[f64]| -> f64 {
+            (0..x.len() - 1)
+                .map(|i| 100.0 * (x[i + 1] - x[i] * x[i]).powi(2) + (1.0 - x[i]).powi(2))
+                .sum()
+        };
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(1.0e-8),
+            maxiter: Some(500),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let mut s = 7u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            -2.0 + 4.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 10usize; // crosses the serial->parallel gate
+        let starts: Vec<Vec<f64>> = (0..nrows).map(|_| (0..4).map(|_| rng()).collect()).collect();
+
+        let batched = minimize_many(&rosen, &starts, options);
+        assert_eq!(batched.len(), nrows);
+        for (i, x0) in starts.iter().enumerate() {
+            let single = minimize(&rosen, x0, options).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(many.x.len(), single.x.len());
+            for (a, b) in many.x.iter().zip(single.x.iter()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "x mismatch start {i}");
+            }
+            assert_eq!(
+                many.fun.map(f64::to_bits),
+                single.fun.map(f64::to_bits),
+                "fun mismatch start {i}"
+            );
+        }
+        assert!(minimize_many(&rosen, &[], options).is_empty());
     }
 
     #[test]

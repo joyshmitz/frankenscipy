@@ -1497,3 +1497,24 @@ cross-check vs scipy on a fixed y0=[2,3]: fsci final state [5.3569214988, 1.9612
 [5.3569214988, 1.9612924121] to 1e-10 (same RK45 algorithm + tolerances → same trajectory, just ~1500×
 faster). fsci-integrate solve_ivp_many test green. The callback lever (inline Rust RHS, no Python per-step)
 gives ~25× per-solve; the N-way parallelism multiplies it to ~1500×. Companion to curve_fit_many (95f3cad8).
+
+### ✅✅✅ opt: minimize_many (vmap-over-solver multistart) — 271-275× faster than looped scipy
+Third vmap-over-solver family (after curve_fit_many 113× and solve_ivp_many ~1500×). Multistart / parameter
+sweep — minimise the SAME objective from MANY starts — is ubiquitous in global optimisation; SciPy loops
+`minimize` in Python, calling the Python objective (+ gradient) many times PER run, N runs SERIALLY. fsci
+`minimize_many` fans the N independent runs across cores AND inlines the objective as a Rust closure (callback
+lever × N-way parallel). Purely additive (new pub fn over the existing minimize); MinimizeOptions is Copy so
+no per-call clone; heavy-per-item thread cap (cores.min(nrows), serial <4).
+
+**SAME-BOX head-to-head (6-D Rosenbrock, BFGS, N random starts in [-2,2]^6; both this box):**
+| N    | scipy (Python loop over minimize) | fsci minimize_many | speedup    |
+|------|-----------------------------------|--------------------|------------|
+| 200  | 2829 ms                           | 10.43 ms           | **271×**   |
+| 1000 | 14677 ms                          | 53.41 ms           | **275×**   |
+
+FAIR head-to-head (not speed from giving up early): on the same 1000 random starts fsci converges 805/1000 vs
+scipy 622 success / 782 reached-global-min — fsci optimises at least as well. CONFORMANCE two ways:
+(1) result i is BYTE-IDENTICAL (.to_bits() on x and fun) to per-start `minimize` — the batch only distributes;
+(2) from the standard Rosenbrock start fsci reaches the exact global min [1,1,1,1,1,1]. fsci-opt minimize_many
+test green. Callback lever (inline Rust objective, no Python per-eval) gives the per-run win; N-way parallelism
+multiplies it. The vmap-over-solver vein is now proven across curve_fit / solve_ivp / minimize.
