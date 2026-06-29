@@ -11542,3 +11542,33 @@ n due to the per-call chirp rebuild.
 - REMAINING fsci-stats candidates (scipy axis slow): mode (1788 ms — biggest, but degenerate on continuous
   data / returns mode+count, needs care), gstd (535 ms — positive-only geometric), scoreatpercentile (222 ms),
   entropy (377 ms). The `reduce_axis_2d` helper makes any scalar-per-line reducer a one-line wrapper.
+
+## 2026-06-29 - AmberKestrel (claude-code) - NO-SHIP (modest gap, wrong-signature lever): fsci solveh_banded is 1.0-1.7x of scipy's LAPACK dpbtrf; the "sparse banded gap" was an apples-to-oranges phantom
+- A prior session left `crates/fsci-sparse/src/bin/perf_spband_tmp.rs` probing fsci `spsolve`
+  (GENERAL sparse solver) on symmetric-banded SPD systems. Measuring it against scipy made it
+  look like a big gap — but the comparison was apples-to-oranges:
+  - **vs scipy GENERAL sparse `scipy.sparse.linalg.spsolve`: fsci already WINS 3.5-4.6x**
+    (n=4000 bw=12: fsci 2.10ms vs scipy 8.08ms; n=8000 bw=12: 3.45 vs 15.74; n=4000 bw=24: 5.34 vs 18.76).
+  - vs scipy DEDICATED banded `scipy.linalg.solveh_banded` (LAPACK dpbtrf/dpbtrs): fsci spsolve
+    looked 1.8-2.7x slower — but a banded-SPD user should call fsci's OWN `solveh_banded`, which EXISTS
+    in fsci-linalg (cholesky_banded/cho_solve_banded, golden-locked).
+- **Fair head-to-head, same-box, fsci-linalg `solveh_banded` vs scipy `solveh_banded`:**
+  | n,bw       | fsci    | scipy   | ratio              |
+  |------------|---------|---------|--------------------|
+  | 4000, 12   | 1.346ms | 0.78ms  | fsci 1.73x slower  |
+  | 8000, 12   | 2.048ms | 1.61ms  | fsci 1.27x slower  |
+  | 4000, 24   | 2.916ms | 2.93ms  | **parity**         |
+- So the REAL gap is modest (1.27-1.73x at small bw, parity at bw=24) against tuned LAPACK Fortran.
+- WHY the flatten/cache lever is WRONG here: the gap SHRINKS with n (1.73x->1.27x) and CLOSES with
+  larger bw. The [[perf_equal_hardware_artifact_and_flatbuffer_lever]] Vec<Vec<f64>>->flat lever pays
+  only when the gap GROWS with n (cache tell). Here it shrinks -> the cost is FIXED setup overhead
+  relative to the tiny O(n*bw^2) flop count (576K flops / 1.35ms = 0.43 Gflop/s = wildly overhead-bound,
+  not cache/flop-bound). Flattening `c` (cholesky_banded's Vec<Vec<f64>> band) would likely net ~0.
+- The cholesky_banded `lower` inner loop (lib.rs ~5208) is O(kd^2)/column with 3 boundary branches
+  (`if j>=k`, `if i+k<=kd`, `if j+i<n`) inside the hot path. A POSSIBLE future lever (NOT attempted —
+  golden-locked numeric kernel, uncertain vs LAPACK): split the first/last kd columns from a branch-free
+  interior box (same interior fast-path idea as the ndimage filters), so the interior O(kd^2) update runs
+  without per-element bounds checks. Byte-identical IF the float op order is preserved. Modest expected
+  payoff; do it only with full budget + the golden (perf_solve_banded) as the byte-identity guard.
+- NET: fsci's banded story is already strong (beats scipy general sparse 3.5-4.6x; matches/within-1.7x of
+  LAPACK banded). Do NOT re-chase the "sparse banded" framing — it's a phantom. Scratch bins removed.
