@@ -225,6 +225,65 @@ where
     ))
 }
 
+/// Batched 1-D root finding: solve `f(x, params) = 0` for MANY parameter sets over a shared
+/// `bracket`, one [`RootResult`] per set. This is the vmap-over-solver primitive for scalar
+/// roots — a 1-D root SWEEP (implied volatility per option, percentile/quantile inversion per
+/// channel, threshold calibration per series) loops `brentq` in Python, N solves SERIALLY. fsci
+/// `brentq_many` (param-sweep `F: Fn(f64 x, &[f64] params)->f64`) fans the N independent Brent
+/// solves across cores and inlines the function. Result `i` is byte-identical to
+/// `brentq(|x| f(x, &param_rows[i]), bracket, options)`. Like `root_many`, the per-solve win is
+/// parallelism-dominated (Brent is cheap), so expect a modest but real speedup over looped scipy.
+pub fn brentq_many<F>(
+    f: F,
+    bracket: (f64, f64),
+    param_rows: &[Vec<f64>],
+    options: RootOptions,
+) -> Vec<Result<RootResult, OptError>>
+where
+    F: Fn(f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let f_ref = &f;
+    let solve_one = move |params: &[f64]| brentq(|x| f_ref(x, params), bracket, options);
+
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<RootResult, OptError>>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= nrows {
+                    return None;
+                }
+                let hi = (lo + chunk).min(nrows);
+                Some(scope.spawn(move || {
+                    (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("brentq_many worker panicked"))
+            .collect()
+    });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 /// Root finder dispatched as `brenth`.
 ///
 /// # Implementation note
@@ -2485,8 +2544,8 @@ mod tests {
         lm_root, root, root_many,
     };
     use crate::{
-        ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, df_sane, halley,
-        newton, newton_krylov, newton_scalar, ridder, root_scalar, secant, toms748,
+        ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, brentq_many, df_sane,
+        halley, newton, newton_krylov, newton_scalar, ridder, root_scalar, secant, toms748,
     };
 
     #[derive(Debug, Serialize)]
@@ -3395,6 +3454,33 @@ mod tests {
         for (i, &v) in r.x.iter().enumerate() {
             assert!((v - 1.0).abs() < 1e-6, "x[{i}]={v}, expected 1");
         }
+    }
+
+    #[test]
+    fn brentq_many_byte_identical_to_per_param() {
+        // 1-D root sweep: solve x^3 - p = 0 (cube root of p) over a shared bracket for many p.
+        // The batched solve must equal looping brentq per parameter, bit-for-bit.
+        let f = |x: f64, p: &[f64]| x * x * x - p[0];
+        let bracket = (0.0, 10.0);
+        let opts = RootOptions::default();
+        let mut s = 9u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            1.0 + 900.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 16usize; // crosses the serial->parallel gate
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng()]).collect();
+
+        let batched = brentq_many(f, bracket, &params, opts);
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let single = brentq(|x| f(x, p), bracket, opts).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(many.root.to_bits(), single.root.to_bits(), "root mismatch param {i}");
+            assert_eq!(many.converged, single.converged, "converged mismatch param {i}");
+        }
+        assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() == nrows);
+        assert!(brentq_many(f, bracket, &[], opts).is_empty());
     }
 
     #[test]

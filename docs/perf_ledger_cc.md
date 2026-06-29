@@ -1710,3 +1710,30 @@ converge. CONFORMANCE two ways: (1) result i BYTE-IDENTICAL (.to_bits() on integ
 nquad; (2) NUMERICAL vs scipy: fsci I(p=2,4D)=0.128003847000 == scipy 0.128003847000 (all 12 digits). new
 nquad_many test green. The vmap-over-solver vein now spans EIGHT solver families
 (curve_fit/solve_ivp/minimize/root/quad/dblquad/tplquad/nquad); integration sub-family COMPLETE.
+
+### ✅✅ opt: brentq_many (vmap-over-solver 1-D root sweep) — 13-47× faster than looped scipy
+Ninth vmap-over-solver family. A 1-D root SWEEP — solve f(x,params)=0 over a shared bracket for many parameter
+sets — is a very common real workload (implied volatility per option, quantile/percentile inversion per
+channel, threshold calibration per series); SciPy loops `brentq` in Python, N Brent solves SERIALLY. fsci
+`brentq_many` (param-sweep `F: Fn(f64 x, &[f64] params)->f64`, shared bracket) fans the N independent solves
+across cores and inlines the function. Purely additive; heavy-per-item cap (cores.min(nrows), serial <4).
+
+**SAME-BOX head-to-head (f(x,p)=(e^x−1)+0.3 sin5x − p, bracket [0,6]; both this box):**
+| N    | scipy (Python loop over brentq) | fsci brentq_many | speedup   |
+|------|---------------------------------|------------------|-----------|
+| 2000 | 31.7 ms                         | 2.434 ms (2000/2000 conv) | **13.0×** |
+| 8000 | 126.4 ms                        | 2.710 ms (8000/8000 conv) | **46.6×** |
+
+Bigger than `root_many` (11-25×) despite Brent being fast C: the exp+sin objective is expensive enough per
+eval that scipy's Python-callback cost dominates (the callback lever bites). Speedup grows with N as
+parallelism amortises; all roots converge. CONFORMANCE two ways: (1) result i BYTE-IDENTICAL (.to_bits() on
+root/converged) to per-param brentq; (2) NUMERICAL vs scipy: fsci root(p=10)=2.411137400718 == scipy
+2.4111374007184447 (12 digits). new brentq_many test green. vmap-over-solver vein now NINE families.
+
+### (negative evidence) opt: differential_evolution / brute already dominate scipy — no work needed
+Measured before chasing: fsci `differential_evolution` (8-D Rastrigin, popsize 15, maxiter 300) = 9.7 ms vs
+scipy 1095 ms (workers=1) = **113× faster** ALREADY — the callback lever (inlined Rust objective vs Python);
+scipy's `workers=-1` can't even run a local lambda (multiprocessing pickling error). fsci `brute` is already
+parallel (thread::scope, byte-identical argmin). So the fsci-opt global optimizers are already dominant; the
+DE population eval uses IMMEDIATE in-generation updates (not parallelizable without switching to scipy's
+deferred scheme = an algorithm change). No change shipped.
