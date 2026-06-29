@@ -1458,3 +1458,22 @@ and scipy recover (3.0,0.7,1.0) exactly; with the amplitude capped below the tru
 trf, same as lmfit). fsci-opt curvefit suite 15/15 green incl. 2 new bounded tests. LIMITATION (documented):
 for a tightly-active bound the transform reaches it asymptotically rather than exactly; for interior optima
 (the common "sanity bounds" case) it is identical to trf and ~10× faster.
+
+### ✅✅✅ opt: curve_fit_many / curve_fit_bounded_many — vmap-over-solver, 33-113× faster than looped scipy
+The JAX-style "different primitive": fit the same model to MANY independent ydata rows. SciPy has no batched
+curve_fit — you loop it in Python, paying the per-call overhead N times SERIALLY. fsci `curve_fit_many` fans
+the N independent fits across cores AND inlines the model as a Rust closure (callback lever × N-way parallel).
+Purely additive (new pub fns over the existing curve_fit/curve_fit_bounded); heavy-per-item thread cap
+(cores.min(nrows), serial under 8 rows). Common in imaging/signal: a decay or peak fit per pixel/channel/trace.
+
+**SAME-BOX head-to-head (3-param exponential a·e^{−bx}+c, 80 pts, N fits; both this box):**
+| N    | scipy (Python loop over curve_fit) | fsci curve_fit_many | speedup    |
+|------|------------------------------------|---------------------|------------|
+| 500  | 96.2 ms                            | 2.92 ms             | **32.9×**  |
+| 2000 | 431.2 ms                           | 3.81 ms             | **113×**   |
+
+Speedup grows with N as the ~1.5ms thread-spawn floor amortises. CONFORMANCE: row i is BYTE-IDENTICAL
+(.to_bits()) to `curve_fit(f, xdata, &ydata_rows[i], opts).popt` — the batch only distributes independent
+fits, it doesn't change any of them. fsci-opt curvefit suite 16/16 green (+ new batched byte-identical test
+covering both curve_fit_many and curve_fit_bounded_many across the serial→parallel gate). Pairs with the
+bounded-fit lever (2235ab6f): curve_fit_bounded_many gives the same N-way win for box-constrained batches.

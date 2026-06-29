@@ -10,7 +10,8 @@ pub mod types;
 pub use audit::{SyncSharedAuditLedger, record_fail_closed, sync_audit_ledger};
 pub use curvefit::{
     CurveFitOptions, CurveFitResult, LeastSquaresOptions, LeastSquaresResult, LeastsqResult,
-    curve_fit, curve_fit_bounded, least_squares, least_squares_bounded, leastsq,
+    curve_fit, curve_fit_bounded, curve_fit_bounded_many, curve_fit_many, least_squares,
+    least_squares_bounded, leastsq,
 };
 pub use linesearch::{
     LineSearchResult, ScipyLineSearchResult, WolfeParams, line_search, line_search_wolfe1,

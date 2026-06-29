@@ -645,6 +645,130 @@ where
     })
 }
 
+/// Batched curve fitting: fit the same model `f` (and shared `xdata`) to MANY independent
+/// `ydata` rows, returning one optimal-parameter vector per row. This is the vmap-over-solver
+/// primitive SciPy lacks — there you loop `curve_fit` in Python, paying the per-call overhead
+/// N times serially; here the N independent fits are fanned across cores and the model is an
+/// inlined Rust closure. Row `i` of the output is byte-identical to `curve_fit(f, xdata,
+/// &ydata_rows[i], options).popt`.
+///
+/// Common in imaging / signal processing (a decay or peak fit per pixel / channel / trace).
+pub fn curve_fit_many<F>(
+    f: F,
+    xdata: &[f64],
+    ydata_rows: &[Vec<f64>],
+    options: CurveFitOptions,
+) -> Result<Vec<Vec<f64>>, OptError>
+where
+    F: Fn(f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = ydata_rows.len();
+    if nrows == 0 {
+        return Ok(Vec::new());
+    }
+    let f_ref = &f;
+    let opts_ref = &options;
+    let fit_one = move |row: &[f64]| curve_fit(f_ref, xdata, row, opts_ref.clone()).map(|r| r.popt);
+
+    // Each fit is an independent ~0.1 ms LM solve (heavy per item) → fan whole rows across
+    // cores, capped by the row count; a tiny batch stays serial to dodge the spawn floor.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 8 {
+        return ydata_rows.iter().map(|row| fit_one(row)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let fit_one = &fit_one;
+    let chunk_results: Vec<Result<Vec<Vec<f64>>, OptError>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= nrows {
+                    return None;
+                }
+                let hi = (lo + chunk).min(nrows);
+                Some(scope.spawn(move || {
+                    (lo..hi)
+                        .map(|i| fit_one(&ydata_rows[i]))
+                        .collect::<Result<Vec<_>, _>>()
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("curve_fit_many worker panicked"))
+            .collect()
+    });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
+/// Batched box-constrained curve fitting — [`curve_fit_bounded`] fanned across many `ydata`
+/// rows, the bounded analogue of [`curve_fit_many`]. Row `i` is byte-identical to
+/// `curve_fit_bounded(f, xdata, &ydata_rows[i], lower, upper, options).popt`.
+pub fn curve_fit_bounded_many<F>(
+    f: F,
+    xdata: &[f64],
+    ydata_rows: &[Vec<f64>],
+    lower: &[f64],
+    upper: &[f64],
+    options: CurveFitOptions,
+) -> Result<Vec<Vec<f64>>, OptError>
+where
+    F: Fn(f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = ydata_rows.len();
+    if nrows == 0 {
+        return Ok(Vec::new());
+    }
+    let f_ref = &f;
+    let opts_ref = &options;
+    let fit_one =
+        move |row: &[f64]| curve_fit_bounded(f_ref, xdata, row, lower, upper, opts_ref.clone()).map(|r| r.popt);
+
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 8 {
+        return ydata_rows.iter().map(|row| fit_one(row)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let fit_one = &fit_one;
+    let chunk_results: Vec<Result<Vec<Vec<f64>>, OptError>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= nrows {
+                    return None;
+                }
+                let hi = (lo + chunk).min(nrows);
+                Some(scope.spawn(move || {
+                    (lo..hi)
+                        .map(|i| fit_one(&ydata_rows[i]))
+                        .collect::<Result<Vec<_>, _>>()
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("curve_fit_bounded_many worker panicked"))
+            .collect()
+    });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
 /// Result from [`leastsq`] — the classic MINPACK-style interface.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LeastsqResult {
@@ -1157,6 +1281,55 @@ mod tests {
             "active-bound popt[0] = {} (want just below 2.0)",
             r2.popt[0]
         );
+    }
+
+    #[test]
+    fn curve_fit_many_byte_identical_to_per_row() {
+        // Batched fit must equal looping curve_fit per row, bit-for-bit (each fit is
+        // independent; parallelism only distributes them).
+        let x: Vec<f64> = (0..80).map(|i| i as f64 * 5.0 / 79.0).collect();
+        let model = |xi: f64, p: &[f64]| p[0] * (-p[1] * xi).exp() + p[2];
+        let mut s = 12345u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let nrows = 40usize; // crosses the serial->parallel gate
+        let rows: Vec<Vec<f64>> = (0..nrows)
+            .map(|_| {
+                let (a, b, c) = (1.0 + 2.0 * rng(), 0.3 + rng(), rng());
+                x.iter().map(|&xi| a * (-b * xi).exp() + c + 0.02 * (rng() - 0.5)).collect()
+            })
+            .collect();
+        let opts = || CurveFitOptions {
+            p0: Some(vec![1.0, 1.0, 0.0]),
+            ..CurveFitOptions::default()
+        };
+        let batched = curve_fit_many(model, &x, &rows, opts()).expect("batched");
+        assert_eq!(batched.len(), nrows);
+        for (i, row) in rows.iter().enumerate() {
+            let single = curve_fit(model, &x, row, opts()).expect("single").popt;
+            for k in 0..3 {
+                assert_eq!(
+                    batched[i][k].to_bits(),
+                    single[k].to_bits(),
+                    "row {i} param {k}: batched {} vs single {}",
+                    batched[i][k],
+                    single[k]
+                );
+            }
+        }
+        // bounded batched is likewise bit-identical to per-row bounded.
+        let lo = [0.0, 0.0, -2.0];
+        let hi = [6.0, 4.0, 2.0];
+        let bb = curve_fit_bounded_many(model, &x, &rows, &lo, &hi, opts()).expect("batched bnd");
+        for (i, row) in rows.iter().enumerate() {
+            let single = curve_fit_bounded(model, &x, row, &lo, &hi, opts()).expect("single bnd").popt;
+            for k in 0..3 {
+                assert_eq!(bb[i][k].to_bits(), single[k].to_bits(), "bnd row {i} param {k}");
+            }
+        }
+        assert!(curve_fit_many(model, &x, &[], opts()).unwrap().is_empty());
     }
 
     #[test]
