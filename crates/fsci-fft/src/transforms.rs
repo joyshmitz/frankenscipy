@@ -1807,6 +1807,101 @@ pub fn rfft_axis2d(
     }
 }
 
+/// Run a real→real (length-preserving) per-row transform over every length-`ncols` row of a row-major
+/// `rows × ncols` array, parallel ACROSS rows. Output row `r` is exactly `transform(row r)`. Shared by the
+/// batched DCT/DST entrypoints.
+fn batched_real_axis2d<F>(
+    input: &[f64],
+    rows: usize,
+    ncols: usize,
+    transform: F,
+) -> Result<Vec<f64>, FftError>
+where
+    F: Fn(&[f64]) -> Result<Vec<f64>, FftError> + Sync,
+{
+    if rows == 0 || ncols == 0 {
+        return Err(FftError::InvalidShape {
+            detail: "rows and ncols must be > 0",
+        });
+    }
+    if input.len() != rows.saturating_mul(ncols) {
+        return Err(FftError::LengthMismatch {
+            expected: rows.saturating_mul(ncols),
+            actual: input.len(),
+        });
+    }
+    let row_out = ncols;
+    let mut out = vec![0.0f64; rows * row_out];
+    let work = rows.saturating_mul(ncols);
+    let nthreads = batched_axis2d_threads(rows, work);
+    if nthreads <= 1 {
+        for r in 0..rows {
+            let res = transform(&input[r * ncols..(r + 1) * ncols])?;
+            out[r * row_out..(r + 1) * row_out].copy_from_slice(&res);
+        }
+        return Ok(out);
+    }
+    let rows_per = rows.div_ceil(nthreads);
+    let transform = &transform;
+    let first_err = std::thread::scope(|scope| {
+        let handles: Vec<_> = out
+            .chunks_mut(rows_per * row_out)
+            .enumerate()
+            .map(|(ti, chunk)| {
+                let r0 = ti * rows_per;
+                scope.spawn(move || -> Result<(), FftError> {
+                    for (rr, slot) in chunk.chunks_mut(row_out).enumerate() {
+                        let r = r0 + rr;
+                        let res = transform(&input[r * ncols..(r + 1) * ncols])?;
+                        slot.copy_from_slice(&res);
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().unwrap().err())
+            .next()
+    });
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(out),
+    }
+}
+
+/// Batched DCT-II along the last axis of a row-major `rows × ncols` real array.
+///
+/// Equivalent to `scipy.fft.dct(x.reshape(rows, ncols), type=2, axis=-1)` — `rows` INDEPENDENT
+/// length-`ncols` DCTs — but parallel ACROSS rows (each row's DCT serial on its owning thread). Per-row /
+/// per-block DCT is the core of nearly every image/audio compression pipeline. Row `r` is bit-identical to
+/// `dct(&input[r*ncols..(r+1)*ncols], options)`.
+pub fn dct_axis2d(
+    input: &[f64],
+    rows: usize,
+    ncols: usize,
+    options: &FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    let mut inner = options.clone();
+    inner.workers = WorkerPolicy::Exact(1);
+    batched_real_axis2d(input, rows, ncols, |row| dct(row, &inner))
+}
+
+/// Batched inverse DCT (DCT-III) along the last axis of a row-major `rows × ncols` real array.
+///
+/// Equivalent to `scipy.fft.idct(x.reshape(rows, ncols), type=2, axis=-1)`, parallel ACROSS rows. Row `r`
+/// is bit-identical to `idct(&input[r*ncols..(r+1)*ncols], options)`.
+pub fn idct_axis2d(
+    input: &[f64],
+    rows: usize,
+    ncols: usize,
+    options: &FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    let mut inner = options.clone();
+    inner.workers = WorkerPolicy::Exact(1);
+    batched_real_axis2d(input, rows, ncols, |row| idct(row, &inner))
+}
+
 fn fft_impl(
     input: &[Complex64],
     options: &FftOptions,
@@ -4958,10 +5053,10 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dctn, dst,
-        dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_axis2d, fft_with_audit, fft2, fftn, fwht,
-        hfft, hfft2, hfftn, idct, idctn, idstn, ifft, ifft2, ifftn, ihfft, ihfft2, ihfftn, irfft,
-        irfft2, irfftn, is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_axis2d,
+        Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_axis2d, dct_iv, dctn,
+        dst, dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_axis2d, fft_with_audit, fft2, fftn,
+        fwht, hfft, hfft2, hfftn, idct, idct_axis2d, idctn, idstn, ifft, ifft2, ifftn, ihfft, ihfft2,
+        ihfftn, irfft, irfft2, irfftn, is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_axis2d,
         rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
     };
     use super::{
@@ -6646,5 +6741,25 @@ mod tests {
         // Shape validation.
         assert!(fft_axis2d(&[(1.0, 0.0); 6], 2, 4, &opts).is_err());
         assert!(rfft_axis2d(&[1.0; 6], 0, 4, &opts).is_err());
+    }
+
+    #[test]
+    fn dct_idct_axis2d_match_per_row() {
+        let opts = FftOptions::default();
+        for &(rows, ncols) in &[(5usize, 8usize), (7, 12), (33, 16)] {
+            let real: Vec<f64> = (0..rows * ncols).map(|i| (i as f64 * 0.7).sin()).collect();
+            let da = dct_axis2d(&real, rows, ncols, &opts).unwrap();
+            let ia = idct_axis2d(&real, rows, ncols, &opts).unwrap();
+            for r in 0..rows {
+                let drow = dct(&real[r * ncols..(r + 1) * ncols], &opts).unwrap();
+                let irow = idct(&real[r * ncols..(r + 1) * ncols], &opts).unwrap();
+                for c in 0..ncols {
+                    assert_eq!(da[r * ncols + c].to_bits(), drow[c].to_bits(), "dct {r},{c}");
+                    assert_eq!(ia[r * ncols + c].to_bits(), irow[c].to_bits(), "idct {r},{c}");
+                }
+            }
+        }
+        assert!(dct_axis2d(&[1.0; 6], 2, 4, &opts).is_err());
+        assert!(idct_axis2d(&[1.0; 6], 0, 4, &opts).is_err());
     }
 }

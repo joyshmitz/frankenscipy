@@ -23,7 +23,8 @@ pub use plan::{
 };
 pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, SyncSharedAuditLedger, TransformTrace,
-    WorkerPolicy, dct, dct_i, dct_iii, dct_iv, dctn, dst, dst_i, dst_ii, dst_iii, dst_iv, dstn,
+    WorkerPolicy, dct, dct_axis2d, dct_i, dct_iii, dct_iv, dctn, dst, dst_i, dst_ii, dst_iii, dst_iv,
+    dstn, idct_axis2d,
     fft, fft_axis2d, fft_with_audit, fft2, fft2_with_audit, fftn, fftn_with_audit, fht, fhtoffset,
     fwht, hfft,
     hfft_with_audit, hfft2, hfft2_with_audit, hfftn, hfftn_with_audit, hilbert, idct, idct_i,

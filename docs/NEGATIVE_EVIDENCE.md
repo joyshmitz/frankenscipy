@@ -11611,3 +11611,19 @@ New batched-axis FFT (fsci-fft had none). Shipped as a WIN but the head-to-head 
 - Not reverted: it is a genuinely missing capability and a clean win vs the default API; the loss is only
   against scipy's opt-in parallel mode at mid transform sizes, and is bounded by the FFT-kernel wall the
   directive says not to chase via more SIMD.
+
+## dct_axis2d/idct_axis2d — gap-fill, wins vs default but LOSES to scipy workers=-1, AmberKestrel 2026-06-29
+Batched DCT-II/III along axis (fsci-fft had none). vs scipy DEFAULT workers=1: 5.6-7× win. vs scipy
+workers=-1: LOSES at every size (0.45-0.66×; fsci 7.3-10.9 ms vs scipy 4.3-5.0 ms). Root cause: fsci's DCT
+is a half-size complex FFT + reorder + twiddle-extract — materially heavier per row than pocketfft's native
+DCT, so when both parallelize across rows the kernel gap dominates (worse than fft_axis2d, which at least
+won at large ncol). Shipped anyway: it is a genuinely missing capability and a real win vs the default API
+(what most code uses), bit-identical to per-row. NOT a domination claim.
+
+IDENTIFIED RADICAL LEVER (would flip fft_axis2d AND dct_axis2d to clean wins vs workers=-1): a
+SIMD-across-ROWS batched FFT kernel. Process 4 independent rows per std::simd<f64,4> lane (lane = row);
+twiddles are scalar (same ncols) → splat; build separate re/im f64 SoA tiles so NO &[f64] view of the
+Complex64=(f64,f64) tuple is needed (sidesteps the forbid(unsafe) AoS blocker that killed within-FFT SIMD,
+per perf_fft_radix4_stage_fusion). Bit-identical PER LANE to the scalar radix-2 path (like pdist
+SIMD-across-pairs). Estimated 2-3× on the per-row kernel → enough to beat scipy workers=-1. Multi-turn
+build (bit-reversal + radix butterflies on SoA tiles + tolerance/property test); deferred this iteration.

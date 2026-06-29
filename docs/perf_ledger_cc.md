@@ -1375,3 +1375,24 @@ is ~1.5× slower than pocketfft (the documented mid-pow2 SIMD wall) and when BOT
 rows that kernel gap dominates. Net: a real new capability that beats the default API and is
 competitive-to-winning vs scipy's best at large transforms. Conformance: `fft_rfft_axis2d_match_per_row`
 bit-identical to per-row, shapes validated. fsci-fft GREEN.
+
+### ⚖️ fft: dct_axis2d / idct_axis2d (batched DCT-II/III along axis) — NEW gap-fill, 5.6-7x vs scipy DEFAULT (loses to workers=-1)
+Completes the batched-axis transform family for the DCT (per-block DCT is the core of image/audio
+compression). fsci-fft had no batched-axis DCT (`dctn` does ALL axes). Added `dct_axis2d`/`idct_axis2d`
+(parallel across rows via the new `batched_real_axis2d` helper, bit-identical to per-row `dct`/`idct`).
+
+**SAME-BOX head-to-head (fsci vs scipy.fft.dct/idct, both this box):**
+| rows × ncol  | fsci dct | scipy dct w=1 | × (w=1) | scipy dct w=-1 | fsci idct | scipy idct w=1 | × (w=1) | scipy idct w=-1 |
+|--------------|----------|---------------|---------|----------------|-----------|----------------|---------|-----------------|
+| 2000 × 4096  | 7.31 ms  | 48.87 ms      | 6.7×    | 4.79 ms (0.66×)| 8.48 ms   | 49.84 ms       | 5.9×    | 4.27 ms (0.50×) |
+| 5000 × 2048  | 8.75 ms  | 61.05 ms      | 7.0×    | 4.99 ms (0.57×)| 8.83 ms   | 61.29 ms       | 6.9×    | 4.96 ms (0.56×) |
+| 20000 × 512  | 10.37 ms | 58.04 ms      | 5.6×    | 4.66 ms (0.45×)| 10.85 ms  | 59.65 ms       | 5.5×    | 4.86 ms (0.45×) |
+
+HONEST (NEGATIVE_EVIDENCE.md): wins 5.6-7× vs scipy DEFAULT (workers=1) but LOSES to scipy workers=-1 at
+EVERY size (0.45-0.66×) — UNLIKE fft_axis2d (which won at large ncol), fsci's DCT kernel is a half-size
+complex FFT + reorder + twiddle-extract, materially heavier than pocketfft's native DCT, so the kernel gap
+dominates once both sides parallelize. Ship value = the missing capability + the default-API win, NOT
+domination of scipy's best. The lever that would flip BOTH this and fft_axis2d to clean wins is a
+SIMD-ACROSS-ROWS batched FFT kernel (lane = independent row → sidesteps the AoS-tuple SoA blocker that
+killed within-FFT SIMD; bit-identical per lane, like pdist SIMD-across-pairs) — documented as the next
+radical lever. Conformance: `dct_idct_axis2d_match_per_row` bit-identical to per-row. fsci-fft GREEN.
