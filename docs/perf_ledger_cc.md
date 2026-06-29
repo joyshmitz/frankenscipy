@@ -1951,3 +1951,14 @@ Mined GAUNTLET_RELEASE_SCORECARD.md (Jun-27) for the biggest documented fsci-vs-
 | `ndimage.mean(labels,index)` "4.7× slower" | (per [[perf_ndimage_label_reduction_privatized_histogram]]) | already WINS 1.17-1.30× (stale 3rd time) |
 
 LESSON (4th confirmation of the stale-scorecard rule): the scorecard's loss table OVERSTATES remaining gaps — re-measure same-box before chasing any of its "X× slower" entries. The lone real residual (pdist chebyshev d=16, 1.68×) is per-pair SIMD finalization overhead that SoA-across-pairs (proven byte-identical for d=4) would amortize — deprioritized as niche (d=64 already wins; d=16-only, ~40-line const/runtime-D SoA for a 1.68× modest gap). Cluster/spatial/stats lanes (cdist, KDTree, gaussian_kde 30×, kendalltau, mvn logpdf, vq, spectral, dbscan, pdist-cheby-d64) all WIN or parity — the accessible non-probe lanes are DOMINATED. Genuine remaining gaps: NMF (persistent-pool, deadlocked); probe-crate residuals (solve_toeplitz/lfilter — linalg/signal, owned); ndimage.label 2.68× (f64-output wall, needs native int store).
+
+## 2026-06-29 — AmberKestrel (cc): NEGATIVE EVIDENCE — pdist Chebyshev SoA-across-pairs REJECTED (~0-gain / regression)
+
+Implemented a general-dim SoA-across-pairs Chebyshev for pdist (`collect_columns` + `pdist_fill_cols` + `fill_chebyshev_soa_rows`: L=8 lanes = 8 distinct j-pairs, iterate the d coordinate columns keeping a running per-lane max + NaN mask, so the max-reduce/NaN finalize amortize across 8 pairs). Conformance GREEN, byte-identical (max exact + order-independent; 14+2 pdist tests). But MEASURED same-box it's a reject:
+| n/d | default (SIMD-over-d) | SoA (this) | scipy |
+|---|---|---|---|
+| 512/16 | 0.94 ms | 0.89 ms (noise) | 0.56 ms (still 1.59× slower) |
+| 512/64 | 1.03 ms | 1.13 ms (**regress**) | 2.16 ms |
+| 2048/64 | 6.19 ms | 7.83 ms (**regress**) | 40.50 ms |
+
+WHY: the SoA pays one `splat(col[i])` broadcast + column load per coordinate per 8-pair block = d broadcasts/block; that per-column overhead EXCEEDS the per-pair max-reduce finalize it removes once d≳16, so SIMD-over-d (the default `chebyshev`, which streams 8 dims/chunk per pair) is strictly better for d≥16. The d=16 residual (1.59×) is fixed per-pair overhead vs SciPy's inlined-C accumulator — fsci already scales BETTER with d (0.94→1.03ms for d 16→64 vs scipy 0.56→2.16), so it's an SMALL-d-only inlining wall, not an algorithmic gap. REVERTED. Lever REJECTED: SoA-across-pairs only wins when the per-pair finalize is EXPENSIVE relative to the per-element work (d=4 sqrt/div pdist) — for a cheap max reduce over d≥16 columns, SIMD-over-d's contiguous streaming dominates.
