@@ -30343,6 +30343,145 @@ pub fn circstd_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsErr
     reduce_axis_2d(x, axis, circstd)
 }
 
+/// Work-capped thread count shared by the parallel-across-lines axis-2D map helpers.
+/// Returns 1 (serial) below the work gate; otherwise caps so each thread owns
+/// >= ~48k element-ops (amortizing the ~20µs OS-thread spawn — see [`reduce_axis_2d`]).
+fn axis_2d_thread_count(n_lines: usize, line_len: usize) -> usize {
+    let threads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let work = (n_lines as u64).saturating_mul(line_len.max(1) as u64);
+    const MIN_WORK_PER_THREAD: u64 = 48_000;
+    if n_lines < 4 || work < 1 << 16 || threads <= 1 {
+        1
+    } else {
+        threads
+            .min(n_lines)
+            .min((work / MIN_WORK_PER_THREAD).max(1) as usize)
+    }
+}
+
+/// Run `produce(idx)` for `idx in 0..n_lines`, parallel across lines with the work cap,
+/// returning the produced vectors in line order. The vector-output (vmap-style) analogue
+/// of [`reduce_axis_2d`]'s scalar reduction.
+fn par_produce_lines<F>(n_lines: usize, line_len: usize, produce: F) -> Vec<Vec<f64>>
+where
+    F: Fn(usize) -> Vec<f64> + Sync,
+{
+    let nthreads = axis_2d_thread_count(n_lines, line_len);
+    if nthreads <= 1 {
+        return (0..n_lines).map(produce).collect();
+    }
+    let chunk = n_lines.div_ceil(nthreads);
+    let produce = &produce;
+    let mut out: Vec<Vec<f64>> = (0..n_lines).map(|_| Vec::new()).collect();
+    std::thread::scope(|scope| {
+        for (ci, ochunk) in out.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in ochunk.iter_mut().enumerate() {
+                    *slot = produce(base + k);
+                }
+            });
+        }
+    });
+    out
+}
+
+/// Apply a per-line vector transform along one axis of a rectangular 2-D input, returning
+/// a same-shaped 2-D result. Parallel across lines; BIT-IDENTICAL to the per-line call.
+fn map_axis_2d<F>(x: &[Vec<f64>], axis: isize, map: F) -> Result<Vec<Vec<f64>>, StatsError>
+where
+    F: Fn(&[f64]) -> Vec<f64> + Sync,
+{
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cols = x[0].len();
+    if x.iter().any(|row| row.len() != cols) {
+        return Err(StatsError::InvalidArgument(
+            "x must be a rectangular 2-D matrix".to_string(),
+        ));
+    }
+    let rows = x.len();
+    match axis {
+        -1 | 1 => Ok(par_produce_lines(rows, cols, |i| map(&x[i]))),
+        0 => {
+            let tcols = par_produce_lines(cols, rows, |j| {
+                let col: Vec<f64> = x.iter().map(|r| r[j]).collect();
+                map(&col)
+            });
+            let mut out: Vec<Vec<f64>> = (0..rows).map(|_| vec![0.0f64; cols]).collect();
+            for (j, tc) in tcols.iter().enumerate() {
+                for (i, orow) in out.iter_mut().enumerate() {
+                    orow[j] = tc[i];
+                }
+            }
+            Ok(out)
+        }
+        other => Err(StatsError::InvalidArgument(format!(
+            "axis must be 0, 1, or -1 for 2-D map, got {other}"
+        ))),
+    }
+}
+
+/// `zscore` (z-score standardization) along one axis — matches `scipy.stats.zscore(x, axis, ddof)`.
+/// One transformed value per element; BIT-IDENTICAL to the per-line 1-D [`zscore_ddof`].
+pub fn zscore_axis_2d(x: &[Vec<f64>], ddof: usize, axis: isize) -> Result<Vec<Vec<f64>>, StatsError> {
+    map_axis_2d(x, axis, |line| zscore_ddof(line, ddof))
+}
+
+/// `gzscore` (geometric z-score) along one axis — matches `scipy.stats.gzscore(x, axis, ddof)`.
+pub fn gzscore_axis_2d(x: &[Vec<f64>], ddof: usize, axis: isize) -> Result<Vec<Vec<f64>>, StatsError> {
+    map_axis_2d(x, axis, |line| gzscore_ddof(line, ddof))
+}
+
+/// `zmap` (standardize `scores` against the mean/std of `compare`) along one axis —
+/// matches `scipy.stats.zmap(scores, compare, axis, ddof)`. `scores` and `compare` must be
+/// the same rectangular shape; each line of `scores` is mapped by the matching line of `compare`.
+pub fn zmap_axis_2d(
+    scores: &[Vec<f64>],
+    compare: &[Vec<f64>],
+    ddof: usize,
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, StatsError> {
+    if scores.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cols = scores[0].len();
+    if scores.iter().any(|r| r.len() != cols) || compare.iter().any(|r| r.len() != cols) {
+        return Err(StatsError::InvalidArgument(
+            "scores and compare must be rectangular 2-D matrices".to_string(),
+        ));
+    }
+    if compare.len() != scores.len() {
+        return Err(StatsError::InvalidArgument(
+            "scores and compare must have the same shape".to_string(),
+        ));
+    }
+    let rows = scores.len();
+    match axis {
+        -1 | 1 => Ok(par_produce_lines(rows, cols, |i| zmap_ddof(&scores[i], &compare[i], ddof))),
+        0 => {
+            let tcols = par_produce_lines(cols, rows, |j| {
+                let sc: Vec<f64> = scores.iter().map(|r| r[j]).collect();
+                let cp: Vec<f64> = compare.iter().map(|r| r[j]).collect();
+                zmap_ddof(&sc, &cp, ddof)
+            });
+            let mut out: Vec<Vec<f64>> = (0..rows).map(|_| vec![0.0f64; cols]).collect();
+            for (j, tc) in tcols.iter().enumerate() {
+                for (i, orow) in out.iter_mut().enumerate() {
+                    orow[j] = tc[i];
+                }
+            }
+            Ok(out)
+        }
+        other => Err(StatsError::InvalidArgument(format!(
+            "axis must be 0, 1, or -1 for 2-D map, got {other}"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RankTieMethod {
     Average,
@@ -59382,6 +59521,54 @@ mod tests {
             assert_eq!(par0[col], skew(&column), "skew axis=0 col {col}");
         }
         assert!(skew_axis_2d(&x, 9).is_err());
+    }
+
+    #[test]
+    fn map_axis_2d_family_matches_per_line() {
+        // Vector-output axis-2D maps must be BIT-IDENTICAL to their per-line 1-D call, both axes.
+        let rows = 37usize;
+        let cols = 113usize;
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| (((r * 71 + c * 13) % 311) as f64) * 0.017 + 0.5 + (c as f64 * 0.3).sin().abs())
+                    .collect()
+            })
+            .collect();
+        let cmp: Vec<Vec<f64>> = (0..rows)
+            .map(|r| (0..cols).map(|c| (((r * 17 + c * 29) % 197) as f64) * 0.021 + 0.5).collect())
+            .collect();
+
+        // ---- axis = -1 (rows) ----
+        let zr = zscore_axis_2d(&x, 0, -1).unwrap();
+        let gr = gzscore_axis_2d(&x, 1, -1).unwrap();
+        let mr = zmap_axis_2d(&x, &cmp, 0, -1).unwrap();
+        for r in 0..rows {
+            let z1 = zscore_ddof(&x[r], 0);
+            let g1 = gzscore_ddof(&x[r], 1);
+            let m1 = zmap_ddof(&x[r], &cmp[r], 0);
+            for c in 0..cols {
+                assert_eq!(zr[r][c].to_bits(), z1[c].to_bits(), "zscore row {r} col {c}");
+                assert_eq!(gr[r][c].to_bits(), g1[c].to_bits(), "gzscore row {r} col {c}");
+                assert_eq!(mr[r][c].to_bits(), m1[c].to_bits(), "zmap row {r} col {c}");
+            }
+        }
+
+        // ---- axis = 0 (columns) ----
+        let z0 = zscore_axis_2d(&x, 0, 0).unwrap();
+        let m0 = zmap_axis_2d(&x, &cmp, 0, 0).unwrap();
+        for c in 0..cols {
+            let col: Vec<f64> = x.iter().map(|row| row[c]).collect();
+            let ccol: Vec<f64> = cmp.iter().map(|row| row[c]).collect();
+            let z1 = zscore_ddof(&col, 0);
+            let m1 = zmap_ddof(&col, &ccol, 0);
+            for r in 0..rows {
+                assert_eq!(z0[r][c].to_bits(), z1[r].to_bits(), "zscore axis0 row {r} col {c}");
+                assert_eq!(m0[r][c].to_bits(), m1[r].to_bits(), "zmap axis0 row {r} col {c}");
+            }
+        }
+        assert!(zscore_axis_2d(&x, 0, 9).is_err());
+        assert!(zmap_axis_2d(&x, &cmp[..rows - 1], 0, 1).is_err());
     }
 
     #[test]

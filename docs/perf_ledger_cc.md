@@ -1142,3 +1142,26 @@ BONUS: tmin_axis_2d (dropped in the prior batch as a 0.72× loss vs scipy's fast
 0.59ms vs scipy 1.01ms = **1.7× WIN** at 2000×512 (4.4× at 500×4096). The lever I built to kill the floor
 flipped the one function the floor had cost me. LESSON: probe `available_parallelism()`-driven fan-out with
 a same-process fixed-thread A/B; "use all cores" is wrong when per-call work is < ~64·spawn_cost.
+
+### ✅✅ stats: zscore/gzscore/zmap axis-2D — a DIFFERENT primitive (vmap-style vector-output map) — 3.9-14.7x faster than scipy
+DIG (jax "different primitive"): reduce_axis_2d reduces a line→scalar; zscore/gzscore/zmap need line→LINE
+(vector output, same shape). Added the complementary primitive: `map_axis_2d` / `par_produce_lines` — a
+batched vector-output map parallel across lines with the SAME work-capped thread count (axis_2d_thread_count,
+the 48k/thread cap factored out). Three new public fns: zscore_axis_2d, gzscore_axis_2d, zmap_axis_2d
+(bit-identical to per-line 1-D; conformance in new `map_axis_2d_family_matches_per_line`, both axes, to_bits).
+
+scipy.stats.zscore/gzscore/zmap carry heavy intermediate-array overhead (mean+std+subtract+divide as
+separate numpy temporaries); fsci does 2 passes (mean/std then write) parallel across lines, no temporaries.
+
+**SAME-BOX paired head-to-head (best-of-30, fsci public fns + scipy.stats back-to-back):**
+| op      | 2000×512 (scipy/fsci → ×) | 500×4096 (scipy/fsci → ×) | 4000×1024 (scipy/fsci → ×) |
+|---------|---------------------------|---------------------------|----------------------------|
+| zscore  | 4.51/1.03 → **4.4×**      | 12.81/1.72 → **7.5×**     | 30.25/2.81 → **10.8×**     |
+| gzscore | 8.31/1.28 → **6.5×**      | 21.45/2.07 → **10.4×**    | 46.44/3.16 → **14.7×**     |
+| zmap    | 4.11/1.05 → **3.9×**      | 12.64/1.70 → **7.4×**     | 29.06/3.18 → **9.1×**      |
+
+This is the FIRST vector-output member of the axis-2D family (the prior 25 are scalar reductions). The
+new `map_axis_2d` primitive + `axis_2d_thread_count` (shared 48k/thread cap) generalize to any future
+batched line→line transform (e.g. detrend/normalize/rankdata-values/winsorize-along-axis). gzscore wins
+most (scipy's per-element log+exp temporaries are the slowest). REVERT-check N/A (pure addition, no
+existing path changed). fsci-stats conformance GREEN (map_axis_2d_family + all zscore/gzscore/zmap tests).
