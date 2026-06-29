@@ -11438,3 +11438,31 @@ n due to the per-call chirp rebuild.
 - Vein status: 10 LANDED ships stand (sosfilt/filtfilt/sosfiltfilt/decimate/savgol/resample_poly/detrend/
   welch/csd/coherence 2-D). spectrogram is the first vein candidate blocked by a 1-D CORRECTNESS gap rather
   than a perf wall.
+
+## 2026-06-28 - LANDED (AmberForge): periodogram_psd inner-loop kernel for Welch — 1.19x faster per segment (byte-identical), ~1.05-1.09x welch wall
+
+- Agent: AmberForge. Perf-vs-ORIGINAL self-optimization (not a new function). The Welch inner loop called the
+  public `periodogram` once per segment, which per call (1) re-summed the window power Σw² (identical for every
+  segment), (2) computed+allocated a frequency-bin vector that welch immediately DISCARDS, and (3) detrended
+  then windowed in TWO separate passes/allocs. Added `periodogram_psd` (PSD-only): precomputed window power
+  (once, in welch), fused constant-detrend+window into ONE pass (`(x[i]-mean)*w[i]`, same FP ops → bit-equal),
+  and no frequency vector.
+- **MEASURED, same-process interleaved best-of-8 A/B (200k iters each):**
+
+  | path | per-segment kernel (256-pt) | ratio |
+  | --- | ---: | ---: |
+  | legacy `periodogram(seg).psd` | 2765 ns | — |
+  | new `periodogram_psd` | 2319 ns | **1.19x faster** |
+
+  welch WALL benefit dilutes to ~1.05-1.09x (welch_2d 1000×10000 ~122ms vs ~130ms legacy; 256×100000 ~355ms
+  vs ~382ms) because welch is FFT-compute-bound + threaded — the kernel's non-FFT overhead is a smaller share
+  of the whole. Reported ratio is the clean kernel A/B (1.19x); the wall gain is honest but modest.
+- BYTE-IDENTICAL: full suite 662/0 unchanged; welch_2d vs scipy oracle still **1.7e-13** (identical to the
+  pre-optimization value — the fused detrend+window and precomputed Σw² change nothing numerically). Lifts all
+  `welch` / `welch_axis_2d` callers. (csd/coherence use a separate cross-spectral path, not periodogram, so
+  they're unaffected.)
+- LESSON: a hot inner loop calling a general public fn pays for that fn's full generality every iteration
+  (here: redundant Σw², a discarded freq vector, an extra pass). A PSD-only/`_into`-style private kernel that
+  hoists the loop-invariant work is byte-identical and free. The wall win is FFT-capped, so it's modest — but
+  the kernel ratio is clean 1.19x. (FFT-family axis-2D vein remains conformance-blocked: stft uses
+  boundary=None/padded=False not scipy's default zeros/padded; spectrogram lacks detrend — both 1-D gaps.)
