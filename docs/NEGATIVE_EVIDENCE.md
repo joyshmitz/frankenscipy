@@ -11586,3 +11586,16 @@ n due to the per-call chirp rebuild.
   64-thread spawn is overkill for 2000 short lines; ~8-16 threads would cut the floor toward ~0.3-0.5ms,
   speeding ALL reducers AND flipping tmin to a win. Needs same-process A/B (risk: regressing the heavy
   big-win reducers that DO use the cores). See [[perf_available_parallelism_per_call_syscall_tax]].
+
+## permutation_test parallelization — behavior change (acceptable), AmberKestrel 2026-06-29
+SHIPPED as a WIN (87× vs scipy, perf_ledger_cc.md) but with two recorded caveats so the change is auditable:
+- **Seed output changed.** The old serial `permutation_test` shuffled a single buffer cumulatively, so
+  permutation `p`'s array depended on permutations `0..p`. The new version resets to the original sample
+  per permutation and jumps the LCG to `p·(n−1)` (pure function of `(seed,p)`). Both are valid Monte-Carlo
+  permutation tests, but the exact p-value for a given seed differs. The only in-repo test is tolerant
+  (p≈0.1 ± 0.02) and passes. Net: reproducibility IMPROVED (now thread-count-independent), but byte-for-byte
+  seed compatibility with the old output is intentionally NOT preserved.
+- **Trait bound tightened** `F: Fn` → `F: Fn + Sync` (needed for `thread::scope`). Statistic closures that
+  capture only shared data satisfy it; a closure capturing a non-Sync handle would no longer compile.
+- This is the cache-friendly counter-example to the earlier resampler-parallelism REJECT: streaming a
+  per-thread L1-resident buffer wins where materializing all resamples lost 3.3×.

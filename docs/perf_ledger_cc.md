@@ -1285,3 +1285,24 @@ upper triangle (m·(m−1)/2) — fsci does 2× the work and STILL wins 80-96×.
 `all_pairs_*` family now spans 8 matrices (kendall/weightedtau/wasserstein/energy/ks/mannwhitneyu +
 ranksums/brunnermunzel) across THREE assembly shapes (f64-symmetric / tuple-symmetric / tuple-FULL).
 fsci-stats GREEN.
+
+### ✅✅ stats: permutation_test parallelized (LCG jump-ahead) — 87x faster than scipy
+A DIFFERENT primitive from the all-pairs vein: the existing `permutation_test` was a SERIAL loop with a
+cumulative (path-dependent) Fisher–Yates shuffle. Rewrote it so permutation `p` is a PURE FUNCTION of
+`(seed, p)` — reset the buffer to the original sample + jump the shared LCG to `p·(n−1)` advances (reusing
+the in-crate `lcg_jump(a,c,steps)` O(log) skip already built for byte-identical bootstrap parallelism) —
+then fan out across permutations. Each thread streams (reset 8 KB buffer → shuffle → stat → discard), so
+its working set is L1/L2-resident (dodges the cache-hostile materialization that made naïve resampler
+parallelism 3.3× SLOWER, per NEGATIVE_EVIDENCE). Result is now DETERMINISTIC and thread-count-INDEPENDENT
+(strictly better reproducibility than the old serial path).
+
+**SAME-BOX head-to-head (fsci vs scipy.stats.permutation_test, vectorized, both this box):**
+| workload                                  | scipy      | fsci     | speedup   |
+|-------------------------------------------|------------|----------|-----------|
+| 2-sample diff-of-means, n=1000, 9999 resamples | 245.7 ms | 2.83 ms | **87.0×** |
+
+CAVEAT (see NEGATIVE_EVIDENCE.md): this CHANGES the exact p-value returned for a given seed (the old
+serial output was a path-dependent Monte-Carlo estimate, never a stable contract); the tolerant
+conformance test `permutation_test_matches_scipy_reference_values` (p≈0.1 ± 0.02) still passes. The trait
+bound tightened `F: Fn` → `F: Fn + Sync` (required for the fan-out; ordinary statistic closures satisfy
+it). fsci-stats GREEN.

@@ -40498,7 +40498,7 @@ pub fn permutation_test<F>(
     seed: u64,
 ) -> (f64, f64)
 where
-    F: Fn(&[f64], &[f64]) -> f64,
+    F: Fn(&[f64], &[f64]) -> f64 + Sync,
 {
     if x.is_empty()
         || y.is_empty()
@@ -40509,23 +40509,65 @@ where
         return (f64::NAN, f64::NAN);
     }
     let observed = stat_fn(x, y);
+    let obs_abs = observed.abs();
+    let nx = x.len();
     let n = x.len() + y.len();
-    let mut combined: Vec<f64> = x.iter().chain(y.iter()).cloned().collect();
-    let mut rng = seed;
-    let mut count_extreme = 0usize;
+    let combined: Vec<f64> = x.iter().chain(y.iter()).cloned().collect();
+    const A: u64 = 6364136223846793005;
 
-    for _ in 0..n_permutations {
-        for i in (1..n).rev() {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let j = (rng >> 33) as usize % (i + 1);
-            combined.swap(i, j);
+    // Permutation `p` is a pure function of (seed, p): reset to the original sample, jump the RNG to
+    // `p·(n−1)` advances, then run the same Fisher–Yates stream. Deterministic AND thread-count-
+    // independent (unlike a cumulative serial shuffle), so the fan-out below changes nothing observable.
+    let do_chunk = |p_start: usize, p_end: usize, buf: &mut [f64]| -> usize {
+        let mut cnt = 0usize;
+        for p in p_start..p_end {
+            buf.copy_from_slice(&combined);
+            // Jump the shared LCG to permutation p's start (p·(n−1) advances) → independent & reproducible.
+            let (jm, jc) = lcg_jump(A, 1, p * (n - 1));
+            let mut rng = jm.wrapping_mul(seed).wrapping_add(jc);
+            for i in (1..n).rev() {
+                rng = rng.wrapping_mul(A).wrapping_add(1);
+                let j = (rng >> 33) as usize % (i + 1);
+                buf.swap(i, j);
+            }
+            if stat_fn(&buf[..nx], &buf[nx..]).abs() >= obs_abs {
+                cnt += 1;
+            }
         }
+        cnt
+    };
 
-        let perm_stat = stat_fn(&combined[..x.len()], &combined[x.len()..]);
-        if perm_stat.abs() >= observed.abs() {
-            count_extreme += 1;
-        }
-    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let work = (n as u64).saturating_mul(n_permutations as u64);
+    // ~128 permutations / thread minimum amortizes the ~1.5ms 64-thread spawn floor (see thread-cap memory)
+    let nthreads = if n_permutations < 256 || work < (1 << 18) || cores <= 1 {
+        1
+    } else {
+        cores.min((n_permutations / 128).max(1))
+    };
+
+    let count_extreme = if nthreads <= 1 {
+        let mut buf = combined.clone();
+        do_chunk(0, n_permutations, &mut buf)
+    } else {
+        let chunk = n_permutations.div_ceil(nthreads);
+        let do_chunk = &do_chunk;
+        let mut buffers: Vec<Vec<f64>> = (0..nthreads).map(|_| combined.clone()).collect();
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = buffers
+                .iter_mut()
+                .enumerate()
+                .map(|(t, buf)| {
+                    let start = (t * chunk).min(n_permutations);
+                    let end = ((t + 1) * chunk).min(n_permutations);
+                    scope.spawn(move || do_chunk(start, end, buf.as_mut_slice()))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).sum()
+        })
+    };
 
     let pvalue = (count_extreme + 1) as f64 / (n_permutations + 1) as f64;
     (observed, pvalue)
