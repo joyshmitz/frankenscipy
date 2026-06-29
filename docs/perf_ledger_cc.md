@@ -1599,3 +1599,26 @@ Python integrand calls). All integrals converge; speedup grows with N. CONFORMAN
 BYTE-IDENTICAL (.to_bits() on integral/error/converged) to per-param tplquad; (2) NUMERICAL vs scipy: fsci
 I(p=5)=0.061963890934 == scipy 0.061963890934 to 4.41e-13; (3) new tplquad_many test green. The vmap-over-
 solver vein now spans SEVEN solver families (curve_fit/solve_ivp/minimize/root/quad/dblquad/tplquad).
+
+### ✅✅ ndimage: mean(labels,index) parallel privatized-histogram scatter — 2.05× self-speedup at large N (→ 2.16× vs scipy)
+DIFFERENT primitive from the vmap vein: a PARALLEL SEGMENTED REDUCTION. First, a stale-scorecard CORRECTION —
+the GAUNTLET scorecard lists `ndimage.mean(labels,index)` as a 1.5-4.7× LOSS (beads 8l8r1.125/.143/fa62u),
+but a fresh same-box re-measure shows the current one-based-contiguous fast path already WINS 1.17-1.30×
+(fsci 169.8/498.5/1177.7 us vs scipy 221.5/581.9/1478.0 us at N=65536/262144/589824) — the slow rows were
+superseded. NEW lever on top: the serial scatter `sums[label-1]+=v; counts[label-1]+=1` is a segmented
+reduction; replaced it (large N only) with PRIVATIZED HISTOGRAMS — each worker accumulates a private
+(sums,counts) over a contiguous chunk via thread::scope, partials merged in chunk order.
+
+**SAME-PROCESS A/B (serial replica vs production mean(), identical data, both this box):**
+| N      | K    | serial | parallel mean() | self-speedup | max\|Δmean\| |
+|--------|------|--------|-----------------|--------------|-------------|
+| 65536  | 512  | 195.6  | 258.0 us        | serial (below gate, unchanged) | 0 (byte-id) |
+| 262144 | 1024 | 663.9  | 505.7 us        | 1.30-1.50×   | 8.88e-16 |
+| 589824 | 4096 | 1399.2 | 683.9 us        | **2.05×**    | 6.66e-16 |
+
+At N=589824 the parallel path → 2.16× vs scipy (1478/683), doubling the large-image margin (was 1.26×). The
+merge in chunk order keeps each label's running sum in global element order — only the ASSOCIATION differs, so
+max|Δmean| = 6.66e-16 (sub-ULP). GATED `nthreads = cores.min(n/128_000)`: small N (the unit-test regime) stays
+on the serial path and is BYTE-IDENTICAL (Δ=0, no regression). CONFORMANCE: 249/0 fsci-ndimage tests green incl.
+new `mean_one_based_parallel_scatter_matches_serial_reference` (<1e-9) + all existing mean/label fixtures.
+Generalizes to variance/sum/std label reductions (same scatter).

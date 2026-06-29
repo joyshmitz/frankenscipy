@@ -5926,6 +5926,83 @@ fn measurement_exact_positive_integer_label(label_value: f64) -> Option<usize> {
     usize::try_from(label).ok().filter(|&label| label > 0)
 }
 
+/// One-based-contiguous label scatter (`sums[label-1] += value`, `counts[label-1] += 1`)
+/// as a parallel privatized-histogram reduction. Each worker accumulates a PRIVATE
+/// `(sums, counts)` over a contiguous chunk, then the partials are merged in chunk order.
+/// Because the chunks are contiguous and merged in order, each label's running sum visits
+/// its elements in the SAME global order as the serial scatter — only the ASSOCIATION of
+/// the float adds differs (≈1 ULP), so the result is tolerance-equal, not bit-equal.
+/// Gated to large `n` so the worker spawn amortises; small `n` (the unit-test regime)
+/// stays on the serial path and remains byte-identical.
+fn measurement_one_based_scatter(
+    data: &[f64],
+    labels: &[f64],
+    label_count: usize,
+) -> (Vec<f64>, Vec<usize>) {
+    let n = data.len();
+    let serial = || {
+        let mut sums = vec![0.0; label_count];
+        let mut counts = vec![0usize; label_count];
+        for (&value, &label_value) in data.iter().zip(labels) {
+            if let Some(pos) = measurement_one_based_label_pos(label_count, label_value) {
+                sums[pos] += value;
+                counts[pos] += 1;
+            }
+        }
+        (sums, counts)
+    };
+
+    // Each worker must stream a worthwhile contiguous slice (~128k elements) for the
+    // thread::scope spawn to pay against the already-fast serial reduction.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(n / 128_000);
+    if nthreads <= 1 {
+        return serial();
+    }
+
+    let chunk = n.div_ceil(nthreads);
+    let partials: Vec<(Vec<f64>, Vec<usize>)> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= n {
+                    return None;
+                }
+                let hi = (lo + chunk).min(n);
+                let d = &data[lo..hi];
+                let l = &labels[lo..hi];
+                Some(scope.spawn(move || {
+                    let mut sums = vec![0.0; label_count];
+                    let mut counts = vec![0usize; label_count];
+                    for (&value, &label_value) in d.iter().zip(l) {
+                        if let Some(pos) = measurement_one_based_label_pos(label_count, label_value)
+                        {
+                            sums[pos] += value;
+                            counts[pos] += 1;
+                        }
+                    }
+                    (sums, counts)
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("label-scatter worker panicked"))
+            .collect()
+    });
+
+    let mut sums = vec![0.0; label_count];
+    let mut counts = vec![0usize; label_count];
+    for (ps, pc) in partials {
+        for k in 0..label_count {
+            sums[k] += ps[k];
+            counts[k] += pc[k];
+        }
+    }
+    (sums, counts)
+}
+
 fn measurement_label_mean(
     input: &NdArray,
     labels: Option<&NdArray>,
@@ -5949,12 +6026,10 @@ fn measurement_label_mean(
     match index {
         Some(index) => {
             if let Some(label_count) = measurement_one_based_contiguous_index_len(index) {
-                for (&value, &label_value) in input.data.iter().zip(&labels.data) {
-                    if let Some(pos) = measurement_one_based_label_pos(label_count, label_value) {
-                        sums[pos] += value;
-                        counts[pos] += 1;
-                    }
-                }
+                let (s, c) =
+                    measurement_one_based_scatter(&input.data, &labels.data, label_count);
+                sums = s;
+                counts = c;
             } else if let Some(label_to_pos) = measurement_dense_label_positions(index) {
                 for (&value, &label_value) in input.data.iter().zip(&labels.data) {
                     if let Some(pos) = measurement_dense_label_pos(&label_to_pos, label_value) {
@@ -13737,6 +13812,48 @@ mod tests {
             &mean(&data, Some(&labels), Some(&index)).unwrap(),
             &[20.0, 35.0, 50.0],
         );
+    }
+
+    #[test]
+    fn mean_one_based_parallel_scatter_matches_serial_reference() {
+        // Large enough to cross the parallel privatized-histogram gate (n/128_000 >= 2).
+        // The parallel reduction reassociates float adds vs the serial scatter, so the
+        // means must agree to tolerance (not bit-exact); confirm well under 1e-9.
+        let n = 300_000usize;
+        let k = 64usize;
+        let mut s = 0x1234_5678_9abc_def0u64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let vals: Vec<f64> = (0..n)
+            .map(|_| (rng() >> 11) as f64 / (1u64 << 53) as f64)
+            .collect();
+        let labels: Vec<f64> = (0..n).map(|_| (1 + (rng() % k as u64)) as f64).collect();
+        let index: Vec<usize> = (1..=k).collect();
+
+        let input = NdArray::new(vals.clone(), vec![n]).unwrap();
+        let lab = NdArray::new(labels.clone(), vec![n]).unwrap();
+        let got = mean(&input, Some(&lab), Some(&index)).unwrap();
+
+        // Serial reference scatter.
+        let mut sref = vec![0.0f64; k];
+        let mut cref = vec![0usize; k];
+        for (&v, &lv) in vals.iter().zip(&labels) {
+            let p = (lv as usize) - 1;
+            sref[p] += v;
+            cref[p] += 1;
+        }
+        for i in 0..k {
+            let want = sref[i] / cref[i] as f64;
+            assert!(
+                (got[i] - want).abs() < 1e-9,
+                "label {i}: parallel {} vs serial {want}",
+                got[i]
+            );
+        }
     }
 
     #[test]
