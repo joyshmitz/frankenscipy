@@ -1962,3 +1962,23 @@ Implemented a general-dim SoA-across-pairs Chebyshev for pdist (`collect_columns
 | 2048/64 | 6.19 ms | 7.83 ms (**regress**) | 40.50 ms |
 
 WHY: the SoA pays one `splat(col[i])` broadcast + column load per coordinate per 8-pair block = d broadcasts/block; that per-column overhead EXCEEDS the per-pair max-reduce finalize it removes once d≳16, so SIMD-over-d (the default `chebyshev`, which streams 8 dims/chunk per pair) is strictly better for d≥16. The d=16 residual (1.59×) is fixed per-pair overhead vs SciPy's inlined-C accumulator — fsci already scales BETTER with d (0.94→1.03ms for d 16→64 vs scipy 0.56→2.16), so it's an SMALL-d-only inlining wall, not an algorithmic gap. REVERTED. Lever REJECTED: SoA-across-pairs only wins when the per-pair finalize is EXPENSIVE relative to the per-element work (d=4 sqrt/div pdist) — for a cheap max reduce over d≥16 columns, SIMD-over-d's contiguous streaming dominates.
+
+## 2026-06-29 — AmberKestrel (cc): NMF flat-buffer + MR=4 panel matmul — 2.9× self-WIN (1005→346ms), closes sklearn gap 6.9×→2.4× (residual = serial OpenBLAS GEMM wall)
+
+`fsci_cluster::nmf` (1000×300, k=20, 200 mu-iters) was the documented cluster loss: **1005 ms vs sklearn — 6.9× slower**, doing 6 GEMMs/iter through `fsci_linalg::matmul` on `Vec<Vec<f64>>` (row-pointer chase + per-call alloc). DUG the flat-buffer + register-blocked-matmul lever:
+- **Flatten** X/W/H to row-major buffers; reuse ALL scratch (wt/wtx/wtw/wtwh/ht/xht/hht/whht/wh) across iters (zero per-iter alloc); flat `transpose_flat`.
+- **`nmf_mm` = ikj with an MR=4 output-row panel**: 4 output rows share each streamed B row → cuts B memory traffic ~4× (the dominant Wᵀ·X is memory-bound — streams X once per output row) and the inner 4-way AXPY auto-vectorizes over the n axis. The 4×N partial rows stay L1-resident (4×300×8 = 9.6 KB < 32 KB).
+
+**Same-process A/B (best-of-4, this box):**
+| kernel | time | vs sklearn(145) |
+|---|---|---|
+| ORIG `fsci_linalg::matmul` (Vec<Vec>) | ~1005 ms (documented) | 6.9× slower |
+| flat + simple ikj | 447 ms | 3.1× slower |
+| **flat + MR=4 panel (SHIPPED)** | **346 ms** | **2.4× slower** |
+| sklearn NMF mu 200it (same-box) | 145 ms | — |
+
+`rel_err = 0.470968` byte-identical across all three kernels (reduction-order change is correctness-safe; the MU updates converge to the same factorization). Conformance GREEN (fsci-cluster 142/142 lib). **Net: 2.9× self-speedup vs ORIG, 1.29× directly-A/B'd over simple-ikj, gap-to-sklearn 6.9×→2.4×.**
+
+**REJECTED in the same A/B — register-tiled MR=4×NR=8** (C-tile held in registers across the K loop): 458 ms, SLOWER than the MR=4 panel (346). Why: the panel's 4×N partials are already L1-resident, so the register-residency saves little while the j-tiling + scalar column-remainder on the narrow matmuls (xht output is 1000×20, hht/whht are k×k) costs more. Don't re-chase register tiling here.
+
+**RESIDUAL = serial GEMM micro-kernel wall, NOT a parallel wall (NEW finding):** sklearn NMF mu is **145 ms single-thread AND 145 ms all-threads** (measured both) — at this size the GEMMs are too small for OpenBLAS to parallelize, so its 145 ms is pure single-thread OpenBLAS micro-kernel (≈36 Gflops vs my MR=4 ≈15 Gflops). Matching that serially needs hand-tuned-assembly packing/prefetch — not reachable from portable Rust. The ONLY remaining lever to actually BEAT sklearn is **parallelism across the 64 cores** (now de-risked: since sklearn is single-threaded here, even modest parallel efficiency wins), but per prior sweeps per-call `thread::scope` spawn always loses (tiny GEMMs) and the persistent barrier-pool deadlocked — Amdahl also bites (serial element-wise updates + small matmuls + transposes ≈ 115 ms floor). Deferred to a dedicated turn. SHIPPED the safe 2.9× self-win now.

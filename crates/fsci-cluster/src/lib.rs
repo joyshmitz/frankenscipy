@@ -1246,6 +1246,102 @@ fn nndsvd_init(x: &[Vec<f64>], k: usize, seed: u64) -> Result<WhPair, ClusterErr
     Ok((w, h))
 }
 
+/// Transpose a `rows×cols` row-major buffer into a `cols×rows` row-major buffer.
+fn transpose_flat(src: &[f64], rows: usize, cols: usize, dst: &mut [f64]) {
+    for r in 0..rows {
+        let srow = &src[r * cols..r * cols + cols];
+        for c in 0..cols {
+            dst[c * rows + r] = srow[c];
+        }
+    }
+}
+
+/// `C(m×n) = A(m×p)·B(p×n)`, all row-major flat buffers; `out` is overwritten.
+///
+/// `ikj` accumulation with an MR=4 output-row panel: four output rows share each
+/// streamed `B` row, cutting B memory traffic ~4× (the dominant `Wᵀ·X` in NMF is
+/// memory-bound — it streams X once per output row) and letting the inner AXPY
+/// auto-vectorize over the n axis.
+fn nmf_mm(a: &[f64], b: &[f64], m: usize, p: usize, n: usize, out: &mut [f64]) {
+    out.iter_mut().for_each(|v| *v = 0.0);
+    let mut i = 0;
+    while i + 4 <= m {
+        let rows = &mut out[i * n..(i + 4) * n];
+        let (r0, rest) = rows.split_at_mut(n);
+        let (r1, rest) = rest.split_at_mut(n);
+        let (r2, r3) = rest.split_at_mut(n);
+        let a0 = &a[i * p..(i + 1) * p];
+        let a1 = &a[(i + 1) * p..(i + 2) * p];
+        let a2 = &a[(i + 2) * p..(i + 3) * p];
+        let a3 = &a[(i + 3) * p..(i + 4) * p];
+        for l in 0..p {
+            let (v0, v1, v2, v3) = (a0[l], a1[l], a2[l], a3[l]);
+            let brow = &b[l * n..l * n + n];
+            for ((((r0j, r1j), r2j), r3j), &bv) in r0
+                .iter_mut()
+                .zip(r1.iter_mut())
+                .zip(r2.iter_mut())
+                .zip(r3.iter_mut())
+                .zip(brow)
+            {
+                *r0j += v0 * bv;
+                *r1j += v1 * bv;
+                *r2j += v2 * bv;
+                *r3j += v3 * bv;
+            }
+        }
+        i += 4;
+    }
+    while i < m {
+        let r = &mut out[i * n..i * n + n];
+        let ar = &a[i * p..i * p + p];
+        for l in 0..p {
+            let v = ar[l];
+            if v == 0.0 {
+                continue;
+            }
+            let brow = &b[l * n..l * n + n];
+            for (rj, &bv) in r.iter_mut().zip(brow) {
+                *rj += v * bv;
+            }
+        }
+        i += 1;
+    }
+}
+
+/// Convert the flat `W` (n×k) and `H` (k×d) back to row-major `Vec<Vec<f64>>`.
+fn nmf_unflatten(
+    w_flat: &[f64],
+    h_flat: &[f64],
+    n: usize,
+    k: usize,
+    d: usize,
+) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+    let w = (0..n).map(|r| w_flat[r * k..r * k + k].to_vec()).collect();
+    let h = (0..k).map(|r| h_flat[r * d..r * d + d].to_vec()).collect();
+    (w, h)
+}
+
+/// Reconstruction error `‖X − W·H‖_F / ‖X‖_F` on flat buffers; `wh` is scratch (n×d).
+fn nmf_rel_err(
+    w: &[f64],
+    h: &[f64],
+    x: &[f64],
+    n: usize,
+    k: usize,
+    d: usize,
+    x_norm: f64,
+    wh: &mut [f64],
+) -> f64 {
+    nmf_mm(w, h, n, k, d, wh);
+    let mut s = 0.0;
+    for idx in 0..n * d {
+        let diff = x[idx] - wh[idx];
+        s += diff * diff;
+    }
+    s.sqrt() / x_norm
+}
+
 /// Non-negative Matrix Factorization `X ≈ W·H` (W, H ≥ 0) by multiplicative updates
 /// (Lee–Seung, Frobenius objective).
 ///
@@ -1297,7 +1393,7 @@ pub fn nmf(
         ));
     }
 
-    let (mut w, mut h) = match init {
+    let (w, h) = match init {
         NmfInit::Nndsvd => nndsvd_init(x, k, seed)?,
         NmfInit::Random => {
             let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
@@ -1315,63 +1411,74 @@ pub fn nmf(
     };
 
     let eps = 1e-10;
-    let mm = |a: &[Vec<f64>], b: &[Vec<f64>]| -> Result<Vec<Vec<f64>>, ClusterError> {
-        fsci_linalg::matmul(a, b).map_err(|e| ClusterError::InvalidArgument(format!("matmul: {e}")))
-    };
     let x_norm: f64 = x.iter().flatten().map(|&v| v * v).sum::<f64>().sqrt().max(1e-30);
-    let rel_err = |w: &[Vec<f64>], h: &[Vec<f64>]| -> Result<f64, ClusterError> {
-        let wh = mm(w, h)?;
-        let mut s = 0.0;
-        for (xr, wr) in x.iter().zip(&wh) {
-            for (&xv, &wv) in xr.iter().zip(wr) {
-                s += (xv - wv) * (xv - wv);
-            }
-        }
-        Ok(s.sqrt() / x_norm)
-    };
+
+    // Iterate on flat row-major buffers: the multiplicative updates are a
+    // sequence of small GEMMs and the dominant Wᵀ·X is memory-bound. `nmf_mm`'s
+    // MR=4 output-row panel cuts B traffic ~4× and vectorizes the inner AXPY.
+    // All scratch is reused across iterations (no per-iter allocation).
+    let mut x_flat = vec![0.0f64; n * d];
+    for (r, row) in x.iter().enumerate() {
+        x_flat[r * d..r * d + d].copy_from_slice(row);
+    }
+    let mut w_flat = vec![0.0f64; n * k];
+    for (r, row) in w.iter().enumerate() {
+        w_flat[r * k..r * k + k].copy_from_slice(row);
+    }
+    let mut h_flat = vec![0.0f64; k * d];
+    for (r, row) in h.iter().enumerate() {
+        h_flat[r * d..r * d + d].copy_from_slice(row);
+    }
+
+    let mut wt_flat = vec![0.0f64; k * n];
+    let mut wtx_flat = vec![0.0f64; k * d];
+    let mut wtw_flat = vec![0.0f64; k * k];
+    let mut wtwh_flat = vec![0.0f64; k * d];
+    let mut ht_flat = vec![0.0f64; d * k];
+    let mut xht_flat = vec![0.0f64; n * k];
+    let mut hht_flat = vec![0.0f64; k * k];
+    let mut whht_flat = vec![0.0f64; n * k];
+    let mut wh_flat = vec![0.0f64; n * d];
 
     let mut prev = f64::INFINITY;
     let mut n_iter = 0;
     for it in 0..max_iter {
         n_iter = it + 1;
         // H ← H ⊙ (Wᵀ X) ⊘ (Wᵀ W H)
-        let wt = transpose_rows(&w);
-        let wtx = mm(&wt, x)?;
-        let wtw = mm(&wt, &w)?;
-        let wtwh = mm(&wtw, &h)?;
-        for (i, hr) in h.iter_mut().enumerate() {
-            for (j, hv) in hr.iter_mut().enumerate() {
-                *hv *= wtx[i][j] / (wtwh[i][j] + eps);
-            }
+        transpose_flat(&w_flat, n, k, &mut wt_flat);
+        nmf_mm(&wt_flat, &x_flat, k, n, d, &mut wtx_flat);
+        nmf_mm(&wt_flat, &w_flat, k, n, k, &mut wtw_flat);
+        nmf_mm(&wtw_flat, &h_flat, k, k, d, &mut wtwh_flat);
+        for idx in 0..k * d {
+            h_flat[idx] *= wtx_flat[idx] / (wtwh_flat[idx] + eps);
         }
         // W ← W ⊙ (X Hᵀ) ⊘ (W H Hᵀ)
-        let ht = transpose_rows(&h);
-        let xht = mm(x, &ht)?;
-        let hht = mm(&h, &ht)?;
-        let whht = mm(&w, &hht)?;
-        for (i, wr) in w.iter_mut().enumerate() {
-            for (j, wv) in wr.iter_mut().enumerate() {
-                *wv *= xht[i][j] / (whht[i][j] + eps);
-            }
+        transpose_flat(&h_flat, k, d, &mut ht_flat);
+        nmf_mm(&x_flat, &ht_flat, n, d, k, &mut xht_flat);
+        nmf_mm(&h_flat, &ht_flat, k, d, k, &mut hht_flat);
+        nmf_mm(&w_flat, &hht_flat, n, k, k, &mut whht_flat);
+        for idx in 0..n * k {
+            w_flat[idx] *= xht_flat[idx] / (whht_flat[idx] + eps);
         }
         if it % 10 == 9 || it == max_iter - 1 {
-            let err = rel_err(&w, &h)?;
+            let err = nmf_rel_err(&w_flat, &h_flat, &x_flat, n, k, d, x_norm, &mut wh_flat);
             if (prev - err).abs() < tol {
-                let reconstruction_err = err;
+                let (w_out, h_out) = nmf_unflatten(&w_flat, &h_flat, n, k, d);
                 return Ok(NmfResult {
-                    w,
-                    h,
+                    w: w_out,
+                    h: h_out,
                     n_iter,
-                    reconstruction_err,
+                    reconstruction_err: err,
                 });
             }
             prev = err;
         }
     }
-    let reconstruction_err = rel_err(&w, &h)?;
+    let reconstruction_err = nmf_rel_err(&w_flat, &h_flat, &x_flat, n, k, d, x_norm, &mut wh_flat);
+    let (w_out, h_out) = nmf_unflatten(&w_flat, &h_flat, n, k, d);
     Ok(NmfResult {
-        w,
-        h,
+        w: w_out,
+        h: h_out,
         n_iter,
         reconstruction_err,
     })
