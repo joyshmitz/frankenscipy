@@ -38291,6 +38291,90 @@ fn kendalltau_asymptotic_z(x: &[f64], y: &[f64], concordant: i64, discordant: i6
     s / var.sqrt()
 }
 
+/// Kendall's tau-b *statistic only* (no p-value) — BIT-IDENTICAL to `kendalltau(x, y).statistic`.
+/// Used by [`kendalltau_matrix`]: a correlation matrix needs only the coefficient, so skipping the
+/// exact-Mahonian / asymptotic p-value (which a per-pair `kendalltau` call always computes) is the
+/// bulk of the per-pair savings.
+fn kendalltau_statistic_only(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len();
+    if n < 2 || x.len() != y.len() {
+        return f64::NAN;
+    }
+    let (concordant, discordant, x_ties, y_ties, _moments) = kendall_counts_and_moments(x, y);
+    let n_pairs = (n * (n - 1) / 2) as f64;
+    let denom = ((n_pairs - x_ties as f64) * (n_pairs - y_ties as f64)).sqrt();
+    if denom == 0.0 {
+        return f64::NAN;
+    }
+    (concordant - discordant) as f64 / denom
+}
+
+/// All-pairs Kendall's tau-b correlation matrix over `variables` (each a column/variable of equal
+/// length). Returns an `m × m` symmetric matrix with `out[i][j] == kendalltau(variables[i],
+/// variables[j]).statistic` (bit-identical), diagonal `kendalltau(v_i, v_i)` (1.0, or NaN for a
+/// constant variable). SciPy has NO vectorized all-pairs Kendall — users loop `scipy.stats.kendalltau`
+/// in Python (m·(m−1)/2 calls). This computes the upper triangle in parallel across pairs (tau-only),
+/// crushing that Python loop.
+pub fn kendalltau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    let m = variables.len();
+    if m == 0 {
+        return Ok(Vec::new());
+    }
+    let n = variables[0].len();
+    if variables.iter().any(|v| v.len() != n) {
+        return Err(StatsError::InvalidArgument(
+            "all variables must have the same length".to_string(),
+        ));
+    }
+    // Upper-triangle pairs (i < j); the diagonal is filled separately.
+    let pairs: Vec<(usize, usize)> = (0..m)
+        .flat_map(|i| ((i + 1)..m).map(move |j| (i, j)))
+        .collect();
+    let np = pairs.len();
+    // Per-pair work is O(n log n) (merge-sort discordant count) — tens of µs, far heavier than the
+    // cheap per-element reductions axis_2d_thread_count is tuned for, so OS-thread spawn is well
+    // amortized: parallelize generously (up to all cores) while keeping >= ~4 heavy pairs/thread.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if np < 8 || cores <= 1 {
+        1
+    } else {
+        cores.min((np / 4).max(1))
+    };
+    let compute = |k: usize| -> f64 {
+        let (i, j) = pairs[k];
+        kendalltau_statistic_only(&variables[i], &variables[j])
+    };
+    let taus: Vec<f64> = if nthreads <= 1 {
+        (0..np).map(compute).collect()
+    } else {
+        let chunk = np.div_ceil(nthreads);
+        let compute = &compute;
+        let mut out = vec![0.0f64; np];
+        std::thread::scope(|scope| {
+            for (ci, ochunk) in out.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (k, slot) in ochunk.iter_mut().enumerate() {
+                        *slot = compute(base + k);
+                    }
+                });
+            }
+        });
+        out
+    };
+    let mut mat = vec![vec![0.0f64; m]; m];
+    for (d, row) in mat.iter_mut().enumerate() {
+        row[d] = kendalltau_statistic_only(&variables[d], &variables[d]);
+    }
+    for (k, &(i, j)) in pairs.iter().enumerate() {
+        mat[i][j] = taus[k];
+        mat[j][i] = taus[k];
+    }
+    Ok(mat)
+}
+
 pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
     let n = x.len();
     if n < 2 || x.len() != y.len() {
@@ -59569,6 +59653,45 @@ mod tests {
         }
         assert!(zscore_axis_2d(&x, 0, 9).is_err());
         assert!(zmap_axis_2d(&x, &cmp[..rows - 1], 0, 1).is_err());
+    }
+
+    #[test]
+    fn kendalltau_matrix_matches_pairwise() {
+        // All-pairs matrix must be BIT-IDENTICAL to per-pair kendalltau(.).statistic, symmetric,
+        // with the diagonal = self-tau. Includes a tied column (to exercise the tie path).
+        let n = 60usize;
+        let m = 9usize;
+        let vars: Vec<Vec<f64>> = (0..m)
+            .map(|v| {
+                (0..n)
+                    .map(|i| {
+                        if v == 3 {
+                            ((i / 7) as f64) // heavily tied column
+                        } else {
+                            (((i * (v + 2) + v * 5) % 53) as f64) * 0.31 - (i as f64 * 0.2 + v as f64).sin()
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let mat = kendalltau_matrix(&vars).unwrap();
+        assert_eq!(mat.len(), m);
+        for i in 0..m {
+            assert_eq!(mat[i].len(), m);
+            for j in 0..m {
+                let expected = kendalltau(&vars[i], &vars[j]).statistic;
+                assert_eq!(
+                    mat[i][j].to_bits(),
+                    expected.to_bits(),
+                    "kendalltau_matrix[{i}][{j}] != kendalltau().statistic"
+                );
+                assert_eq!(mat[i][j].to_bits(), mat[j][i].to_bits(), "not symmetric at {i},{j}");
+            }
+        }
+        // ragged input rejected
+        let mut bad = vars.clone();
+        bad[0].push(1.0);
+        assert!(kendalltau_matrix(&bad).is_err());
     }
 
     #[test]

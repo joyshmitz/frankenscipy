@@ -1165,3 +1165,25 @@ new `map_axis_2d` primitive + `axis_2d_thread_count` (shared 48k/thread cap) gen
 batched line→line transform (e.g. detrend/normalize/rankdata-values/winsorize-along-axis). gzscore wins
 most (scipy's per-element log+exp temporaries are the slowest). REVERT-check N/A (pure addition, no
 existing path changed). fsci-stats conformance GREEN (map_axis_2d_family + all zscore/gzscore/zmap tests).
+
+### ✅✅ stats: kendalltau_matrix (all-pairs Kendall tau) — a DIFFERENT primitive (parallel all-pairs vs Python loop) — 61-118x faster than scipy
+DIG: scipy has NO vectorized all-pairs Kendall tau — computing a Kendall correlation matrix means looping
+`scipy.stats.kendalltau` in Python over m·(m−1)/2 pairs, paying Python-call overhead × every pair PLUS a
+per-pair exact-Mahonian/asymptotic p-value the matrix never needs. NEW `kendalltau_matrix(variables)`:
+(1) tau-ONLY per pair (`kendalltau_statistic_only`, bit-identical to `kendalltau(.).statistic`, skips the
+p-value — the bulk of per-pair cost), (2) parallel ACROSS pairs (heavy O(n log n) per pair amortizes OS
+spawn → fan out to all cores, >=4 pairs/thread). Diagonal = self-tau (1.0 / NaN-for-constant).
+
+**SAME-BOX head-to-head (fsci kendalltau_matrix vs scipy Python kendalltau-loop, both this box):**
+| matrix (m vars × n obs)      | pairs  | scipy      | fsci     | speedup    |
+|------------------------------|--------|------------|----------|------------|
+| m=40,  n=400                 | 780    | 194 ms     | 3.16 ms  | **61×**    |
+| m=100, n=1000                | 4 950  | 1 673 ms   | 19.85 ms | **84×**    |
+| m=200, n=1000                | 19 900 | 6 688 ms   | 56.74 ms | **118×**   |
+
+Speedup GROWS with size (more pairs ⇒ more parallelism + Python-loop overhead dominates scipy more).
+Conformance: `kendalltau_matrix_matches_pairwise` asserts every entry == per-pair kendalltau(.).statistic
+bit-identically (incl. a tied column), symmetric, ragged-input rejected. Pure addition (123 lines, 0
+deletions) — no existing path changed. This is the "all-pairs over an O(n log n) per-pair kernel, tau-only,
+parallel across pairs" lever; generalizes to any all-pairs statistic scipy makes users Python-loop
+(weightedtau matrix, somersd matrix, pairwise distance-correlation). fsci-stats conformance GREEN.
