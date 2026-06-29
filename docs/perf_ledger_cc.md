@@ -2081,3 +2081,26 @@ sosfiltfilt/axis_2d tests GREEN), parallel above with P=avail.min(N/65536). NOT 
 (superposition) → verified by new `sosfilt_parallel_scan_matches_serial_reference` property test (<1e-9,
 orders 6/12/18, N above gate w/ remainder). sosfiltfilt inherits (calls sosfilt 2x). The constant-coeff
 linear-recurrence parallel-scan lever now covers BOTH lfilter (ba) AND sosfilt (cascaded biquads).
+
+## 2026-06-29 (AmberKestrel, cc) — signal.savgol_filter branch-free vectorized interior dot
+
+savgol_filter already BEAT scipy (parallel par_index_fill across output indices), but the Interp-mode
+interior closure did a per-tap BOUNDS-CHECK branch (`if idx>=0 && idx<n`) for EVERY coefficient, defeating
+SIMD even though the interior `[half, n-half)` is reflection-free (every tap in range). Lever (same as the
+gaussian_filter interior-split): compute the interior branch-free via `savgol_dot` — chunks_exact(8) +
+`try_into::<[f64;8]>` fixed-arrays (elide bounds checks ⇒ inner loop unrolls & auto-vectorizes) with 8
+independent accumulators (pipeline the FMA chain). Boundary `[0,half)∪[n-half,n)` left 0 (overwritten by
+the polynomial edge fit). Applied to all 3 paths: Interp interior (main), padded modes, and the serial
+axis_2d helper.
+
+MEASURED (n=2M): win=101/poly3 10.14→7.38ms = **1.37x self** (vs scipy 68.06ms: 6.7x→**9.2x faster**);
+win=301/poly4 24.92→11.99ms = **2.08x self** (vs scipy 409.26ms: 16.4x→**34.1x faster**). Win grows with
+window (more taps to vectorize). NOT byte-identical (8-lane + tree reassociation ~1e-14) but within the
+savgol scipy tolerance — all 18 savgol tests GREEN incl. matches_scipy_reference_values / even-window /
+padded modes_match_scipy / axis_2d. This WIDENS an existing lead (savgol already won), not a gap-close —
+signal crate is otherwise dominated (lfilter/sosfilt scans shipped this session; hilbert 1.95x, decimate
+1.11x, savgol now 9-34x all faster than scipy). LEVER (reusable): any per-output FIR/correlation with a
+per-tap bounds-check branch over a reflection-free interior → split interior (branch-free chunks_exact(8)+
+try_into fixed-array dot, 8 accumulators) from boundary. The try_into-[f64;8] idiom is the stable-Rust
+auto-vectorization key (plain `slice[j+lane]` keeps bounds checks and does NOT vectorize — measured 1.22x
+vs 2.08x for the fixed-array form).

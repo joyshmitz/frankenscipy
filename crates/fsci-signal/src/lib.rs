@@ -383,6 +383,35 @@ pub fn savgol_filter_axis_2d(
 /// order-preserving `par_index_fill`, so serial vs parallel are bit-equal), but
 /// runs serially and skips the per-call coefficient solve — for use inside the
 /// across-lines fan-out of [`savgol_filter_axis_2d`].
+/// Branch-free Savitzky-Golay interior correlation `Σ_j coeffs[j]·window[j]` with eight
+/// independent accumulators, so the FMA chain pipelines and the compiler auto-vectorizes
+/// the contiguous loads (the per-output bounds-check branch in the naive interior closure
+/// defeats both). Reassociated vs a strict left-fold (~1e-14), within the savgol scipy
+/// tolerance. Used only for the reflection-free interior `[half, n-half)` where every tap
+/// index is in range; the boundary samples are overwritten by the polynomial edge fit.
+#[inline]
+fn savgol_dot(coeffs: &[f64], window: &[f64]) -> f64 {
+    let mut s = [0.0f64; 8];
+    let mut ci = coeffs.chunks_exact(8);
+    let mut wi = window.chunks_exact(8);
+    for (c8, w8) in ci.by_ref().zip(wi.by_ref()) {
+        // Fixed-size arrays elide per-element bounds checks ⇒ the inner loop fully
+        // unrolls and auto-vectorizes the contiguous loads/FMAs.
+        let c8: [f64; 8] = c8.try_into().unwrap();
+        let w8: [f64; 8] = w8.try_into().unwrap();
+        for lane in 0..8 {
+            s[lane] += c8[lane] * w8[lane];
+        }
+    }
+    let tail: f64 = ci
+        .remainder()
+        .iter()
+        .zip(wi.remainder())
+        .map(|(c, w)| c * w)
+        .sum();
+    ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7])) + tail
+}
+
 fn savgol_apply_interp_serial(
     x: &[f64],
     coeffs: &[f64],
@@ -398,17 +427,14 @@ fn savgol_apply_interp_serial(
     let half = window_length / 2;
     let even_shift = usize::from(window_length.is_multiple_of(2));
 
-    // Interior: centered correlation (boundary regions overwritten below).
+    // Interior `[half, n-half)`: branch-free vectorizable correlation; boundary regions
+    // overwritten by the polynomial edge fit below (scipy's mode='interp').
     let mut result = vec![0.0_f64; n];
-    for (i, slot) in result.iter_mut().enumerate() {
-        let mut val = 0.0;
-        for (j, &c) in coeffs.iter().enumerate() {
-            let idx = i as i64 + j as i64 - half as i64 + even_shift as i64;
-            if idx >= 0 && idx < n as i64 {
-                val += c * x[idx as usize];
-            }
+    if n > 2 * half {
+        for (k, slot) in result[half..n - half].iter_mut().enumerate() {
+            let base = (half + k) - half + even_shift;
+            *slot = savgol_dot(coeffs, &x[base..base + window_length]);
         }
-        *slot = val;
     }
     // Boundary: polynomial edge fit (scipy's mode='interp').
     if half > 0 {
@@ -457,18 +483,21 @@ pub fn savgol_filter_mode(
     let n = x.len();
 
     if mode == SavgolMode::Interp {
-        // Interior: centered correlation; boundary regions overwritten by the
-        // polynomial edge fit below (SciPy's `mode='interp'`).
-        let mut result = par_index_fill(n, |i| {
-            let mut val = 0.0;
-            for (j, &c) in coeffs.iter().enumerate() {
-                let idx = i as i64 + j as i64 - half as i64 + even_shift as i64;
-                if idx >= 0 && idx < n as i64 {
-                    val += c * x[idx as usize];
-                }
-            }
-            val
-        });
+        // Interior `[half, n-half)`: every tap index `i + j - half + even_shift` is in
+        // range, so drop the per-tap bounds-check branch and run a branch-free,
+        // vectorizable contiguous correlation (`savgol_dot`). The boundary samples
+        // `[0, half) ∪ [n-half, n)` are overwritten by the polynomial edge fit below, so
+        // they are left zero here (SciPy's `mode='interp'`).
+        let mut result = vec![0.0_f64; n];
+        if n > 2 * half {
+            let lo = half;
+            let hi = n - half;
+            let interior = par_index_fill(hi - lo, |k| {
+                let base = (lo + k) - half + even_shift;
+                savgol_dot(&coeffs, &x[base..base + window_length])
+            });
+            result[lo..hi].copy_from_slice(&interior);
+        }
         if half > 0 {
             let positions: Vec<f64> = (0..window_length).map(|k| k as f64).collect();
             let left = polyfit(&positions, &x[0..window_length], polyorder)?;
@@ -501,11 +530,8 @@ pub fn savgol_filter_mode(
     }
 
     let result = par_index_fill(n, |i| {
-        let mut val = 0.0;
-        for (j, &c) in coeffs.iter().enumerate() {
-            val += c * padded[i + j + even_shift];
-        }
-        val
+        let base = i + even_shift;
+        savgol_dot(&coeffs, &padded[base..base + window_length])
     });
     Ok(result)
 }
