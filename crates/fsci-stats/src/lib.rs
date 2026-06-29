@@ -29980,6 +29980,100 @@ pub fn rankdata(data: &[f64], method: Option<&str>) -> Result<Vec<f64>, StatsErr
     }
 }
 
+/// Apply [`rankdata`] across one axis of a rectangular 2-D input.
+///
+/// Matches `scipy.stats.rankdata(a, method, axis=...)`. Each line is ranked
+/// independently — BIT-IDENTICAL to per-line 1-D `rankdata`. scipy ranks each line
+/// single-threaded (a full sort per line); the across-lines fan-out over cores wins big.
+/// The per-line rank is a serial sort, so the fan-out cannot oversubscribe.
+pub fn rankdata_axis_2d(
+    x: &[Vec<f64>],
+    method: Option<&str>,
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, StatsError> {
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cols = x[0].len();
+    if x.iter().any(|row| row.len() != cols) {
+        return Err(StatsError::InvalidArgument(
+            "x must be a rectangular 2-D matrix".to_string(),
+        ));
+    }
+    // Validate the method once (fail fast before spawning).
+    rankdata(&[0.0], method)?;
+
+    let (n_lines, line_len): (usize, usize) = match axis {
+        -1 | 1 => (x.len(), cols),
+        0 => (cols, x.len()),
+        other => {
+            return Err(StatsError::InvalidArgument(format!(
+                "axis must be 0, 1, or -1 for 2-D rankdata, got {other}"
+            )));
+        }
+    };
+    let by_columns = axis == 0;
+    let line = |idx: usize| -> Result<Vec<f64>, StatsError> {
+        if by_columns {
+            let col: Vec<f64> = x.iter().map(|r| r[idx]).collect();
+            rankdata(&col, method)
+        } else {
+            rankdata(&x[idx], method)
+        }
+    };
+
+    // Per-line work ~ L·log L (a sort); fan out when it amortises the thread spawn.
+    let threads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let work = (n_lines as u64).saturating_mul(line_len.max(1) as u64);
+    let nthreads = if n_lines < 4 || work < 1 << 16 || threads <= 1 {
+        1
+    } else {
+        threads.min(n_lines)
+    };
+
+    let lines: Vec<Vec<f64>> = if nthreads <= 1 {
+        (0..n_lines).map(&line).collect::<Result<Vec<_>, _>>()?
+    } else {
+        let chunk = n_lines.div_ceil(nthreads);
+        let line = &line;
+        let chunk_results: Vec<Result<Vec<Vec<f64>>, StatsError>> = std::thread::scope(|scope| {
+            (0..n_lines)
+                .step_by(chunk)
+                .map(|l0| {
+                    scope.spawn(move || {
+                        let l1 = (l0 + chunk).min(n_lines);
+                        (l0..l1).map(line).collect::<Result<Vec<_>, _>>()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("rankdata line chunk panicked"))
+                .collect()
+        });
+        let mut lines = Vec::with_capacity(n_lines);
+        for cr in chunk_results {
+            lines.extend(cr?);
+        }
+        lines
+    };
+
+    if by_columns {
+        // `lines[c]` is the ranked column `c` (length = rows); scatter to row-major.
+        let nrows = x.len();
+        let mut out = vec![vec![0.0; cols]; nrows];
+        for (c, col_ranks) in lines.into_iter().enumerate() {
+            for (r, v) in col_ranks.into_iter().enumerate() {
+                out[r][c] = v;
+            }
+        }
+        Ok(out)
+    } else {
+        Ok(lines)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RankTieMethod {
     Average,
@@ -58912,6 +59006,42 @@ mod tests {
     }
 
     // ── rankdata helper ───────────────────────────────────────────
+
+    #[test]
+    fn rankdata_axis_2d_matches_per_line() {
+        // 2-D rankdata must be BIT-IDENTICAL to per-line 1-D rankdata, all methods/axes.
+        let rows = 40usize;
+        let cols = 257usize;
+        let x: Vec<Vec<f64>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| (((r * 131 + c * 7) % 97) as f64) * 0.31 - (c as f64 * 0.5).sin())
+                    .collect()
+            })
+            .collect();
+
+        for method in ["average", "min", "max", "dense", "ordinal"] {
+            // axis = -1 (rows)
+            let par = rankdata_axis_2d(&x, Some(method), -1).expect("rankdata_2d rows");
+            let serial: Vec<Vec<f64>> = x
+                .iter()
+                .map(|row| rankdata(row, Some(method)).expect("rankdata row"))
+                .collect();
+            assert_eq!(par, serial, "rankdata_axis_2d axis=-1 {method}");
+
+            // axis = 0 (columns)
+            let par0 = rankdata_axis_2d(&x, Some(method), 0).expect("rankdata_2d cols");
+            for col in 0..cols {
+                let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+                let ranked = rankdata(&column, Some(method)).expect("rankdata col");
+                for (r, &value) in ranked.iter().enumerate() {
+                    assert_eq!(par0[r][col], value, "rankdata axis=0 {method} col {col} row {r}");
+                }
+            }
+        }
+        assert!(rankdata_axis_2d(&x, Some("average"), 9).is_err());
+        assert!(rankdata_axis_2d(&x, Some("nope"), -1).is_err());
+    }
 
     #[test]
     fn rankdata_no_ties() {

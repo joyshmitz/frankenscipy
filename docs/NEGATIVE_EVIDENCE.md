@@ -11492,3 +11492,27 @@ n due to the per-call chirp rebuild.
   broken path (stft, no detrend) through the already-correct sibling kernel (periodogram, detrends) rather
   than debugging the broken path's residual. When two sibling fns share math and ONE matches scipy, route the
   other through it. 11 vein ships now; the FFT-family is fully harvested (welch/csd/coherence/spectrogram 2-D).
+
+## 2026-06-28 - LANDED WIN (AmberForge): rankdata_axis_2d (multi-channel ranking) — 60.7-90.5x FASTER than scipy
+
+- Agent: AmberForge. Pivoted the parallel-across-lines lever (proven in fsci-signal) to a fresh crate
+  (fsci-stats). fsci's `rankdata` was 1-D only; scipy.stats.rankdata takes an axis but ranks each line in a
+  Python loop (a full sort per line) — shockingly slow. Added `rankdata_axis_2d(x, method, axis)` parallel
+  across lines; the per-line rank is a serial sort (no internal parallelism → no oversubscription).
+- **MEASURED vs scipy.stats.rankdata(axis=-1, method='average', best-of-5):**
+
+  | channels × length | fsci rankdata_2d | scipy | speedup |
+  | ---: | ---: | ---: | ---: |
+  | 2000 × 10000 | 27.1 ms | 2455.3 ms | **90.5x** |
+  | 500 × 100000 | 121.9 ms | 7396.3 ms | **60.7x** |
+
+  EXACT match vs scipy for ALL FIVE methods (average/min/max/dense/ordinal: max abs diff **0.0e0**).
+  BYTE-IDENTICAL to per-line 1-D `rankdata` (test `rankdata_axis_2d_matches_per_line`, all methods, axis=-1
+  and 0). fsci-stats 1997/0.
+- WHY so large (vs the FFT-family's 2-4x): scipy.stats.rankdata(axis) is NOT vectorized — it loops the
+  per-line sort in Python (~1.2ms/row), so fsci wins on BOTH a faster per-line sort (Rust vs Python) AND the
+  64-core fan-out. The biggest fan-out wins are where scipy's per-line cost is high AND it doesn't multithread
+  (sort-per-line ranking, lstsq detrend, IIR filters) — NOT the well-vectorized ops (FFT).
+- LESSON: the parallel-across-lines lever generalizes BEYOND fsci-signal. Target any 1-D-only fsci fn whose
+  scipy counterpart takes an `axis` and loops/serial-sorts per line. Next candidates in fsci-stats:
+  scipy.stats functions with axis + heavy per-line work (mode/iqr/median_abs_deviation/gstd over many rows).
