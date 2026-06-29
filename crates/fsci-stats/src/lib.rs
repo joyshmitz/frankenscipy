@@ -38514,6 +38514,105 @@ pub fn mannwhitneyu_matrix(
     })
 }
 
+/// Parallel all-pairs producing TWO FULL (not necessarily symmetric) matrices from a per-pair kernel
+/// returning `(stat, pvalue)`. Unlike [`all_pairs_two_symmetric_matrices`] this evaluates EVERY ordered
+/// pair `(i, j), i ≠ j` (plus the diagonal), so it is correct for DIRECTIONAL / anti-symmetric statistics
+/// (e.g. a signed z where `stat[j][i] == -stat[i][j]`) — no symmetry is assumed. `out.k[i][j]` is exactly
+/// the `k`-th component of `pair_stat(variables[i], variables[j])`. Costs `m·(m−1)` kernel evals; use only
+/// when the per-pair kernel is cheap (normal-approximation p-values) so the 2× over the symmetric helper
+/// is negligible against the parallel win.
+fn all_pairs_two_full_matrices<F>(
+    variables: &[Vec<f64>],
+    pair_stat: F,
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError>
+where
+    F: Fn(&[f64], &[f64]) -> (f64, f64) + Sync,
+{
+    let m = variables.len();
+    if m == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let n = variables[0].len();
+    if variables.iter().any(|v| v.len() != n) {
+        return Err(StatsError::InvalidArgument(
+            "all variables must have the same length".to_string(),
+        ));
+    }
+    let pairs: Vec<(usize, usize)> = (0..m)
+        .flat_map(|i| (0..m).filter(move |&j| j != i).map(move |j| (i, j)))
+        .collect();
+    let np = pairs.len();
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if np < 8 || cores <= 1 {
+        1
+    } else {
+        cores.min((np / 4).max(1))
+    };
+    let compute = |k: usize| -> (f64, f64) {
+        let (i, j) = pairs[k];
+        pair_stat(&variables[i], &variables[j])
+    };
+    let vals: Vec<(f64, f64)> = if nthreads <= 1 {
+        (0..np).map(compute).collect()
+    } else {
+        let chunk = np.div_ceil(nthreads);
+        let compute = &compute;
+        let mut out = vec![(0.0f64, 0.0f64); np];
+        std::thread::scope(|scope| {
+            for (ci, ochunk) in out.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (k, slot) in ochunk.iter_mut().enumerate() {
+                        *slot = compute(base + k);
+                    }
+                });
+            }
+        });
+        out
+    };
+    let mut stat = vec![vec![0.0f64; m]; m];
+    let mut pval = vec![vec![0.0f64; m]; m];
+    for d in 0..m {
+        let (s, p) = pair_stat(&variables[d], &variables[d]);
+        stat[d][d] = s;
+        pval[d][d] = p;
+    }
+    for (k, &(i, j)) in pairs.iter().enumerate() {
+        let (s, p) = vals[k];
+        stat[i][j] = s;
+        pval[i][j] = p;
+    }
+    Ok((stat, pval))
+}
+
+/// All-pairs Wilcoxon rank-sum test over `samples`. Returns `(statistic, pvalue)` matrices, both `m × m`,
+/// with `out.0[i][j] == ranksums(samples[i], samples[j]).statistic` (the signed z — ANTI-symmetric,
+/// `[j][i] == −[i][j]`) and `out.1[i][j] ==` its (symmetric) p-value. SciPy has NO vectorized all-pairs
+/// form — users loop `scipy.stats.ranksums` in Python; this runs every ordered pair in parallel.
+pub fn ranksums_matrix(
+    samples: &[Vec<f64>],
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+    all_pairs_two_full_matrices(samples, |a, b| {
+        let r = ranksums(a, b);
+        (r.statistic, r.pvalue)
+    })
+}
+
+/// All-pairs Brunner–Munzel test over `samples`. Returns `(statistic, pvalue)` matrices, both `m × m`,
+/// with `out.0[i][j] == brunnermunzel(samples[i], samples[j]).statistic` (the signed W — ANTI-symmetric)
+/// and `out.1[i][j] ==` its p-value. SciPy has NO vectorized all-pairs form — users loop
+/// `scipy.stats.brunnermunzel` in Python; this runs every ordered pair in parallel.
+pub fn brunnermunzel_matrix(
+    samples: &[Vec<f64>],
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+    all_pairs_two_full_matrices(samples, |a, b| {
+        let r = brunnermunzel(a, b);
+        (r.statistic, r.pvalue)
+    })
+}
+
 pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
     let n = x.len();
     if n < 2 || x.len() != y.len() {
@@ -59909,6 +60008,23 @@ mod tests {
             }
         }
         assert!(mannwhitneyu_matrix(&bad).is_err());
+
+        // ranksums_matrix / brunnermunzel_matrix: FULL matrices, every ordered (i,j) bit-identical to the
+        // per-pair call; statistic anti-symmetric ([j][i] == -[i][j]), p-value symmetric.
+        let (rsz, rsp) = ranksums_matrix(&samples).unwrap();
+        let (bmw, bmp) = brunnermunzel_matrix(&samples).unwrap();
+        for i in 0..m {
+            for j in 0..m {
+                let rr = ranksums(&samples[i], &samples[j]);
+                assert_eq!(rsz[i][j].to_bits(), rr.statistic.to_bits(), "ranksums z[{i}][{j}]");
+                assert_eq!(rsp[i][j].to_bits(), rr.pvalue.to_bits(), "ranksums p[{i}][{j}]");
+                let bb = brunnermunzel(&samples[i], &samples[j]);
+                assert_eq!(bmw[i][j].to_bits(), bb.statistic.to_bits(), "bm W[{i}][{j}]");
+                assert_eq!(bmp[i][j].to_bits(), bb.pvalue.to_bits(), "bm p[{i}][{j}]");
+            }
+        }
+        assert!(ranksums_matrix(&bad).is_err());
+        assert!(brunnermunzel_matrix(&bad).is_err());
     }
 
     #[test]

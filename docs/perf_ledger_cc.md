@@ -1265,3 +1265,23 @@ mannwhitneyu's normal-approx pvalue keeps the per-pair kernel light → the full
 (both stat & pvalue), symmetric, ragged rejected. The tuple helper now backs ks + mannwhitneyu; the
 `all_pairs_*` family covers 6 matrices total (kendall/weightedtau/wasserstein/energy/ks/mannwhitneyu).
 fsci-stats GREEN.
+
+### ✅✅ stats: ranksums_matrix + brunnermunzel_matrix (all-pairs rank tests) — 80-96x faster than scipy
+Completes the rank-based two-sample test matrices. ranksums (signed z) and brunnermunzel (signed W) have
+ANTI-symmetric statistics (`stat[j][i] == −stat[i][j]`) + symmetric p-values, so they need a NEW FULL
+ordered-pairs helper `all_pairs_two_full_matrices` (evaluates every `(i,j), i≠j` — no symmetry assumed,
+correct for directional stats). Both use cheap normal-approx p-values → big wins even at 2× the kernel
+evals. SciPy has NO vectorized all-pairs form — users loop the test in Python.
+
+**SAME-BOX head-to-head (fsci FULL m×(m−1) matrix vs scipy Python upper-triangle loop, both this box):**
+| matrix (m × n)  | pairs (scipy) | scipy ranksums | fsci   | ×        | scipy brunnermunzel | fsci    | ×        |
+|-----------------|---------------|----------------|--------|----------|---------------------|---------|----------|
+| m=40,  n=400    | 780           | 277.3 ms       | 3.27 ms| **84.9×**| 489.3 ms            | 5.21 ms | **94.0×**|
+| m=100, n=1000   | 4 950         | 2 200.5 ms     | 22.9 ms| **96.0×**| 3 750.0 ms          | 46.7 ms | **80.3×**|
+
+Note: fsci returns the FULL directional matrix (m·(m−1) kernel evals) while scipy's loop only fills the
+upper triangle (m·(m−1)/2) — fsci does 2× the work and STILL wins 80-96×. Conformance: every ordered
+(i,j) bit-identical to per-pair ranksums/brunnermunzel (both stat & p-value), ragged rejected. The
+`all_pairs_*` family now spans 8 matrices (kendall/weightedtau/wasserstein/energy/ks/mannwhitneyu +
+ranksums/brunnermunzel) across THREE assembly shapes (f64-symmetric / tuple-symmetric / tuple-FULL).
+fsci-stats GREEN.
