@@ -4982,6 +4982,36 @@ impl RbfInterpolator {
 /// a pure per-query function, so the parallel result is bit-identical to the
 /// sequential `queries.iter().map(f).collect()` (order preserved by concatenating
 /// contiguous chunks). Used by the per-query batch evaluators.
+/// Chunked parallel fallible map producing one `R` per item, order-preserved (so the
+/// result is identical to the serial `items.iter().map(f).collect()`). Splits items into
+/// `nthreads` CONTIGUOUS chunks — one `thread::scope` spawn per chunk, NOT per item — to
+/// avoid the over-spawn that sank a prior per-column attempt. Propagates the first error.
+fn par_chunk_try_map<T, R, E, F>(items: &[T], nthreads: usize, f: F) -> Result<Vec<R>, E>
+where
+    T: Sync,
+    R: Send,
+    E: Send,
+    F: Fn(&T) -> Result<R, E> + Sync,
+{
+    if nthreads <= 1 || items.len() < 2 {
+        return items.iter().map(&f).collect();
+    }
+    let chunk = items.len().div_ceil(nthreads);
+    let f = &f;
+    let chunk_results: Vec<Result<Vec<R>, E>> = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for ch in items.chunks(chunk) {
+            handles.push(scope.spawn(move || ch.iter().map(f).collect::<Result<Vec<R>, E>>()));
+        }
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut out = Vec::with_capacity(items.len());
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
 fn par_query_map<T, F>(queries: &[T], work_per_query: usize, f: F) -> Vec<f64>
 where
     T: Sync,
@@ -8357,27 +8387,37 @@ impl RectBivariateSpline {
         let nx = x.len();
         let ny = y.len();
 
-        // Step 1: Fit 1D splines along x for each row of z
-        // This gives us an intermediate coefficient matrix of shape (ny, nx)
-        // (make_interp_spline returns nx coefficients for nx data points)
-        let mut row_coeffs: Vec<Vec<f64>> = Vec::with_capacity(ny);
+        // Each row-spline (and column-spline) is an INDEPENDENT `make_interp_spline` over a
+        // banded system, so fan both tensor-product passes across cores (chunked, one spawn
+        // per chunk). scipy's RectBivariateSpline is single-threaded FITPACK ⇒ pure
+        // domination at large grids. Order-preserved ⇒ identical coefficients to the serial
+        // build. Small grids stay serial (gate below the parallel break-even).
+        let nthreads = if (nx as u64).saturating_mul(ny as u64) < (1 << 16) {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nx.max(ny))
+        };
 
-        for row in z {
-            let spline_x = make_interp_spline(x, row, kx)?;
-            row_coeffs.push(spline_x.coeffs().to_vec());
-        }
+        // Step 1: Fit 1D splines along x for each row of z → intermediate (ny, nx) coeffs.
+        let row_coeffs: Vec<Vec<f64>> = par_chunk_try_map(z, nthreads, |row| {
+            Ok::<_, InterpError>(make_interp_spline(x, row, kx)?.coeffs().to_vec())
+        })?;
 
-        // Step 2: For each column of row_coeffs, fit a 1D spline along y
-        // Final coefficients have shape (ny, nx)
-        let mut final_coeffs: Vec<Vec<f64>> = vec![vec![0.0; nx]; ny];
-
-        for col_idx in 0..nx {
-            // Extract this column
+        // Step 2: Fit a 1D spline along y for each column of row_coeffs. Each column produces
+        // its own length-ny coefficient vector; assemble the (ny, nx) result by transpose
+        // (avoids a cross-thread write race on the shared row-major output).
+        let col_indices: Vec<usize> = (0..nx).collect();
+        let col_results: Vec<Vec<f64>> = par_chunk_try_map(&col_indices, nthreads, |&col_idx| {
             let col_values: Vec<f64> = row_coeffs.iter().map(|row| row[col_idx]).collect();
-            let spline_y = make_interp_spline(y, &col_values, ky)?;
-            let y_coeffs = spline_y.coeffs();
+            Ok::<_, InterpError>(make_interp_spline(y, &col_values, ky)?.coeffs().to_vec())
+        })?;
 
-            for (row_idx, &coeff) in y_coeffs.iter().enumerate() {
+        let mut final_coeffs: Vec<Vec<f64>> = vec![vec![0.0; nx]; ny];
+        for (col_idx, col) in col_results.iter().enumerate() {
+            for (row_idx, &coeff) in col.iter().enumerate() {
                 final_coeffs[row_idx][col_idx] = coeff;
             }
         }

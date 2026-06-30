@@ -2175,3 +2175,21 @@ coefficients by SOLVING a full linear system per line → route to the recursive
 sibling/N-D path already uses. grep `make_interp_spline` / dense-solve calls inside per-line coefficient
 loops. (Same family as the lfilter/sosfilt scans: the fast way to "solve" a cardinal-spline interpolation
 system IS the recursive IIR, not a banded/dense solve.)
+
+## 2026-06-29 (AmberKestrel, cc) — interpolate.RectBivariateSpline build: chunked-parallel tensor product (5x flip)
+
+RectBivariateSpline::new built the tensor-product spline by fitting 1-D `make_interp_spline` along each
+row (ny) then each column (nx) — SERIALLY. Each row/col spline is INDEPENDENT and the per-call cost is
+mostly fixed overhead (knot build + banded solve setup), so 1600 serial calls @ ~92µs dominated: 800×800
+= **147ms = 5.2x SLOWER than scipy 28ms** (400² 4.6x). scipy's RectBivariateSpline is single-threaded
+FITPACK ⇒ parallelism is pure domination. Fanned BOTH passes across cores via a new chunked
+`par_chunk_try_map` (one thread::scope spawn per CHUNK, not per row — a prior per-column per-spawn attempt
+was reverted for over-spawn, see line ~2658). Column pass assembles via transpose to avoid a cross-thread
+write race on the row-major output.
+
+MEASURED: 400² 35.1→**6.8ms = 5.2x self / 1.13x FASTER than scipy** (was 4.6x slower); 800²
+147→**16.0ms = 9.2x self / 1.77x faster** (was 5.2x slower); win grows with grid. BYTE-IDENTICAL
+(order-preserved chunked map ⇒ identical coefficients to serial), 178/178 interpolate lib GREEN incl. all
+rect/smooth bivariate tests. LEVER: a tensor-product / per-line build looping an independent banded/spline
+solve per row & column → chunked-parallel both passes (transpose-assemble the second pass). Reusable
+`par_chunk_try_map` (fallible, order-preserved, chunk-spawn) added for Vec-valued parallel maps.
