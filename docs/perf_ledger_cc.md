@@ -2250,3 +2250,16 @@ GENERALIZABLE: any transform computing the first N bins of a 2N-point FFT of a z
 (DCT/DST type IV cores, some chirp/Bluestein setups) → decimate into 2 N-point FFTs by output parity and
 run them in parallel. The 2N->2*N split is ALWAYS >= as cheap (less work + cache-resident) and the pair is
 embarrassingly parallel against scipy's single-threaded core.
+
+### 2026-06-30 follow-on (AmberKestrel, cc) — idct twiddle cache (byte-identical), lifts dct-III/dst-III
+The deferred follow-on from the Type-IV dig: `idct` (even-N path) recomputed its N/2 twiddle table
+`(cos(πk/2N), sin(πk/2N))` with inline cos/sin on EVERY call — ~6-8ms of stray transcendentals at N=2^20.
+That table = conj of the already-cached DCT-II twiddle (`get_or_compute_dct2_twiddles`); cos even + sin odd
+make conj(stored (cos(-θ),sin(-θ))) == (cosθ,sinθ) BIT-IDENTICALLY (verified to_bits across 5.6e5 k/N, 0
+mismatches). Reused the cache via `complex_conj`. BYTE-IDENTICAL output → zero conformance risk, 236/236
+green. Lifts idct AND its dct_iii/dst_iii callers:
+  idct     n=2^20 20.6 -> 15.9ms = 1.30x;  n=1M 21.0 -> 16.6ms = 1.27x
+  dst-III  n=2^20 24.3 -> 17.3ms = 1.41x;  n=1M 22.5 -> 17.3ms = 1.30x
+  dct-III  n=2^20 -> 15.8ms;               n=1M -> 16.3ms
+dst-III now 2.16x vs scipy (was 3.0x). LEVER (generalizable): grep inline `angle.cos()/angle.sin()` in
+per-element transform hot loops where a sibling already caches the same (or conj/neg) table — reuse it.

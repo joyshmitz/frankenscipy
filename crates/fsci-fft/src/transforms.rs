@@ -2430,13 +2430,18 @@ pub fn idct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
         //   e^{-iπk/2N}·V[k] = (X[k] - i·X[N-k])/2  ⇒  V[k] = e^{+iπk/2N}(X[k]-iX[N-k])/2,
         //   V[0] = X[0]/2.
         let m = n / 2;
+        // Twiddle e^{+iπk/2N} = conj(dct2_tw[k]); reuse the cached DCT-II table
+        // instead of recomputing N/2 cos/sin on every call. Bit-identical (cos is
+        // even, sin odd → conj of the stored (cos(-θ),sin(-θ)) == (cos θ,sin θ),
+        // verified to_bits across 5.6e5 k/N). Lifts idct and its dct_iii/dst_iii
+        // callers (was ~6-8ms of stray transcendentals at N=2^20).
+        let idct_tw = get_or_compute_dct2_twiddles(n);
         let mut half = Vec::with_capacity(m + 1);
         half.push((0.5 * scaled_input[0], 0.0));
         for k in 1..=m {
             let xk = scaled_input[k];
             let xnk = scaled_input[n - k];
-            let angle = PI * k as f64 / (2.0 * nf);
-            let twiddle = (angle.cos(), angle.sin());
+            let twiddle = complex_conj(idct_tw[k]);
             half.push(complex_mul((0.5 * xk, -0.5 * xnk), twiddle));
         }
         // v = N·v_true (unscaled real inverse FFT); un-interleave the forward
