@@ -296,6 +296,55 @@ pub fn cosine(a: &[f64], b: &[f64]) -> f64 {
 }
 
 /// Minkowski distance of order `p`.
+/// `Σ |a-b|^p` for a small INTEGER exponent `p`, raised to `1/p`. `|d|^p` is computed by
+/// repeated multiplication (≈p mults) instead of a ≈80-cycle `powf`, 8-wide SIMD with two
+/// accumulators + scalar tail. scipy's cdist uses `pow()` even for integer p, so this is a
+/// large win for the common `p = 3, 4, …` Minkowski case. Reassociated (~1e-14) vs the
+/// scalar `powf` fold, within the distance tolerance.
+#[inline]
+fn minkowski_int(a: &[f64], b: &[f64], p: u32) -> f64 {
+    use std::simd::{Simd, num::SimdFloat};
+    const L: usize = 8;
+    let n = a.len().min(b.len());
+    let mut acc0 = Simd::<f64, L>::splat(0.0);
+    let mut acc1 = Simd::<f64, L>::splat(0.0);
+    let mut i = 0;
+    while i + 2 * L <= n {
+        let d0 = (Simd::<f64, L>::from_slice(&a[i..i + L]) - Simd::from_slice(&b[i..i + L])).abs();
+        let d1 = (Simd::<f64, L>::from_slice(&a[i + L..i + 2 * L])
+            - Simd::from_slice(&b[i + L..i + 2 * L]))
+        .abs();
+        let (mut t0, mut t1) = (d0, d1);
+        for _ in 1..p {
+            t0 *= d0;
+            t1 *= d1;
+        }
+        acc0 += t0;
+        acc1 += t1;
+        i += 2 * L;
+    }
+    if i + L <= n {
+        let d = (Simd::<f64, L>::from_slice(&a[i..i + L]) - Simd::from_slice(&b[i..i + L])).abs();
+        let mut t = d;
+        for _ in 1..p {
+            t *= d;
+        }
+        acc0 += t;
+        i += L;
+    }
+    let mut s = (acc0 + acc1).reduce_sum();
+    while i < n {
+        let d = (a[i] - b[i]).abs();
+        let mut t = d;
+        for _ in 1..p {
+            t *= d;
+        }
+        s += t;
+        i += 1;
+    }
+    s.powf(1.0 / p as f64)
+}
+
 pub fn minkowski(a: &[f64], b: &[f64], p: f64) -> f64 {
     if p <= 0.0 || p.is_nan() {
         return f64::NAN;
@@ -308,6 +357,11 @@ pub fn minkowski(a: &[f64], b: &[f64], p: f64) -> f64 {
     }
     if p == 2.0 {
         return euclidean(a, b);
+    }
+    // Small integer exponents: repeated multiplication + SIMD instead of per-element powf.
+    let pr = p.round();
+    if pr == p && (3.0..=64.0).contains(&pr) {
+        return minkowski_int(a, b, pr as u32);
     }
     a.iter()
         .zip(b.iter())

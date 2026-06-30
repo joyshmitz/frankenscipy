@@ -2104,3 +2104,22 @@ per-tap bounds-check branch over a reflection-free interior → split interior (
 try_into fixed-array dot, 8 accumulators) from boundary. The try_into-[f64;8] idiom is the stable-Rust
 auto-vectorization key (plain `slice[j+lane]` keeps bounds checks and does NOT vectorize — measured 1.22x
 vs 2.08x for the fixed-array form).
+
+## 2026-06-29 (AmberKestrel, cc) — spatial.minkowski integer-exponent fast path (cdist/pdist)
+
+scipy's cdist 'minkowski' is its SLOWEST common metric — `pow(|d|, p)` per element ⇒ 1235ms for
+1200×1200 d=80 (vs euclidean 34ms). fsci's general minkowski path also did per-element `.powf(p)`; it
+ALREADY beat scipy ~24x via cdist row-parallelism (~51ms) but still paid an ~80-cycle powf per element.
+Lever: for a SMALL INTEGER exponent (p∈[3,64], the common p=3,4,5 case), `|d|^p` is just ≈p repeated
+multiplications — replaced powf with an 8-wide std::simd integer-power kernel (`minkowski_int`: two
+accumulators + scalar tail, `t *= |d|` p-1 times). p=1/2/∞ still route to cityblock/euclidean/chebyshev;
+non-integer p keeps the scalar powf.
+
+MEASURED (cdist 1200×1200 d=80): p=3 **51→5.12ms = 10x self / 241x FASTER than scipy 1235ms**; p=4 4.76ms;
+p=5 5.07ms; non-integer p=3.5 unchanged at 51ms (still 24x vs scipy). pdist_minkowski inherits (both
+route through `minkowski`). NOT byte-identical (x*x*x vs powf + SIMD reassoc ~1e-14) but within distance
+tolerance — 225/225 spatial lib GREEN incl. minkowski reference-value + cdist/pdist tests. LEVER (reusable):
+any per-element `powf(INTEGER)` in a hot reduction → repeated-multiplication + SIMD (powf is ~80 cycles,
+x^p is ~p mults; the SLOWEST scipy distance metric becomes near-free). grep `.powf(` over possibly-integer
+exponents. SIGNAL crate done this session (lfilter/sosfilt/savgol); spatial euclidean/cosine/cityblock/
+canberra/chebyshev already SIMD — minkowski was the last scalar-powf hole.
