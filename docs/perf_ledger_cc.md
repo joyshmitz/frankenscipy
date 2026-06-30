@@ -2138,3 +2138,21 @@ powf reference (row 0). Within tolerance, 225/225 spatial lib GREEN incl. minkow
 Both minkowski_distance and minkowski_distance_p share `minkowski_rowwise` ⇒ both inherit. The `powf(integer)
 → repeated-mult + SIMD` lever now covers every minkowski surface (cdist/pdist per-pair + batched rowwise).
 Left serial (row loop) — the kernel alone removes the powf bottleneck; row-parallel is a future follow-on.
+
+## 2026-06-29 (AmberKestrel, cc) — interpolate.RbfInterpolator build: route dense solve to optimized blocked-LU
+
+RbfInterpolator::new solved the n×n RBF system Φw=values via a LOCAL naive serial Gaussian elimination
+(`solve_dense_system_flat`). Profiled n=2000 d=3: matrix fill 46ms, **naive solve ~1147ms** = 96% of the
+1193ms build. fsci-interpolate already depends on fsci-linalg, whose `solve()` has a multithreaded
+blocked-LU fast path (n≥1000). Routed the build's solve through it (flat phi → Vec<Vec> rows →
+`fsci_linalg::solve`, default Strict/General options).
+
+MEASURED (n=2000 d=3): build 1193→842ms = **1.42x self** (linalg solve 800ms vs naive 1147ms); closes the
+build gap vs scipy 131ms from 9.1x→6.4x. NOT byte-identical (blocked-LU pivoting/blocking vs naive GE,
+~1e-12) but within RBF tolerance — interpolate lib 178/178 GREEN incl. all rbf_* tests. HONEST FRAMING:
+RBF is NOT a real end-to-end gap — eval_many is already 57x FASTER than scipy (16.4ms vs 950ms @ nq=20000),
+so fsci wins the full build+eval workflow (856ms vs scipy 1081ms = 1.26x) even before this. The residual
+6.4x build gap is the fsci-linalg DENSE SOLVE wall (~3.3 GFLOP/s vs LAPACK ~40 — n=2000 solve is 800ms),
+a separate-crate multi-session target, not cheaply closable here. This ship = reuse the optimized solver
+instead of a naive one (good hygiene + 1.42x), not a wall-break. LEVER: grep for LOCAL naive dense solvers
+(`solve_dense_system*`, hand-rolled GE) in non-linalg crates → route to fsci_linalg::solve's blocked path.

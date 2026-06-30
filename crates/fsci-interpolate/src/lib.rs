@@ -4933,10 +4933,16 @@ impl RbfInterpolator {
             }
         }
 
-        // Solve Φ w = values for weights (flat dense solver; same partial-pivoting
-        // elimination + FP order as solve_dense_system → bit-identical weights).
-        let mut values_mut = values.to_vec();
-        let weights = solve_dense_system_flat(&mut phi, n, &mut values_mut)?;
+        // Solve Φ w = values for weights. Route through fsci-linalg's multithreaded
+        // blocked LU (n≥1000 fast path) instead of the local serial Gaussian elimination
+        // — the dense O(n³) solve dominates RBF construction. Not bit-identical to the
+        // naive GE (different pivoting/blocking, ~1e-12), but within the RBF tolerance.
+        let a_rows: Vec<Vec<f64>> = phi.chunks(n).map(<[f64]>::to_vec).collect();
+        let weights = fsci_linalg::solve(&a_rows, values, fsci_linalg::SolveOptions::default())
+            .map_err(|e| InterpError::InvalidArgument {
+                detail: format!("RbfInterpolator dense solve failed: {e:?}"),
+            })?
+            .x;
 
         Ok(Self {
             points: points.to_vec(),
