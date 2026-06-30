@@ -2263,3 +2263,12 @@ green. Lifts idct AND its dct_iii/dst_iii callers:
   dct-III  n=2^20 -> 15.8ms;               n=1M -> 16.3ms
 dst-III now 2.16x vs scipy (was 3.0x). LEVER (generalizable): grep inline `angle.cos()/angle.sin()` in
 per-element transform hot loops where a sibling already caches the same (or conj/neg) table — reuse it.
+
+### 2026-06-30 (AmberKestrel, cc) — N-D dctn alloc-free fiber kernel: TESTED, ~0-gain, REVERTED
+Swept rest of fsci-fft post Type-IV: hfft/ihfft parity-or-faster, fht 1.1-1.23x, dst-I fsci faster. Only gap
+= dctn/dstn 2D (1.58-1.74x vs scipy serial). apply_dct_along_axis already 64-thread parallel but no better
+than serial floor → hypothesized per-fiber alloc contention. Built alloc-free `dct_ii_gather_into` +
+per-worker reused DctIIScratch + fiber-contiguous output (bit-identical). Clean A/B = ~0-gain (14-15 vs
+14-16ms @1024^2; OLD faster @2048^2). REVERTED. Real wall = fsci 1-D dct 2x scipy per-call (FFT-SIMD wall) +
+strided-axis bandwidth; needs cache-blocked transpose + faster FFT kernel, not an N-D lever. See
+docs/NEGATIVE_EVIDENCE.md.

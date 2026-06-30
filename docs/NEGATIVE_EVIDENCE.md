@@ -11723,3 +11723,29 @@ Plus a broad domination sweep this cycle — every all-pairs / iterative / pairw
 - linalg expm: nalgebra DMatrix matmul = dense BLAS wall + probe-crate (perf_eig_tmp owned).
 
 CONCLUSION (3rd cycle confirming): my accessible non-probe lanes (cluster/stats/interpolate/spatial/csgraph) are thoroughly dominated after this session's 6 shipped wins. The remaining repo losses are constant-factor inlined-C walls (filter1d 1D, jnjnp_zeros, eigsh Lanczos), dense-BLAS walls (expm/eig/svd — probe-owned), or sub-threshold-to-parallelize. A future profitable lever likely needs a genuinely different primitive (e.g., the missing-scipy-function gapfill vein) or coordinated work in a probe crate, not more parallelization hunting here.
+
+## 2026-06-30 — AmberKestrel (cc): N-D dctn/dstn gap is a memory-bandwidth + FFT-SIMD wall, NOT allocation (alloc-free lever REVERTED ~0-gain)
+
+DIG after shipping the Type-IV split (40dec82d) + idct twiddle cache (9a51cc96). Swept the rest of fsci-fft:
+hfft/ihfft at parity-or-faster than scipy (pow2), fht 1.1-1.23x (fine), dst-I fsci 1.1-2.4x FASTER. The one
+gap: **N-D dctn/dstn**. MEASURED 2D, same box:
+  dctn 1024^2: fsci 15.1ms vs scipy SERIAL 8.68ms (1.74x slow); scipy workers=-1 1.34ms
+  dctn 2048^2: fsci 93.8ms vs scipy 59.5ms (1.58x slow); scipy workers=-1 49.6ms
+
+`apply_dct_along_axis` is ALREADY parallel (64-thread fiber fan-out, work-gated). Anomaly: the 64-thread
+pass was NOT faster than a serial sum of 2048 dct() calls — suspected per-fiber heap allocation (~5 Vecs/fiber:
+reorder v, rfft packed, half-spectrum, backend output, fiber output) causing 64-way allocator contention.
+
+LEVER TESTED + REVERTED: built an allocation-free fiber kernel `dct_ii_gather_into` + per-worker reused
+`DctIIScratch` (fold the Makhoul reorder into the strided gather; in-place half-length real-FFT via
+transform_1d_inplace on reused `packed`; one fiber-contiguous `fiber_out` buffer with chunks_mut → safe
+parallel writes; serial strided scatter). Bit-identical by construction. Clean same-binary A/B (env-gated):
+  1024^2 NEW 14.1/15.4ms vs OLD 16.5/14.0ms;  2048^2 NEW 98.5/93.3 vs OLD 94.0/91.0 — **~0-gain (OLD
+  marginally faster at 2048^2)**. REVERTED (git show HEAD:path).
+
+ROOT CAUSE (the real wall, don't re-chase the alloc angle): (1) fsci's 1-D dct(1024) ~8.3us/call cache-warm
+serial vs scipy ~4.2us = **2x per-call**, i.e. the documented pocketfft FFT-SIMD wall (see
+perf_fft_radix4_stage_fusion) inherited per fiber. (2) strided gather/scatter on the non-contiguous (column)
+axis wastes ~8x cache-line bandwidth. Matching scipy needs a cache-blocked transpose (so both axes run
+contiguous) + a faster 1-D FFT SIMD kernel — both are constant-factor inlined-C walls, NOT an N-D-level
+lever. Allocation was never the bottleneck. NON-GAP confirmed.
