@@ -2193,3 +2193,25 @@ MEASURED: 400² 35.1→**6.8ms = 5.2x self / 1.13x FASTER than scipy** (was 4.6x
 rect/smooth bivariate tests. LEVER: a tensor-product / per-line build looping an independent banded/spline
 solve per row & column → chunked-parallel both passes (transpose-assemble the second pass). Reusable
 `par_chunk_try_map` (fallible, order-preserved, chunk-spawn) added for Vec-valued parallel maps.
+
+## 2026-06-29 (AmberKestrel, cc) — NEGATIVE EVIDENCE: interpolate builders / sparse / CloughTocher all DOMINATED
+
+After flipping spline_filter1d (17.6x→1.86x) and RectBivariateSpline (5.2x→1.77x) via the "measure the
+public builder directly" lever, swept the adjacent surface for more slow-arm/serial-builder gaps — measured
+same-box vs scipy 1.17.1, all WIN or parity (do NOT re-chase):
+- interpolate CubicSpline build n=500k: fsci 11.3ms vs scipy 39.6ms = **3.5x faster**
+- interpolate Akima1D build n=500k: 10.8ms vs 41.7ms = **3.9x faster**
+- interpolate PchipInterpolator build n=500k: 20.2ms vs 34.7ms = **1.7x faster**
+- interpolate RegularGridInterpolator eval nq=200k (80³): 6.0ms vs 67.4ms = **11.2x faster**
+- interpolate CloughTocher2D eval nq=50k: 7.5ms vs 44.8-96ms = **5.9-12.8x faster**; build ~parity
+  (npt=2000 1.05x faster; npt=8000 1.17x slower — marginal, cost is the global gradient solve =
+  known-hard backlog, NOT a cheap parallelization)
+- interpolate SmoothBivariateSpline: FITPACK surfit (adaptive knots = sequential), scipy only 2.34ms@n=5000 — not a target
+- sparse spsolve tridiag N=200k: 11.2ms vs scipy 85.4ms = **7.6x faster** (already special-cases banded)
+- sparse spmm (CSR@CSR): already parallel Gustavson (fanned across rows, gated by work) — not a gap
+CONCLUSION: the interpolate-1D-builder / sparse-core / CT-eval surfaces are DOMINATED. The "serial builder
+over independent units" + "wrapper on naive arm" levers are now mined out across interpolate/ndimage/sparse;
+the 2 genuine flips this session (spline_filter1d, RectBivariateSpline) were the payoff. Remaining gaps =
+the known WALLS (fsci-linalg dense solve ~10x vs LAPACK, FFT non-pow2 SIMD, Qhull/HiGHS) + hot-crate
+collision zones (stats/integrate axis-2d, other agents). Next dig should target a WALL or an unmeasured crate
+(special/fft batched), not these.
