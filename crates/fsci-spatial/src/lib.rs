@@ -296,13 +296,13 @@ pub fn cosine(a: &[f64], b: &[f64]) -> f64 {
 }
 
 /// Minkowski distance of order `p`.
-/// `Σ |a-b|^p` for a small INTEGER exponent `p`, raised to `1/p`. `|d|^p` is computed by
-/// repeated multiplication (≈p mults) instead of a ≈80-cycle `powf`, 8-wide SIMD with two
-/// accumulators + scalar tail. scipy's cdist uses `pow()` even for integer p, so this is a
-/// large win for the common `p = 3, 4, …` Minkowski case. Reassociated (~1e-14) vs the
-/// scalar `powf` fold, within the distance tolerance.
+/// `Σ |a-b|^p` for a small INTEGER exponent `p`. `|d|^p` is computed by repeated
+/// multiplication (≈p mults) instead of a ≈80-cycle `powf`, 8-wide SIMD with two
+/// accumulators + scalar tail. scipy uses `pow()` even for integer p, so this is a large
+/// win for the common `p = 2, 3, 4, …` Minkowski case. Reassociated (~1e-14) vs the scalar
+/// `powf` fold, within the distance tolerance.
 #[inline]
-fn minkowski_int(a: &[f64], b: &[f64], p: u32) -> f64 {
+fn minkowski_pow_sum(a: &[f64], b: &[f64], p: u32) -> f64 {
     use std::simd::{Simd, num::SimdFloat};
     const L: usize = 8;
     let n = a.len().min(b.len());
@@ -342,7 +342,13 @@ fn minkowski_int(a: &[f64], b: &[f64], p: u32) -> f64 {
         s += t;
         i += 1;
     }
-    s.powf(1.0 / p as f64)
+    s
+}
+
+/// `(Σ |a-b|^p)^(1/p)` for a small integer `p` (see [`minkowski_pow_sum`]).
+#[inline]
+fn minkowski_int(a: &[f64], b: &[f64], p: u32) -> f64 {
+    minkowski_pow_sum(a, b, p).powf(1.0 / p as f64)
 }
 
 pub fn minkowski(a: &[f64], b: &[f64], p: f64) -> f64 {
@@ -6436,10 +6442,17 @@ fn minkowski_rowwise(
                 .map(|(&ai, &bi)| (bi - ai).abs())
                 .sum()
         } else {
-            a.iter()
-                .zip(b.iter())
-                .map(|(&ai, &bi)| (bi - ai).abs().powf(p))
-                .sum()
+            // Small integer exponents: repeated multiplication + SIMD instead of per-element
+            // powf (scipy's minkowski_distance pays a pow() per element regardless).
+            let pr = p.round();
+            if pr == p && (2.0..=64.0).contains(&pr) {
+                minkowski_pow_sum(a, b, pr as u32)
+            } else {
+                a.iter()
+                    .zip(b.iter())
+                    .map(|(&ai, &bi)| (bi - ai).abs().powf(p))
+                    .sum()
+            }
         };
         Ok(val)
     };

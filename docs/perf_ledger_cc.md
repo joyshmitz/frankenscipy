@@ -2123,3 +2123,18 @@ any per-element `powf(INTEGER)` in a hot reduction → repeated-multiplication +
 x^p is ~p mults; the SLOWEST scipy distance metric becomes near-free). grep `.powf(` over possibly-integer
 exponents. SIGNAL crate done this session (lfilter/sosfilt/savgol); spatial euclidean/cosine/cityblock/
 canberra/chebyshev already SIMD — minkowski was the last scalar-powf hole.
+
+## 2026-06-29 (AmberKestrel, cc) — spatial.minkowski_distance integer-exponent fast path (follow-on)
+
+Follow-on to the cdist/pdist minkowski win (74ec55a9): the batched row-wise `minkowski_distance` /
+`minkowski_distance_p` (scipy.spatial API) had its OWN inline per-element `.powf(p)` loop (separate from
+the per-pair `minkowski`). Refactored the integer-power SIMD kernel out of `minkowski_int` into
+`minkowski_pow_sum(a,b,p:u32)` (8-wide std::simd `Σ|Δ|^p` by repeated multiplication) and routed the
+`minkowski_rowwise` else-branch through it for integer p∈[2,64]; non-integer p keeps scalar powf.
+
+MEASURED (minkowski_distance n=400k d=8): p=3 **8.52ms vs scipy 100.66ms = 11.8x FASTER** (~5x self vs the
+p=3.5 powf path at 44ms); p=2 8.30ms vs scipy 36.21ms = **4.4x**; p=4 8.90ms. correctness diff 0.0 vs scalar
+powf reference (row 0). Within tolerance, 225/225 spatial lib GREEN incl. minkowski_distance_batched_matches_scipy.
+Both minkowski_distance and minkowski_distance_p share `minkowski_rowwise` ⇒ both inherit. The `powf(integer)
+→ repeated-mult + SIMD` lever now covers every minkowski surface (cdist/pdist per-pair + batched rowwise).
+Left serial (row loop) — the kernel alone removes the powf bottleneck; row-parallel is a future follow-on.
