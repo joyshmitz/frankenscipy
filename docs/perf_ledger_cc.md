@@ -2215,3 +2215,38 @@ the 2 genuine flips this session (spline_filter1d, RectBivariateSpline) were the
 the known WALLS (fsci-linalg dense solve ~10x vs LAPACK, FFT non-pow2 SIMD, Qhull/HiGHS) + hot-crate
 collision zones (stats/integrate axis-2d, other agents). Next dig should target a WALL or an unmeasured crate
 (special/fft batched), not these.
+
+---
+## 2026-06-29 (AmberKestrel, cc) — DCT-IV / DST-IV Type-IV core: 2N-FFT → split into 2 parallel N-FFTs
+
+DIG into fsci-fft (untouched 16h, low collision). Measured fsci vs scipy 1.17 dct/dst at n=2^20 and
+n=1,000,000 (both single-threaded scipy pocketfft). Found the Type-IV transforms were the biggest gap:
+  dst-IV n=2^20 79.4ms vs scipy 17.5 (4.8x slow);  n=1M 58.5ms vs 7.7 (7.5x slow)
+  dst-III ~3x; dst-II/dct-II ~1.3-2.7x (pure FFT SIMD wall, documented, not chased)
+  dst-I: fsci ALREADY 1.1-2.4x FASTER than scipy (scipy dst-I 306-349ms; not a gap)
+
+ROOT CAUSE: `dct4_core_fft` (shared by dct_iv + dst_iv) ran ONE 2N-point COMPLEX FFT of a zero-padded
+length-N complex sequence u (u[n]=x[n]e^{-iπn/2N}); only the first N bins are used. The 2N complex FFT
+both doubles the length and thrashes cache (2x16MB at n=2^20). Measured building block: fft 2N complex
+62.5ms vs fft N complex 18.7ms — superlinear cache blowup.
+
+LEVER (exact Cooley-Tukey decimation-in-frequency, NOT byte-identical, ~1e-14): split the 2N transform by
+OUTPUT PARITY into two independent N-point FFTs —
+  U[2m]   = FFT_N(u)[m]
+  U[2m+1] = FFT_N(u')[m],   u'[n] = u[n]·e^{-iπn/N}
+verified vs scipy to 2.3e-10 abs (~1e-13 rel) across n=1..1024. The two N-FFTs run CONCURRENTLY on 2
+threads above gate N>=1<<16 (scipy is single-threaded here so the 2nd core is free). A/B serial-vs-parallel
+confirms parallelism is the bulk of the win (pow2 case is memory-bound; cache benefit of the split alone
+is small at pow2, large for the 5-smooth 1M). New cached split-twiddle table e^{-iπk/N}.
+
+RESULT (ratio vs ORIG fsci):
+  dst-IV / dct-IV  n=2^20  79.4 -> 46.5ms = 1.71x self
+                   n=1M    58.5 -> 31.7ms = 1.85x self
+Both Type-IV transforms lifted (shared core). 236/236 fsci-fft tests GREEN (metamorphic self-inverse +
+all). Still 2.7-4x vs scipy at these n (the per-FFT-point pocketfft SIMD wall, documented hard wall) — but
+a clean algorithmic self-win flipping fsci's own 2N-complex baseline. Commit: this one.
+
+GENERALIZABLE: any transform computing the first N bins of a 2N-point FFT of a zero-padded length-N input
+(DCT/DST type IV cores, some chirp/Bluestein setups) → decimate into 2 N-point FFTs by output parity and
+run them in parallel. The 2N->2*N split is ALWAYS >= as cheap (less work + cache-resident) and the pair is
+embarrassingly parallel against scipy's single-threaded core.

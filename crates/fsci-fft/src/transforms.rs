@@ -2257,6 +2257,39 @@ fn get_or_compute_dct4_twiddles(n: usize) -> TwiddleTable {
     table
 }
 
+static DCT4_SPLIT_TWIDDLE_CACHE: OnceLock<RwLock<HashMap<usize, TwiddleTable>>> = OnceLock::new();
+fn get_dct4_split_cache() -> &'static RwLock<HashMap<usize, TwiddleTable>> {
+    DCT4_SPLIT_TWIDDLE_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+thread_local! {
+    static LOCAL_DCT4_SPLIT_CACHE: std::cell::RefCell<HashMap<usize, TwiddleTable>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+/// Cached split twiddle exp(-iπk/N), k=0..N-1, keyed by N. Forms the odd-output
+/// sub-sequence u'[k] = u[k]·exp(-iπk/N) in the Type-IV core (see dct4_core_fft).
+fn get_or_compute_dct4_split_twiddles(n: usize) -> TwiddleTable {
+    if let Some(t) = LOCAL_DCT4_SPLIT_CACHE.with(|c| c.borrow().get(&n).cloned()) {
+        return t;
+    }
+    let cache = get_dct4_split_cache();
+    let table = if let Some(t) = cache.read().ok().and_then(|g| g.get(&n).cloned()) {
+        t
+    } else {
+        let mut table = Vec::with_capacity(n);
+        for k in 0..n {
+            let angle = -PI * k as f64 / n as f64;
+            table.push((angle.cos(), angle.sin()));
+        }
+        let table: TwiddleTable = Arc::from(table);
+        if let Ok(mut g) = cache.write() {
+            g.insert(n, Arc::clone(&table));
+        }
+        table
+    };
+    LOCAL_DCT4_SPLIT_CACHE.with(|c| c.borrow_mut().insert(n, Arc::clone(&table)));
+    table
+}
+
 fn get_or_compute_dct2_twiddles(n: usize) -> TwiddleTable {
     if let Some(t) = LOCAL_DCT2_CACHE.with(|c| c.borrow().get(&n).cloned()) {
         return t;
@@ -2533,19 +2566,59 @@ pub fn dct_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     }
 }
 
-/// Shared core for the Type-IV cosine/sine transforms: pre-rotate the input by a
-/// half sample, run one 2N-point complex FFT, and return its first N bins `U[k]`.
+/// At/above this N the two N-point sub-FFTs of the Type-IV core run on separate
+/// threads (each is heavy enough — ~N log N — to dwarf the spawn cost; scipy's
+/// pocketfft is single-threaded here so the second core is free domination).
+const DCT4_PARALLEL_GATE: usize = 1 << 16;
+
+/// Shared core for the Type-IV cosine/sine transforms. Returns the first N bins
+/// `U[k] = Σ_{n=0}^{N-1} u[n]·exp(-iπnk/N)`, `u[n] = x[n]·exp(-iπn/2N)`.
+///
+/// The old route ran ONE 2N-point complex FFT of the zero-padded `u`, which both
+/// doubles the transform length and thrashes the cache. Instead split that 2N
+/// transform by OUTPUT parity into two independent N-point FFTs (exact
+/// Cooley-Tukey decimation in frequency):
+///   U[2m]   = FFT_N(u)[m]
+///   U[2m+1] = FFT_N(u')[m],   u'[n] = u[n]·exp(-iπn/N)
+/// Two N-point FFTs are far cheaper than one 2N-point FFT at large N (less work
+/// AND cache-resident) and the pair runs concurrently above DCT4_PARALLEL_GATE.
 /// DCT-IV reads `2·Re(e^{-iπ(2k+1)/4N}·U[k])` and DST-IV `-2·Im(...)`.
 fn dct4_core_fft(input: &[f64], options: &FftOptions) -> Vec<Complex64> {
     let n = input.len();
-    let two_n = 2 * n;
-    let mut u = vec![(0.0, 0.0); two_n];
-    let pre_tw = get_or_compute_dct2_twiddles(n); // exp(-iπnn/2N), bit-identical to inline cos/sin
-    for (nn, slot) in u.iter_mut().enumerate().take(n) {
-        *slot = complex_mul((input[nn], 0.0), pre_tw[nn]);
+    let pre_tw = get_or_compute_dct2_twiddles(n); // exp(-iπn/2N)
+    let split_tw = get_or_compute_dct4_split_twiddles(n); // exp(-iπn/N)
+    // u[n] = x[n]·exp(-iπn/2N);  u'[n] = u[n]·exp(-iπn/N)
+    let mut u = vec![(0.0, 0.0); n];
+    let mut up = vec![(0.0, 0.0); n];
+    for i in 0..n {
+        let un = complex_mul((input[i], 0.0), pre_tw[i]);
+        u[i] = un;
+        up[i] = complex_mul(un, split_tw[i]);
     }
-    let backend = resolve_backend(options.backend);
-    backend.transform_1d_unscaled(&u, false)
+
+    let kind = options.backend;
+    // A = FFT_N(u), B = FFT_N(u'); concurrent for large N (scipy is serial here).
+    let (a, b) = if n >= DCT4_PARALLEL_GATE {
+        let u_ref = &u;
+        std::thread::scope(|s| {
+            let h = s.spawn(move || resolve_backend(kind).transform_1d_unscaled(u_ref, false));
+            let b = resolve_backend(kind).transform_1d_unscaled(&up, false);
+            (h.join().expect("dct4 sub-FFT thread panicked"), b)
+        })
+    } else {
+        let backend = resolve_backend(kind);
+        (
+            backend.transform_1d_unscaled(&u, false),
+            backend.transform_1d_unscaled(&up, false),
+        )
+    };
+
+    // Interleave the parity halves: U[2m] = A[m], U[2m+1] = B[m].
+    let mut out = vec![(0.0, 0.0); n];
+    for (k, slot) in out.iter_mut().enumerate() {
+        *slot = if k % 2 == 0 { a[k / 2] } else { b[k / 2] };
+    }
+    out
 }
 
 /// Discrete Cosine Transform Type IV.
