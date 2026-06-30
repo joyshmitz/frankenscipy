@@ -10750,7 +10750,18 @@ pub fn spline_filter1d(
                 line.push(result.data[flat]);
             }
 
-            let coeffs = spline_coefficients_for_line(&line, order)?;
+            // Reflect mode with a long-enough axis: use the fast exact recursive IIR
+            // prefilter (Unser/Thévenaz, the same scipy-conformant kernel the N-D
+            // `spline_filter`/`prefilter_spline_coefficients` use) instead of building and
+            // solving a full interpolation system via `make_interp_spline` (O(n) banded build
+            // per line — ~17x slower for a single long line). Nearest mode and axes too short
+            // for the order's stencil keep the general path.
+            let coeffs = if mode == BoundaryMode::Reflect && (2..=5).contains(&order) && axis_len > order
+            {
+                bspline_reflect_coefficients(&line, order)
+            } else {
+                spline_coefficients_for_line(&line, order)?
+            };
 
             for (i, &c) in coeffs.iter().enumerate() {
                 let flat = outer_idx * axis_len * stride + i * stride + inner_idx;

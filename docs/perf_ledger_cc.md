@@ -2156,3 +2156,22 @@ so fsci wins the full build+eval workflow (856ms vs scipy 1081ms = 1.26x) even b
 a separate-crate multi-session target, not cheaply closable here. This ship = reuse the optimized solver
 instead of a naive one (good hygiene + 1.42x), not a wall-break. LEVER: grep for LOCAL naive dense solvers
 (`solve_dense_system*`, hand-rolled GE) in non-linalg crates → route to fsci_linalg::solve's blocked path.
+
+## 2026-06-29 (AmberKestrel, cc) — ndimage.spline_filter1d: route Reflect to the fast IIR prefilter (17.6x→1.86x flip)
+
+`spline_filter1d` computed each axis-line's spline coefficients via `spline_coefficients_for_line`, which
+called `make_interp_spline(0..n, line, order)` — building and solving a FULL n-point interpolation system
+PER LINE. For a single long 1-D array that is pathological: n=4M order3 = **865ms = 17.6x SLOWER than
+scipy 49ms** (order5 1123ms = 17.8x). The N-D `spline_filter`/`prefilter_spline_coefficients` already use
+the fast exact O(n) recursive IIR (`bspline_reflect_coefficients`, Unser/Thévenaz, scipy-conformant) — but
+`spline_filter1d` was on the slow `make_interp_spline` arm. Routed Reflect mode (order 2..=5, axis>order)
+through `bspline_reflect_coefficients`; Nearest/short-axis keep the general path.
+
+MEASURED (1-D n=4M): order3 865→**26.4ms = 32.8x self / 1.86x FASTER than scipy** (was 17.6x slower);
+order5 1123→40.8ms = 27.5x self / **1.55x faster**. Multi-line spline_filter1d (2D/3D along one axis)
+inherits the per-line speedup. SCIPY-VERIFIED (mode='reflect'): order2/3 EXACT, order4/5 ~1e-7 (within
+tolerance); 255/255 ndimage lib GREEN. LEVER (recurring): a function computing spline/IIR prefilter
+coefficients by SOLVING a full linear system per line → route to the recursive IIR prefilter the
+sibling/N-D path already uses. grep `make_interp_spline` / dense-solve calls inside per-line coefficient
+loops. (Same family as the lfilter/sosfilt scans: the fast way to "solve" a cardinal-spline interpolation
+system IS the recursive IIR, not a banded/dense solve.)
