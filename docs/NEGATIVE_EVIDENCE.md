@@ -11749,3 +11749,22 @@ perf_fft_radix4_stage_fusion) inherited per fiber. (2) strided gather/scatter on
 axis wastes ~8x cache-line bandwidth. Matching scipy needs a cache-blocked transpose (so both axes run
 contiguous) + a faster 1-D FFT SIMD kernel — both are constant-factor inlined-C walls, NOT an N-D-level
 lever. Allocation was never the bottleneck. NON-GAP confirmed.
+
+## 2026-07-01 — AmberKestrel (cc): fsci-sparse core ops competitive; spmm redundant-symbolic-pass = ~4.5% (near-zero, not shipped)
+
+DIG into fsci-sparse (scipy.sparse is heavily C-optimized). Measured vs scipy 1.17 (20000² @0.005, nnz=2M / 10000² @0.003 for spmm):
+- **matvec (csr@vec)**: fsci 1.5ms vs scipy 1.26ms = 1.2x (≈parity, memory-bandwidth wall; already parallel). NOT a gap.
+- **spmm (csr@csr)**: fsci ~87ms vs scipy 112.7ms = **1.3x FASTER** (already parallel across output rows via spmm_rows_parallel, Gustavson). nnzC byte-matches scipy (8606882). NOT a loss.
+- to_csc: not a direct CsrMatrix method; tocoo/A@vec scipy bandwidth-fast. No accessible gap.
+
+SPMM LEVER INVESTIGATED + NOT SHIPPED: the parallel path (spmm_rows_parallel_exact) runs a SEPARATE symbolic
+counts pass (spmm_row_counts_chunk = a full extra Gustavson merge) before the numeric pass (spmm_row_chunk,
+which ALREADY returns exact per-row counts) — looked like a 2x redundant-work lever. Replaced it with a single
+numeric pass + a `chunk_a_nnz × avg_b_row` capacity estimate (byte-identical, byte_mism=0). **Same-binary
+atomic-toggle A/B (5 rounds): only ~4.5% faster** (ratio 1.024-1.072). The symbolic pass is NOT pure redundant
+work — it mostly buys EXACT buffer pre-allocation + cache-warming, so removing it (even with a good cap
+estimate) recovers only ~4.5%. Below the ship threshold + would orphan spmm_row_counts_chunk (dead-code churn)
+→ REVERTED per revert-near-zero. NOISE LESSON REINFORCED (see perf_linalg_lu_trailing_bandwidth_bound):
+cross-worker spmm runs ranged **84-107ms for IDENTICAL code** (~±12% box noise) — a lucky 89.5ms first read vs
+a 100.5ms second read falsely looked like a regression; only the SAME-BINARY atomic toggle revealed the true
+consistent +4.5%. Don't trust cross-run sparse deltas < ~20%.

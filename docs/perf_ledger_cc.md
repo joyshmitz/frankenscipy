@@ -2398,3 +2398,10 @@ distance ranking (34173, comment-confirmed total order). Did NOT touch the 2 cor
 by y-VALUES (not a guaranteed total order → stability matters). 2001/2001 stats green. LEVER: grep
 `.sort_by(...total_cmp...then...index)` — a unique-index tiebreak makes it a total order → sort_unstable_by is
 a free byte-identical speedup.
+
+### 2026-07-01 (AmberKestrel, cc) — SURFACE: fsci-sparse competitive; spmm symbolic-pass removal = ~4.5% (reverted)
+No clean sparse gap: matvec ≈parity (bandwidth), spmm 1.3x FASTER than scipy (already parallel). The spmm
+parallel path's redundant symbolic-counts pass LOOKED like a 2x lever but same-binary atomic A/B = only ~4.5%
+(symbolic pass buys exact-alloc + cache-warm, not pure waste) → reverted (near-zero + dead-code churn). Noise
+lesson: cross-worker spmm = 84-107ms for IDENTICAL code; same-binary atomic toggle MANDATORY for <20% sparse
+claims. See docs/NEGATIVE_EVIDENCE.md.
