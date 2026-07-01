@@ -646,18 +646,76 @@ pub fn mmwrite(rows: usize, cols: usize, data: &[f64]) -> Result<String, IoError
         )));
     }
 
-    let mut out = String::new();
-    out.push_str("%%MatrixMarket matrix array real general\n");
-    out.push_str(&format!("{rows} {cols}\n"));
+    const HEADER: &str = "%%MatrixMarket matrix array real general\n";
+    let n = expected_len;
 
-    // Column-major order (Matrix Market convention)
-    for c in 0..cols {
-        for r in 0..rows {
-            let v = data[r * cols + c];
-            let _ = writeln!(out, "{v}");
+    // Serial gate FIRST (before the available_parallelism syscall — see the
+    // per-call syscall-tax lesson): small matrices format in one pass.
+    const MM_PAR_GATE: usize = 1 << 16;
+    if n < MM_PAR_GATE {
+        let mut out = String::new();
+        out.push_str(HEADER);
+        out.push_str(&format!("{rows} {cols}\n"));
+        // Column-major order (Matrix Market convention)
+        for c in 0..cols {
+            for r in 0..rows {
+                let v = data[r * cols + c];
+                let _ = writeln!(out, "{v}");
+            }
         }
+        return Ok(out);
     }
 
+    // The f64 Display formatting (not allocation) dominates mmwrite and is
+    // embarrassingly parallel; SciPy's mmwrite is single-threaded. Each worker
+    // formats a contiguous slice of the column-major value stream (value k maps
+    // to col k/rows, row k%rows → data[row*cols+col]) into a private String;
+    // concatenating the parts in order reproduces the serial output BIT-FOR-BIT.
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / 16384)
+        .max(1);
+    if nthreads <= 1 {
+        let mut out = String::new();
+        out.push_str(HEADER);
+        out.push_str(&format!("{rows} {cols}\n"));
+        for c in 0..cols {
+            for r in 0..rows {
+                let v = data[r * cols + c];
+                let _ = writeln!(out, "{v}");
+            }
+        }
+        return Ok(out);
+    }
+
+    let chunk = n.div_ceil(nthreads);
+    let mut parts: Vec<String> = (0..nthreads).map(|_| String::new()).collect();
+    std::thread::scope(|scope| {
+        for (t, slot) in parts.iter_mut().enumerate() {
+            let k0 = t * chunk;
+            let k1 = ((t + 1) * chunk).min(n);
+            scope.spawn(move || {
+                if k0 >= k1 {
+                    return;
+                }
+                let mut local = String::with_capacity((k1 - k0) * 20);
+                for k in k0..k1 {
+                    let v = data[(k % rows) * cols + (k / rows)];
+                    let _ = writeln!(local, "{v}");
+                }
+                *slot = local;
+            });
+        }
+    });
+
+    let total: usize = parts.iter().map(String::len).sum();
+    let mut out = String::with_capacity(total + HEADER.len() + 32);
+    out.push_str(HEADER);
+    out.push_str(&format!("{rows} {cols}\n"));
+    for p in &parts {
+        out.push_str(p);
+    }
     Ok(out)
 }
 
@@ -4549,6 +4607,36 @@ mod tests {
         // nnz mismatch is rejected just like mmread.
         let bad = "%%MatrixMarket matrix coordinate real general\n3 3 5\n1 1 1.0\n";
         assert!(mmread_sparse(bad).is_err());
+    }
+
+    #[test]
+    fn mmwrite_parallel_path_matches_serial_and_roundtrips() {
+        // A matrix above MM_PAR_GATE (65536 elements) exercises mmwrite's
+        // parallel formatting path. It must (a) reproduce the exact same text a
+        // single serial pass would and (b) round-trip through mmread bit-for-bit.
+        let rows = 300usize;
+        let cols = 256usize; // 76800 > 65536 → parallel path
+        let data: Vec<f64> = (0..rows * cols)
+            .map(|i| ((i as f64) * 0.013).cos() - 0.5 * (i as f64).sqrt())
+            .collect();
+        let text = mmwrite(rows, cols, &data).unwrap();
+
+        // Reference serial output (column-major, same Display formatting).
+        let mut expected = String::from("%%MatrixMarket matrix array real general\n");
+        expected.push_str(&format!("{rows} {cols}\n"));
+        for c in 0..cols {
+            for r in 0..rows {
+                expected.push_str(&format!("{}\n", data[r * cols + c]));
+            }
+        }
+        assert_eq!(text, expected, "parallel mmwrite must equal serial output");
+
+        // Round-trip: mmread reconstructs the dense matrix bit-for-bit.
+        let back = mmread(&text).unwrap();
+        assert_eq!((back.rows, back.cols), (rows, cols));
+        for (i, (&orig, &got)) in data.iter().zip(back.data.iter()).enumerate() {
+            assert_eq!(orig.to_bits(), got.to_bits(), "roundtrip mismatch at {i}");
+        }
     }
 
     #[test]

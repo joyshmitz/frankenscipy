@@ -2306,3 +2306,19 @@ loadmat/mat tests green — sole red is the unrelated pre-existing mmwrite_compl
 -13 lines. LEVER (generalizable): binary readers that decode-to-Vec THEN transpose/reorder → fuse into one
 pass writing the final layout directly; the intermediate buffer is pure alloc + memory-traffic overhead.
 mmwrite float-format gap (5.6x) left as deferred (needs fast f64 formatter/dep — byte-id risk).
+
+### 2026-07-01 (AmberKestrel, cc) — mmwrite parallel formatting: 8.7x self, flips 5.6x scipy LOSS to 1.56x WIN
+The last fsci-io gap: mmwrite(dense) 5.6x SLOWER than scipy (276ms vs 49.8ms, 1500x1500). PROFILED: the f64
+Display FORMATTING is the wall (~175ms/2.25M values = 78ns each) — NOT allocation (with_capacity gave 0-gain)
+and NOT writeln! overhead (reused-buffer write! 0-gain); the strided column-major read adds ~100ms. No
+byte-identical single-thread win without a float-formatter dep. BUT scipy's mmwrite is SINGLE-THREADED and
+formatting is embarrassingly parallel. LEVER: each worker formats a contiguous slice of the column-major value
+stream (value k → col k/rows, row k%rows → data[row*cols+col]) into a private String; concat parts in order =
+BIT-FOR-BIT the serial output (verified all nthreads==serial + round-trip test). Serial gate n<1<<16 BEFORE
+the available_parallelism syscall (per-call-syscall-tax lesson); nthreads = avail.min(n/16384). RESULT:
+mmwrite **276 -> 31.8ms = 8.7x self; flips 5.6x scipy LOSS -> 1.56x WIN** (beats scipy 49.8ms). Byte-identical
+(117/117 mmwrite/mm tests green incl. new mmwrite_parallel_path_matches_serial_and_roundtrips; sole red is
+the unrelated pre-existing mmwrite_complex 0-vs-1-based test). fsci-io vein now: mmread_sparse (10x),
+loadmat (8.7x), mmwrite (8.7x) all shipped; loadtxt/read_csv/savemat/savetxt already faster. LEVER
+(generalizable): when the wall is a serial std formatter/parser and the peer lib is single-threaded, PARALLEL
+format-into-private-buffers + ordered concat is byte-identical and wins.
