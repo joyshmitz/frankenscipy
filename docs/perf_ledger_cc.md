@@ -2353,3 +2353,19 @@ node.point. RESULT: d=8 query_k_many **270.6 -> 184.9ms = 1.46x self; flips 1.54
 reference_values). Minimal 25/-7 diff (kept node.point for the non-hot ball/nn/pairs paths). FOLLOW-ON: remove
 node.point entirely + route ball_search/nn_search/query_ball_* through the slab (would shrink KDNode 56->32B →
 more nodes/cache-line, help ball queries too).
+
+### 2026-07-01 (AmberKestrel, cc) — KDTree single-NN (query_many/nn_search): 2.2x self, closes d=8 3.9x scipy loss to 1.78x
+Follow-on to the knn flat-slab (822eabd7). Measured fsci KDTree ball/nn/pairs vs scipy cKDTree workers=-1:
+ball_point_many 2.4-12x FASTER, query_pairs faster, BUT **d=8 query_many (single-NN k=1) 103.3ms = 3.9x SLOWER
+than scipy workers=-1 (26.4ms)**. TWO causes (both the levers already applied to query_k_many but NOT
+query_many): (1) thread ceiling hard-capped at `cores.min(16)` — query_k_many's comment already noted the
+16-cap left d=8 ~3.5x slow and lifted it for work-heavy batches, but query_many never got the fix; (2)
+nn_search still read scattered `node.point`. FIX: thread_ceiling = if dim>=6 { cores } else { cores.min(16) }
+(single-NN backtracking is compute-heavy at higher dim → use all cores; low-dim stays capped to avoid
+over-spawn) + route nn_search through the node-ordered flat point slab. RESULT: d=8 query_many **103.3 ->
+46.9ms = 2.2x self; closes 3.9x scipy-parallel loss to 1.78x**; d=3 2.3->1.8ms (flat-slab, still 4.8x faster
+than scipy). Byte-identical (same coords, independent deterministic per-query; 225/225 spatial green incl.
+kdtree_query_many_matches_per_query + nearest_neighbors_kdtree_matches_brute_force_bitwise). Also lifts single
+`query` (uses nn_search). RESIDUAL 1.78x = nn_search kernel + median-split vs scipy's sliding-midpoint tree
+(deeper rewrite, deferred). LEVER (reusable): when a batched-query method wins but its SINGLE/other-k sibling
+loses, diff their thread-gate + kernel — the fix often already exists on the fast sibling.

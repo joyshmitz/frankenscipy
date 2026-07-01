@@ -2724,7 +2724,7 @@ impl KDTree {
 
         let mut best_idx = 0;
         let mut best_dist = f64::INFINITY;
-        nn_search(&self.nodes, 0, query, &mut best_idx, &mut best_dist);
+        nn_search(&self.nodes, &self.points, self.dim, 0, query, &mut best_idx, &mut best_dist);
 
         Ok((best_idx, best_dist.sqrt()))
     }
@@ -2760,16 +2760,23 @@ impl KDTree {
         let cores = std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1);
+        // Single-NN backtracking grows fast with dimension: at higher dim each
+        // query is compute-heavy, so let it use all cores (a flat 16-cap left d=8
+        // ~4x slower than SciPy workers=-1); low-dim queries are cheap and would
+        // over-spawn, so keep the 16 ceiling and ≥128 queries/thread there.
+        let thread_ceiling = if self.dim >= 6 { cores } else { cores.min(16) };
         let nthreads = if nq >= 512 {
-            cores.min(16).min(nq / 128).max(1)
+            thread_ceiling.min(nq / 128).max(1)
         } else {
             1
         };
         let nodes = &self.nodes;
+        let points = &self.points;
+        let dim = self.dim;
         let eval = |slot: &mut (usize, f64), q: &[f64]| {
             let mut bi = 0;
             let mut bd = f64::INFINITY;
-            nn_search(nodes, 0, q, &mut bi, &mut bd);
+            nn_search(nodes, points, dim, 0, q, &mut bi, &mut bd);
             *slot = (bi, bd.sqrt());
         };
         if nthreads <= 1 {
@@ -2785,7 +2792,7 @@ impl KDTree {
                     for (slot, q) in ochunk.iter_mut().zip(qchunk) {
                         let mut bi = 0;
                         let mut bd = f64::INFINITY;
-                        nn_search(nodes, 0, q, &mut bi, &mut bd);
+                        nn_search(nodes, points, dim, 0, q, &mut bi, &mut bd);
                         *slot = (bi, bd.sqrt());
                     }
                 });
@@ -3394,20 +3401,24 @@ fn build_kdtree(
 
 fn nn_search(
     nodes: &[KDNode],
+    points: &[f64],
+    dim: usize,
     node_idx: usize,
     query: &[f64],
     best_idx: &mut usize,
     best_dist_sq: &mut f64,
 ) {
     let node = &nodes[node_idx];
-    let dist_sq = sqeuclidean(query, &node.point);
+    // Contiguous node-ordered slab instead of the scattered per-node heap Vec.
+    let point = &points[node_idx * dim..node_idx * dim + dim];
+    let dist_sq = sqeuclidean(query, point);
 
     if dist_sq < *best_dist_sq {
         *best_dist_sq = dist_sq;
         *best_idx = node.index;
     }
 
-    let diff = query[node.split_dim] - node.point[node.split_dim];
+    let diff = query[node.split_dim] - point[node.split_dim];
     let (near, far) = if diff <= 0.0 {
         (node.left, node.right)
     } else {
@@ -3415,14 +3426,14 @@ fn nn_search(
     };
 
     if let Some(near_idx) = near {
-        nn_search(nodes, near_idx, query, best_idx, best_dist_sq);
+        nn_search(nodes, points, dim, near_idx, query, best_idx, best_dist_sq);
     }
 
     // Check if the other subtree could contain a closer point
     if diff * diff < *best_dist_sq
         && let Some(far_idx) = far
     {
-        nn_search(nodes, far_idx, query, best_idx, best_dist_sq);
+        nn_search(nodes, points, dim, far_idx, query, best_idx, best_dist_sq);
     }
 }
 
