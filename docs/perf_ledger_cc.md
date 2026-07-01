@@ -2405,3 +2405,20 @@ parallel path's redundant symbolic-counts pass LOOKED like a 2x lever but same-b
 (symbolic pass buys exact-alloc + cache-warm, not pure waste) → reverted (near-zero + dead-code churn). Noise
 lesson: cross-worker spmm = 84-107ms for IDENTICAL code; same-binary atomic toggle MANDATORY for <20% sparse
 claims. See docs/NEGATIVE_EVIDENCE.md.
+
+### 2026-07-01 (AmberKestrel, cc) — ndimage van Herk min/max: total_cmp → f64::max/min for clean data (1.6-2x, flips loss to win)
+Measured fsci-ndimage vs scipy (2000², size 5): sobel/laplace/gaussian_gradient_magnitude WIN 1.4-2.1x, BUT
+**grey_dilation 108.6ms = 1.49x SLOWER, grey_erosion 128.7ms = 1.81x SLOWER** than scipy (72.7/71.0). The van
+Herk (Gil-Werman) HGW kernel is already the default (MINMAX_FILTER_HGW=true), so the wall is its HOT OP:
+`tc_max`/`tc_min` use `f64::total_cmp` (~6 integer ops, bit-flip + i64 cmp) purely for scipy total-order
+tie-breaks — called ~24M×/filter. `f64::max`/`f64::min` are FASTER and byte-identical to the total order
+EXCEPT in exactly two spots: NaN (total_cmp propagates, f64::max drops) and the {+0.0,-0.0} pair
+(f64::max(+0,-0)==-0 but total order gives +0). LEVER: probe the input ONCE for NaN-or-(-0.0); clean data
+(the common case) runs f64::max/min, else the safe tc_max/tc_min. min/max of clean values can't MINT a NaN or
+-0.0, so cleanliness holds through every separable axis pass. RESULT: grey_dilation **108.6->67.0ms = 1.62x
+self, flips 1.49x loss to 1.09x WIN**; grey_erosion 128.7->76.3ms = 1.69x self (1.81x loss → parity);
+morphological_gradient 193.7->98.4ms = 1.97x self, now **1.94x FASTER** than scipy. BYTE-IDENTICAL: 0
+mismatches vs the deque/total_cmp reference across 5 boundary modes × 4 sizes × dil+ero, for BOTH ±0-injected
+finite AND NaN-injected data; 255/255 ndimage tests green. Lifts the whole family (min/max filter, grey_open/
+close, morphological_gradient, tophat). LEVER (reusable): grep hot-loop `total_cmp`-based max/min → gate on
+NaN/-0.0 and use f64::max/min for clean data (byte-identical, ~2x on the op).

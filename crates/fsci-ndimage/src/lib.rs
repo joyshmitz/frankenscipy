@@ -2770,9 +2770,22 @@ fn separable_minmax_filter(
     // identically.
     let kernel_shape: Vec<usize> = vec![size; ndim];
     let origins = normalize_filter_origins(ndim, &kernel_shape, origins)?;
+    // The van Herk kernel's hot op is `tc_max`/`tc_min` (a full `total_cmp`, ~6
+    // integer ops) only to reproduce scipy's total-order tie-breaks. For the
+    // overwhelming common case `f64::max`/`f64::min` are byte-identical AND far
+    // cheaper — they differ from the total order in EXACTLY two spots: NaN
+    // (total_cmp propagates it, f64::max/min drops it) and the pair {+0.0, -0.0}
+    // (`f64::max(+0,-0) == -0` but total order gives +0). So probe ONCE for a NaN
+    // or a negative zero; absent both, run the fast comparators. min/max of such
+    // "clean" values can never MINT a NaN or a -0.0, so the input's cleanliness
+    // holds through every separable axis pass.
+    let needs_total_cmp = input
+        .data
+        .iter()
+        .any(|v| v.is_nan() || (*v == 0.0 && v.is_sign_negative()));
     let mut cur = input.clone();
     for (d, &origin) in origins.iter().enumerate() {
-        cur = minmax_filter_along_axis(&cur, d, size, origin, mode, cval, is_max);
+        cur = minmax_filter_along_axis(&cur, d, size, origin, mode, cval, is_max, needs_total_cmp);
     }
     Ok(cur)
 }
@@ -3337,15 +3350,20 @@ fn minmax_filter_along_axis(
     mode: BoundaryMode,
     cval: f64,
     is_max: bool,
+    needs_total_cmp: bool,
 ) -> NdArray {
     use std::cmp::Ordering;
     use std::collections::VecDeque;
 
     if MINMAX_FILTER_HGW.load(std::sync::atomic::Ordering::Relaxed) {
-        return if is_max {
-            minmax_along_axis_hgw(arr, axis, size, origin, mode, cval, tc_max)
-        } else {
-            minmax_along_axis_hgw(arr, axis, size, origin, mode, cval, tc_min)
+        // Clean data → fast `f64::max`/`f64::min` (byte-identical to the total-order
+        // pick when neither NaN nor -0.0 is present); otherwise `tc_max`/`tc_min`
+        // to preserve scipy's total-order tie-breaks and NaN propagation.
+        return match (is_max, needs_total_cmp) {
+            (true, false) => minmax_along_axis_hgw(arr, axis, size, origin, mode, cval, f64::max),
+            (false, false) => minmax_along_axis_hgw(arr, axis, size, origin, mode, cval, f64::min),
+            (true, true) => minmax_along_axis_hgw(arr, axis, size, origin, mode, cval, tc_max),
+            (false, true) => minmax_along_axis_hgw(arr, axis, size, origin, mode, cval, tc_min),
         };
     }
 
