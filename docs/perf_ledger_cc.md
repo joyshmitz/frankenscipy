@@ -2322,3 +2322,16 @@ the unrelated pre-existing mmwrite_complex 0-vs-1-based test). fsci-io vein now:
 loadmat (8.7x), mmwrite (8.7x) all shipped; loadtxt/read_csv/savemat/savetxt already faster. LEVER
 (generalizable): when the wall is a serial std formatter/parser and the peer lib is single-threaded, PARALLEL
 format-into-private-buffers + ordered concat is byte-identical and wins.
+
+### 2026-07-01 (AmberKestrel, cc) — wav_read parallel per-sample decode: 7.3x self (byte-identical)
+Swept remaining fsci-io readers: read_arff 3.1x FASTER than scipy (1064ms vs 339ms, no gap); wav_read 22ms.
+The wav scipy comparison is APPLES-TO-ORANGES (scipy.io.wavfile.read returns raw int16 zero-copy in 0.33ms;
+fsci returns normalized f64, doing real conversion work scipy skips) — NOT a scipy gap, but a self-improvement:
+the per-sample i16→f64 decode was a serial `chunks_exact.map.collect` that does NOT auto-vectorize (measured:
+the chunks16+[u8;16] idiom gave ~0-gain, reverted) and is compute-bound (~4ns/sample). LEVER: parallelize the
+per-sample decode across threads (generic `decode_wav_samples(bytes, stride, conv)` covering 8/16/24/32-bit,
+serial gate n<1<<18 before the available_parallelism syscall, byte-identical — each worker runs the same conv
+on a disjoint sample range). RESULT: wav_read **22.09 -> 3.02ms = 7.3x self**, byte-identical (new test
+wav_read_parallel_decode_matches_serial + 118/118 wav/io tests green; sole red = unrelated pre-existing
+mmwrite_complex). NOTE honestly: still ~9x scipy's 0.33ms because fsci produces f64 not raw int16 — a semantic
+difference, not a perf bug. fsci-io scipy-comparable surface now fully swept/dominated.

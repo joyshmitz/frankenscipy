@@ -840,6 +840,45 @@ pub struct WavData {
 /// depth match SciPy exactly while `data` equals SciPy's samples divided by
 /// full scale. This `f64` API cannot reproduce SciPy's dtype-driven raw output
 /// losslessly; the chosen convention is tracked by bead frankenscipy-8hj9z.
+/// At/above this sample count, wav_read's per-sample decode fans across threads.
+const WAV_DECODE_PAR_GATE: usize = 1 << 18;
+
+/// Decode `data_bytes` into one normalized `f64` per `stride`-byte sample via
+/// `conv`. The decode is compute-bound (measured ~4 ns/sample scalar, and the
+/// i16→f64 widen does not auto-vectorize) and per-sample independent, so above
+/// WAV_DECODE_PAR_GATE it fans across threads. BIT-IDENTICAL to the serial
+/// `chunks_exact(stride).map(conv)`: each worker runs the same `conv` on a
+/// disjoint contiguous sample range. The serial gate is checked before the
+/// available_parallelism syscall (per-call syscall-tax lesson).
+fn decode_wav_samples(data_bytes: &[u8], stride: usize, conv: fn(&[u8]) -> f64) -> Vec<f64> {
+    let ns = data_bytes.len() / stride;
+    if ns < WAV_DECODE_PAR_GATE {
+        return data_bytes.chunks_exact(stride).map(conv).collect();
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(ns / (1 << 17))
+        .max(1);
+    if nthreads <= 1 {
+        return data_bytes.chunks_exact(stride).map(conv).collect();
+    }
+    let mut samples = vec![0.0f64; ns];
+    let chunk = ns.div_ceil(nthreads);
+    std::thread::scope(|scope| {
+        for (t, out) in samples.chunks_mut(chunk).enumerate() {
+            let base = t * chunk;
+            scope.spawn(move || {
+                for (k, o) in out.iter_mut().enumerate() {
+                    let i = (base + k) * stride;
+                    *o = conv(&data_bytes[i..i + stride]);
+                }
+            });
+        }
+    });
+    samples
+}
+
 pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
     if bytes.len() < 44 {
         return Err(IoError::InvalidFormat("WAV file too short".to_string()));
@@ -940,31 +979,23 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
                 )));
             }
 
+            // Per-sample decode, parallelized above the gate (byte-identical).
             let samples = match (bits_per_sample, audio_format) {
-                (8, _) => data_bytes
-                    .iter()
-                    .map(|&b| (b as f64 - 128.0) / 128.0)
-                    .collect(),
-                (16, _) => data_bytes
-                    .chunks_exact(2)
-                    .map(|c| i16::from_le_bytes([c[0], c[1]]) as f64 / 32768.0)
-                    .collect(),
-                (24, _) => data_bytes
-                    .chunks_exact(3)
-                    .map(|c| {
-                        let sign = if c[2] & 0x80 != 0 { 0xFF } else { 0x00 };
-                        let raw = i32::from_le_bytes([c[0], c[1], c[2], sign]);
-                        raw as f64 / 8_388_608.0
-                    })
-                    .collect(),
-                (32, 3) => data_bytes
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
-                    .collect(),
-                (32, _) => data_bytes
-                    .chunks_exact(4)
-                    .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64 / 2_147_483_648.0)
-                    .collect(),
+                (8, _) => decode_wav_samples(data_bytes, 1, |b| (b[0] as f64 - 128.0) / 128.0),
+                (16, _) => decode_wav_samples(data_bytes, 2, |c| {
+                    i16::from_le_bytes([c[0], c[1]]) as f64 / 32768.0
+                }),
+                (24, _) => decode_wav_samples(data_bytes, 3, |c| {
+                    let sign = if c[2] & 0x80 != 0 { 0xFF } else { 0x00 };
+                    let raw = i32::from_le_bytes([c[0], c[1], c[2], sign]);
+                    raw as f64 / 8_388_608.0
+                }),
+                (32, 3) => decode_wav_samples(data_bytes, 4, |c| {
+                    f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64
+                }),
+                (32, _) => decode_wav_samples(data_bytes, 4, |c| {
+                    i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64 / 2_147_483_648.0
+                }),
                 _ => {
                     return Err(IoError::UnsupportedFeature(format!(
                         "unsupported bits per sample: {bits_per_sample}"
@@ -4968,6 +4999,48 @@ mod tests {
                 usize::MAX
             ))
         );
+    }
+
+    #[test]
+    fn wav_read_parallel_decode_matches_serial() {
+        // A buffer above WAV_DECODE_PAR_GATE (262144 samples) exercises the
+        // parallel per-sample decode. Build a 16-bit PCM data chunk directly and
+        // assert wav_read reproduces the exact serial conversion, bit-for-bit.
+        let ns = (1usize << 18) + 1234; // > gate, non-multiple of any chunk
+        let mut data_bytes = Vec::with_capacity(ns * 2);
+        for k in 0..ns {
+            let s = (((k as i32 * 2654435761u32 as i32) >> 8) as i16).to_le_bytes();
+            data_bytes.extend_from_slice(&s);
+        }
+        // Serial reference (the exact pre-parallel conversion).
+        let expected: Vec<f64> = data_bytes
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]) as f64 / 32768.0)
+            .collect();
+
+        // Assemble a minimal canonical 16-bit mono PCM WAV around the data chunk.
+        let data_len = data_bytes.len() as u32;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&44100u32.to_le_bytes());
+        wav.extend_from_slice(&(44100u32 * 2).to_le_bytes()); // byte rate
+        wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        wav.extend_from_slice(&data_bytes);
+
+        let got = wav_read(&wav).unwrap();
+        assert_eq!(got.data.len(), expected.len());
+        for (i, (&e, &g)) in expected.iter().zip(got.data.iter()).enumerate() {
+            assert_eq!(e.to_bits(), g.to_bits(), "parallel decode mismatch at {i}");
+        }
     }
 
     #[test]
