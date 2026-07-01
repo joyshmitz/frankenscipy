@@ -2383,3 +2383,18 @@ syscall. RESULT: BSpline.eval_many **59.9 -> 5.2ms = 11.5x self; flips ~parity t
 splev** (14.7x vs scipy BSpline). Byte-identical, 179/179 interpolate tests green. Lifts all
 BSpline.eval_many callers. LEVER (proven again): a serial per-element eval where the scipy peer is
 single-threaded → chunk-parallel with per-chunk pointer re-seed (byte-id for sorted-monotone state).
+
+### 2026-07-01 (AmberKestrel, cc) — rankdata(ordinal) stable→unstable sort: 1.36x self (byte-identical anomaly fix)
+Swept fsci-stats sort/selection fns vs scipy (N=2M): rankdata(avg) 5.3x FASTER, wasserstein 6.6x, energy 4.2x
+— all win. SELF-ANOMALY: rankdata(ordinal) 114.6ms was 1.9x SLOWER than rankdata(average) 61.0ms — ordinal
+(argsort+assign 1..n) should be SIMPLER than average (tie-grouping). CAUSE: rankdata_ordinal used STABLE
+`sort_by` while the tie methods use faster `sort_unstable_by`. The ordinal comparator (value, then original
+index) is a STRICT TOTAL ORDER (unique indices → no equal elements), so an unstable sort yields the IDENTICAL
+permutation as stable (nothing for stability to disambiguate). FIX: sort_by → sort_unstable_by. RESULT:
+ordinal **114.6 -> 84.2ms = 1.36x self** (now 3.2x vs scipy 269ms, was 2.3x). BYTE-IDENTICAL (byte_mism=0 vs
+stable-sort reference INCLUDING tied data; 9/9 rankdata tests green incl. rankdata_ordinal_matches_scipy_
+reference + rankdata_with_ties). Applied the same provably-safe transform to multiscale_graphcorr's per-row
+distance ranking (34173, comment-confirmed total order). Did NOT touch the 2 correlation sorts that tiebreak
+by y-VALUES (not a guaranteed total order → stability matters). 2001/2001 stats green. LEVER: grep
+`.sort_by(...total_cmp...then...index)` — a unique-index tiebreak makes it a total order → sort_unstable_by is
+a free byte-identical speedup.
