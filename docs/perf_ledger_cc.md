@@ -2290,3 +2290,19 @@ sparse-return behavior for the format's primary (sparse) use case. fsci-io mmrea
 test passes). NOTE: pre-existing UNRELATED red `mmwrite_complex_output_format` fails on HEAD too (test asserts
 0-based coordinate indices; the emitter correctly produces 1-based per MM spec) — another agent's test bug,
 left untouched per own-files.
+
+### 2026-07-01 (AmberKestrel, cc) — loadmat_v5 fused decode+transpose: 8.7x self, flips 8.2x scipy LOSS to WIN
+Continued fsci-io sweep. Measured writers/readers vs scipy/numpy: savemat 1.55x FASTER, savetxt 3.2x FASTER,
+mmwrite(dense) 5.6x SLOWER (float-format wall, deferred), **loadmat 8.2x SLOWER** (25.3ms vs scipy 3.1ms,
+300000x8 v5 .mat). ROOT CAUSE (profiled): loadmat_v5 decoded the column-major disk payload into an
+intermediate `column_major` Vec (`chunks_exact(8).map(from_le_bytes).collect()`) THEN did a SEPARATE strided
+transpose into row-major `data` — one extra full 19MB alloc + two extra passes over R*C*8 bytes. A/B:
+decode.collect+transpose 25.8ms vs FUSED single pass 6.4ms. LEVER: `decode_v5_numeric_rowmajor` fuses the
+byte-decode and the column->row transpose in one pass (c outer = sequential disk read, strided row-major
+write), dropping the intermediate buffer; handles all MI_ numeric types; error messages preserved
+(loadmat_rejects_wrong_element_count green). RESULT: loadmat **25.3 -> 2.90ms = 8.7x self; flips 8.2x scipy
+LOSS -> 1.07x WIN** (beats scipy's 3.10ms). Byte-identical (values == scipy exactly; 116/116 pre-existing
+loadmat/mat tests green — sole red is the unrelated pre-existing mmwrite_complex 0-vs-1-based test). Net
+-13 lines. LEVER (generalizable): binary readers that decode-to-Vec THEN transpose/reorder → fuse into one
+pass writing the final layout directly; the intermediate buffer is pure alloc + memory-traffic overhead.
+mmwrite float-format gap (5.6x) left as deferred (needs fast f64 formatter/dep — byte-id risk).
