@@ -2369,3 +2369,17 @@ kdtree_query_many_matches_per_query + nearest_neighbors_kdtree_matches_brute_for
 `query` (uses nn_search). RESIDUAL 1.78x = nn_search kernel + median-split vs scipy's sliding-midpoint tree
 (deeper rewrite, deferred). LEVER (reusable): when a batched-query method wins but its SINGLE/other-k sibling
 loses, diff their thread-gate + kernel — the fix often already exists on the fast sibling.
+
+### 2026-07-01 (AmberKestrel, cc) — BSpline.eval_many parallel de Boor: 11.5x self, 10.4x FASTER than scipy splev
+PIVOT (no collision anywhere on frankenscipy — last 8h commits all mine). Measured fsci-interpolate spline eval
+on nq=2M sorted queries (n=2000 knots): CubicSplineStandalone.eval_many 9.1ms = 1.68x FASTER than scipy
+CubicSpline (15.3ms) — win. BUT **BSpline.eval_many 59.9ms was ~PARITY with scipy splev (54.3ms)** and it was
+SERIAL. scipy's splev is single-threaded and per-point de Boor is independent, so PARALLELIZE. For sorted
+input each worker re-seeds its knot-span pointer mu by advancing from k to its chunk start (O(#knots) ≪
+#queries) then merge-advances within the chunk — the span reached for any x depends only on x+knots, so
+BIT-IDENTICAL to the single serial pointer walk (verified byte_mismatches=0 sorted AND unsorted, 2M pts; new
+test bspline_eval_many_parallel_matches_per_point). Serial gate n<1<<15 before the available_parallelism
+syscall. RESULT: BSpline.eval_many **59.9 -> 5.2ms = 11.5x self; flips ~parity to 10.4x FASTER than scipy
+splev** (14.7x vs scipy BSpline). Byte-identical, 179/179 interpolate tests green. Lifts all
+BSpline.eval_many callers. LEVER (proven again): a serial per-element eval where the scipy peer is
+single-threaded → chunk-parallel with per-chunk pointer re-seed (byte-id for sorted-monotone state).

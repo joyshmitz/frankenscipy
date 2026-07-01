@@ -1179,23 +1179,72 @@ impl BSpline {
         if xs.is_empty() {
             return Vec::new();
         }
-        let mut d = vec![0.0; self.k + 1];
         let is_sorted = xs.windows(2).all(|w| w[0] <= w[1]);
-        if is_sorted {
-            let mut results = Vec::with_capacity(xs.len());
-            let mut mu = self.k;
-            let n = self.c.len();
-            let t = &self.t;
-            for &x in xs {
-                while mu < n - 1 && x >= t[mu + 1] {
-                    mu += 1;
-                }
-                results.push(self.eval_into_with_span(x, mu, &mut d));
-            }
-            results
+
+        // Serial gate FIRST (before the available_parallelism syscall). Per-point
+        // de Boor evaluation is independent and SciPy's splev is single-threaded,
+        // so large batches fan across cores. For sorted input each worker re-seeds
+        // its knot-span pointer `mu` by advancing from `k` to its chunk start
+        // (O(#knots), ≪ #queries) then merge-advances within the chunk — the span
+        // reached for any `x` depends only on `x` and the knots, so the result is
+        // BIT-IDENTICAL to the single serial pointer walk.
+        const BSPLINE_EVAL_PAR_GATE: usize = 1 << 15;
+        let nthreads = if xs.len() >= BSPLINE_EVAL_PAR_GATE {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(xs.len() / 16384)
+                .max(1)
         } else {
-            xs.iter().map(|&x| self.eval_into(x, &mut d)).collect()
+            1
+        };
+
+        if nthreads <= 1 {
+            let mut d = vec![0.0; self.k + 1];
+            if is_sorted {
+                let mut results = Vec::with_capacity(xs.len());
+                let mut mu = self.k;
+                let n = self.c.len();
+                let t = &self.t;
+                for &x in xs {
+                    while mu < n - 1 && x >= t[mu + 1] {
+                        mu += 1;
+                    }
+                    results.push(self.eval_into_with_span(x, mu, &mut d));
+                }
+                return results;
+            }
+            return xs.iter().map(|&x| self.eval_into(x, &mut d)).collect();
         }
+
+        let mut out = vec![0.0; xs.len()];
+        let chunk = xs.len().div_ceil(nthreads);
+        let n = self.c.len();
+        std::thread::scope(|s| {
+            for (xchunk, ochunk) in xs.chunks(chunk).zip(out.chunks_mut(chunk)) {
+                s.spawn(move || {
+                    let mut d = vec![0.0; self.k + 1];
+                    if is_sorted {
+                        let t = &self.t;
+                        let mut mu = self.k;
+                        while mu < n - 1 && xchunk[0] >= t[mu + 1] {
+                            mu += 1;
+                        }
+                        for (o, &x) in ochunk.iter_mut().zip(xchunk) {
+                            while mu < n - 1 && x >= t[mu + 1] {
+                                mu += 1;
+                            }
+                            *o = self.eval_into_with_span(x, mu, &mut d);
+                        }
+                    } else {
+                        for (o, &x) in ochunk.iter_mut().zip(xchunk) {
+                            *o = self.eval_into(x, &mut d);
+                        }
+                    }
+                });
+            }
+        });
+        out
     }
 
     fn eval_into_with_span(&self, x: f64, mu: usize, d: &mut [f64]) -> f64 {
@@ -9967,6 +10016,44 @@ mod tests {
                 (got - want).abs() < 1e-12,
                 "knot[{i}] = {got}, expected {want}"
             );
+        }
+    }
+
+    #[test]
+    fn bspline_eval_many_parallel_matches_per_point() {
+        // Above BSPLINE_EVAL_PAR_GATE (32768), eval_many fans across threads. It
+        // must stay BIT-IDENTICAL to per-point eval for both sorted and unsorted
+        // query batches (the parallel path re-seeds the knot-span pointer per
+        // chunk, which must reproduce the serial pointer walk exactly).
+        let n = 300usize;
+        let x: Vec<f64> = (0..n).map(|i| i as f64 * 0.37).collect();
+        let y: Vec<f64> = x.iter().map(|&v| v.sin() + 0.3 * v.cos()).collect();
+        // Build a cubic interpolating B-spline via the crate's own fit.
+        let spline = make_interp_spline(&x, &y, 3).expect("cubic bspline");
+
+        let nq = (1usize << 15) + 777; // > gate
+        let lo = x[0];
+        let hi = x[n - 1];
+        let sorted: Vec<f64> = (0..nq)
+            .map(|i| lo + (hi - lo) * (i as f64) / (nq as f64))
+            .collect();
+        let em = spline.eval_many(&sorted);
+        for (i, &xq) in sorted.iter().enumerate() {
+            assert_eq!(em[i].to_bits(), spline.eval(xq).to_bits(), "sorted i={i}");
+        }
+
+        // Unsorted (pseudo-random order) hits the per-point parallel branch.
+        let mut unsorted = sorted.clone();
+        let mut seed = 0x9e3779b97f4a7c15u64;
+        for i in (1..unsorted.len()).rev() {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            unsorted.swap(i, (seed as usize) % (i + 1));
+        }
+        let emu = spline.eval_many(&unsorted);
+        for (i, &xq) in unsorted.iter().enumerate() {
+            assert_eq!(emu[i].to_bits(), spline.eval(xq).to_bits(), "unsorted i={i}");
         }
     }
 
