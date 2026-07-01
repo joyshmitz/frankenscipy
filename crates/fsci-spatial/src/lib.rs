@@ -2641,6 +2641,12 @@ fn sparse_distance_matrix_output_from_triplets(
 pub struct KDTree {
     nodes: Vec<KDNode>,
     dim: usize,
+    /// Node-ordered contiguous coordinate slab: node `i`'s point occupies
+    /// `points[i*dim .. (i+1)*dim]`. The k-NN traversal reads coordinates from
+    /// here instead of chasing each node's scattered heap `Vec<f64>` — for a
+    /// large high-dimensional tree the per-node pointer chase (one cache miss per
+    /// visited node, and backtracking visits many) dominated the query.
+    points: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -2689,7 +2695,13 @@ impl KDTree {
         let coords: Vec<f64> = data.iter().flatten().copied().collect();
         build_kdtree(&coords, &mut indices, 0, &mut nodes, dim);
 
-        Ok(Self { nodes, dim })
+        // Node-ordered coordinate slab for the cache-friendly k-NN traversal.
+        let mut points = Vec::with_capacity(nodes.len() * dim);
+        for node in &nodes {
+            points.extend_from_slice(&node.point);
+        }
+
+        Ok(Self { nodes, dim, points })
     }
 
     /// Find the nearest neighbor to `query`.
@@ -2805,7 +2817,7 @@ impl KDTree {
 
         // Simple approach: find k nearest via repeated queries with exclusion
         // For a proper implementation, use a max-heap bounded to k elements.
-        knn_search(&self.nodes, 0, query, k, &mut results);
+        knn_search(&self.nodes, &self.points, self.dim, 0, query, k, &mut results);
 
         // Sort by distance and convert from squared to actual distance
         results.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -2847,6 +2859,8 @@ impl KDTree {
         }
         let kk = k.min(self.nodes.len());
         let nodes = &self.nodes;
+        let points = &self.points;
+        let dim = self.dim;
         let cores = std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1);
@@ -2866,7 +2880,7 @@ impl KDTree {
         if nthreads <= 1 {
             for (slot, q) in out.iter_mut().zip(queries) {
                 let mut results: Vec<(usize, f64)> = Vec::with_capacity(kk);
-                knn_search(nodes, 0, q, kk, &mut results);
+                knn_search(nodes, points, dim, 0, q, kk, &mut results);
                 results.sort_by(|a, b| a.1.total_cmp(&b.1));
                 for r in &mut results {
                     r.1 = r.1.sqrt();
@@ -2881,7 +2895,7 @@ impl KDTree {
                 s.spawn(move || {
                     for (slot, q) in ochunk.iter_mut().zip(qchunk) {
                         let mut results: Vec<(usize, f64)> = Vec::with_capacity(kk);
-                        knn_search(nodes, 0, q, kk, &mut results);
+                        knn_search(nodes, points, dim, 0, q, kk, &mut results);
                         results.sort_by(|a, b| a.1.total_cmp(&b.1));
                         for r in &mut results {
                             r.1 = r.1.sqrt();
@@ -3414,13 +3428,17 @@ fn nn_search(
 
 fn knn_search(
     nodes: &[KDNode],
+    points: &[f64],
+    dim: usize,
     node_idx: usize,
     query: &[f64],
     k: usize,
     results: &mut Vec<(usize, f64)>,
 ) {
     let node = &nodes[node_idx];
-    let point = &node.point;
+    // Read this node's coordinates from the contiguous node-ordered slab rather
+    // than the scattered per-node heap `Vec` (cache-friendly on deep backtracks).
+    let point = &points[node_idx * dim..node_idx * dim + dim];
     let dist_sq = sqeuclidean(query, point);
 
     // Insert if we have room or this is closer than the worst
@@ -3447,7 +3465,7 @@ fn knn_search(
     };
 
     if let Some(near_idx) = near {
-        knn_search(nodes, near_idx, query, k, results);
+        knn_search(nodes, points, dim, near_idx, query, k, results);
     }
 
     let worst_dist = if results.len() < k {
@@ -3459,7 +3477,7 @@ fn knn_search(
     if diff * diff < worst_dist
         && let Some(far_idx) = far
     {
-        knn_search(nodes, far_idx, query, k, results);
+        knn_search(nodes, points, dim, far_idx, query, k, results);
     }
 }
 

@@ -2335,3 +2335,21 @@ on a disjoint sample range). RESULT: wav_read **22.09 -> 3.02ms = 7.3x self**, b
 wav_read_parallel_decode_matches_serial + 118/118 wav/io tests green; sole red = unrelated pre-existing
 mmwrite_complex). NOTE honestly: still ~9x scipy's 0.33ms because fsci produces f64 not raw int16 — a semantic
 difference, not a perf bug. fsci-io scipy-comparable surface now fully swept/dominated.
+
+### 2026-07-01 (AmberKestrel, cc) — KDTree knn flat point-slab: d=8 query 1.46x self, closes 1.54x scipy-parallel loss to parity
+PIVOT off io (fully swept) to fsci-spatial KDTree. Measured vs scipy.spatial.cKDTree: fsci build 1.46-1.9x
+FASTER; d=3 query_k_many 8.1ms BEATS scipy workers=-1 (11.5ms); BUT **d=8 query_k_many 270.6ms = 1.54x SLOWER
+than scipy workers=-1 (175.9ms)** (36x faster than scipy SERIAL — scipy's single-thread d=8 query is 9.9s).
+query_k_many already parallel+tuned, so the residual is the per-query knn_search KERNEL. ROOT CAUSE: `KDNode`
+stores `point: Vec<f64>` — a SEPARATE heap alloc per node (200k scattered Vecs); knn_search's
+`sqeuclidean(query, &node.point)` chases a pointer to scattered memory (cache miss per visited node, and d=8
+backtracking visits MANY). sqeuclidean is already std::simd, so the wall is the scattered coord reads. The
+BUILD already flattened coords (partition), but build_kdtree cloned each point back into a per-node Vec.
+LEVER (flat-buffer, [[perf_equal_hardware_artifact_and_flatbuffer_lever]]): add a node-ordered contiguous
+slab `points: Vec<f64>` (node i at points[i*dim..]) and route knn_search coord reads through it instead of
+node.point. RESULT: d=8 query_k_many **270.6 -> 184.9ms = 1.46x self; flips 1.54x scipy-parallel loss to 1.05x
+(PARITY)**; d=3 unchanged (already cache-friendly); build +1ms (the slab copy, negligible). Byte-identical
+(slab is a node-order copy of node.point; 225/225 spatial tests green incl. kdtree_query_matches_scipy_
+reference_values). Minimal 25/-7 diff (kept node.point for the non-hot ball/nn/pairs paths). FOLLOW-ON: remove
+node.point entirely + route ball_search/nn_search/query_ball_* through the slab (would shrink KDNode 56->32B →
+more nodes/cache-line, help ball queries too).
