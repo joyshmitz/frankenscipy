@@ -2272,3 +2272,21 @@ per-worker reused DctIIScratch + fiber-contiguous output (bit-identical). Clean 
 14-16ms @1024^2; OLD faster @2048^2). REVERTED. Real wall = fsci 1-D dct 2x scipy per-call (FFT-SIMD wall) +
 strided-axis bandwidth; needs cache-blocked transpose + faster FFT kernel, not an N-D lever. See
 docs/NEGATIVE_EVIDENCE.md.
+
+### 2026-07-01 (AmberKestrel, cc) — mmread_sparse: sparse-COO MatrixMarket read, ~10x faster than dense mmread (scipy parity)
+DIG into fsci-io (13d stale, low collision). Measured all readers vs numpy/scipy on large files: loadtxt 14x
+FASTER, read_csv 12x FASTER, mmread(dense) 1.46x FASTER — all wins. ONE gap: **mmread on a SPARSE (coordinate)
+file was 9.8x SLOWER than scipy** (136ms vs scipy 14ms, 4000^2 @1% ~160k nnz). ROOT CAUSE (profiled): mmread
+materializes a DENSE rows*cols buffer (128MB for this file) even for coordinate format; the ~120ms is almost
+entirely first-touch page faults across that 128MB of mostly-zeros (parse-to-COO alone = 13ms = scipy
+parity; the dense buffer is intrinsic to mmread's dense return type — can't be sped up in place). scipy
+returns sparse COO in 14ms. LEVER: added `mmread_sparse` (+ `MmSparse` COO struct) = parse coordinate format
+to (row_indices, col_indices, values) triplets, NO dense materialization; symmetric/skew/hermitian expand the
+stored triangle to both off-diagonals (negate for skew), so scattering the triplets with `+=` reproduces
+mmread's dense `data` BIT-FOR-BIT (verified: byte_mismatches=0 across general/symmetric/skew/duplicate/pattern
++ permanent test mmread_sparse_matches_dense_mmread). RESULT: **15.1ms vs mmread dense 123.6ms = 8.2x self;
+9.8x scipy-loss -> ~PARITY (scipy 14ms)**. Purely additive (206 insertions, 0 deletions), matches scipy.io
+sparse-return behavior for the format's primary (sparse) use case. fsci-io mmread family 20/20 green (my new
+test passes). NOTE: pre-existing UNRELATED red `mmwrite_complex_output_format` fails on HEAD too (test asserts
+0-based coordinate indices; the emitter correctly produces 1-based per MM spec) — another agent's test bug,
+left untouched per own-files.
