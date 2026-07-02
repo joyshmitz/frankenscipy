@@ -13305,3 +13305,28 @@ Axis-2D integration set now complete: trapezoid/simpson/cumulative_trapezoid/cum
 
 NEG this sweep (candidates measured, not yet pursued): binned_statistic 1M mean/std 51ms, binned_statistic_2d
 38.9ms, NearestNDInterpolator 76.8ms — check whether fsci has them / already parallel next cycle.
+
+## 2026-07-02 — BlackThrush (cc): FIX — group_delay now ports scipy's exact algorithm (was the pre-existing near-singularity discrepancy)
+
+Closed the group_delay scipy-conformance gap flagged in the parallel-sweep commit. fsci previously used an ad-hoc
+analytic-derivative kernel that diverged from scipy near filter singularities (max err 5.07). Replaced it with a
+faithful port of scipy.signal.group_delay's exact formula (read from the installed `_filter_design.py`):
+`c = convolve(b, reversed(a))`, `cr = c·arange`, `gd(ω) = Re(Σⱼ cr[j]·zʲ / Σⱼ c[j]·zʲ) − (len(a)−1)`, `z = e^{−jω}`,
+with `gd → 0` where non-finite (zeros/poles on the unit circle). `c`/`cr` are ω-independent so they are built ONCE;
+the per-ω Horner evaluation stays parallel (win preserved).
+
+STRICTLY closer to scipy than the old kernel, everywhere:
+
+| filter | old analytic err | new scipy-port err (well-cond. band) | near-singular |
+| --- | --- | --- | --- |
+| butter8 | 6.7e-5 | 2.1e-7 | 0.31 (was 5.07) |
+| butter4 | — | 8.2e-12 | — |
+| cheby1 | — | 1.4e-9 | 0.45 |
+
+Now matches scipy's ALGORITHM exactly (verified: numpy-manual == scipy = 0.0). The residual at the last ~1% of
+bins near ω=π is fundamental numerical conditioning: there `|den| ≈ 1e-18` (catastrophic cancellation), so the
+ratio amplifies sub-ULP differences between Rust's `cos`/`sin` and numpy's `cexp` — impossible to match bit-for-bit
+across libm boundaries, and the value there is roundoff-dominated noise in scipy too. Higher-order filters amplify
+this more (butter8 well-cond. 2e-7 vs butter4 8e-12). Locked with `group_delay_matches_scipy_reference_values`
+(butter4 well-conditioned bins) + the parallel path stays bit-identical to the serial scipy-kernel recomputation.
+fsci-signal 670/670 green.

@@ -10462,14 +10462,48 @@ pub fn group_delay(
     // Group delay = Re{ (B'·conj(B))/(|B|²) - (A'·conj(A))/(|A|²) }
     // where B' = Σ (-jk) b[k] e^{-jkω}
 
-    // Each ω's group delay is an independent analytic poly evaluation → fan a
-    // large sweep across cores, byte-identical to the serial loop.
-    let work = (b.len() + a.len()).saturating_mul(4).max(8);
-    let nthreads = freqz_response_thread_count(n, work);
+    // scipy's exact group-delay formula (scipy.signal.group_delay):
+    //   c  = convolve(b, reversed(a));  cr = c * [0,1,2,...]
+    //   gd(ω) = Re( Σⱼ cr[j]·zʲ  /  Σⱼ c[j]·zʲ ) − (len(a)−1),  z = e^{−jω}
+    // with gd set to 0 wherever it is non-finite (zeros/poles on the unit circle).
+    // This matches scipy across the whole band INCLUDING the singular bins, where
+    // the previous analytic-derivative kernel diverged. c/cr are RHS-independent so
+    // they are built ONCE and shared; the per-ω evaluation stays parallel.
+    let (nb, na) = (b.len(), a.len());
+    let nc = nb + na - 1;
+    let mut c = vec![0.0f64; nc];
+    for (i, &bi) in b.iter().enumerate() {
+        for (j, &aj) in a.iter().rev().enumerate() {
+            c[i + j] += bi * aj;
+        }
+    }
+    let cr: Vec<f64> = c.iter().enumerate().map(|(j, &cj)| j as f64 * cj).collect();
+    let offset = (na - 1) as f64;
+    let c_ref = &c;
+    let cr_ref = &cr;
+
+    let nthreads = freqz_response_thread_count(n, nc.max(8));
     let pairs: Vec<(f64, f64)> = freqz_par_collect(n, nthreads, |i| {
         // Match scipy endpoint=False: w[i] = i * pi / n
         let omega = std::f64::consts::PI * i as f64 / n as f64;
-        (omega, group_delay_at_frequency(b, a, omega))
+        // z = e^{−jω}
+        let (sin_w, cos_w) = omega.sin_cos();
+        let (zr, zi) = (cos_w, -sin_w);
+        // Horner: den = Σⱼ c[j]·zʲ , num = Σⱼ cr[j]·zʲ (both accumulated together).
+        let (mut den_r, mut den_i, mut num_r, mut num_i) = (0.0, 0.0, 0.0, 0.0);
+        for j in (0..nc).rev() {
+            let dr = den_r * zr - den_i * zi + c_ref[j];
+            let di = den_r * zi + den_i * zr;
+            den_r = dr;
+            den_i = di;
+            let mr = num_r * zr - num_i * zi + cr_ref[j];
+            let mi = num_r * zi + num_i * zr;
+            num_r = mr;
+            num_i = mi;
+        }
+        let denom = den_r * den_r + den_i * den_i;
+        let gd = (num_r * den_r + num_i * den_i) / denom - offset;
+        (omega, if gd.is_finite() { gd } else { 0.0 })
     });
     let mut w_out = Vec::with_capacity(n);
     let mut gd_out = Vec::with_capacity(n);
@@ -24549,12 +24583,67 @@ mod tests {
             };
             assert_eq!(par.h_mag[i].to_bits(), emag.to_bits(), "zpk mag @ {i}");
             assert_eq!(par.h_phase[i].to_bits(), ephase.to_bits(), "zpk phase @ {i}");
-            // group_delay: same kernel the parallel path calls.
+            // group_delay: recompute scipy's exact kernel serially (c = b⊛reversed(a),
+            // cr = c·arange, gd = Re(Σ cr[j]zʲ / Σ c[j]zʲ) − (len(a)−1)) and require
+            // the parallel sweep to be bit-identical.
+            let (nb, na) = (coeffs.b.len(), coeffs.a.len());
+            let nc = nb + na - 1;
+            let mut c = vec![0.0f64; nc];
+            for (bi, &bv) in coeffs.b.iter().enumerate() {
+                for (aj, &av) in coeffs.a.iter().rev().enumerate() {
+                    c[bi + aj] += bv * av;
+                }
+            }
+            let (zr, zi) = (omega.cos(), -omega.sin());
+            let (mut dr, mut di, mut mr, mut mi) = (0.0, 0.0, 0.0, 0.0);
+            for j in (0..nc).rev() {
+                let (ndr, ndi) = (dr * zr - di * zi + c[j], dr * zi + di * zr);
+                dr = ndr;
+                di = ndi;
+                let crj = j as f64 * c[j];
+                let (nmr, nmi) = (mr * zr - mi * zi + crj, mr * zi + mi * zr);
+                mr = nmr;
+                mi = nmi;
+            }
+            let denom = dr * dr + di * di;
+            let gexp = (mr * dr + mi * di) / denom - (na - 1) as f64;
+            let gexp = if gexp.is_finite() { gexp } else { 0.0 };
             assert_eq!(gw[i].to_bits(), omega.to_bits());
-            assert_eq!(
-                gd[i].to_bits(),
-                group_delay_at_frequency(&coeffs.b, &coeffs.a, omega).to_bits(),
-                "group_delay @ {i}"
+            assert_eq!(gd[i].to_bits(), gexp.to_bits(), "group_delay @ {i}");
+        }
+    }
+
+    #[test]
+    fn group_delay_matches_scipy_reference_values() {
+        // scipy.signal.group_delay((b, a), w=16) for butter(4, 0.25), sampled at
+        // well-conditioned bins (ω < π/2, far from the z=−1 near-singularity).
+        let b = [
+            0.010_209_480_791_203_14,
+            0.040_837_923_164_812_55,
+            0.061_256_884_747_218_83,
+            0.040_837_923_164_812_55,
+            0.010_209_480_791_203_14,
+        ];
+        let a = [
+            1.0,
+            -1.968_427_786_938_518_5,
+            1.735_860_709_208_886_7,
+            -0.724_470_829_507_362_6,
+            0.120_389_599_896_244_51,
+        ];
+        let (_, gd) = group_delay(&b, &a, Some(16)).expect("group_delay");
+        let refs = [
+            (0usize, 3.154_322_029_898_951_4),
+            (2, 3.694_350_924_227_495_4),
+            (4, 5.226_251_859_505_503),
+            (6, 2.191_457_866_224_930_7),
+            (8, 1.176_960_257_628_593_4),
+        ];
+        for (i, want) in refs {
+            assert!(
+                (gd[i] - want).abs() < 1e-9,
+                "group_delay[{i}] = {} vs scipy {want}",
+                gd[i]
             );
         }
     }
