@@ -12729,3 +12729,32 @@ the rest (24.7→~0.4µs/pt). LEVER: for a special-fn ufunc where scipy recomput
 (spheroidal, and any "characteristic-value + coefficient-series" family), a batched form that hoists the solve +
 parallelizes the compute-bound series beats scipy multi-x. CONTRAST the FFT-batch bandwidth wall (02e0f0c4): this
 eval is COMPUTE-bound so it scales to 61-68x self, not ~2x.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched mathieu_cem_many/mathieu_sem_many (amortize Fourier solve + parallel trig eval) — 6.2-14.7x FASTER than scipy; + rad1_many NEGATIVE (Bessel eval too slow)
+
+Extended the amortize-x-invariant-solve lever (pro_ang1_many, 948a312c) to the periodic Mathieu functions.
+`scipy.special.mathieu_cem(m,q,x)` as a ufunc recomputes the Fourier coefficients (an x-invariant matrix solve)
+for EVERY element. fsci `mathieu_cem_many`/`mathieu_sem_many` (factored `mathieu_series_many`): compute
+`mathieu_fourier` ONCE, then fan the CHEAP cosine/sine series across threads.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), m=3 q=5, fixed (m,q) over N random x (degrees):
+
+| N | fsci serial-loop → many | scipy mathieu_cem | many vs scipy | self |
+| --- | --- | --- | --- | --- |
+| 20000 | 285.8 → 2.87ms | 17.78ms | 6.20x FASTER | 99.6x |
+| 50000 | 704.0 → 3.07ms | 44.98ms | 14.67x FASTER | 229.6x |
+
+Byte-identical to the fsci serial loop (0 value/deriv mismatches, both ce/se); fsci mathieu_cem/sem match scipy
+~13 digits at moderate q. fsci-special lib 1123/1123 green (+ `mathieu_series_many_matches_serial_and_scipy`).
+Win GROWS with N (amortized matrix cost spread over more points). CAVEAT: large-q values inherit the scalar's
+characteristic-value labeling (pre-existing concern, NOT introduced — `_many` is byte-identical to looping the
+scalar); se_0 ≡ 0 handled.
+
+BOUNDARY OF THE LEVER (rad1_many NEGATIVE, attempted + reverted this cycle): the amortize+parallelize lever wins
+ONLY when the per-x eval is CHEAP-COMPETITIVE with scipy's. pro_rad1_many (spheroidal radial, first kind) was
+measured at 138.7ms/430ms = **0.65-0.81x SLOWER than scipy** despite 33x self-speedup, because fsci's radial eval
+calls `sph_jn` ~len(d) times per x (each recomputing the spherical Bessel from scratch) → 6.9-8.6µs/pt, above
+scipy's 5.6µs/pt. Reverted (not a scipy-beating win). Contrast the WINNERS: mathieu (trig series, ~0.15µs/pt) and
+pro_ang1 (Legendre, competitive). RULE: amortize-invariant-solve wins iff the residual per-x eval is competitive;
+a per-term-recomputed Bessel series is NOT (would need a single batched-Bessel recurrence — accuracy risk,
+deferred). So: TRIG/POLYNOMIAL per-x series → win; BESSEL/special-fn-per-term series → check eval cost first.

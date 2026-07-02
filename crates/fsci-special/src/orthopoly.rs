@@ -945,15 +945,69 @@ fn mathieu_fourier(m: u32, q: f64, even: bool) -> (Vec<f64>, u32) {
 #[must_use]
 pub fn mathieu_cem(m: u32, q: f64, x: f64) -> (f64, f64) {
     let (a, k0) = mathieu_fourier(m, q, true);
+    mathieu_series_eval(&a, k0, x, true)
+}
+
+/// Per-`x` evaluation of a Mathieu Fourier series given the (x-independent)
+/// coefficients `a`/`k0` from [`mathieu_fourier`]. `even` selects the cosine
+/// series (`ce_m`) or sine series (`se_m`). Split out so batched callers
+/// ([`mathieu_cem_many`]) compute the coefficients ONCE and reuse them across all
+/// `x` (the matrix Fourier solve is invariant in `x`).
+fn mathieu_series_eval(a: &[f64], k0: u32, x: f64, even: bool) -> (f64, f64) {
     let xr = x.to_radians();
     let mut value = 0.0_f64;
     let mut derivative = 0.0_f64;
     for (i, &ai) in a.iter().enumerate() {
         let k = f64::from(k0 + 2 * i as u32);
-        value += ai * (k * xr).cos();
-        derivative -= ai * k * (k * xr).sin();
+        if even {
+            value += ai * (k * xr).cos();
+            derivative -= ai * k * (k * xr).sin();
+        } else {
+            value += ai * (k * xr).sin();
+            derivative += ai * k * (k * xr).cos();
+        }
     }
     (value, derivative)
+}
+
+/// Vectorised Mathieu periodic function (`ce_m` if `even`, else `se_m`) over many
+/// `x` (degrees) at fixed `(m, q)` — computes the Fourier coefficients ONCE (the
+/// x-invariant matrix solve) and fans the cheap trig series across threads.
+/// Bit-identical to the serial [`mathieu_cem`]/[`mathieu_sem`] map.
+pub fn mathieu_series_many(m: u32, q: f64, xs: &[f64], even: bool) -> Vec<(f64, f64)> {
+    if !even && m == 0 {
+        return vec![(0.0, 0.0); xs.len()];
+    }
+    let (a, k0) = mathieu_fourier(m, q, even);
+    let npts = xs.len();
+    let nthreads = if npts < 512 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(npts / 256)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return xs
+            .iter()
+            .map(|&x| mathieu_series_eval(&a, k0, x, even))
+            .collect();
+    }
+    let mut out = vec![(0.0_f64, 0.0_f64); npts];
+    let chunk = npts.div_ceil(nthreads);
+    let a_ref = &a;
+    std::thread::scope(|scope| {
+        for (out_chunk, x_chunk) in out.chunks_mut(chunk).zip(xs.chunks(chunk)) {
+            scope.spawn(move || {
+                for (slot, &x) in out_chunk.iter_mut().zip(x_chunk) {
+                    *slot = mathieu_series_eval(a_ref, k0, x, even);
+                }
+            });
+        }
+    });
+    out
 }
 
 /// Odd periodic Mathieu function `se_m(x, q)` (`m ≥ 1`) and its derivative
@@ -968,15 +1022,7 @@ pub fn mathieu_sem(m: u32, q: f64, x: f64) -> (f64, f64) {
         return (0.0, 0.0);
     }
     let (b, k0) = mathieu_fourier(m, q, false);
-    let xr = x.to_radians();
-    let mut value = 0.0_f64;
-    let mut derivative = 0.0_f64;
-    for (i, &bi) in b.iter().enumerate() {
-        let k = f64::from(k0 + 2 * i as u32);
-        value += bi * (k * xr).sin();
-        derivative += bi * k * (k * xr).cos();
-    }
-    (value, derivative)
+    mathieu_series_eval(&b, k0, x, false)
 }
 
 /// Bessel `J_n(u)` and its derivative `J_n'(u) = (J_{n-1}(u) − J_{n+1}(u))/2`.

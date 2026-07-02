@@ -206,6 +206,8 @@ pub use convenience::{
     logsumexp_axis_2d,
     logsumexp_axis_2d_with_b,
     logsumexp_with_b,
+    mathieu_cem_many,
+    mathieu_sem_many,
     maximum,
     minimum,
     mish,

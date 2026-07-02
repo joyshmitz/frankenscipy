@@ -3572,6 +3572,25 @@ pub fn obl_ang1_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
     crate::orthopoly::spheroidal_ang1_many(m, n, c, x, false)
 }
 
+/// Vectorized even periodic Mathieu function `mathieu_cem(m, q, x)` (value and
+/// derivative) over many `x` (degrees) at a fixed `(m, q)`. The Fourier
+/// coefficients (an x-invariant matrix solve) are computed ONCE and the cheap
+/// cosine series is fanned across threads; SciPy's ufunc recomputes them per
+/// element. Each entry equals [`mathieu_cem`](crate::mathieu_cem). (Large-`q`
+/// values inherit the scalar's characteristic-value labeling — a pre-existing
+/// concern, not introduced here.)
+#[must_use]
+pub fn mathieu_cem_many(m: u32, q: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    crate::orthopoly::mathieu_series_many(m, q, x, true)
+}
+
+/// Vectorized odd periodic Mathieu function `mathieu_sem(m, q, x)` over many `x`
+/// (degrees) at a fixed `(m, q)`; see [`mathieu_cem_many`].
+#[must_use]
+pub fn mathieu_sem_many(m: u32, q: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    crate::orthopoly::mathieu_series_many(m, q, x, false)
+}
+
 /// Weighted integral of the Bessel function of the first kind,
 /// `besselpoly(a, λ, ν) = ∫₀¹ xˡ Jᵥ(2·a·x) dx`.
 ///
@@ -14256,6 +14275,47 @@ mod tests {
             (super::zeta_scalar(f64::INFINITY) - 1.0).abs() < 1e-15,
             "ζ(∞) = 1"
         );
+    }
+
+    #[test]
+    fn mathieu_series_many_matches_serial_and_scipy() {
+        // mathieu_cem_many / mathieu_sem_many must be bit-identical to the serial
+        // per-x loop (Fourier coeffs computed once, reused across all x).
+        let (m, q) = (3u32, 5.0f64);
+        let mut s = 0xC0FF_EE12_3456_789Bu64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            180.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let xs: Vec<f64> = (0..1500).map(|_| rng()).collect(); // above the 512 gate
+        for &even in &[true, false] {
+            let many = if even {
+                mathieu_cem_many(m, q, &xs)
+            } else {
+                mathieu_sem_many(m, q, &xs)
+            };
+            assert_eq!(many.len(), xs.len());
+            for (&x, &(gv, gd)) in xs.iter().zip(&many) {
+                let (sv, sd) = if even {
+                    crate::orthopoly::mathieu_cem(m, q, x)
+                } else {
+                    crate::orthopoly::mathieu_sem(m, q, x)
+                };
+                assert_eq!(gv.to_bits(), sv.to_bits(), "mathieu value mismatch");
+                assert_eq!(gd.to_bits(), sd.to_bits(), "mathieu deriv mismatch");
+            }
+        }
+        // Accuracy vs SciPy reference at a fixed point (moderate q).
+        let (cv, cd) = mathieu_cem_many(m, q, &[40.0])[0];
+        assert!((cv - 0.4016099012381087).abs() < 1e-11, "cem value {cv}");
+        assert!((cd - (-2.484064740098615)).abs() < 1e-10, "cem deriv {cd}");
+        let (sv, sd) = mathieu_sem_many(m, q, &[40.0])[0];
+        assert!((sv - 1.0545080484646563).abs() < 1e-11, "sem value {sv}");
+        assert!((sd - 0.32779280697063695).abs() < 1e-10, "sem deriv {sd}");
+        // se_0 ≡ 0.
+        assert_eq!(mathieu_sem_many(0, q, &[10.0, 20.0]), vec![(0.0, 0.0); 2]);
     }
 
     #[test]
