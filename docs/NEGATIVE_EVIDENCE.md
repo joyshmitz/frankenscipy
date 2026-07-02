@@ -12150,3 +12150,31 @@ eval_many all parallel (par_query_try_map); spatial directed_hausdorff Taha-Hanb
 spatial cdist parallel (cdist_fill); RbfInterpolator.eval_many parallel; integrate quad_vec inherently
 sequential (adaptive GK15). fsci-fft non-pow2 SoA-SIMD kernel remains THE deferred multi-cycle gap (only bites
 full-length transforms now — OA routing sidesteps it for all 1-D convolution entry points).
+
+## 2026-07-02 — BlackThrush (cc): SURFACE BLOCKER — accessible-lever veins exhausted; sole remaining measurable gap is the fsci-fft non-pow2 SoA-SIMD kernel constant
+
+Measurement-first sweep this cycle across NOT-yet-re-hunted crates — every candidate is ALREADY optimal (don't
+re-hunt): ndimage `distance_transform_edt` (separable Felzenszwalb + `edt_axis_pass_parallel`), ndimage
+`map_coordinates` (parallel across output points), stats `siegelslopes`/`theilslopes` (parallel per-anchor
+medians + fast path), stats `bootstrap`/`permutation_test`/`monte_carlo_test` ABSENT (RNG-dependent → exact
+conformance intractable, not a clean beat), interpolate `griddata` (all 3 methods parallel eval_many), spatial
+`cdist` (cdist_fill parallel) + `directed_hausdorff` (Taha early-break + parallel), integrate `quad_vec`
+(inherently sequential adaptive GK15). fsci-fft already has Bluestein + Rader + mixed-radix + radix-2²-fusion +
+real-FFT specialization (algorithmically complete). GAUNTLET_RELEASE_SCORECARD shows every documented loss
+already flipped to a win ("keep").
+
+CONCLUSION: the port is exhaustively optimized on all ACCESSIBLE levers (parallel-across-items, method-routing,
+recurrence, quadrature→series, cache/alloc). Confirmed over many cycles across special (fully), signal (conv
+family + filters), csgraph, stats (distributions/tests/reducers/slopes), interpolate, spatial, ndimage.
+
+SOLE REMAINING MEASURABLE GAP = the fsci-fft non-pow2 mixed-radix kernel CONSTANT (~3.6x slower per-point than
+pocketfft): scalar butterflies over AoS `Complex64=(f64,f64)` vs pocketfft's SoA-SIMD-across-the-r-loop. It now
+only bites FULL-LENGTH transforms (resample at non-5-smooth n; similar-size fftconvolve; 2D conv near k≈31) —
+the 1-D conv family already routes around it via overlap-add. A partial SIMD-across-r with AoS gather/scatter
+gives ~1.8x but scipy is ~3.6x faster, so it would NOT flip to a win (self-speedup only, high byte-identity
+risk). The real fix is a crate-wide SoA storage + SIMD-across-r restructure = a dedicated multi-cycle project
+that needs a QUIET box for trustworthy same-process A/B (per AmberKestrel 2026-07-01 + this cycle's confirmation).
+
+RECOMMENDATION: next cycle either (a) commit a dedicated fsci-fft SoA-SIMD restructure session on a quiet box,
+or (b) treat the port as complete on accessible levers and shift to breadth (new scipy API surface / missing
+deterministic functions) rather than perf. No risky non-winning fft-partial shipped this cycle.
