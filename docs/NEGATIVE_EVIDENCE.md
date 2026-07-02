@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - PARTIAL/KEEP: erfcinv deep-tail iterate-break — 3× self (loss-reduction, not a flip)
+
+- Target: `fsci_special::convenience::erfcinv_conv` deep-tail branch (y < 2e-3). Its log-space Newton
+  broke only on the absolute residual `|f| < 1e-16`, unreachable for tiny y (~1e-15 relative noise),
+  so it ran all 16 iters — each a full erfcx continued fraction — a **17× SciPy loss** on the tail
+  (erfcinv(1e-8) 2.25µs vs scipy 0.13µs). Same iterate-break lever: break when the Newton step stops
+  moving (`|step| ≤ 4·ε·|x|`), ~4 iters.
+- MEASURED (same box; scipy 1.17.1): erfcinv(1e-8) **2.25µs → 0.76µs = 3.0× self**. HONEST: still
+  ~5.8× SLOWER than scipy — the residual gap is the erfcx continued-fraction cost (scipy uses a
+  rational approximation, no root-finding); the iterate-break only removes the wasteful oscillation,
+  not the CF floor. NOT a SciPy flip. Central erfcinv (y > 0.0625 → erfinv; 2e-3–0.0625 → ndtri) is
+  already 6.7× FASTER than scipy, unaffected. wrightomega already 1.5-2× FASTER (no change needed).
+- Verification: 7 erfcinv + 5 erfinv tests green (break fires post-convergence, root unchanged).
+- To actually flip the deep tail: port scipy/Blair rational approximation for erfcinv (no erfcx CF).
+  Deferred — deep-tail erfcinv is niche (extreme quantiles), and this eliminates the pathological
+  16-iter oscillation safely.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: fdtridfd/stdtridf bisection → illinois_root — flip 21× loss → parity/win (20.8× self)
 
 - Target: `fsci_special::beta::fdtridfd` / `stdtridf` (invert fdtr/stdtr in the df PARAMETER). Both

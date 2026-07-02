@@ -4929,8 +4929,13 @@ pub fn erfcinv_conv(y: f64) -> f64 {
     for _ in 0..16 {
         let ex = crate::error::erfcx_cf_real(x);
         let f = -x * x + ex.ln() - ln_y;
-        x += f * sqrt_pi * ex / 2.0;
-        if f.abs() < 1e-16 {
+        let step = f * sqrt_pi * ex / 2.0;
+        x += step;
+        // Iterate-convergence break (see betaincinv_scalar): the absolute `1e-16`
+        // log-space residual is unreachable for tiny y (~1e-15 relative noise), so
+        // Newton otherwise ran all 16 iters — each a full erfcx continued fraction —
+        // making the deep tail ~17× slower than SciPy. Stop once x stops moving.
+        if step.abs() <= 4.0 * f64::EPSILON * x.abs().max(f64::MIN_POSITIVE) {
             break;
         }
     }
