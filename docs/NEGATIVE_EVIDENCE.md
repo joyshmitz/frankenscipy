@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - BLOCKER: broad same-box sweep of stats/interpolate/cluster — all already ≥ SciPy
+
+- After shipping the sparse counting-sort vein + `energy_distance` sort-hoist, dug a fresh
+  measurement-driven hunt across stats / interpolate / cluster (same-box LOCAL bench, scipy 1.17.1).
+  EVERY expensive function measured is already at parity-or-better; NO new loss found this pass.
+- Verified WINS/parity (do NOT re-chase — measured same-box this session unless noted):
+  - `cluster.cophenet`: fsci **36.9 ms vs scipy 141.7 ms @ n=3000 = 3.8× FASTER** (move-not-clone
+    membership + tight Rust; its O(n²) writes are memory-bound scattered — parallelizing is blocked
+    by forbid(unsafe), but it already wins so moot).
+  - `stats.multiscale_graphcorr` (MGC): permutation scoring already parallel across cores.
+  - `stats` two-sample tests (anderson_ksamp / cramervonmises_2samp / ks_2samp / epps / ansari /
+    mannwhitneyu / mood): scipy only 1-22 ms @ n=50k (O(n log n)); low absolute value, fsci parallel/parity.
+  - `stats.gaussian_kde` (1D+ND parallel evaluate_many), `kendalltau` (Knight O(n log n)),
+    `theilslopes` (sub-O(n²) interval/rank fast path), `wasserstein` (single sort) — all optimal.
+  - `interpolate.griddata`/LinearND/CloughTocher — already 46× (find_simplex grid 14.7-16.4×, etc.).
+  - Redundant-sort-hoist vein EXHAUSTED: grep of all `fn` with ≥2 sorts → every other hit sorts
+    DISTINCT arrays (u/v, x/y, data1/data2); `energy_distance` was the sole same-array double-sort.
+- BLOCKER (one sentence): the readily-measurable crates (sparse, stats, interpolate, cluster) are
+  exhaustively optimized — fsci matches-or-beats SciPy on every expensive function measured — so the
+  remaining fresh-win surface is the documented multi-session WALLS (FFT non-pow2 SIMD underlying
+  signal.resample; dense LAPACK eig/svd; Qhull; HiGHS/linprog; CloughTocher gradients) plus safe
+  parallel SCATTER writes under `#![forbid(unsafe_code)]` (blocks COO-scatter + cophenet parallel).
+- NEXT-SESSION STEER: don't re-run per-function hunts in these crates; either commit to one wall
+  (FFT radix SIMD is highest-value, underlies resample + all 5-smooth FFT ops) or a genuinely new
+  lever CLASS (scan/parallel-prefix, cache-blocked transpose to unlock strided/scatter parallelism).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: stats.energy_distance sort-hoist (1.8-2× self, widens 5-9× → 9-18× vs SciPy)
 
 - Target: `fsci_stats::energy_distance`. It already used the O((N+M)log(N+M)) closed-form L1
