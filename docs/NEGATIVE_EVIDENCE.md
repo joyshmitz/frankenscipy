@@ -11982,3 +11982,26 @@ cost for those was not measured (probe stalled on the 1M nctdtrit serial map). C
 safe regardless; NEXT CYCLE: measure `_many` throughput vs scipy per-fn (same box) and record ratios; drop or
 keep stdtrit_many based on its measured margin. LEVER GUARD reconfirmed: parallel-vs-single-threaded only wins
 when fsci's per-point scalar is not far slower than scipy's — verify the scalar ratio BEFORE claiming a _many win.
+
+## 2026-07-01 — BlackThrush (cc): RESOLVED prior cycle — inverse-CDF _many MEASURED: 4 WINS kept (1.6-13.1x), nctdtrit_many REVERTED (2.9x loss)
+
+Closed out last cycle's UNVERIFIED inverse-CDF _many throughput (commit 9445dfe8). Measured same box, 1M pts
+(nctdtrit at 100k), all bit-identical to serial (0 mismatches):
+
+| fn | scipy ns/pt | fsci _many ns/pt | self | verdict |
+|----|----:|----:|----:|:--|
+| gdtrix   | 314  | 24    | 16x | **13.1x FASTER** KEEP |
+| chdtriv  | 1979 | 203   | 27x | **9.7x FASTER**  KEEP |
+| stdtrit  | 313  | 64    | 26x | **4.9x FASTER**  KEEP |
+| nbdtrik  | 2218 | 1386  | 37x | **1.6x FASTER**  KEEP |
+| nctdtrit | 7794 | 22265 | 31x | **2.9x SLOWER**  REVERTED |
+
+stdtrit_many beat last cycle's ~1.3x pessimistic estimate (4.9x) — par_map_indices fanned to ~26x self on
+this 64-core box, overcoming the 5.3x scalar deficit (fsci stdtrit scalar 1669 vs scipy 313 ns/pt).
+
+REVERTED nctdtrit_many: fsci's `nctdtrit` SCALAR is pathologically slow — **680 µs/pt serial vs scipy's
+7.8 µs/pt = ~87x slower scalar**; even 31x parallelism nets 22.3µs/pt = 2.9x SLOWER than scipy. Parallelism
+cannot rescue an ~87x scalar deficit (reconfirms the lever guard: verify fsci scalar isn't far slower than
+scipy before wrapping). SEPARATE ANOMALY / BACKLOG: fsci `nctdtrit` scalar is ~87x slower than scipy's cdflib
+`cdftnc`-based inverse — likely a slow inner noncentral-t CDF eval or an over-wide root-find bracket; a scalar
+fix there (not a _many) is the real lever, and would also make a future nctdtrit_many viable.

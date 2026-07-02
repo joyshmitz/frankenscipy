@@ -1060,15 +1060,6 @@ pub fn stdtrit_many(v: f64, p: &[f64]) -> Vec<f64> {
         .expect("stdtrit is infallible")
 }
 
-/// Vectorized inverse noncentral-t CDF `nctdtrit(df, nc, p)` over many `p` for
-/// fixed `(df, nc)`. SciPy's ufunc is especially slow here (~7.8 µs/pt); see
-/// [`stdtrit_many`].
-#[must_use]
-pub fn nctdtrit_many(df: f64, nc: f64, p: &[f64]) -> Vec<f64> {
-    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(nctdtrit(df, nc, p[i])))
-        .expect("nctdtrit is infallible")
-}
-
 /// Vectorized inverse negative-binomial CDF w.r.t. successes, `nbdtrik(y, n, p)`,
 /// over many CDF values `y` for fixed `(n, p)`; see [`stdtrit_many`].
 #[must_use]
