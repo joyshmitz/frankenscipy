@@ -6,6 +6,28 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: betaincinv iterate-break — flip stdtrit 17.7× loss → parity/win (16× self)
+
+- Target: `fsci_special::convenience::betaincinv_scalar` (inverse regularized incomplete beta — the
+  core of `btdtri`, `stdtrit`, and every beta/F/t quantile). Its bracketed-Newton loop only broke on
+  the residual test `|betainc(x)−y| ≤ 1e-15·y`, which is UNREACHABLE (betainc carries ~1e-15 relative
+  noise), so Newton oscillated at the ULP floor to its 120-iter cap — ~90 full-betainc evals per call.
+- Diagnosis (measured): fsci `betainc` is FAST (0.15-0.26µs, faster than scipy's 1.2µs), so the loss
+  wasn't the kernel — it was the iteration count. stdtrit(8,0.9) = 23.9µs ≈ 92 betainc evals; a Python
+  prototype of the SAME algorithm converged in **7**.
+- Fix: add an **iterate-convergence break** — return as soon as the Newton/bisection estimate stops
+  moving (`|x_new−x| ≤ 4·ε·|x|`); x is then the root to machine precision. Converges in ~5-7 iters.
+- MEASURED (same box, best-of; scipy 1.17.1): stdtrit(8,0.9) **23.9µs → 1.49µs = 16× self** (was
+  17.7× SLOWER than scipy → now 1.17× ~parity); stdtrit(3,0.99) **0.86µs = 1.26× FASTER** than scipy
+  (1.08µs); btdtri(4,0.5,0.2) **1.45µs = 1.15× FASTER** than scipy (1.67µs). The core inverse-beta
+  now matches-or-beats scipy; broad impact across all beta/F/t quantiles that hit the cap.
+- Verification: 87 beta-module tests + betaincinv (4/4) + stdtrit (8/8) green — the break only fires
+  once x has converged to machine precision, so the returned root is unchanged (≤1 ULP). LEVER: grep
+  root-finders whose ONLY exit is a residual/|f| tolerance tighter than the forward kernel's achievable
+  accuracy → they silently run to the iteration cap; add an iterate-stops-moving break.
+- Still slow (routed): `fdtridfd`/`stdtridf` (parameter-inversions) use raw 240-iter bisection (~21×
+  slower) — convert to the existing `illinois_root` helper (superlinear). Separate lever.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: hyperu large-x a>0 asymptotic — FLIP 13× loss → 10-41× SciPy WIN
 
 - Target: `fsci_special::hyper::hyperu_scalar`. The `a > 0` branch routed EVERY case straight to

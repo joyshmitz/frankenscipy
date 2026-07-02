@@ -4677,16 +4677,27 @@ pub fn betaincinv_scalar(a: f64, b: f64, y: f64) -> f64 {
             0.0
         };
 
-        if dpx > 1e-30 {
-            let x_new = x - err / dpx;
-            if x_new > lo && x_new < hi {
-                x = x_new;
+        let x_new = if dpx > 1e-30 {
+            let step = x - err / dpx;
+            if step > lo && step < hi {
+                step
             } else {
-                x = 0.5 * (lo + hi);
+                0.5 * (lo + hi)
             }
         } else {
-            x = 0.5 * (lo + hi);
+            0.5 * (lo + hi)
+        };
+
+        // Iterate-convergence break: once the estimate stops moving, x is the root
+        // to machine precision. Without this, the (necessarily) tight `1e-15·y`
+        // residual tolerance above is often unreachable (betainc carries ~1e-15
+        // relative noise), so Newton oscillated at the ULP floor to the 120-iter
+        // cap — the cause of a ~90-eval, ~18× SciPy loss on stdtrit / t- & F-quantiles
+        // (each eval is a full betainc). Newton converges in ~5-7 iterates instead.
+        if (x_new - x).abs() <= 4.0 * f64::EPSILON * x.abs().max(f64::MIN_POSITIVE) {
+            return x_new;
         }
+        x = x_new;
     }
     x
 }
