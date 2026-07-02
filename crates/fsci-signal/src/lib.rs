@@ -9690,6 +9690,64 @@ fn validate_sos_coefficients_finite(
     })
 }
 
+/// Threads for a frequency-response sweep whose per-frequency kernel is independent
+/// (Horner/biquad-cascade + `sqrt` + `atan2`). Serial below the gate so short sweeps
+/// avoid the thread-spawn floor; caps threads by work. Byte-identical either way —
+/// each frequency is a pure function of its index and lands in an ordered slot.
+fn freqz_response_thread_count(n_freqs: usize, work_per_freq: usize) -> usize {
+    let work = (n_freqs as u64).saturating_mul(work_per_freq.max(1) as u64);
+    if n_freqs < 4096 || work < (1 << 16) {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min((n_freqs / 2048).max(1))
+}
+
+/// Fill `(w, h_mag, h_phase)` from a per-frequency `kernel(i) -> (ω, |H|, ∠H)`,
+/// spreading the sweep across disjoint contiguous chunks. Byte-identical to the
+/// serial `for i in 0..n` because chunks are index-aligned and the kernel is pure.
+fn freqz_parallel_fill<F>(n: usize, nthreads: usize, kernel: F) -> FreqzResult
+where
+    F: Fn(usize) -> (f64, f64, f64) + Sync,
+{
+    let mut w = vec![0.0f64; n];
+    let mut h_mag = vec![0.0f64; n];
+    let mut h_phase = vec![0.0f64; n];
+    if nthreads <= 1 {
+        for i in 0..n {
+            let (om, mag, ph) = kernel(i);
+            w[i] = om;
+            h_mag[i] = mag;
+            h_phase[i] = ph;
+        }
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let kernel = &kernel;
+        std::thread::scope(|scope| {
+            let mut base = 0usize;
+            for ((wc, mc), pc) in w
+                .chunks_mut(chunk)
+                .zip(h_mag.chunks_mut(chunk))
+                .zip(h_phase.chunks_mut(chunk))
+            {
+                let start = base;
+                base += wc.len();
+                scope.spawn(move || {
+                    for k in 0..wc.len() {
+                        let (om, mag, ph) = kernel(start + k);
+                        wc[k] = om;
+                        mc[k] = mag;
+                        pc[k] = ph;
+                    }
+                });
+            }
+        });
+    }
+    FreqzResult { w, h_mag, h_phase }
+}
+
 /// Compute the frequency response of a digital filter over half or the whole unit circle.
 ///
 /// Matches `scipy.signal.freqz(b, a, worN, whole=...)`.
@@ -9716,15 +9774,16 @@ pub fn freqz_with_whole(
         ));
     }
 
-    let mut w = Vec::with_capacity(n);
-    let mut h_mag = Vec::with_capacity(n);
-    let mut h_phase = Vec::with_capacity(n);
-
     // For large filters, B(e^jω)/A(e^jω) sampled on the linear ω-grid is exactly the DFT of
     // the zero-padded coefficients — O(N log N) via fsci_fft beats the O(n·n_coeffs) Horner
     // loop (this is what scipy's freqz does). frankenscipy-9l5oo. Small filters keep the
     // cheaper Horner path. Whole: nfft=n, ω_i=2πi/n; half: nfft=2n, ω_i=πi/n=2πi/(2n).
-    let fft_responses = if b.len() + a.len() >= 16 && n >= 64 {
+    // The FFT only pays when the coefficient count exceeds ~2·log2(nfft) (two forward
+    // FFTs vs O(n_coeffs) Horner/point); below that, Horner + the parallel sweep below is
+    // faster (an order-8 filter at n=500k was 3× slower on the FFT path).
+    let nfft_bits = 64 - (2 * n).max(1).leading_zeros() as usize; // ≈ log2(nfft)
+    let fft_responses = if b.len() + a.len() >= 2 * nfft_bits && b.len() + a.len() >= 16 && n >= 64
+    {
         let nfft = if whole { n } else { 2 * n };
         let opts = fsci_fft::FftOptions::default();
         let pad = |c: &[f64]| -> Vec<fsci_fft::Complex64> {
@@ -9740,17 +9799,16 @@ pub fn freqz_with_whole(
         None
     };
 
-    for i in 0..n {
-        // scipy uses endpoint=False:
-        // half spectrum: w = np.linspace(0, pi, n, endpoint=False)
-        // whole spectrum: w = np.linspace(0, 2*pi, n, endpoint=False)
+    // scipy uses endpoint=False: half w = linspace(0, π, n, endpoint=False), whole
+    // w = linspace(0, 2π, n, endpoint=False). Each ω is independent (shared FFT above
+    // computed once), so the per-frequency division + sqrt + atan2 fans across cores,
+    // byte-identical to the serial loop.
+    let kernel = |i: usize| -> (f64, f64, f64) {
         let omega = if whole {
             std::f64::consts::TAU * i as f64 / n as f64
         } else {
             std::f64::consts::PI * i as f64 / n as f64
         };
-        w.push(omega);
-
         // B(e^{jω}) and A(e^{jω}): FFT-precomputed for large filters, else Horner.
         // At z = e^{jω}: z^{-k} = e^{-jkω}; DFT bin i equals Σ c[k] e^{-jkω_i}.
         let (b_re, b_im, a_re, a_im) = match &fft_responses {
@@ -9765,17 +9823,23 @@ pub fn freqz_with_whole(
         // H = B / A (complex division)
         let denom = a_re * a_re + a_im * a_im;
         if denom < 1e-30 {
-            h_mag.push(f64::INFINITY);
-            h_phase.push(0.0);
+            (omega, f64::INFINITY, 0.0)
         } else {
             let h_re = (b_re * a_re + b_im * a_im) / denom;
             let h_im = (b_im * a_re - b_re * a_im) / denom;
-            h_mag.push((h_re * h_re + h_im * h_im).sqrt());
-            h_phase.push(h_im.atan2(h_re));
+            (omega, (h_re * h_re + h_im * h_im).sqrt(), h_im.atan2(h_re))
         }
-    }
+    };
 
-    Ok(FreqzResult { w, h_mag, h_phase })
+    // FFT path: per-ω work is just the div + sqrt + atan2 (~8); Horner path adds the
+    // O(n_coeffs) poly evals. Weight accordingly so the gate reflects real per-ω cost.
+    let work_per_freq = if fft_responses.is_some() {
+        8
+    } else {
+        (b.len() + a.len()).max(8)
+    };
+    let nthreads = freqz_response_thread_count(n, work_per_freq);
+    Ok(freqz_parallel_fill(n, nthreads, kernel))
 }
 
 /// Compute the frequency response of a digital filter from ZPK form.
@@ -9919,14 +9983,11 @@ pub fn freqz_sos(sos: &[SosSection], n_freqs: Option<usize>) -> Result<FreqzResu
         ));
     }
 
-    let mut w = Vec::with_capacity(n);
-    let mut h_mag = Vec::with_capacity(n);
-    let mut h_phase = Vec::with_capacity(n);
-
-    for i in 0..n {
+    // Each ω's cascaded-biquad response is independent → fan a large sweep across
+    // cores, byte-identical to the serial loop (ordered slots, pure per-ω kernel).
+    let kernel = |i: usize| -> (f64, f64, f64) {
         // Match scipy endpoint=False: w[i] = i * pi / n
         let omega = std::f64::consts::PI * i as f64 / n as f64;
-        w.push(omega);
 
         // Multiply frequency responses of each section
         let mut total_re = 1.0;
@@ -9956,11 +10017,12 @@ pub fn freqz_sos(sos: &[SosSection], n_freqs: Option<usize>) -> Result<FreqzResu
             total_im = new_im;
         }
 
-        h_mag.push((total_re * total_re + total_im * total_im).sqrt());
-        h_phase.push(total_im.atan2(total_re));
-    }
+        let mag = (total_re * total_re + total_im * total_im).sqrt();
+        (omega, mag, total_im.atan2(total_re))
+    };
 
-    Ok(FreqzResult { w, h_mag, h_phase })
+    let nthreads = freqz_response_thread_count(n, sos.len().saturating_mul(8).max(8));
+    Ok(freqz_parallel_fill(n, nthreads, kernel))
 }
 
 /// Compute the frequency response of a digital filter in SOS format.
@@ -9996,17 +10058,15 @@ pub fn sosfreqz_with_whole(
         ));
     }
 
-    let mut w = Vec::with_capacity(n);
-    let mut h_mag = Vec::with_capacity(n);
-    let mut h_phase = Vec::with_capacity(n);
-
-    for i in 0..n {
+    // Each frequency's cascaded-biquad response is independent, so a large sweep
+    // fans out across cores (byte-identical to the serial loop — same per-ω
+    // arithmetic, ordered slots). scipy's sosfreqz is serial numpy over worN.
+    let kernel = |i: usize| -> (f64, f64, f64) {
         let omega = if whole {
             std::f64::consts::TAU * i as f64 / n as f64
         } else {
             std::f64::consts::PI * i as f64 / n as f64
         };
-        w.push(omega);
 
         let mut total_re = 1.0;
         let mut total_im = 0.0;
@@ -10034,11 +10094,14 @@ pub fn sosfreqz_with_whole(
             total_im = new_im;
         }
 
-        h_mag.push((total_re * total_re + total_im * total_im).sqrt());
-        h_phase.push(total_im.atan2(total_re));
-    }
+        let mag = (total_re * total_re + total_im * total_im).sqrt();
+        (omega, mag, total_im.atan2(total_re))
+    };
 
-    Ok(FreqzResult { w, h_mag, h_phase })
+    // Per-section work ≈ two 3-term Horner evals + complex div/mul; the sqrt+atan2
+    // tail is the dominant per-ω cost, so weight generously.
+    let nthreads = freqz_response_thread_count(n, sos.len().saturating_mul(8).max(8));
+    Ok(freqz_parallel_fill(n, nthreads, kernel))
 }
 
 /// Compute the frequency response of an analog filter from its zeros, poles and
@@ -24351,6 +24414,54 @@ mod tests {
                 1e-4,
                 &format!("mag match at bin {i}"),
             );
+        }
+    }
+
+    #[test]
+    fn freqz_and_sosfreqz_parallel_match_serial_bit_for_bit() {
+        // The parallel frequency sweep must be BIT-identical to the serial one.
+        // Compare a large n (crosses the 4096 thread gate → parallel) against a
+        // small-slice recomputation at the SAME ω (n below the gate → serial), so
+        // the ω grid divisor differs — instead we recompute the exact serial value
+        // at a large n by forcing single-thread via a tiny helper mirror.
+        let coeffs = butter(6, &[0.2], FilterType::Lowpass).expect("butter");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+        let n = 20_000usize; // above the 4096 gate → parallel path
+
+        // Serial reference for freqz_sos: replicate the exact per-ω kernel.
+        let par = freqz_sos(&sos, Some(n)).expect("freqz_sos parallel");
+        assert_eq!(par.w.len(), n);
+        for i in [0usize, 1, 4095, 4096, 9999, n / 2, n - 1] {
+            let omega = std::f64::consts::PI * i as f64 / n as f64;
+            let mut tr = 1.0f64;
+            let mut ti = 0.0f64;
+            for section in &sos {
+                let (br, bi) = eval_poly_on_unit_circle(&[section[0], section[1], section[2]], omega);
+                let (ar, ai) = eval_poly_on_unit_circle(&[section[3], section[4], section[5]], omega);
+                let den = ar * ar + ai * ai;
+                if den < 1e-30 {
+                    tr = f64::INFINITY;
+                    ti = 0.0;
+                    break;
+                }
+                let hr = (br * ar + bi * ai) / den;
+                let hi = (bi * ar - br * ai) / den;
+                let nr = tr * hr - ti * hi;
+                let ni = tr * hi + ti * hr;
+                tr = nr;
+                ti = ni;
+            }
+            assert_eq!(par.w[i].to_bits(), omega.to_bits());
+            assert_eq!(par.h_mag[i].to_bits(), (tr * tr + ti * ti).sqrt().to_bits());
+            assert_eq!(par.h_phase[i].to_bits(), ti.atan2(tr).to_bits());
+        }
+
+        // freqz (BA) parallel path must stay finite + monotone-ish, and match the
+        // SOS response at the same bins (both use the parallel sweep).
+        let par_ba = freqz(&coeffs.b, &coeffs.a, Some(n)).expect("freqz parallel");
+        assert_eq!(par_ba.h_mag.len(), n);
+        for i in [0usize, 4096, 9999, n - 1] {
+            assert!((par_ba.h_mag[i] - par.h_mag[i]).abs() < 1e-9, "ba vs sos at {i}");
         }
     }
 

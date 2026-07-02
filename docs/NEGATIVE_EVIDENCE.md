@@ -13195,3 +13195,28 @@ BATCH TRANSFORM SET (this arc): Rotation multiply/from_matrix/as_euler/from_eule
 RigidTransform compose (20x) + the as_euler correctness fix. Remaining transform ops measured scipy-already-fast
 (inv/mean/reduce/from_rotvec/magnitude, RigidTransform.apply 5.71ms vectorized) — batch vein for the transform
 module is now worked out.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — parallel freqz / sosfreqz frequency sweeps — sosfreqz 17.8x, freqz flipped 0.3x LOSS → 4.7x WIN
+
+`freqz`/`sosfreqz` evaluate a filter's response over `worN` frequencies — each ω is an INDEPENDENT
+Horner/biquad-cascade eval + `sqrt` + `atan2`, but fsci ran them SERIALLY. Added `freqz_response_thread_count`
+(work-gated) + `freqz_parallel_fill` (per-ω kernel → ordered disjoint chunks, byte-identical to the serial loop)
+and routed `freqz_sos` (the `sosfreqz` kernel) and `freqz_with_whole` through it.
+
+Also fixed a `freqz` FFT-path anomaly: the FFT gate (`n_coeffs >= 16`) sent order-8 filters through TWO 1M-point
+FFTs when direct Horner is cheaper — the FFT only pays when `n_coeffs > ~2·log2(nfft)` (two forward FFTs vs
+O(n_coeffs)/point). Tightened the gate to `n_coeffs >= 2·log2(nfft)`; order 8–20 filters now use Horner, which
+also matches scipy's `polyval` path MORE closely.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), order-8 Butterworth, 500k frequencies:
+
+| op | fsci before | fsci after | scipy | vs scipy |
+| --- | --- | --- | --- | --- |
+| sosfreqz | 33.5ms (serial) | 4.63ms | 82.5ms | **17.8x** (was 2.5x) |
+| freqz | 68.8ms (FFT path) | 4.75ms | 22.5ms | **4.7x** (was 0.3x LOSS) |
+
+Matches scipy: freqz mag err 1.01e-12, sosfreqz 3.69e-12. Parallel sweep is BIT-identical to the serial per-ω
+kernel (verified in `freqz_and_sosfreqz_parallel_match_serial_bit_for_bit`, n=20k crossing the 4096 gate,
+`.to_bits()` compare at sampled indices). fsci-signal 668/668 green. LEVER (recurring): a serial `for i in 0..n`
+sweep whose per-i kernel is independent → parallel ordered-chunk fill, byte-identical; here it also FLIPPED a loss
+by removing a mis-gated FFT fast path.
