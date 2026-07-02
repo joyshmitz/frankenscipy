@@ -12200,3 +12200,22 @@ HONEST: PARTIAL — medium sizes on already-good factorizations still lose to sc
 6.14 vs 1.96; 250k×200k 41 vs 28) — the residual is the SoA-SIMD constant (deferred). But the odd-heavy-length
 penalty (a length-SELECTION bug, not the kernel) is now fixed. Lever: fsci-fft cost ∝ radix-3/5 stage count at
 large N — any FFT-length chooser should penalise odd factors above cache, not just minimise points.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — fix catastrophic FFT anomaly for `tail==2` (2·odd-smooth) sizes: 13.27→~2ms (flips 4.9x-slower→1.3x-FASTER than numpy)
+
+Digging the "next_fast_len / convolve2d per-axis" lever led to a bigger find. fsci `fft` cost is factorization-
+driven (last cycle): large-pow2 lengths BEAT numpy, odd-heavy are slow. Pinpointed a CATASTROPHIC anomaly:
+fft(101250=2·3⁴·5⁴) = **13.27ms** but fft(50625=3⁴·5⁴, half the size, pure-odd) = **0.82ms** — 16x slower at 2x
+size. Root cause: the iterative odd-power-tail path sets `tail`=pow2-part; for tail==2 the leaf phase runs n/2
+length-2 leaves each gathering two samples n/2 apart — at large n every one of ~n reads is a cache miss (50625
+stride-50625 gathers ≈ 13ms). tail==1 (pure odd) and tail≥4 (larger contiguous leaf FFTs) don't thrash.
+
+FIX: in `get_or_compute_odd_power_tail_plan`, decline the plan for `tail==2 && n≥2¹⁶` so those shapes fall back
+to the cache-friendlier recursive `mixed_radix_fft`. fft(101250) **13.27→~2.1ms (quiet) = 6.4x self; flips
+4.9x-SLOWER→1.29x-FASTER than numpy** (2.70ms); fft(156250=2·5⁷) →3.2ms = 1.22x faster than numpy. Also lifts
+`dct` whose Makhoul real-FFT hits N/2=2·odd: dct(202500) **13.2→3.12ms** (7.3x→2.6x vs scipy; dct's extract
+overhead is the residual). Roundtrip ifft(fft(x))=x to 1.1e-15; conformance fsci-fft 182/182 green. NO
+regression: tail==1 (50625 0.79ms) unchanged; threshold 2¹⁶ leaves sub-cache tail==2 sizes on their original
+iterative path. (Numbers load-sensitive: 2.09ms quiet / 3.75ms loaded — the 13→~2-3.75 anomaly fix is robust.)
+LEVER: fsci-fft's iterative odd-power-tail thrashes for tail==2 (few-radix-2, huge-stride leaf gathers) — the
+recursive route is cache-friendlier there. Residual odd-heavy (tail=4/32, e.g. 202500/100000) still ~kernel-wall.

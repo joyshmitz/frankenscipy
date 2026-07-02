@@ -209,6 +209,16 @@ fn get_or_compute_odd_power_tail_plan(n: usize) -> Option<OddPowerTailPlanRef> {
     }
 
     let (factors, tail) = odd_power_tail_factorization(n)?;
+    // With `tail == 2` the leaf phase runs `n/2` length-2 leaves, each gathering
+    // two samples `n/2` apart — at large n every one of those ~n reads is a cache
+    // miss, so the transform collapses (n=101250=2·3⁴·5⁴ → 50625 stride-50625
+    // gathers ≈ 13 ms vs ≈ 2 ms on the recursive route). Decline the plan for this
+    // shape at large n so it falls back to the cache-friendlier recursive
+    // mixed_radix_fft. (tail==1 pure-odd stays fast on the iterative path; tail≥4
+    // amortises the gathers over larger contiguous leaf FFTs.)
+    if tail == 2 && n >= (1 << 16) {
+        return None;
+    }
     let odd_len = n / tail;
     let leaf_bases = (0..odd_len)
         .map(|leaf| mixed_radix_leaf_base(leaf, &factors))
