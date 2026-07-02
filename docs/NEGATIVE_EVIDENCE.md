@@ -12852,3 +12852,24 @@ Python residual callbacks); the parallel fan adds a modest 1.2x here because fsc
 (~9µs). VMAP-OVER-SOLVER CORE COMPLETE: curve_fit/curve_fit_bounded/least_squares/minimize/minimize_scalar/root/
 newton/secant/fixed_point/brentq/quad/dblquad/tplquad/nquad/solve_ivp/solve_bvp — all `_many`, all byte-identical,
 all Python-overhead-lever wins (13-1950x by callback density).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — cut_tree_multi (multi-cut dendrogram) — 802x FASTER than scipy.cluster.hierarchy.cut_tree, byte-exact
+
+fsci had only a SINGLE-cut `cut_tree(z, n_clusters|height)`; `scipy.cluster.hierarchy.cut_tree(Z, n_clusters=[…])`
+takes a LIST and returns an `(n_points, n_cuts)` matrix — and scipy's implementation is notoriously slow
+(re-derives each column: 128.5ms for 4 cuts at n=3000, 32ms/cut). Added `cut_tree_multi(z, n_clusters, heights)`:
+one flat labeling per cut (`out[j]` = column j; both-None = all levels, `n` clusters down to `1`, matching scipy's
+default full matrix), each cut reusing fsci's O(n) union-find single `cut_tree`.
+
+Measured (same box): n=3000, 4 cuts `[2,5,10,20]` — fsci `cut_tree_multi` 0.160ms vs scipy 128.51ms = **802x**.
+BYTE-EXACT to scipy (0 mismatches): verified the full `(n, n)` matrix (all 12 columns) AND a `n_clusters` list on a
+saved reference tree — identical LABELS, not just partition (fsci's single cut_tree already matches scipy's
+first-appearance labeling exactly, k=2/3/5). fsci-cluster lib 143/143 green (+ `cut_tree_multi_matches_looping_
+single_cut`: list / heights / full-matrix all equal the byte-exact single cut, column j has n−j clusters,
+both-specified errors). The win is scipy's cut_tree being algorithmically slow — fsci's union-find is O(n)/cut.
+
+ALSO CHECKED (NEGATIVE, not landed): `cophenet` — fsci is ALREADY faster than scipy's `cophenet(Z, Y)` (17x/4x)
+BUT that's unfair (scipy also computes the correlation coefficient); vs the fair `cophenet(Z)` distances-only,
+fsci is 0.76-0.86x SLOWER (~1.2-1.3x). Both are O(n²) MEMORY-BOUND with the same L3→RAM cache cliff (scatter-write
+into the condensed n²/2 array); scipy's tight C scatter wins by a constant. cophenet is a memory-bound wall, not
+winnable without a fundamentally more cache-friendly layout — leave it.

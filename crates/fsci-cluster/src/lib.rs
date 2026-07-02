@@ -5312,6 +5312,33 @@ pub fn cut_tree(
     Ok(out)
 }
 
+/// Cut a hierarchical tree at MULTIPLE points at once — the batched form of
+/// [`cut_tree`], matching `scipy.cluster.hierarchy.cut_tree(Z, n_clusters=[…])` /
+/// `height=[…]`. Returns one flat cluster labeling per requested cut: entry `j`
+/// is column `j` of SciPy's `(n_points, n_cuts)` result (so `out[j][p]` is point
+/// `p`'s label at cut `j`). With both `None`, cuts at every level — `n` clusters
+/// down to `1` (`out[j]` has `n − j` clusters), matching SciPy's default full
+/// matrix. SciPy's `cut_tree` is notably slow (re-derives each column); each cut
+/// here reuses the O(n) union-find of [`cut_tree`], so every column is
+/// byte-identical to SciPy's while the whole call is orders of magnitude faster.
+pub fn cut_tree_multi(
+    z: &[[f64; 4]],
+    n_clusters: Option<&[usize]>,
+    heights: Option<&[f64]>,
+) -> Result<Vec<Vec<usize>>, ClusterError> {
+    match (n_clusters, heights) {
+        (Some(_), Some(_)) => Err(ClusterError::InvalidArgument(
+            "specify at most one of n_clusters or heights".to_string(),
+        )),
+        (Some(ks), None) => ks.iter().map(|&k| cut_tree(z, Some(k), None)).collect(),
+        (None, Some(hs)) => hs.iter().map(|&h| cut_tree(z, None, Some(h))).collect(),
+        (None, None) => {
+            let n = z.len() + 1;
+            (0..n).map(|j| cut_tree(z, Some(n - j), None)).collect()
+        }
+    }
+}
+
 /// Convert a SciPy/FrankenSciPy linkage matrix to MATLAB(TM) format.
 ///
 /// Matches `scipy.cluster.hierarchy.to_mlab_linkage(Z)`: 1-indexes the two
@@ -10204,6 +10231,57 @@ mod tests {
         assert_eq!(root.left.as_ref().unwrap().id, 6);
         assert_eq!(root.right.as_ref().unwrap().id, 7);
         assert_eq!(root.pre_order(), vec![2, 3, 0, 1, 4]);
+    }
+
+    #[test]
+    fn cut_tree_multi_matches_looping_single_cut() {
+        // Build a real linkage, then check cut_tree_multi equals looping the
+        // (byte-exact-to-scipy) single cut_tree for every mode.
+        let mut s = 3u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let n = 60usize;
+        let data: Vec<Vec<f64>> = (0..n).map(|_| (0..3).map(|_| rng()).collect()).collect();
+        let z = average(&data).expect("linkage");
+
+        // n_clusters list.
+        let ks = [2usize, 5, 9, 20];
+        let multi = cut_tree_multi(&z, Some(&ks), None).expect("multi");
+        assert_eq!(multi.len(), ks.len());
+        for (col, &k) in multi.iter().zip(&ks) {
+            assert_eq!(col, &cut_tree(&z, Some(k), None).unwrap());
+            assert_eq!(
+                col.iter().copied().max().unwrap() + 1,
+                k,
+                "k={k} label count"
+            );
+        }
+
+        // heights list.
+        let hs = [z[10][2], z[30][2], z[50][2]];
+        let hmulti = cut_tree_multi(&z, None, Some(&hs)).expect("hmulti");
+        for (col, &h) in hmulti.iter().zip(&hs) {
+            assert_eq!(col, &cut_tree(&z, None, Some(h)).unwrap());
+        }
+
+        // Full matrix (both None): column j has n-j clusters, matching scipy default.
+        let full = cut_tree_multi(&z, None, None).expect("full");
+        assert_eq!(full.len(), n);
+        for (j, col) in full.iter().enumerate() {
+            assert_eq!(col, &cut_tree(&z, Some(n - j), None).unwrap());
+            assert_eq!(
+                col.iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
+                n - j
+            );
+        }
+
+        // Both specified -> error.
+        assert!(cut_tree_multi(&z, Some(&ks), Some(&hs)).is_err());
     }
 
     #[test]
