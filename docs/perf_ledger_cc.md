@@ -2422,3 +2422,9 @@ mismatches vs the deque/total_cmp reference across 5 boundary modes × 4 sizes �
 finite AND NaN-injected data; 255/255 ndimage tests green. Lifts the whole family (min/max filter, grey_open/
 close, morphological_gradient, tophat). LEVER (reusable): grep hot-loop `total_cmp`-based max/min → gate on
 NaN/-0.0 and use f64::max/min for clean data (byte-identical, ~2x on the op).
+
+### 2026-07-01 (AmberKestrel, cc) — SURFACE: ndimage cdt(chessboard) offset-split ~1.10x, doesn't beat scipy (reverted)
+median/percentile filters 20-35x FASTER (wins). Gaps: binary_erosion 1.35x, distance_transform_cdt(chessboard)
+1.51x. cdt interior chamfer iterated all 8 offsets w/ sign branch (used 4); pre-split fwd/bwd → byte-identical
+~1.10x (same-binary A/B) but STILL 1.33x vs scipy (offset iter not dominant; strided neighbour reads + raster
+stepping = C-chamfer/memory wall). Reverted (near-zero + no scipy beat). See docs/NEGATIVE_EVIDENCE.md.

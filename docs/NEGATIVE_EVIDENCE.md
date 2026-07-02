@@ -11768,3 +11768,21 @@ estimate) recovers only ~4.5%. Below the ship threshold + would orphan spmm_row_
 cross-worker spmm runs ranged **84-107ms for IDENTICAL code** (~±12% box noise) — a lucky 89.5ms first read vs
 a 100.5ms second read falsely looked like a regression; only the SAME-BINARY atomic toggle revealed the true
 consistent +4.5%. Don't trust cross-run sparse deltas < ~20%.
+
+## 2026-07-01 — AmberKestrel (cc): ndimage binary_erosion + distance_transform_cdt(chessboard) are C-chamfer walls; cdt offset-split ~1.10x (doesn't beat scipy, reverted)
+
+DIG into more fsci-ndimage (after the grey min/max win 25286b57). Measured vs scipy 1.17 (2000² float / 1500² binary):
+- **median_filter 20x FASTER, percentile_filter 35x FASTER** (parallel quickselect) — big wins, unchanged.
+- uniform_filter 1.09x, binary_dilation ~parity — competitive.
+- **binary_erosion 1.35x SLOWER** (fsci ero≈dil≈38ms; scipy ero 28.7 < its own dil 38.1 — scipy optimizes erosion, fsci is symmetric via separable min/max). Not chased (would need to match scipy's specific erosion trick).
+- **distance_transform_cdt(chessboard) 1.51x SLOWER** (fsci 50.8 vs scipy 33.6). Two-pass 8-neighbour chamfer.
+
+CDT LEVER INVESTIGATED + REVERTED: the interior chamfer loop iterated ALL 8 offsets with an `if flat_delta<0`
+(fwd) / `>0` (bwd) sign branch, using only 4. Pre-partitioned offsets into fwd/bwd lists so each interior
+sweep iterates exactly its 4 (no branch) — BYTE-IDENTICAL (min is order-independent; byte_mism=0 vs ORIG).
+Same-binary atomic-toggle A/B (5 rounds): **stable ~1.10x** (49.5→44.7ms), but STILL 1.33x slower than scipy
+(33.6) — the offset iteration is not the dominant cost (the 4 strided neighbour reads + raster coord stepping
+are, and those are the C-chamfer/memory-bandwidth wall). ~1.10x doesn't beat scipy → reverted per
+revert-near-zero + win-vs-scipy. A 2-D interior-block fast path (drop per-cell coord stepping/interior check)
+might reach ~35ms ≈ parity, NOT a clear win — deferred as not worth the 2-D-specialization churn. cdt/binary
+morphology are constant-factor inlined-C walls, not accessible algorithmic gaps.
