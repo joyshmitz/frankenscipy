@@ -2384,6 +2384,29 @@ fn hyp2f1_scalar(a: f64, b: f64, c: f64, z: f64, mode: RuntimeMode) -> Result<f6
         return Ok(1.0);
     }
 
+    // z near 1 with non-integer c−a−b: the direct 2F1 series converges like z^n, so
+    // it needs O(log ε / log z) terms — ~35 000 at z = 0.999, past hyp2f1_series's
+    // 5000-term cap → previously SLOW (z≈0.99) then WRONG (NaN for z ≳ 0.999). Use
+    // the DLMF 15.8.4 z→1−z connection formula: two series in the SMALL argument
+    // (1−z) that converge in ~10 terms, plus SciPy-matching gamma prefactors. The
+    // integer c−a−b log case (15.8.10) is left to the normal path (deferred).
+    if (0.9..1.0).contains(&z) {
+        let cab = c - a - b;
+        if (cab - cab.round()).abs() > 1e-6 {
+            let omz = 1.0 - z;
+            let pref1 = gamma_ratio_for_hyp2f1(c, cab, c - a, c - b);
+            let pref2 = gamma_ratio_for_hyp2f1(c, -cab, a, b);
+            if pref1.is_finite() && pref2.is_finite() {
+                let s1 = hyp2f1_series(a, b, 1.0 - cab, omz)?;
+                let s2 = hyp2f1_series(c - a, c - b, 1.0 + cab, omz)?;
+                let result = pref1 * s1 + omz.powf(cab) * pref2 * s2;
+                if result.is_finite() {
+                    return Ok(result);
+                }
+            }
+        }
+    }
+
     let decision =
         select_hypergeometric_branch(HyperCaspProblem::hyp2f1(a, b, c, z, 1.0e-14), mode)?;
     match decision.branch {
@@ -4410,6 +4433,33 @@ mod tests {
             );
             let got = get_scalar(&r).unwrap_or(f64::NAN);
             assert!(got.is_finite(), "2F1(1,2;3;{z}) returned non-finite {got}");
+        }
+    }
+
+    #[test]
+    fn hyp2f1_near_unit_argument_noninteger_cab_matches_scipy() {
+        // z very close to 1 with non-integer c−a−b: the direct series (~35k terms at
+        // z=0.999) blew past the 5000-term cap and returned NaN; the DLMF 15.8.4
+        // z→1−z connection formula fixes it. References from scipy.special.hyp2f1.
+        let cases = [
+            (1.0, 2.0, 3.7, 0.99, 3.391_220_236_058_44),
+            (0.5, 1.5, 3.2, 0.995, 1.568_712_1),
+            (1.0, 2.0, 3.7, 0.999, 3.740_952_9),
+            (2.0, 1.0, 4.3, 0.9995, 2.531_491_0),
+        ];
+        for (a, b, c, z, expected) in cases {
+            let got = get_scalar(&hyp2f1(
+                &scalar(a),
+                &scalar(b),
+                &scalar(c),
+                &scalar(z),
+                RuntimeMode::Strict,
+            ))
+            .unwrap_or(f64::NAN);
+            assert!(
+                (got - expected).abs() <= 1e-6 * expected.abs().max(1.0),
+                "2F1({a},{b};{c};{z}) = {got}, expected {expected}"
+            );
         }
     }
 

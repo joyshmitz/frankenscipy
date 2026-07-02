@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: hyp2f1 near z→1 connection formula — fixes NaN + 5.5-7× SciPy WIN
+
+- BUG + PERF found via measurement: `hyp2f1` near z→1 with non-integer c−a−b ran the direct series
+  (converges like zⁿ ⇒ ~35 000 terms at z=0.999, past hyp2f1_series's 5000-term cap) — **SLOW**
+  (5-8µs at z=0.99-0.995, ~3× SciPy) then **WRONG (NaN)** for z ≳ 0.999 where SciPy is finite.
+- Fix: DLMF 15.8.4 z→1−z connection formula — two 2F1 series in the SMALL argument (1−z) that
+  converge in ~10 terms, with SciPy-matching gamma prefactors (reused `gamma_ratio_for_hyp2f1`).
+  Gated `z ∈ [0.9, 1) && |c−a−b − round| > 1e-6`, with a finite-result safety fallthrough to the
+  normal dispatch. The integer c−a−b log case (15.8.10) is deferred (still slow/NaN — separate lever).
+- MEASURED (same box; scipy 1.17.1): hyp2f1(1,2,3.7,0.99) 5.2µs → **0.31µs = 17× self, 5.5× FASTER**
+  than scipy (1.70µs); (0.5,1.5,3.2,0.995) 7.9 → 0.25µs = **6.3× FASTER**; (1,2,3.7,0.999) **NaN →
+  3.740953 (CORRECT), 7× FASTER**; (2,1,4.3,0.9995) **NaN → 2.531491 (CORRECT), ~7× FASTER**. All
+  match scipy to ≥6 digits.
+- Verification: new `hyp2f1_near_unit_argument_noninteger_cab_matches_scipy` (4 scipy refs) + all 28
+  hyp2f1 tests green. NOTE: hyp1f1 and hyp2f1 elsewhere already 6-13× FASTER than scipy (nice regions);
+  this closes the near-z=1 non-integer gap. REMAINING: integer c−a−b near z=1 (needs 15.8.10 log form).
+
 ## 2026-07-02 - BlackThrush (cc) - PARTIAL/KEEP: invert_monotone → illinois — chndtridf 16× self (kernel-walled, not a flip)
 
 - Target: the shared `invert_monotone` helper (gamma.rs) — a 200-iteration bisection with NO
