@@ -7137,6 +7137,90 @@ pub fn expm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Lin
     Ok(rows_from_dmatrix(&result))
 }
 
+/// Parallel map of a per-matrix function over a batch — order-preserving and
+/// bit-identical to the serial `mats.iter().map(f).collect()` (each result is a
+/// pure function of one independent matrix). SciPy exposes only the single-matrix
+/// forms, so a caller with many matrices loops single-threaded; fanning the
+/// independent per-matrix work across cores wins even when fsci's per-matrix
+/// kernel is slower than SciPy's. Tiny batches stay serial (skip the syscall).
+fn par_matrix_batch_map<F>(
+    mats: &[Vec<Vec<f64>>],
+    f: F,
+) -> Result<Vec<Vec<Vec<f64>>>, LinalgError>
+where
+    F: Fn(&[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgError> + Sync,
+{
+    let nb = mats.len();
+    let nthreads = if nb < 2 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nb)
+    };
+    if nthreads <= 1 {
+        return mats.iter().map(|m| f(m)).collect();
+    }
+    let chunk = nb.div_ceil(nthreads);
+    let f = &f;
+    let chunk_results: Vec<Result<Vec<Vec<Vec<f64>>>, LinalgError>> = std::thread::scope(|scope| {
+        mats.chunks(chunk)
+            .map(|c| scope.spawn(move || c.iter().map(|m| f(m)).collect::<Result<Vec<_>, _>>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("matrix-batch worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(nb);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
+/// Vectorized matrix exponential over a batch of matrices — parallel across the
+/// batch; see [`par_matrix_batch_map`]. Each result equals [`expm`] of the
+/// corresponding input.
+pub fn expm_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<Vec<f64>>>, LinalgError> {
+    par_matrix_batch_map(mats, |m| expm(m, options))
+}
+
+/// Vectorized matrix logarithm over a batch; see [`expm_many`].
+pub fn logm_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<Vec<f64>>>, LinalgError> {
+    par_matrix_batch_map(mats, |m| logm(m, options))
+}
+
+/// Vectorized matrix square root over a batch; see [`expm_many`].
+pub fn sqrtm_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<Vec<f64>>>, LinalgError> {
+    par_matrix_batch_map(mats, |m| sqrtm(m, options))
+}
+
+/// Vectorized matrix cosine over a batch; see [`expm_many`].
+pub fn cosm_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<Vec<f64>>>, LinalgError> {
+    par_matrix_batch_map(mats, |m| cosm(m, options))
+}
+
+/// Vectorized matrix sine over a batch; see [`expm_many`].
+pub fn sinm_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<Vec<f64>>>, LinalgError> {
+    par_matrix_batch_map(mats, |m| sinm(m, options))
+}
+
 /// Scaling and squaring method with truncated Taylor series.
 ///
 /// Algorithm: scale A by 2^(-s) so ||A/2^s|| is small, compute exp via

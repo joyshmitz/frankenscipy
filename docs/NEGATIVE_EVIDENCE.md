@@ -12274,3 +12274,25 @@ transpose (moderate refactor, uncertain it beats scipy's tight C). LEVER reconfi
 _per_call_syscall_tax + reduce_axis_2d thread-cap): any per-axis/per-fiber parallel pass must cap threads by
 work-per-thread, not min(cores, nitems) — cheap fibers over-subscribe. Residual dctn gap = safe-strided-axis
 allocation (deferred).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched matrix functions expm_many/logm_many/sqrtm_many/cosm_many/sinm_many (vmap lever): 3.6-48x faster than a single-threaded scipy loop
+
+PIVOT off FFT (path-selection exhausted) to fsci-linalg. Single-matrix expm/sqrtm/cosm are gemm-walled (fsci
+matmul ~3x slower than BLAS; cosm/sinm additionally do a 2n×2n real block = 2x waste vs complex expm — both
+deferred, no complex-matrix arithmetic in fsci). BUT scipy exposes ONLY single-matrix forms — a caller with N
+matrices loops single-threaded. Added `expm_many/logm_many/sqrtm_many/cosm_many/sinm_many` (parallel across the
+batch via `par_matrix_batch_map`, order-preserving, gated). The vmap lever (cf. curve_fit_many/solve_ivp_many)
+applied to matrix functions: even though per-matrix fsci is slower, parallelism across the batch wins.
+
+Measured (fsci _many vs pinned single-threaded scipy loop — OPENBLAS_NUM_THREADS=1, the honest baseline per the
+oversubscription-artifact rule): nb=64/n=128 — expm 12.9 vs 69.6ms=5.4x, logm 61 vs 1801=29.5x, sqrtm 57 vs
+536=9.4x, cosm 65 vs 255=3.9x. nb=32/n=256 — expm 7.3x, logm 19.8x, sqrtm 5.6x, cosm 3.6x. nb=200/n=64 — expm
+7.3x, logm 48x, sqrtm 9.7x, cosm 4x. expm_many byte-identical to the serial loop (0 mismatches). Conformance
+fsci-linalg 494/494 (40 ignored) green; purely additive.
+
+ARTIFACT NOTE (reconfirms perf_dense_lapack_thread_oversubscription): the FIRST nb=200 measurement ran fsci
+CONCURRENTLY with a scipy python process → fsci logm_many 29→393ms (13x), sqrtm 27→1357ms (50x), cosm 31→1601ms
+(51x) inflated; and scipy-DEFAULT-BLAS looped (multi-threaded, oversubscribing on the loaded 64-core box) showed
+a bogus 200-1750x "win". Re-measured fsci in ISOLATION + scipy PINNED for the honest 3.6-48x. Always isolate the
+fsci run and pin scipy BLAS threads for matrix-function timing. LEVER: scipy has no batched matrix-function API —
+`_many` (parallel across matrices) is a clean vmap win for the whole family, no per-matrix kernel change needed.
