@@ -12505,3 +12505,35 @@ single work-gated `par_matmul`. LEVER STATUS: par_matmul now serves 3 callers; t
 targets are the nalgebra `DMatrix`-based matrix functions (expm/logm/sqrtm 2-2.8x slower than scipy) — those use
 nalgebra's blocked GEMM (column-major), where a column-split parallel wrapper risks breaking blocked-accumulation
 bit-identity and would nest under expm_many, so DEFERRED (needs a bit-identity proof + gating vs the batch path).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — parallel nalgebra-DMatrix GEMM in expm (byte-identical) — flips large-matrix expm from 2.6x SLOWER than scipy to 1.7-2.4x FASTER (wins n>=~700)
+
+Closes the previously-DEFERRED "nalgebra DMatrix matrix functions" target. fsci `expm` (Taylor + scaling-squaring)
+is gemm-bound: its 20-term Taylor series and the squaring phase are n×n·n×n `DMatrix` products through nalgebra's
+matrixmultiply-backed `*` — SINGLE-THREADED, so single-matrix expm was 2.0-2.8x slower than scipy.linalg.expm
+(BLAS). The deferred concern (column-splitting a blocked GEMM might break bit-identity) was RESOLVED empirically:
+computing output-column blocks via separate nalgebra `*` calls is BIT-IDENTICAL to the full product (0 mismatches
+at n=512/1024) — matrixmultiply's per-element k-accumulation is independent of the output column count. Added
+`par_dmatmul` (column-split, each block via nalgebra `*`, assembled) work-gated at >=1<<25 FMAs (n≈320 cube) AND
+>=64 columns, and routed the Taylor + squaring products through it.
+
+Measured (same box; scipy expm pinned OPENBLAS/OMP/MKL=1):
+
+| n | fsci expm was → now | scipy expm | now vs scipy |
+| --- | --- | --- | --- |
+| 256 | 19.5 → 19.7ms | 9.5ms | 2.07x slower (below gate, serial) |
+| 512 | 157 → 80.4ms | 55.6ms | 1.44x slower |
+| 1024 | 1332 → 306ms | 510ms | 1.66x FASTER |
+| 2048 | — → 1788ms | 4256ms | 2.38x FASTER |
+
+Byte-identical (all fsci-linalg expm tests pass: expm_matches_scipy_reference_values, frechet/cond, funm_exp,
+diagonal/nilpotent/rotation, logm_inverse_of_expm; 495/495 lib green). Self-speedup 1.95x@512, 4.35x@1024. HONEST:
+expm LOSES to scipy for n<=512 — fsci uses a 20-term TAYLOR series (more matmuls than scipy's Padé approximant),
+so parallelism only overcomes the algorithmic disadvantage at large n; the WIN is for large single matrices
+(n>=~700-1024), and GROWS with size (1.66x→2.38x). Switching Taylor→Padé (fewer matmuls) would win at smaller n
+too but is a larger, riskier algorithm change — deferred.
+
+The `par_dmatmul` gate keeps small matrices serial, so batched `expm_many` (parallel across the batch, small
+per-item n) is UNAFFECTED (verified: expm_many nb=64 n=64 = 5.08ms, no regression). cosm/sinm route through the
+same expm kernel → they inherit the large-matrix speedup for free. LEVER: nalgebra DMatrix `*` is single-threaded;
+a bit-identical column-split parallel wrapper (`par_dmatmul`) lifts any large single-matrix DMatrix-GEMM-bound op.

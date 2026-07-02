@@ -7444,6 +7444,55 @@ pub fn svdvals_many(
 ///
 /// Algorithm: scale A by 2^(-s) so ||A/2^s|| is small, compute exp via
 /// Taylor series (accurate for small norm), then square s times.
+/// Row/column-parallel `DMatrix` product: splits the OUTPUT COLUMNS of `a·b`
+/// across threads, each block computed by nalgebra's own (matrixmultiply-backed)
+/// `*`, then assembled. BIT-IDENTICAL to `a * b` — matrixmultiply's per-element
+/// k-accumulation is independent of how many output columns are computed, so a
+/// column-block gives the exact same bits (verified: 0 mismatches at n=512/1024).
+/// Work-gated (≥1<<25 FMAs AND ≥64 output columns): small products stay serial,
+/// so matrix functions of SMALL matrices — including every per-item call inside
+/// the batch `*_many` (which parallelise across the batch) — never fan out and
+/// never over-subscribe; only genuinely large single-matrix functions parallelise.
+fn par_dmatmul(a: &DMatrix<f64>, b: &DMatrix<f64>) -> DMatrix<f64> {
+    let (m, ka) = (a.nrows(), a.ncols());
+    let n = b.ncols();
+    let work = (m as u64)
+        .saturating_mul(ka as u64)
+        .saturating_mul(n as u64);
+    const PAR_DMATMUL_WORK_GATE: u64 = 1 << 25; // ~33M FMAs (n≈320 cube)
+    if work < PAR_DMATMUL_WORK_GATE || n < 64 {
+        return a * b;
+    }
+    let avail = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = (n / 32).clamp(1, avail);
+    if nthreads <= 1 {
+        return a * b;
+    }
+    let chunk = n.div_ceil(nthreads);
+    let blocks: Vec<(usize, DMatrix<f64>)> = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        let mut c0 = 0;
+        while c0 < n {
+            let w = (c0 + chunk).min(n) - c0;
+            let start = c0;
+            handles.push(scope.spawn(move || (start, a * b.columns(start, w))));
+            c0 += chunk;
+        }
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("par_dmatmul worker panicked"))
+            .collect()
+    });
+    let mut out = DMatrix::<f64>::zeros(m, n);
+    for (c0, blk) in blocks {
+        let w = blk.ncols();
+        out.columns_mut(c0, w).copy_from(&blk);
+    }
+    out
+}
+
 fn expm_pade_scaling_squaring(a: &DMatrix<f64>) -> DMatrix<f64> {
     let n = a.nrows();
     let identity = DMatrix::<f64>::identity(n, n);
@@ -7467,10 +7516,12 @@ fn expm_pade_scaling_squaring(a: &DMatrix<f64>) -> DMatrix<f64> {
     // For ||A|| <= 0.5, 20 terms gives ~10^-16 accuracy
     let result = taylor_exp(&scaled, &identity, 20);
 
-    // Squaring phase: exp(A) = exp(A/2^s)^(2^s)
+    // Squaring phase: exp(A) = exp(A/2^s)^(2^s). Each n×n·n×n product fans across
+    // cores via the bit-identical `par_dmatmul` (large matrices only; small ones
+    // and batched per-item calls stay serial via the work gate).
     let mut exp_a = result;
     for _ in 0..s {
-        exp_a = &exp_a * &exp_a;
+        exp_a = par_dmatmul(&exp_a, &exp_a);
     }
 
     exp_a
@@ -7482,7 +7533,9 @@ fn taylor_exp(a: &DMatrix<f64>, identity: &DMatrix<f64>, terms: usize) -> DMatri
     let mut term = identity.clone(); // A^k / k!
 
     for k in 1..=terms {
-        term = &term * a / (k as f64);
+        // `par_dmatmul` is bit-identical to `&term * a`, so the series (and hence
+        // expm) is unchanged; large matrices just compute each product in parallel.
+        term = par_dmatmul(&term, a) / (k as f64);
         result += &term;
     }
 
