@@ -12963,3 +12963,25 @@ cheap moment kernels ⇒ the win is Python-overhead elimination (fsci SERIAL alr
 scipy per-call is less Python-dominated ⇒ smaller vs-scipy ratio (74x). fsci-stats lib 2006/2006 green
 (+ `goodness_of_fit_many_match_serial_loop_bit_for_bit`). Remaining GoF `_many` candidates: kstest (needs a target
 param), anderson (returns critical values), cramervonmises, skewtest/kurtosistest.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — skewtest_many/kurtosistest_many/cramervonmises_many (more GoF vmap) — 118-1051x FASTER than the scipy loop
+
+Completes the one-sample GoF `_many` set (after normaltest/jarque_bera/shapiro). scipy loops these in Python
+(skewtest 1105ms, kurtosistest 1084ms, cramervonmises 1871ms over 3000 datasets). Added skewtest_many/
+kurtosistest_many (shared nan_policy/alternative, fallible → Vec<Result>) and cramervonmises_many (shared
+`cdf_func: Fn(f64)->f64 + Sync`). Correctness-gated: fsci skewtest/kurtosistest EXACT vs scipy on fixed data;
+cramervonmises EXACT with the exact CDF.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), 3000 datasets × 300 pts:
+
+| test | fsci serial → many | scipy loop | vs scipy | self |
+| --- | --- | --- | --- | --- |
+| skewtest | 1.91 → 1.32ms | 1105ms | 837x | 1.4x |
+| kurtosistest | 2.38 → 1.03ms | 1084ms | 1051x | 2.3x |
+| cramervonmises | 231.7 → 15.9ms | 1871ms | 118x | 14.6x |
+
+Byte-identical to the fsci serial loop (0 stat/p mismatches, all three, both paths). skew/kurtosis are cheap
+moment kernels (Python-overhead-elimination, fsci serial already 400-800x); cramervonmises is heavy (sort + n
+CDF evals) so parallelism helps a lot (14.6x self) → 118x. fsci-stats lib 2006/2006 green (test extended).
+ONE-SAMPLE GoF `_many` SET DONE: normaltest/jarque_bera/shapiro/skewtest/kurtosistest/cramervonmises. Remaining:
+kstest (KstestTarget param), anderson (returns critical-value struct, not stat/p).

@@ -32394,6 +32394,47 @@ pub fn shapiro_many(datasets: &[Vec<f64>]) -> Vec<GoodnessOfFitResult> {
     par_pair_index_map(datasets.len(), 128, |i| shapiro(&datasets[i]))
 }
 
+/// Vectorised [`skewtest`] (D'Agostino skewness) over `n` independent datasets,
+/// with a shared `nan_policy`/`alternative`; see [`normaltest_many`]. Each entry
+/// equals `skewtest(&datasets[k], nan_policy, alternative)`.
+#[must_use]
+pub fn skewtest_many(
+    datasets: &[Vec<f64>],
+    nan_policy: Option<&str>,
+    alternative: Option<&str>,
+) -> Vec<Result<GoodnessOfFitResult, StatsError>> {
+    par_pair_index_map(datasets.len(), 256, |i| {
+        skewtest(&datasets[i], nan_policy, alternative)
+    })
+}
+
+/// Vectorised [`kurtosistest`] (Anscombe-Glynn kurtosis) over `n` independent
+/// datasets; see [`skewtest_many`].
+#[must_use]
+pub fn kurtosistest_many(
+    datasets: &[Vec<f64>],
+    nan_policy: Option<&str>,
+    alternative: Option<&str>,
+) -> Vec<Result<GoodnessOfFitResult, StatsError>> {
+    par_pair_index_map(datasets.len(), 256, |i| {
+        kurtosistest(&datasets[i], nan_policy, alternative)
+    })
+}
+
+/// Vectorised one-sample Cramér-von Mises [`cramervonmises`] over `n` independent
+/// datasets against a shared `cdf_func`; see [`normaltest_many`]. Each entry
+/// equals `cramervonmises(&datasets[k], &cdf_func)` (the sort + CDF-eval kernel is
+/// run in parallel across datasets).
+#[must_use]
+pub fn cramervonmises_many<F>(datasets: &[Vec<f64>], cdf_func: F) -> Vec<GoodnessOfFitResult>
+where
+    F: Fn(f64) -> f64 + Sync,
+{
+    par_pair_index_map(datasets.len(), 128, |i| {
+        cramervonmises(&datasets[i], &cdf_func)
+    })
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -84115,6 +84156,24 @@ mod tests {
             assert_eq!(sh[i].pvalue.to_bits(), h0.pvalue.to_bits());
         }
         assert!(normaltest_many(&[]).is_empty());
+
+        // skewtest_many / kurtosistest_many (fallible) + cramervonmises_many (cdf).
+        let ncdf = |x: f64| standard_normal_cdf(x);
+        let sk = skewtest_many(&datasets, None, None);
+        let ku = kurtosistest_many(&datasets, None, None);
+        let cv = cramervonmises_many(&datasets, ncdf);
+        for i in 0..n {
+            let s0 = skewtest(&datasets[i], None, None).unwrap();
+            let sm = sk[i].as_ref().unwrap();
+            assert_eq!(sm.statistic.to_bits(), s0.statistic.to_bits());
+            assert_eq!(sm.pvalue.to_bits(), s0.pvalue.to_bits());
+            let k0 = kurtosistest(&datasets[i], None, None).unwrap();
+            let km = ku[i].as_ref().unwrap();
+            assert_eq!(km.statistic.to_bits(), k0.statistic.to_bits());
+            let c0 = cramervonmises(&datasets[i], ncdf);
+            assert_eq!(cv[i].statistic.to_bits(), c0.statistic.to_bits());
+            assert_eq!(cv[i].pvalue.to_bits(), c0.pvalue.to_bits());
+        }
     }
 
     #[test]
