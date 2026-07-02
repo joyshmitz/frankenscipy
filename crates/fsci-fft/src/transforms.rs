@@ -3177,15 +3177,23 @@ fn apply_dct_along_axis(
         }
     };
 
-    // Threads are re-spawned per axis pass, so gate on the total fiber work.
+    // Threads are re-spawned per axis pass, so cap by work-PER-THREAD, not just
+    // `min(cores, outer_size)`: the DCT/DST fibers are cheap, so one thread per
+    // core oversubscribes on small/medium grids — 64 threads for 256 fibers of
+    // ~1µs work is spawn-overhead-bound (256² dctn was 5.1 ms ≈ 14× SciPy).
+    // Require ~2¹⁶ element-transforms per thread; small grids stay serial and
+    // skip the `available_parallelism` syscall entirely. Byte-identical: only the
+    // thread COUNT changes (fibers are independent, each output index written once).
     let work = (outer_size as u64).saturating_mul(axis_len as u64);
-    let nthreads = if work < (1 << 15) || outer_size < 2 {
+    let max_by_work = (work / (1 << 16)) as usize;
+    let nthreads = if max_by_work < 2 || outer_size < 2 {
         1
     } else {
         std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1)
             .min(outer_size)
+            .min(max_by_work)
     };
 
     let fibers: Vec<Result<Vec<f64>, FftError>> = if nthreads <= 1 {
@@ -3300,15 +3308,23 @@ fn apply_dst_along_axis(
         Ok(transformed)
     };
 
-    // Threads are re-spawned per axis pass, so gate on the total fiber work.
+    // Threads are re-spawned per axis pass, so cap by work-PER-THREAD, not just
+    // `min(cores, outer_size)`: the DCT/DST fibers are cheap, so one thread per
+    // core oversubscribes on small/medium grids — 64 threads for 256 fibers of
+    // ~1µs work is spawn-overhead-bound (256² dctn was 5.1 ms ≈ 14× SciPy).
+    // Require ~2¹⁶ element-transforms per thread; small grids stay serial and
+    // skip the `available_parallelism` syscall entirely. Byte-identical: only the
+    // thread COUNT changes (fibers are independent, each output index written once).
     let work = (outer_size as u64).saturating_mul(axis_len as u64);
-    let nthreads = if work < (1 << 15) || outer_size < 2 {
+    let max_by_work = (work / (1 << 16)) as usize;
+    let nthreads = if max_by_work < 2 || outer_size < 2 {
         1
     } else {
         std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1)
             .min(outer_size)
+            .min(max_by_work)
     };
 
     let fibers: Vec<Result<Vec<f64>, FftError>> = if nthreads <= 1 {

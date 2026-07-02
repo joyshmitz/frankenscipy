@@ -12255,3 +12255,22 @@ parallel iterative path (20.6ms) — likewise 600000 20.4→13.4ms. All roundtri
 regression (tail==1, n<2¹⁶, n>500k, tail>64 unchanged). The odd-heavy FFT "wall" was a two-axis
 path-selection problem (small tail + medium n → recursive; else iterative); now resolved. Residual true kernel
 wall: only VERY large odd-heavy (n>500k, e.g. 810000 17ms) — already iterative-parallel & beating numpy there.
+
+## 2026-07-02 — BlackThrush (cc): KEEP (self-improvement, not scipy-beat) — dctn/dstn strided-axis thread-cap: 256² 5.1→1.86ms (removes 14x→5x over-subscription anomaly)
+
+Measured fsci dctn vs scipy.fft.dctn: 256² **13.7x slower** (5.10 vs 0.373ms), 512² 3.4x, 1024² 2.5x, 2048²
+1.4x. The 256² catastrophe was thread OVER-SUBSCRIPTION: `apply_dct_along_axis` used `min(cores, outer_size)`
+= 64 threads for 256 cheap ~1µs fibers → spawn overhead dominated (3.2ms of the 5.1ms was pure spawn). Applied
+the proven thread-cap-by-work lever (also to dstn): `max_by_work = work/2¹⁶`, serial below (and skip the
+available_parallelism syscall). Byte-identical (thread count only; fibers independent, conformance 182/182).
+256² 5.10→**1.86ms (2.7x)**, 1024² 30.3→**18.1 (1.67x, 16 vs 64 threads)**, 512²/2048² ~flat (alloc-bound), NO
+regression.
+
+HONEST: this is a SELF-IMPROVEMENT, not a scipy-beat — dctn stays 1.35-5x slower than scipy. The residual is
+(a) per-fiber allocation (temp Vec + dct-result Vec + the intermediate Vec<Vec> needed to SAFELY scatter the
+strided-axis writes without unsafe/aliasing — the deferred "parallel strided-axis writes under forbid(unsafe)"
+gap) and (b) the DCT kernel constant. Removing (a) needs a dct-into-buffer + per-thread contiguous scratch +
+transpose (moderate refactor, uncertain it beats scipy's tight C). LEVER reconfirmed (perf_available_parallelism
+_per_call_syscall_tax + reduce_axis_2d thread-cap): any per-axis/per-fiber parallel pass must cap threads by
+work-per-thread, not min(cores, nitems) — cheap fibers over-subscribe. Residual dctn gap = safe-strided-axis
+allocation (deferred).
