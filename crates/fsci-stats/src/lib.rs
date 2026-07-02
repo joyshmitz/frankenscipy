@@ -32257,6 +32257,32 @@ pub fn linregress_many(xs: &[Vec<f64>], ys: &[Vec<f64>]) -> Vec<LinregressResult
     par_pair_index_map(xs.len(), 128, |i| linregress(&xs[i], &ys[i]))
 }
 
+/// Vectorised [`mannwhitneyu`] over `n` independent `(x, y)` sample pairs; see
+/// [`pearsonr_many`]. Rank-based, so each item sorts + evaluates a normal-tail
+/// p-value — heavier per item than the parametric tests, so the batch fan-out
+/// wins bigger.
+#[must_use]
+pub fn mannwhitneyu_many(x: &[Vec<f64>], y: &[Vec<f64>]) -> Vec<TtestResult> {
+    assert_eq!(
+        x.len(),
+        y.len(),
+        "mannwhitneyu_many: x and y length mismatch"
+    );
+    par_pair_index_map(x.len(), 128, |i| mannwhitneyu(&x[i], &y[i]))
+}
+
+/// Vectorised [`ks_2samp`] over `n` independent `(data1, data2)` pairs; see
+/// [`pearsonr_many`].
+#[must_use]
+pub fn ks_2samp_many(data1: &[Vec<f64>], data2: &[Vec<f64>]) -> Vec<GoodnessOfFitResult> {
+    assert_eq!(
+        data1.len(),
+        data2.len(),
+        "ks_2samp_many: data1 and data2 length mismatch"
+    );
+    par_pair_index_map(data1.len(), 128, |i| ks_2samp(&data1[i], &data2[i]))
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -83843,6 +83869,20 @@ mod tests {
             small[1].statistic.to_bits(),
             pearsonr(&xs[1], &ys[1]).statistic.to_bits()
         );
+
+        // Nonparametric batch APIs (rank-based) — same bit-identity guarantee.
+        let mw = mannwhitneyu_many(&xs, &ys);
+        let ks = ks_2samp_many(&xs, &ys);
+        assert_eq!(mw.len(), n);
+        assert_eq!(ks.len(), n);
+        for i in 0..n {
+            let m0 = mannwhitneyu(&xs[i], &ys[i]);
+            assert_eq!(mw[i].statistic.to_bits(), m0.statistic.to_bits());
+            assert_eq!(mw[i].pvalue.to_bits(), m0.pvalue.to_bits());
+            let k0 = ks_2samp(&xs[i], &ys[i]);
+            assert_eq!(ks[i].statistic.to_bits(), k0.statistic.to_bits());
+            assert_eq!(ks[i].pvalue.to_bits(), k0.pvalue.to_bits());
+        }
     }
 
     #[test]

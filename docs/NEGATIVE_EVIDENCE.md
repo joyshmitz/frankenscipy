@@ -12413,3 +12413,31 @@ vectorised form → `_many` parallel across the batch is a 100-1400x win, win �
 studentt CDF > pearsonr's beta-incomplete). Remaining candidates: f_oneway (variadic groups), mannwhitneyu,
 kruskal, ks_2samp, chisquare, wilcoxon — all loop-in-Python in scipy. `_matrix`/`_cross` all-pairs variants
 already exist for kendalltau/ks_2samp/mannwhitneyu (different primitive).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched mannwhitneyu_many/ks_2samp_many (nonparametric mass-univariate vmap) — mannwhitneyu 156-551x, ks_2samp 11-82x vs the scipy loop
+
+Extends the stats-vmap family to the RANK-BASED nonparametric tests (the canonical bioinformatics workload:
+Mann-Whitney U / KS across thousands of genes). Added mannwhitneyu_many/ks_2samp_many via `par_pair_index_map`.
+CORRECTNESS GATE FIRST (same-data cross-check on n=60, seed 42): fsci mannwhitneyu U=1725 p=0.695779797958 and
+ks_2samp D=0.1 p=0.928437179534 are BOTH EXACT vs scipy → shipped. fsci `wilcoxon` DIFFERS (p=0.8465 vs scipy
+0.8424, a normal-approx/continuity pre-existing parity gap) → NOT shipped (would be a fast wrong answer); logged
+as a wilcoxon parity follow-on.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1). fsci `_many` absolute (best-of-5, ms) vs the scipy loop:
+
+| batch | fsci many (mannwhitneyu/ks_2samp ms) | vs scipy-loop | self (many vs fsci serial) | bit-mism |
+| --- | --- | --- | --- | --- |
+| N=5000 m=200 | 4.41 / 16.34 | mannwhitneyu 551x, ks_2samp 82x | 15.1x / 21.1x | 0 |
+| N=2000 m=500 | 6.56 / 53.62 | mannwhitneyu 156x, ks_2samp 11.4x | 11.0x / 12.6x | 0 |
+
+scipy-loop baselines: N=5000 m=200 mannwhitneyu 2432ms / ks_2samp 1343ms; N=2000 m=500 1024 / 613ms.
+mannwhitneyu is the big win (fsci per-item ~15-35x faster than scipy + parallel). HONEST on ks_2samp: fsci's
+per-item ks_2samp is ~PARITY-to-slightly-SLOWER than scipy's C at m=500 (fsci serial 675ms vs scipy loop 613ms),
+so ks_2samp_many's win (11-82x) is PARALLELISM-driven, not the Python-overhead lever — and there's a latent
+per-item ks_2samp optimization (the Kolmogorov asymptotic p-value / merge kernel looks heavy at ~0.34ms/call on
+1000 pts; a candidate anomaly to profile). `_many` byte-identical to the fsci serial loop (0 mismatches).
+Conformance fsci-stats lib 2003/2003 green (batch bit-identity test extended to mannwhitneyu/ks_2samp).
+
+FOLLOW-ONS: (1) wilcoxon p-value parity vs scipy (normal-approx/continuity); (2) per-item ks_2samp kernel profile
+(near-parity with scipy C → possible wrong-algo like the kv/eigvals_banded anomalies). Remaining stats-vmap:
+f_oneway/kruskal (variadic groups → Vec<Vec<Vec>>), chisquare.
