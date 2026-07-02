@@ -216,7 +216,7 @@ fn get_or_compute_odd_power_tail_plan(n: usize) -> Option<OddPowerTailPlanRef> {
     // shape at large n so it falls back to the cache-friendlier recursive
     // mixed_radix_fft. (tail==1 pure-odd stays fast on the iterative path; tail≥4
     // amortises the gathers over larger contiguous leaf FFTs.)
-    if tail == 2 && n >= (1 << 16) {
+    if (2..=8).contains(&tail) && n >= (1 << 16) {
         return None;
     }
     let odd_len = n / tail;

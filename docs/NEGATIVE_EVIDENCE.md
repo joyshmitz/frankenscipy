@@ -12219,3 +12219,21 @@ regression: tail==1 (50625 0.79ms) unchanged; threshold 2¹⁶ leaves sub-cache 
 iterative path. (Numbers load-sensitive: 2.09ms quiet / 3.75ms loaded — the 13→~2-3.75 anomaly fix is robust.)
 LEVER: fsci-fft's iterative odd-power-tail thrashes for tail==2 (few-radix-2, huge-stride leaf gathers) — the
 recursive route is cache-friendlier there. Residual odd-heavy (tail=4/32, e.g. 202500/100000) still ~kernel-wall.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — extend odd-power-tail decline to tail∈{2,4,8}: flips fft(202500/312500/405000) to 1.3-1.4x FASTER than numpy
+
+Continuation of the tail==2 fix (ad6b3702). Confirmed the iterative-odd-power-tail cache thrash extends to
+tail=4 and tail=8: fft(78732=2²·3⁹) was **10.8ms vs numpy 0.73**, fft(202500 tail=4) 11.7 vs 4.75, fft(405000
+tail=8) 13.1 vs 10.3 — all gather-dominated (n/tail strided leaves). The boundary is the leaf kernel:
+`leaf_tail_fft` uses small-gather for tail≤16, radix-4 for tail>16, BUT measurement shows recursive wins only
+up to tail=8 — tail=16 (810000) is WORSE on recursive (32ms) than iterative (17ms, which already beats numpy
+24ms), so tail≥16 keeps the iterative path. Widened the guard to `(2..=8).contains(&tail) && n≥2¹⁶`.
+
+Same box vs numpy complex fft: 202500 11.7→**3.67ms=1.29x FASTER** (was 2.5x slower); 312500 13.25→**5.97=1.32x
+FASTER**; 405000 13.1→**7.41=1.39x FASTER**; 101250 (tail=2, prior) 2.09=1.29x faster. Big self-speedups where
+still <numpy at small n: 78732 10.8→1.59ms (6.8x), 125000 8.0→1.77ms (4.5x). Roundtrip ≤1e-15; conformance
+182/182. NO regression: tail==1 (50625 0.77ms) and tail≥16 (810000 17.3ms, beats numpy) unchanged. The
+odd-power-tail path is a WIN for large-pow2-tail (its design) but thrashes for small tail (2-8); recursive is
+cache-friendlier there. RESIDUAL true kernel wall: tail=32/64 (100000 6.3ms, 200000) — many odd-combine stages,
+both paths ~kernel-slow (deferred SoA-SIMD). Odd-heavy FFT "wall" was largely a path-selection bug (tail 2-8),
+now fixed; large-pow2 and pure-odd already beat/match numpy.
