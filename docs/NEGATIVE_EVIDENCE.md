@@ -11810,3 +11810,24 @@ non-pow2 / radix-5 mixed-radix SIMD** (underlies resample + many signal/fft ops 
 scipy) — a dedicated FFT-crate cycle, not a quick per-function lever. Second: safe parallel STRIDED-axis
 writes (would unlock dctn + uniform_filter axis-0 + others) — needs a scatter/transpose primitive under
 forbid(unsafe).
+
+## 2026-07-01 — AmberKestrel (cc): fsci-fft non-pow2 radix-3/5 butterflies ALREADY Winograd-optimized; gap is SoA-vs-AoS SIMD (crate restructure, not a lever)
+
+Followed up last cycle's flag of the fsci-fft non-pow2 wall (biggest documented gap; resample 4x, all 5-smooth
+FFT ~2-4x scipy). INSPECTED the mixed-radix kernel (mixed_radix_iterative_odd_power_tail →
+mixed_radix_combine_stage):
+- The path IS already PARALLEL (leaves + combine stages fanned via thread::scope), yet still ~3.6x slower than
+  single-threaded scipy → the SCALAR BUTTERFLY is the wall, not scheduling (the voigt-profile diagnostic).
+- The radix-3 and radix-5 combines are ALREADY Winograd-optimized (radix-5 uses the C1/C2/S1/S2 constant
+  decomposition with t1±4 / t2±3, ~10 mults not the naive 25; radix-3 the standard 3-mult form). So "add
+  optimized butterflies" is NOT the fix — they're already there.
+- RELATIVE signal (load-independent): 5-smooth/3-smooth rfft is ~6x slower than same-size pow2 (radix-2/4).
+  The residual is that fsci's butterflies are SCALAR over interleaved AoS `Complex64=(f64,f64)`, while scipy's
+  pocketfft uses SoA SIMD (vectorized across the `r` loop). Beating pocketfft needs SoA layout + SIMD-across-r,
+  which is a CRATE-WIDE restructure (the whole FFT uses AoS tuples), not a per-function lever. A SIMD-across-r
+  with manual AoS gather/scatter could give ~1.8x vs ORIG but would NOT beat scipy and is high-risk.
+
+BOX CONTEXT: measured under load avg 20-26 / 80 concurrent build+bench procs — absolute FFT numbers inflated
+~1.6-10x (pow2 rfft 2^19 read 20ms vs ~12ms quiet); FFT perf work here needs a QUIET box + same-binary atomic
+A/B. DEFERRED: the fsci-fft SoA-SIMD restructure is a genuine multi-cycle project for a dedicated quiet-box
+session, not a 60-min lever. Updated the arc map accordingly.
