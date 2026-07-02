@@ -12538,25 +12538,27 @@ per-item n) is UNAFFECTED (verified: expm_many nb=64 n=64 = 5.08ms, no regressio
 same expm kernel → they inherit the large-matrix speedup for free. LEVER: nalgebra DMatrix `*` is single-threaded;
 a bit-identical column-split parallel wrapper (`par_dmatmul`) lifts any large single-matrix DMatrix-GEMM-bound op.
 
-## 2026-07-02 — BlackThrush (cc): KEEP — hyperu 768-step Simpson → peak-split Gauss-Legendre (kv-style quadrature lever) — 4x per-call, parallel array path 7.0x FASTER than scipy (was ~1.7x)
+## 2026-07-02 — BlackThrush (cc): REVERTED (accuracy regression caught by mpmath) — hyperu 768-step Simpson → peak-split Gauss-Legendre was a 4x speedup but a ~3.5e-8 ACCURACY LOSS
 
-Anomaly hunt in fsci-special (grep fixed-step quadrature kernels, the kv/wofz signature). `hyperu` (confluent
-hypergeometric U) computed its integral-representation fallback with a 768-step UNIFORM Simpson rule in log-s
-space — 768 transcendental integrand evals/call → serial-loop N=100k was 1373ms = 21.5x SLOWER than
-scipy.special.hyperu. The integrand exp(-x·eˢ + a·s + (b-a-1)·ln(1+eˢ) - lnΓ(a)) is smooth + UNIMODAL, so replaced
-it with a peak-split 48-node Gauss-Legendre rule (gauss48 on [lower,peak] + [peak,upper], reusing bessel.rs's
-`gauss48_integrate` made pub(crate)) — dense nodes at the shared split endpoint resolve the mode; ~96 evals vs 768.
+ATTEMPTED + SHIPPED (ea5e20df) THEN REVERTED same session. Replaced hyperu's a>0 integral fallback (768-step
+uniform Simpson in log-s space) with a peak-split 48-node Gauss-Legendre rule (~96 evals): 4.03x per-call
+self-speedup, parallel array path 9.09ms vs scipy 63.94ms. Goldens + 10 units + 1121 lib all GREEN, and it
+matched SCIPY to 3.47e-8 over a 252-pt grid. **But that was WRONG** — the validation was vs scipy, not vs the
+truth. mpmath@40dps at the worst grid point (a=1.5,b=1.25,x=6): truth 0.053105616597234556; the OLD 768-Simpson
+returns 5.31056165972345409e-2 (matches mpmath to ~1e-15, MACHINE PRECISION), scipy 2.3e-11, but the new
+gauss48 returns 5.3105618438e-2 = **3.47e-8 off the truth**. The 768 steps were NOT over-resolved — they were
+BUYING ~1e-15 accuracy that a 96-eval Gauss rule cannot match on this integrand; cutting to gauss48 forfeited
+fsci's accuracy lead (fsci hyperu already BEATS scipy on accuracy AND speed 1.47-1.71x — see the 966c8370
+oracle result). Reverted the code (hyper.rs + bessel.rs restored to the 768-Simpson); the misleading in-code
+comment claiming a "~3.2e-8 Simpson floor vs scipy" (frankenscipy-tkd3v) is what led me astray — that "floor"
+is scipy's own error in places, NOT fsci's.
 
-Measured (same box; scipy pinned): serial-loop N=100k 1373 → 340ms = 4.03x self-speedup. ACCURACY unchanged: max
-rel err vs scipy = 3.47e-8 over a 252-pt (a,b,x) grid — matches the OLD uniform-Simpson ~3.2e-8 plateau (the floor
-is the log-space interval truncation, NOT the quadrature rule, so gauss48 hits the same floor with 8x fewer evals).
-Conformance golden `diff_special_hyperu` PASSES + 10 hyperu unit tests pass + fsci-special lib 1121/1121 green.
-
-REAL vs-scipy win via the ALREADY-PARALLEL tensor path (hyperu_dispatch uses par_map_indices across array
-elements): fsci array hyperu N=100k = 9.09ms vs scipy ufunc 63.94ms = **7.0x FASTER** — up from ~1.7x before (the
-4x kernel speedup lifts the parallel win). Lifts every hyperu caller. HONEST: fsci hyperu's ~3e-8 accuracy floor
-(pre-existing, from the log-space integral method) is looser than scipy's ~machine-precision Kummer-series; a full
-Kummer/connection-formula path would remove the integral AND close the accuracy gap but has cancellation risk near
-integer b (why the integral fallback exists) — deferred. LEVER (reconfirmed, 3rd time incl. kv/wofz): a fixed-step
-uniform quadrature in a special-fn kernel over a smooth unimodal integrand → peak-split Gauss-Legendre = ~8x fewer
-evals at equal accuracy. grep `STEPS`/`for i in 0..=N`/`h = (upper-lower)/N` in per-point kernels.
+LESSON (the meta-rule from [[perf_special_quadrature_to_continued_fraction]], now paid in blood): before
+"optimizing" a slow FIXED quadrature in a special-fn kernel, oracle-check its accuracy vs **mpmath** FIRST —
+NOT vs scipy (scipy is itself only ~1e-11 to ~5e-6 for hyperu). A conformance golden that asserts vs scipy with
+a loose tolerance will HAPPILY pass a change that silently drops 7 digits of accuracy. The wofz-CF win
+(affac121) was real because the 768-Simpson there bought NO accuracy the CF couldn't match; hyperu's 768-Simpson
+DOES buy accuracy → not a candidate. Contrast: quadrature→Gauss is a win ONLY when the old rule is over-resolved
+(oracle-verified), which requires an mpmath check the golden cannot provide. hyperu is a WALL for the
+speed-via-fewer-evals lever; the only real hyperu speedup is a Kummer/connection-formula rewrite (removes the
+integral, keeps machine precision) — deferred (cancellation near integer b).
