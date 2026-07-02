@@ -32370,6 +32370,30 @@ pub fn chisquare_many(f_obs: &[Vec<f64>], f_exp: Option<&[Vec<f64>]>) -> Vec<(f6
     })
 }
 
+/// Vectorised D'Agostino-Pearson [`normaltest`] over `n` independent datasets —
+/// parallel across the batch (see [`pearsonr_many`]). SciPy has no batched form,
+/// so a caller testing many samples loops it in Python; each entry equals
+/// `normaltest(&datasets[k])`.
+#[must_use]
+pub fn normaltest_many(datasets: &[Vec<f64>]) -> Vec<GoodnessOfFitResult> {
+    par_pair_index_map(datasets.len(), 256, |i| normaltest(&datasets[i]))
+}
+
+/// Vectorised [`jarque_bera`] normality test over `n` independent datasets; see
+/// [`normaltest_many`].
+#[must_use]
+pub fn jarque_bera_many(datasets: &[Vec<f64>]) -> Vec<GoodnessOfFitResult> {
+    par_pair_index_map(datasets.len(), 256, |i| jarque_bera(&datasets[i]))
+}
+
+/// Vectorised [`shapiro`] (Shapiro-Wilk) normality test over `n` independent
+/// datasets; see [`normaltest_many`]. Heavier per item (sort + W statistic), so it
+/// amortises the thread spawn at a lower gate.
+#[must_use]
+pub fn shapiro_many(datasets: &[Vec<f64>]) -> Vec<GoodnessOfFitResult> {
+    par_pair_index_map(datasets.len(), 128, |i| shapiro(&datasets[i]))
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -84054,6 +84078,43 @@ mod tests {
             "hypsecant CDF should be near 0 at -5"
         );
         assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
+    }
+
+    #[test]
+    fn goodness_of_fit_many_match_serial_loop_bit_for_bit() {
+        // normaltest_many / jarque_bera_many / shapiro_many must be bit-identical
+        // to the serial per-dataset loop. n crosses each function's parallel gate.
+        let mut s = 0x5DEECE66D_u64 | 1;
+        let mut nrm = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            let u1 = ((s >> 11) as f64 / (1u64 << 53) as f64).max(1e-12);
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            let u2 = (s >> 11) as f64 / (1u64 << 53) as f64;
+            (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+        };
+        let n = 700usize; // above the 256/128 gates
+        let datasets: Vec<Vec<f64>> = (0..n).map(|_| (0..120).map(|_| nrm()).collect()).collect();
+
+        let nt = normaltest_many(&datasets);
+        let jb = jarque_bera_many(&datasets);
+        let sh = shapiro_many(&datasets);
+        assert_eq!(nt.len(), n);
+        for i in 0..n {
+            let s0 = normaltest(&datasets[i]);
+            assert_eq!(nt[i].statistic.to_bits(), s0.statistic.to_bits());
+            assert_eq!(nt[i].pvalue.to_bits(), s0.pvalue.to_bits());
+            let j0 = jarque_bera(&datasets[i]);
+            assert_eq!(jb[i].statistic.to_bits(), j0.statistic.to_bits());
+            assert_eq!(jb[i].pvalue.to_bits(), j0.pvalue.to_bits());
+            let h0 = shapiro(&datasets[i]);
+            assert_eq!(sh[i].statistic.to_bits(), h0.statistic.to_bits());
+            assert_eq!(sh[i].pvalue.to_bits(), h0.pvalue.to_bits());
+        }
+        assert!(normaltest_many(&[]).is_empty());
     }
 
     #[test]

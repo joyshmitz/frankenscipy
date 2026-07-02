@@ -12939,3 +12939,27 @@ fsci c=1.774277 vs scipy 1.774289; fsci's Newton is arguably tighter than scipy'
 beats the scipy loop 152x (Newton vs Nelder-Mead + no Python). Generic over all `ContinuousDistribution + Send`;
 the big scipy-beating gain is for numerically-fit distributions (weibull/beta/gengamma); closed-form ones
 (norm/gamma-floc) are fast in scipy already so the ratio is smaller.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched normaltest_many/jarque_bera_many/shapiro_many (one-sample normality GoF vmap) — 74-2267x FASTER than the scipy loop
+
+New vmap family — one-sample goodness-of-fit / normality tests (mass normality testing, e.g. per-gene / per-channel
+QC). SciPy has no batched form, so a caller loops `scipy.stats.normaltest`/`jarque_bera`/`shapiro` in Python
+(measured: normaltest 2132ms, jarque_bera 1124ms, shapiro 354ms over 3000 datasets). Added normaltest_many/
+jarque_bera_many/shapiro_many via `par_pair_index_map`, gated 256 (normaltest/jb, cheap moment kernel) / 128
+(shapiro, heavier sort+W). Correctness-gated: fsci normaltest/jarque_bera/shapiro EXACT vs scipy on fixed data
+(stat + p-value to 12 digits).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), 3000 datasets × 300 pts:
+
+| test | fsci serial → many | scipy loop | vs scipy | self |
+| --- | --- | --- | --- | --- |
+| normaltest | 1.73 → 0.94ms | 2132ms | 2267x | 1.8x |
+| jarque_bera | 1.88 → 0.65ms | 1124ms | 1730x | 2.9x |
+| shapiro | 26.61 → 4.77ms | 354ms | 74x | 5.6x |
+
+Byte-identical to the fsci serial loop (0 stat/p mismatches, all three, both paths). normaltest/jarque_bera are
+cheap moment kernels ⇒ the win is Python-overhead elimination (fsci SERIAL already 600-1200x; parallel adds only
+1.8-2.9x). shapiro is heavier (sort + Shapiro-Wilk W + p-value), so parallelism helps more (5.6x self) but its
+scipy per-call is less Python-dominated ⇒ smaller vs-scipy ratio (74x). fsci-stats lib 2006/2006 green
+(+ `goodness_of_fit_many_match_serial_loop_bit_for_bit`). Remaining GoF `_many` candidates: kstest (needs a target
+param), anderson (returns critical values), cramervonmises, skewtest/kurtosistest.
