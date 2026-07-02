@@ -11852,3 +11852,33 @@ fresnel_many 9.7ms vs 59.2ms fsci serial map = 6.1x self-speedup. Bit-identity v
 all 7 fns (2M pts). Conformance 1121/1121 green. Purely additive (new pub fns). Extends the special `_many`
 vein (Kelvin, struve, kv). itairy intentionally NOT wrapped — its scalar disagrees with SciPy.
 Bench: `cargo run -p fsci-special --release --bin <tmp>` (fsci) + scipy.special ufuncs, same 64-core box.
+
+## 2026-07-01 — BlackThrush (cc): KEEP — struve integrals itstruve0/itmodstruve0/it2struve0 quadrature→series closed form (329x scalar, `_many` flips 18x LOSS → 17-41x scipy WIN)
+
+Anomaly caught by benching a fresh `_many` wrapper: `itstruve0_many/itmodstruve0_many/it2struve0_many`
+(2M pts) were ~3.4-3.8 SECONDS = ~18x SLOWER than scipy even fanned across 64 cores. The voigt/kv diagnostic:
+a parallel wrapper that only loses means the SCALAR KERNEL is the wall. Root cause: all three scalars route
+through `struve_integral_abs`, a **Simpson quadrature with 256·|x| nodes** (clamped ≤32768), each node
+re-evaluating the (already series-based) `struve(0,t)` — the classic fixed-step-quadrature-in-a-kernel cost
+(perf_special_quadrature_to_continued_fraction lever).
+
+FIX: integrate the Struve/modified-Struve series term-by-term (closed form, incremental term recurrence, no
+per-node struve() calls) for |x| ≤ 16; keep the quadrature as an accuracy-preserving fallback beyond 16 where
+the alternating series loses digits to cancellation. Accuracy vs scipy across [-20,20]: series band ≤ 2.3e-11
+(itstruve0), ≤ 1.3e-12 (itmodstruve0), ≤ 6.6e-11 (it2struve0) — BETTER than the old quadrature (~4.6e-10);
+quadrature band unchanged. No accuracy regression.
+
+Same-box, 2M pts in [0,10]:
+
+| fn | scipy (ms) | fsci `_many` (ms) | ratio | scalar self-speedup |
+|----|-----------:|------------------:|------:|--------------------:|
+| itstruve0    | 190.6 | 10.9 | 17.5x | 3587→10.9ms = 329x |
+| itmodstruve0 | 171.7 |  9.9 | 17.3x | 3385→9.9ms  = 340x |
+| it2struve0   | 404.8 |  9.8 | 41.2x | 3782→9.8ms  = 385x |
+
+0 bit-identity mismatches (`_many` vs serial). Conformance 1121 lib + 75 metamorphic green. The scalar
+speedup lifts every caller (`itstruve0` etc. directly), not just the batch path. pbvv/pbdv `_many` were
+REJECTED: pbdv's scipy ufunc is already fast (19 ns/pt) and fsci's pbvv scalar DIVERGES from scipy for x<0
+(fsci 1.16e5 vs scipy 4.3e261 @x=-8) — would be a wrong "win". LEVER (reconfirmed): grep fixed-step
+Simpson/Gauss `for i in 0..steps` inside special-fn scalar kernels → term-by-term series with incremental
+recurrence; gate by cancellation domain, keep quadrature fallback.

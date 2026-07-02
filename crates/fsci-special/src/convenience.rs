@@ -1482,7 +1482,15 @@ fn modstruve_asymptotic(v: f64, x: f64) -> f64 {
 /// even in x: integrating from 0 to a negative endpoint returns the same value
 /// as integrating to the positive endpoint.
 pub fn itstruve0(x: f64) -> f64 {
-    struve_integral_abs(x, |t| struve(0.0, t))
+    // For |x| ≤ 16 integrate the Struve H_0 series term-by-term (closed form,
+    // ~1e-11 vs scipy) instead of running a 256·|x|-step Simpson quadrature that
+    // re-evaluates struve() at every node. Beyond 16 the alternating series loses
+    // digits to cancellation, so fall back to the (accuracy-preserving) quadrature.
+    if x.abs() <= STRUVE_INT_SERIES_MAX {
+        struve0_integral_series(x, -1.0)
+    } else {
+        struve_integral_abs(x, |t| struve(0.0, t))
+    }
 }
 
 /// Integral of the modified Struve function L_0 from 0 to x.
@@ -1490,7 +1498,14 @@ pub fn itstruve0(x: f64) -> f64 {
 /// Matches `scipy.special.itmodstruve0`; L_0 has the same odd symmetry as H_0
 /// for real inputs, so the integral is even in x.
 pub fn itmodstruve0(x: f64) -> f64 {
-    struve_integral_abs(x, |t| modstruve(0.0, t))
+    // Modified-Struve L_0 series has all-positive terms (no cancellation); the
+    // same term-by-term integral closed form is used for |x| ≤ 16, quadrature
+    // beyond. See [`itstruve0`].
+    if x.abs() <= STRUVE_INT_SERIES_MAX {
+        struve0_integral_series(x, 1.0)
+    } else {
+        struve_integral_abs(x, |t| modstruve(0.0, t))
+    }
 }
 
 /// Integrals of the modified Bessel functions `I₀` and `K₀` from 0 to `x`.
@@ -1961,12 +1976,64 @@ pub fn it2struve0(x: f64) -> f64 {
         return f64::NAN;
     }
 
-    let correction = struve_integral_abs(x, struve0_over_t);
+    let correction = if x.abs() <= STRUVE_INT_SERIES_MAX {
+        struve0_over_t_integral_series(x.abs())
+    } else {
+        struve_integral_abs(x, struve0_over_t)
+    };
     if x.is_sign_negative() {
         std::f64::consts::FRAC_PI_2 + correction
     } else {
         std::f64::consts::FRAC_PI_2 - correction
     }
+}
+
+/// Above this |x| the alternating Struve-integral series loses too many digits
+/// to cancellation, so the scalar integrals fall back to Simpson quadrature.
+const STRUVE_INT_SERIES_MAX: f64 = 16.0;
+
+/// `∫₀ˣ C_0(t) dt` where `C_0 = H_0` (`sgn = -1`, alternating) or `C_0 = L_0`
+/// (`sgn = +1`, modified). Integrates the Struve/modified-Struve series
+/// term-by-term: `Σ sgnᵏ · x^{2k+2} / (Γ(k+3/2)² · 2^{2k+1} · (2k+2))`, which is
+/// even in `x`. Matches scipy to ~1e-11 for `|x| ≤ 16`. Zero for `x == 0`.
+fn struve0_integral_series(x: f64, sgn: f64) -> f64 {
+    let ax = x.abs();
+    let x2 = ax * ax;
+    let mut term = x2 / PI; // k = 0 term (Γ(3/2)² = π/4)
+    let mut sum = term;
+    let mut k = 0usize;
+    loop {
+        let kf = k as f64;
+        // tₖ₊₁/tₖ = sgn · x²/(4(k+3/2)²) · (2k+2)/(2k+4)
+        term *= sgn * x2 / (4.0 * (kf + 1.5) * (kf + 1.5)) * (2.0 * kf + 2.0) / (2.0 * kf + 4.0);
+        sum += term;
+        k += 1;
+        if (term.abs() < 1e-18 * sum.abs().max(1.0) && kf > ax) || k > 2000 {
+            break;
+        }
+    }
+    sum
+}
+
+/// `∫₀ˣ H_0(t)/t dt` via term-by-term integration of the `H_0/t` series:
+/// `Σ (-1)ᵏ · x^{2k+1} / (2^{2k+1} · Γ(k+3/2)² · (2k+1))`. `x` is `|x|`; the
+/// caller applies scipy's `π/2 ∓ correction` sign convention. ~1e-10 for `x ≤ 16`.
+fn struve0_over_t_integral_series(ax: f64) -> f64 {
+    let x2 = ax * ax;
+    let mut term = 2.0 * ax / PI; // k = 0 term
+    let mut sum = term;
+    let mut k = 0usize;
+    loop {
+        let kf = k as f64;
+        // tₖ₊₁/tₖ = -x²/(4(k+3/2)²) · (2k+1)/(2k+3)
+        term *= -x2 / (4.0 * (kf + 1.5) * (kf + 1.5)) * (2.0 * kf + 1.0) / (2.0 * kf + 3.0);
+        sum += term;
+        k += 1;
+        if (term.abs() < 1e-18 * sum.abs().max(1.0) && kf > ax) || k > 2000 {
+            break;
+        }
+    }
+    sum
 }
 
 fn struve_integral_abs<F>(x: f64, integrand: F) -> f64
@@ -3438,6 +3505,24 @@ pub fn expn_many(n: usize, x: &[f64]) -> Vec<f64> {
 #[must_use]
 pub fn poch_many(x: &[f64], a: f64) -> Vec<f64> {
     par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(poch(x[i], a))).expect("poch is infallible")
+}
+/// Vectorized integral of the Struve function H_0, `∫₀ˣ H_0(t) dt`; see [`fresnel_many`].
+#[must_use]
+pub fn itstruve0_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(itstruve0(x[i])))
+        .expect("itstruve0 is infallible")
+}
+/// Vectorized integral of the modified Struve function L_0, `∫₀ˣ L_0(t) dt`; see [`fresnel_many`].
+#[must_use]
+pub fn itmodstruve0_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(itmodstruve0(x[i])))
+        .expect("itmodstruve0 is infallible")
+}
+/// Vectorized second integral of the Struve function H_0, `∫₀ˣ (H_0(t)/t) dt`; see [`fresnel_many`].
+#[must_use]
+pub fn it2struve0_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(it2struve0(x[i])))
+        .expect("it2struve0 is infallible")
 }
 
 /// Weighted integral of the Bessel function of the first kind,
