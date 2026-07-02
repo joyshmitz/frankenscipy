@@ -12381,3 +12381,35 @@ expm/logm/sqrtm/cosm/sinm. LAW confirmed within the vein: win ∝ per-item cost 
 5-15x with NO tiny-matrix floor; det/qr (cheap) 2-4x and det hits a numpy-C-batch crossover at n<=16. Remaining
 single-matrix APIs are niche (cho_solve/lu_solve take pre-factored inputs; eig returns complex). This vein is now
 exhausted; next hunt = a genuinely different primitive or a less-trodden crate.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched pearsonr_many/spearmanr_many/ttest_ind_many/linregress_many (mass-univariate vmap) — 435-1417x vs the scipy-loop
+
+New vmap family (stats hypothesis tests / correlations), distinct from the distribution-method `_many` that
+fsci-stats already had. SciPy has NO batched pearsonr/ttest_ind/linregress, so a mass-univariate caller (genomics,
+neuroimaging: thousands of independent tests) loops them in Python — paying per-call Python dispatch + a p-value
+special function (studentt/beta-incomplete) N times serially. Added pearsonr_many/spearmanr_many/ttest_ind_many/
+linregress_many via a new generic `par_pair_index_map` (infallible index-map sibling of the linalg
+par_batch_index_map: contiguous ranges fanned in one spawn-set, per-chunk Vec<T> assembled in index order =>
+bit-identical to the serial loop). Gated `n < 256` serial (skips the availability syscall); >=128 items/thread so
+the moderate per-item kernel (each evaluates a p-value special fn) amortises the spawn.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1). fsci `_many` absolute (best-of-5, ms) vs the scipy loop:
+
+| batch | fsci many (pearson/ttest/linreg ms) | vs scipy-loop | self (many vs fsci serial) | bit-mism |
+| --- | --- | --- | --- | --- |
+| N=5000 m=200 | 2.07 / 1.80 / 2.03 | pearsonr 472x, ttest_ind 1417x, linregress 522x | 1.5-2.0x | 0 |
+| N=2000 m=500 | 0.91 / 0.95 / 0.89 | pearsonr 435x, ttest_ind 1092x, linregress 485x | 3.1-3.4x | 0 |
+
+scipy-loop baselines: N=5000 m=200 pearsonr 977ms / ttest_ind 2550ms / linregress 1059ms; N=2000 m=500
+396 / 1037 / 431ms. The win is the Python-overhead lever (like curve_fit_many/quad_many): scipy loops in Python,
+fsci inlines in Rust + fans across cores. Even fsci SERIAL (~3ms) beats the scipy loop ~300-800x; the parallel
+fan-out adds 1.5-3.4x on top. CORRECTNESS: fsci per-item == scipy to ~1e-15 on identical fixed data (pearsonr r/p
+& linregress slope/intercept/r/p/stderr EXACT; ttest p-value differs only at the 15th digit) — verified by a
+same-data cross-check, not just self-consistency. `_many` byte-identical to the fsci serial loop (0 mismatches
+across the sweep). Conformance fsci-stats lib 2003/2003 green (+ bit-identity test + length-mismatch panic test).
+
+LEVER (vmap extends to stats): any scipy.stats function that returns a p-value (special-fn per call) and has no
+vectorised form → `_many` parallel across the batch is a 100-1400x win, win ∝ per-call p-value cost (ttest's
+studentt CDF > pearsonr's beta-incomplete). Remaining candidates: f_oneway (variadic groups), mannwhitneyu,
+kruskal, ks_2samp, chisquare, wilcoxon — all loop-in-Python in scipy. `_matrix`/`_cross` all-pairs variants
+already exist for kendalltau/ks_2samp/mannwhitneyu (different primitive).

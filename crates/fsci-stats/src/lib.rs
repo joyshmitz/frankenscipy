@@ -32164,6 +32164,99 @@ where
     out
 }
 
+/// Map an infallible closure over `0..n`, fanning contiguous index ranges across
+/// threads in one spawn-set and assembling per-chunk `Vec<T>`s in index order
+/// (⇒ bit-identical to the serial `(0..n).map(f).collect()`). Serves the batched
+/// hypothesis-test / correlation APIs (`ttest_ind_many`, `pearsonr_many`, …),
+/// where SciPy has no vectorised form and callers loop in Python. Gated so small
+/// batches stay serial (skips the `available_parallelism()` syscall); each worker
+/// takes at least `min_per_thread` items so moderate per-item kernels (which each
+/// also evaluate a p-value special function) clearly amortise the thread spawn.
+fn par_pair_index_map<T, F>(n: usize, min_per_thread: usize, f: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(usize) -> T + Sync,
+{
+    if n < 2 * min_per_thread.max(1) {
+        return (0..n).map(|i| f(i)).collect();
+    }
+    let avail = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = (n / min_per_thread.max(1)).clamp(1, avail);
+    if nthreads <= 1 {
+        return (0..n).map(|i| f(i)).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let fref = &f;
+    let parts: Vec<Vec<T>> = std::thread::scope(|scope| {
+        (0..n)
+            .step_by(chunk)
+            .map(|start| {
+                scope.spawn(move || {
+                    let end = (start + chunk).min(n);
+                    (start..end).map(|i| fref(i)).collect::<Vec<T>>()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("stats batch worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(n);
+    for part in parts {
+        out.extend(part);
+    }
+    out
+}
+
+/// Vectorised [`pearsonr`] over `n` independent `(x, y)` pairs — parallel across
+/// the batch (see [`par_pair_index_map`]). SciPy has no batched `pearsonr`, so a
+/// mass-univariate caller loops it in Python; each entry equals `pearsonr(&xs[k],
+/// &ys[k])`. Panics if `xs.len() != ys.len()` (a programming error, matching the
+/// existing per-call length checks).
+#[must_use]
+pub fn pearsonr_many(xs: &[Vec<f64>], ys: &[Vec<f64>]) -> Vec<CorrelationResult> {
+    assert_eq!(
+        xs.len(),
+        ys.len(),
+        "pearsonr_many: xs and ys length mismatch"
+    );
+    par_pair_index_map(xs.len(), 128, |i| pearsonr(&xs[i], &ys[i]))
+}
+
+/// Vectorised [`spearmanr`] over `n` independent `(x, y)` pairs; see
+/// [`pearsonr_many`].
+#[must_use]
+pub fn spearmanr_many(xs: &[Vec<f64>], ys: &[Vec<f64>]) -> Vec<CorrelationResult> {
+    assert_eq!(
+        xs.len(),
+        ys.len(),
+        "spearmanr_many: xs and ys length mismatch"
+    );
+    par_pair_index_map(xs.len(), 128, |i| spearmanr(&xs[i], &ys[i]))
+}
+
+/// Vectorised [`ttest_ind`] over `n` independent `(a, b)` sample pairs; see
+/// [`pearsonr_many`].
+#[must_use]
+pub fn ttest_ind_many(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<TtestResult> {
+    assert_eq!(a.len(), b.len(), "ttest_ind_many: a and b length mismatch");
+    par_pair_index_map(a.len(), 128, |i| ttest_ind(&a[i], &b[i]))
+}
+
+/// Vectorised [`linregress`] over `n` independent `(x, y)` pairs; see
+/// [`pearsonr_many`].
+#[must_use]
+pub fn linregress_many(xs: &[Vec<f64>], ys: &[Vec<f64>]) -> Vec<LinregressResult> {
+    assert_eq!(
+        xs.len(),
+        ys.len(),
+        "linregress_many: xs and ys length mismatch"
+    );
+    par_pair_index_map(xs.len(), 128, |i| linregress(&xs[i], &ys[i]))
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -83707,5 +83800,56 @@ mod tests {
             "hypsecant CDF should be near 0 at -5"
         );
         assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
+    }
+
+    #[test]
+    fn batched_hypothesis_tests_match_serial_loop_bit_for_bit() {
+        // pearsonr_many / ttest_ind_many / linregress_many must be bit-identical
+        // to the serial per-pair loop (parallel-across-batch is order-preserving).
+        let mut s = 0x9E3779B97F4A7C15u64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let n = 400usize; // above the 2*128 gate -> exercises the parallel path
+        let m = 64usize;
+        let xs: Vec<Vec<f64>> = (0..n).map(|_| (0..m).map(|_| rng()).collect()).collect();
+        let ys: Vec<Vec<f64>> = (0..n).map(|_| (0..m).map(|_| rng()).collect()).collect();
+
+        let pr = pearsonr_many(&xs, &ys);
+        let tt = ttest_ind_many(&xs, &ys);
+        let lr = linregress_many(&xs, &ys);
+        assert_eq!(pr.len(), n);
+        assert_eq!(tt.len(), n);
+        assert_eq!(lr.len(), n);
+        for i in 0..n {
+            let p = pearsonr(&xs[i], &ys[i]);
+            assert_eq!(pr[i].statistic.to_bits(), p.statistic.to_bits());
+            assert_eq!(pr[i].pvalue.to_bits(), p.pvalue.to_bits());
+            let t = ttest_ind(&xs[i], &ys[i]);
+            assert_eq!(tt[i].statistic.to_bits(), t.statistic.to_bits());
+            assert_eq!(tt[i].pvalue.to_bits(), t.pvalue.to_bits());
+            let l = linregress(&xs[i], &ys[i]);
+            assert_eq!(lr[i].slope.to_bits(), l.slope.to_bits());
+            assert_eq!(lr[i].pvalue.to_bits(), l.pvalue.to_bits());
+        }
+
+        // Below-gate batch stays serial but still returns the right values.
+        let small = pearsonr_many(&xs[..3], &ys[..3]);
+        assert_eq!(small.len(), 3);
+        assert_eq!(
+            small[1].statistic.to_bits(),
+            pearsonr(&xs[1], &ys[1]).statistic.to_bits()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "length mismatch")]
+    fn pearsonr_many_length_mismatch_panics() {
+        let xs = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+        let ys = vec![vec![1.0, 2.0, 3.0]];
+        let _ = pearsonr_many(&xs, &ys);
     }
 }
