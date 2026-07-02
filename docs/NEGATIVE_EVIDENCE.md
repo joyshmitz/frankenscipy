@@ -6,6 +6,21 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: gammaincinv/gammainccinv iterate-break — chdtri flip 4.35× loss → 1.3-3.2× WIN
+
+- Applied the same iterate-convergence-break lever (see betaincinv entry) to the two gamma inverses:
+  `gammaincinv_scalar` (P(a,x)=y) and `gammainccinv_scalar` (Q(a,x)=y). Both broke their bracketed
+  Newton only on unreachable residual tolerances (`1e-15·y` / `1e-16·y`, tighter than gammainc's
+  ~1e-15 noise), so Newton oscillated at the ULP floor toward the 100-/30-iter caps. Added
+  `if |x_new−x| ≤ 4·ε·|x| return x_new`. These feed chi²/gamma/Poisson quantiles + chdtri/gdtrix.
+- MEASURED (same box, best-of; scipy 1.17.1):
+  - `chdtri(5,0.3)` 3.15µs → **0.61µs** = 5.2× self, **3.2× FASTER** than scipy (1.95µs) — was 1.62× SLOWER.
+  - `chdtri(20,0.05)` 5.75µs → **1.00µs** = 5.75× self, **1.3× FASTER** than scipy (1.32µs) — was 4.35× SLOWER.
+  - `gammaincinv(2,0.6)` 0.33µs = **2.9× FASTER** than scipy (0.94µs); `gammaincinv(7.5,0.9)` 0.85µs = **1.18× FASTER**.
+- Verification: 157 gamma-module tests + gammaincinv (4/4) + chdtr (8/8) green (break fires only after
+  x converged, root unchanged). The iterate-break lever is now proven on 3 core inverses
+  (betaincinv, gammaincinv, gammainccinv) — all feed the stats-distribution ppf family.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: betaincinv iterate-break — flip stdtrit 17.7× loss → parity/win (16× self)
 
 - Target: `fsci_special::convenience::betaincinv_scalar` (inverse regularized incomplete beta — the

@@ -4788,17 +4788,27 @@ pub fn gammaincinv_scalar(a: f64, y: f64) -> f64 {
 
         // Newton step: dP/dx = x^(a-1) * e^(-x) / Gamma(a)
         let dpx = x.powf(a - 1.0) * (-x).exp() / ln_gamma_a.exp();
-        if dpx.abs() > 1e-30 {
-            let x_new = x - err / dpx;
+        let x_new = if dpx.abs() > 1e-30 {
+            let step = x - err / dpx;
             // Accept Newton step only if it stays in bracket
-            if x_new > lo && x_new < hi {
-                x = x_new;
+            if step > lo && step < hi {
+                step
             } else {
-                x = 0.5 * (lo + hi);
+                0.5 * (lo + hi)
             }
         } else {
-            x = 0.5 * (lo + hi);
+            0.5 * (lo + hi)
+        };
+
+        // Iterate-convergence break (see betaincinv_scalar): the `1e-15·y` residual
+        // tolerance above is often unreachable (gammainc carries ~1e-15 relative
+        // noise), so without this Newton oscillated at the ULP floor toward the
+        // 100-iter cap — each iter a full gammainc. Return as soon as the estimate
+        // stops moving; x is then the root to machine precision (~3-4 iters).
+        if (x_new - x).abs() <= 4.0 * f64::EPSILON * x.abs().max(f64::MIN_POSITIVE) {
+            return x_new;
         }
+        x = x_new;
     }
     x
 }
@@ -4859,8 +4869,16 @@ pub fn gammainccinv_scalar(a: f64, y: f64) -> f64 {
         if dqx == 0.0 || !dqx.is_finite() {
             break;
         }
-        let x_new = x - err / dqx;
-        x = if x_new > 0.0 { x_new } else { 0.5 * x };
+        let step = x - err / dqx;
+        let x_new = if step > 0.0 { step } else { 0.5 * x };
+        // Iterate-convergence break (see betaincinv_scalar): the `1e-16·y` residual
+        // tolerance is unreachable (gammaincc carries ~1e-15 noise), so Newton else
+        // oscillates at the ULP floor to the 30-iter cap — the chdtri / chi²-quantile
+        // loss. Return once the estimate stops moving (root to machine precision).
+        if (x_new - x).abs() <= 4.0 * f64::EPSILON * x.abs().max(f64::MIN_POSITIVE) {
+            return x_new;
+        }
+        x = x_new;
     }
     x
 }
