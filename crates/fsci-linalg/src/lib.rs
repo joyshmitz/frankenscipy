@@ -14616,10 +14616,45 @@ pub fn dft(n: usize, scale: Option<&str>) -> Result<Vec<Vec<Complex<f64>>>, Lina
             Complex::new(theta.cos() * factor, theta.sin() * factor)
         })
         .collect();
-    for (j, row) in result.iter_mut().enumerate() {
+
+    // Each output row is independent (`W[j][k] = roots[(j·k) mod n]`), so for a
+    // large matrix the n² cell fills fan out across cores — byte-identical to the
+    // serial double loop (same reduced index, same shared `roots`). scipy builds the
+    // DFT matrix with a Python-level `omega ** outer(...)`, so this is a pure win.
+    let fill_row = |j: usize, row: &mut [Complex<f64>]| {
         for (k, entry) in row.iter_mut().enumerate() {
             *entry = roots[(j * k) % n];
         }
+    };
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    // Gate on total cell count so small matrices skip the thread-spawn overhead.
+    let nthreads = if n < 256 || cores <= 1 {
+        1
+    } else {
+        cores.min(n)
+    };
+    if nthreads <= 1 {
+        for (j, row) in result.iter_mut().enumerate() {
+            fill_row(j, row);
+        }
+    } else {
+        let roots_ref = &roots;
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (ci, rows_chunk) in result.chunks_mut(chunk).enumerate() {
+                let j0 = ci * chunk;
+                scope.spawn(move || {
+                    for (dj, row) in rows_chunk.iter_mut().enumerate() {
+                        let j = j0 + dj;
+                        for (k, entry) in row.iter_mut().enumerate() {
+                            *entry = roots_ref[(j * k) % n];
+                        }
+                    }
+                });
+            }
+        });
     }
     Ok(result)
 }
@@ -14915,20 +14950,44 @@ pub fn hadamard(n: usize) -> Result<Vec<Vec<f64>>, LinalgError> {
         });
     }
 
-    let mut h = vec![vec![1.0]];
-    let mut size = 1;
-    while size < n {
-        let mut new_h = vec![vec![0.0; 2 * size]; 2 * size];
-        for i in 0..size {
-            for j in 0..size {
-                new_h[i][j] = h[i][j];
-                new_h[i][j + size] = h[i][j];
-                new_h[i + size][j] = h[i][j];
-                new_h[i + size][j + size] = -h[i][j];
-            }
+    // The Sylvester/natural-order Hadamard matrix has the closed form
+    // `H[i][j] = (−1)^popcount(i & j)` — byte-identical to the recursive doubling
+    // (each ±1 is exact) but O(n²) with no sequential dependency, so the rows fan
+    // out across cores. scipy builds it by repeated `np.block` doubling.
+    let mut h = vec![vec![0.0f64; n]; n];
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if n < 256 || cores <= 1 {
+        1
+    } else {
+        cores.min(n)
+    };
+    let fill_row = |i: usize, row: &mut [f64]| {
+        for (j, entry) in row.iter_mut().enumerate() {
+            *entry = if (i & j).count_ones() & 1 == 0 {
+                1.0
+            } else {
+                -1.0
+            };
         }
-        h = new_h;
-        size *= 2;
+    };
+    if nthreads <= 1 {
+        for (i, row) in h.iter_mut().enumerate() {
+            fill_row(i, row);
+        }
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (ci, rows_chunk) in h.chunks_mut(chunk).enumerate() {
+                let i0 = ci * chunk;
+                scope.spawn(move || {
+                    for (di, row) in rows_chunk.iter_mut().enumerate() {
+                        fill_row(i0 + di, row);
+                    }
+                });
+            }
+        });
     }
     Ok(h)
 }

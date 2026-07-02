@@ -13330,3 +13330,24 @@ across libm boundaries, and the value there is roundoff-dominated noise in scipy
 this more (butter8 well-cond. 2e-7 vs butter4 8e-12). Locked with `group_delay_matches_scipy_reference_values`
 (butter4 well-conditioned bins) + the parallel path stays bit-identical to the serial scipy-kernel recomputation.
 fsci-signal 670/670 green.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — parallel dft matrix (10x→75x) + hadamard closed-form (1.9x→3.6x)
+
+Loss/under-win hunt on scipy.linalg matrix constructors (scipy builds these with slow Python-level array ops):
+scipy `dft(3000)` = 1414ms, `hadamard(8192)` = 926ms. fsci already beat scipy but its constructors were SERIAL.
+
+- **dft**: fsci precomputed the n roots of unity then filled the n² cells `W[j][k] = roots[(j·k) mod n]` in a
+  serial double loop (138ms, 10.2x). Each row is independent → fanned the cell-fill across cores (work-gated
+  n≥256). 138ms → 18.9ms = **75x vs scipy** (was 10.2x). Byte-identical (0 mismatches).
+- **hadamard**: fsci built it by sequential Sylvester doubling (`np.block`-style), memory-bound at 492ms (1.9x).
+  Replaced with the closed form `H[i][j] = (−1)^popcount(i & j)` — the SAME natural-order Walsh–Hadamard matrix
+  (each ±1 exact → byte-identical, 0 mismatches) but O(n²) with no sequential dependency, filled in parallel.
+  492ms → 257ms = **3.6x vs scipy** (was 1.9x; residual is the 536MB write bandwidth wall).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1). Existing dft/hadamard scipy-conformance tests still pass;
+fsci-linalg 496/496 green. LEVER: a matrix CONSTRUCTOR whose cells are an independent closed-form of (i,j) → fill
+rows in parallel (and prefer a closed form over a sequential recurrence when one exists, e.g. Sylvester → popcount).
+
+NEG this sweep (already-dominant): convolve2d 13.7x / correlate2d 17.9x, median_filter 30.5x / rank_filter 28.5x
+(2D-float rank/median NOT a dead-end anymore — parallel quickselect wins), griddata linear/cubic fast. pascal(1500)
+scipy 37.6s is exact-BIG-INT vs fsci f64 — apples-to-oranges, not a real target.
