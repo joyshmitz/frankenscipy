@@ -12613,3 +12613,24 @@ Byte-identical to the fsci serial loop (0 mismatches). fsci-stats lib 2003/2003 
 100s×) and the thread gate must be HIGH (4096+/thread) or parallelism regresses — measure serial-vs-parallel, not
 just vs-scipy. STATS-VMAP HYPOTHESIS-TEST FAMILY COMPLETE (9 fns): pearsonr/spearmanr/ttest_ind/linregress/
 mannwhitneyu/ks_2samp/f_oneway/kruskal/chisquare. wilcoxon excluded (parity gap).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — par_dmatmul in matrix_power binary-exponentiation (byte-identical) — flips 1.3-1.4x SLOWER than numpy to 1.7-3.5x FASTER for large matrices
+
+Extends the `par_dmatmul` lever (52c0bd5b) to `matrix_power`. Its binary exponentiation does ~2·log2(power)
+n×n·n×n `DMatrix` products (`result*current`, `current*current`) through nalgebra's single-threaded multiply →
+1.27-1.42x slower than `np.linalg.matrix_power` (single-thread BLAS). Routed both products through the
+bit-identical work-gated `par_dmatmul` (column-split, large matrices only).
+
+Measured (same box; numpy pinned OPENBLAS/OMP/MKL=1):
+
+| n, power | fsci was → now | numpy | now vs numpy |
+| --- | --- | --- | --- |
+| 512, 64 | 43.8 → 18.2ms | 30.8ms | 1.69x FASTER |
+| 1024, 64 | 358.6 → 81.5ms | 258.3ms | 3.17x FASTER |
+| 1024, 200 | 466.5 → 105.5ms | 368.8ms | 3.50x FASTER |
+
+Byte-identical (all 8 matrix_power tests pass — zero/one/two/negative-power/non-square); self-speedup 2.4x@512,
+4.4x@1024. Win grows with size (small matrices stay serial via the gate → no regression, no nesting). fsci-linalg
+lib 495/495 green. par_dmatmul now serves expm (+cosm/sinm via the shared kernel) AND matrix_power. LEVER: any
+top-level nalgebra-DMatrix repeated/large matmul (matrix_power, expm squaring) → bit-identical column-split
+`par_dmatmul` for a ~2-8x win on large matrices; logm/sqrtm are Schur-based (not matmul-bound) so out of scope.

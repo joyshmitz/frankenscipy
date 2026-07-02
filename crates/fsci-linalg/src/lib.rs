@@ -7977,13 +7977,15 @@ pub fn matrix_power(
     let mut current = base;
     let mut p = abs_power;
 
+    // Binary-exponentiation matmuls fan across cores via the bit-identical
+    // `par_dmatmul` (large matrices only; small ones stay serial via the gate).
     while p > 0 {
         if p & 1 == 1 {
-            result = &result * &current;
+            result = par_dmatmul(&result, &current);
         }
         p >>= 1;
         if p > 0 {
-            current = &current * &current;
+            current = par_dmatmul(&current, &current);
         }
     }
 
