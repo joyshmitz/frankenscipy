@@ -12703,3 +12703,29 @@ fft crate — fsci_fft already has Arc-shared twiddles + a thread-local cache, s
 bandwidth-limited, not allocation-limited. Don't re-chase this. Also confirmed this cycle: welch/csd/spectrogram/
 decimate/resample_poly/lfilter/sosfilt/filtfilt `_axis_2d` are ALL already parallel (decimate delegates to the
 parallel filtfilt_axis_2d) — the signal-transform vmap family is fully covered; no serial `_axis` gaps remain.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched pro_ang1_many/obl_ang1_many (spheroidal angular, amortize+parallelize) — 5.5-6.0x FASTER than scipy's pro_ang1 ufunc (byte-identical)
+
+Completes the spheroidal batch family (pro_cv_many/obl_cv_many already shipped) with the ANGULAR functions.
+`scipy.special.pro_ang1(m,n,c,x)` as a ufunc over many `x` RE-SOLVES the ~50-110-wide tridiagonal eigenproblem
+(characteristic value + expansion coefficients) for EVERY element, even though those are INVARIANT in `x`. fsci
+`pro_ang1_many(m,n,c,&xs)` (via a factored `spheroidal_ang1_many`): computes cv + coefficients ONCE, then
+evaluates only the cheap associated-Legendre series per `x` — AND the eval is compute-bound + per-x independent
+(unlike bandwidth-bound FFTs, it scales with cores), so the eval is fanned across threads (gate npts>=512, cap
+npts/256). TWO levers stacked: amortize the invariant solve + parallelize the compute-bound eval.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), m=1 n=2 c=1.5, fixed (m,n,c) over N random x:
+
+| N | fsci serial-loop → many | scipy pro_ang1 | many vs scipy | self |
+| --- | --- | --- | --- | --- |
+| 20000 | 1356 → 22.2ms | 121.8ms | 5.48x FASTER | 61.1x |
+| 50000 | 3465 → 50.4ms | 302.0ms | 5.99x FASTER | 68.7x |
+
+Byte-identical to the fsci serial loop (0 value/deriv bit-mismatches; cv+coeffs are deterministic in m,n,c so
+amortizing them changes nothing). fsci pro_ang1/obl_ang1 match scipy to ~1e-15 per-point (verified). fsci-special
+lib 1122/1122 green (+ `spheroidal_ang1_many_matches_serial_and_scipy`). Amortization alone gave only 2.7x
+(66→24.7µs/pt — the eval, not the solve, dominates fsci's per-point cost); the compute-bound parallel eval added
+the rest (24.7→~0.4µs/pt). LEVER: for a special-fn ufunc where scipy recomputes an x-invariant solve per element
+(spheroidal, and any "characteristic-value + coefficient-series" family), a batched form that hoists the solve +
+parallelizes the compute-bound series beats scipy multi-x. CONTRAST the FFT-batch bandwidth wall (02e0f0c4): this
+eval is COMPUTE-bound so it scales to 61-68x self, not ~2x.

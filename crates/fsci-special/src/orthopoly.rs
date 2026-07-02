@@ -1302,6 +1302,15 @@ fn spheroidal_ang1(m: u32, n: u32, c: f64, x: f64, prolate: bool, cv: f64) -> (f
         return (f64::NAN, f64::NAN);
     }
     let (d, parity) = spheroidal_coefficients(m, n, c, prolate, cv);
+    spheroidal_ang1_eval(m, x, &d, parity)
+}
+
+/// The per-`x` evaluation of the spheroidal angular function of the first kind,
+/// given the (x-independent) expansion coefficients `d` and `parity` from
+/// [`spheroidal_coefficients`]. Split out so batched callers ([`pro_ang1_many`])
+/// compute the coefficients ONCE and reuse them across all `x` — the expensive
+/// characteristic-value + eigenvector solve is invariant in `x`.
+fn spheroidal_ang1_eval(m: u32, x: f64, d: &[f64], parity: u32) -> (f64, f64) {
     let mut value = 0.0_f64;
     let mut derivative = 0.0_f64;
     for (k, &dk) in d.iter().enumerate() {
@@ -1310,6 +1319,53 @@ fn spheroidal_ang1(m: u32, n: u32, c: f64, x: f64, prolate: bool, cv: f64) -> (f
         derivative += dk * assoc_legendre_no_cs_deriv(m, l, x);
     }
     (value, derivative)
+}
+
+/// Vectorised spheroidal angular function of the first kind over many `x` at a
+/// fixed `(m, n, c)` — computes the characteristic value and expansion
+/// coefficients ONCE (both invariant in `x`) and evaluates the cheap series at
+/// each `x`. Each element equals [`pro_ang1`]/[`obl_ang1`] of the corresponding
+/// `x` (bit-identical: `cv` and the coefficients are deterministic in `m,n,c`).
+pub fn spheroidal_ang1_many(m: u32, n: u32, c: f64, xs: &[f64], prolate: bool) -> Vec<(f64, f64)> {
+    if n < m {
+        return vec![(f64::NAN, f64::NAN); xs.len()];
+    }
+    let cv = spheroidal_cv(m, n, c, prolate);
+    let (d, parity) = spheroidal_coefficients(m, n, c, prolate, cv);
+    let npts = xs.len();
+    // The per-`x` eval is a ~len(d)-term associated-Legendre series (compute-bound,
+    // per-point independent — unlike bandwidth-bound FFTs it scales with cores), so
+    // fan the points across threads once the batch amortises the spawn. Serial gate
+    // avoids the availability syscall for small batches. Order-preserving ⇒
+    // bit-identical to the serial map.
+    let nthreads = if npts < 512 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(npts / 256)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return xs
+            .iter()
+            .map(|&x| spheroidal_ang1_eval(m, x, &d, parity))
+            .collect();
+    }
+    let mut out = vec![(0.0_f64, 0.0_f64); npts];
+    let chunk = npts.div_ceil(nthreads);
+    let d_ref = &d;
+    std::thread::scope(|scope| {
+        for (out_chunk, x_chunk) in out.chunks_mut(chunk).zip(xs.chunks(chunk)) {
+            scope.spawn(move || {
+                for (slot, &x) in out_chunk.iter_mut().zip(x_chunk) {
+                    *slot = spheroidal_ang1_eval(m, x, d_ref, parity);
+                }
+            });
+        }
+    });
+    out
 }
 
 /// Prolate spheroidal angular function of the first kind `S_mn^{(1)}(c, x)` and

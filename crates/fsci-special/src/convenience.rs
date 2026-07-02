@@ -3554,6 +3554,24 @@ pub fn obl_cv_many(m: u32, n: u32, c: &[f64]) -> Vec<f64> {
     .expect("obl_cv is infallible")
 }
 
+/// Vectorized prolate-spheroidal angular function `pro_ang1(m, n, c, x)` (value
+/// and derivative) over many `x` at a fixed `(m, n, c)`. The characteristic value
+/// and expansion coefficients (the expensive tridiagonal solve, ~50–110 wide) are
+/// INVARIANT in `x`, so they are computed ONCE and only the cheap Legendre series
+/// is evaluated per `x` — whereas SciPy's `pro_ang1` ufunc re-solves the
+/// eigenproblem for every element. Each entry equals [`pro_ang1`](crate::pro_ang1).
+#[must_use]
+pub fn pro_ang1_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    crate::orthopoly::spheroidal_ang1_many(m, n, c, x, true)
+}
+
+/// Vectorized oblate-spheroidal angular function `obl_ang1(m, n, c, x)` over many
+/// `x` at a fixed `(m, n, c)`; see [`pro_ang1_many`].
+#[must_use]
+pub fn obl_ang1_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    crate::orthopoly::spheroidal_ang1_many(m, n, c, x, false)
+}
+
 /// Weighted integral of the Bessel function of the first kind,
 /// `besselpoly(a, λ, ν) = ∫₀¹ xˡ Jᵥ(2·a·x) dx`.
 ///
@@ -14237,6 +14255,57 @@ mod tests {
         assert!(
             (super::zeta_scalar(f64::INFINITY) - 1.0).abs() < 1e-15,
             "ζ(∞) = 1"
+        );
+    }
+
+    #[test]
+    fn spheroidal_ang1_many_matches_serial_and_scipy() {
+        // pro_ang1_many / obl_ang1_many must be bit-identical to the serial
+        // per-x loop (the parallel eval reuses the once-computed cv+coeffs).
+        let (m, n, c) = (1u32, 2u32, 1.5f64);
+        let mut s = 0xA5A5_1234_9E37_79B9u64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64 * 1.8 - 0.9
+        };
+        let xs: Vec<f64> = (0..1500).map(|_| rng()).collect(); // above the 512 gate
+        for &prolate in &[true, false] {
+            let many = if prolate {
+                pro_ang1_many(m, n, c, &xs)
+            } else {
+                obl_ang1_many(m, n, c, &xs)
+            };
+            assert_eq!(many.len(), xs.len());
+            for (&x, &(gv, gd)) in xs.iter().zip(&many) {
+                let (sv, sd) = if prolate {
+                    crate::orthopoly::pro_ang1(m, n, c, x)
+                } else {
+                    crate::orthopoly::obl_ang1(m, n, c, x)
+                };
+                assert_eq!(gv.to_bits(), sv.to_bits(), "ang1_many value mismatch");
+                assert_eq!(gd.to_bits(), sd.to_bits(), "ang1_many deriv mismatch");
+            }
+        }
+        // Accuracy vs SciPy reference at a fixed point.
+        let (pv, pd) = pro_ang1_many(m, n, c, &[0.3])[0];
+        assert!(
+            (pv - 0.8464455185558086).abs() < 1e-12,
+            "pro_ang1 value {pv}"
+        );
+        assert!(
+            (pd - 2.4622196095402016).abs() < 1e-11,
+            "pro_ang1 deriv {pd}"
+        );
+        let (ov, od) = obl_ang1_many(m, n, c, &[0.3])[0];
+        assert!(
+            (ov - 0.8712913187137773).abs() < 1e-12,
+            "obl_ang1 value {ov}"
+        );
+        assert!(
+            (od - 2.7025234895588786).abs() < 1e-11,
+            "obl_ang1 deriv {od}"
         );
     }
 }
