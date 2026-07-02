@@ -2,6 +2,7 @@
 
 use fsci_runtime::RuntimeMode;
 
+use crate::bessel::gauss48_integrate;
 use crate::convenience::erfcx_scalar;
 use crate::gamma::{gammaincc_scalar, log_gammaincc_scalar};
 use crate::types::{
@@ -247,12 +248,11 @@ const HYPER_UNSUPPORTED_CHAIN: &[HypergeometricBranch] =
     &[HypergeometricBranch::UnsupportedAnalyticContinuation];
 const HYP2F1_DIVERGENT_CHAIN: &[HypergeometricBranch] =
     &[HypergeometricBranch::DivergentAtUnitArgument];
-// The log-space integrand's accuracy plateaus at ~3.2e-8 vs SciPy for STEPS>=512 (256 degrades to
-// 8.5e-4) — the 4096 steps were ~8x over-resolved with no accuracy gain. 768 keeps the identical
-// 3.2e-8 floor with a comfortable margin over the 512 plateau-start, cutting ~5.3x of the per-point
-// quadrature cost (the dominant term in hyperu's SciPy gap). A true WIN still needs the Kummer series
-// (no integral); this is the verified no-accuracy-loss partial. frankenscipy-tkd3v
-const HYPERU_QUADRATURE_STEPS: usize = 768;
+// The log-space integrand is smooth+unimodal, so a peak-split 48-node Gauss–Legendre rule
+// (see `hyperu_positive_a_integral`) integrates it to ≥ the old uniform-Simpson accuracy floor
+// (~3.2e-8 vs SciPy, verified unchanged on a broad (a,b,x) grid) with ~96 integrand evals instead
+// of ~768 — cutting the dominant per-point cost of hyperu's SciPy gap. (A full Kummer-series path
+// would remove the integral entirely; this is the drop-in quadrature win. frankenscipy-tkd3v)
 const HYPERU_LOG_UNDERFLOW: f64 = -745.0;
 const HYPERU_LOG_OVERFLOW: f64 = 709.0;
 
@@ -2093,17 +2093,16 @@ fn hyperu_positive_a_integral(
     let upper_decay = (60.0 / x).ln();
     let upper = upper_decay.max(peak_s + 20.0).clamp(18.0, 180.0);
 
-    let h = (upper - lower) / HYPERU_QUADRATURE_STEPS as f64;
-    let mut sum = hyperu_integrand_log_s(a, b, x, ln_gamma_a, lower)
-        + hyperu_integrand_log_s(a, b, x, ln_gamma_a, upper);
-
-    for i in 1..HYPERU_QUADRATURE_STEPS {
-        let s = lower + h * i as f64;
-        let weight = if i % 2 == 0 { 2.0 } else { 4.0 };
-        sum += weight * hyperu_integrand_log_s(a, b, x, ln_gamma_a, s);
-    }
-
-    let value = sum * h / 3.0;
+    // The integrand exp(-x·eˢ + a·s + (b-a-1)·ln(1+eˢ) - lnΓ(a)) is smooth and
+    // UNIMODAL in s (peak near `peak_s`, super-exponential decay on the right, ~eᵃˢ
+    // decay on the left). A peak-split 48-node Gauss–Legendre rule — dense nodes at
+    // the shared split endpoint where the mode sits — nails such an integrand with
+    // ~96 evaluations, versus the 768-step uniform Simpson (~8× fewer transcendental
+    // integrand evals) at equal-or-better accuracy (cf. the Kᵥ quadrature→Gauss win).
+    let integrand = |s: f64| hyperu_integrand_log_s(a, b, x, ln_gamma_a, s);
+    let split = peak_s.clamp(lower, upper);
+    let value =
+        gauss48_integrate(&integrand, lower, split) + gauss48_integrate(&integrand, split, upper);
     if value.is_finite() {
         return Ok(value);
     }

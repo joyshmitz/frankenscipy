@@ -1764,7 +1764,7 @@ fn gauss_legendre_48() -> &'static ([f64; 48], [f64; 48]) {
 }
 
 /// Fixed 48-node Gauss–Legendre quadrature of `f` over `[a, b]`.
-fn gauss48_integrate(f: &impl Fn(f64) -> f64, a: f64, b: f64) -> f64 {
+pub(crate) fn gauss48_integrate(f: &impl Fn(f64) -> f64, a: f64, b: f64) -> f64 {
     let (x, w) = gauss_legendre_48();
     let c1 = 0.5 * (b - a);
     let c2 = 0.5 * (b + a);

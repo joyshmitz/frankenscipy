@@ -12537,3 +12537,26 @@ The `par_dmatmul` gate keeps small matrices serial, so batched `expm_many` (para
 per-item n) is UNAFFECTED (verified: expm_many nb=64 n=64 = 5.08ms, no regression). cosm/sinm route through the
 same expm kernel → they inherit the large-matrix speedup for free. LEVER: nalgebra DMatrix `*` is single-threaded;
 a bit-identical column-split parallel wrapper (`par_dmatmul`) lifts any large single-matrix DMatrix-GEMM-bound op.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — hyperu 768-step Simpson → peak-split Gauss-Legendre (kv-style quadrature lever) — 4x per-call, parallel array path 7.0x FASTER than scipy (was ~1.7x)
+
+Anomaly hunt in fsci-special (grep fixed-step quadrature kernels, the kv/wofz signature). `hyperu` (confluent
+hypergeometric U) computed its integral-representation fallback with a 768-step UNIFORM Simpson rule in log-s
+space — 768 transcendental integrand evals/call → serial-loop N=100k was 1373ms = 21.5x SLOWER than
+scipy.special.hyperu. The integrand exp(-x·eˢ + a·s + (b-a-1)·ln(1+eˢ) - lnΓ(a)) is smooth + UNIMODAL, so replaced
+it with a peak-split 48-node Gauss-Legendre rule (gauss48 on [lower,peak] + [peak,upper], reusing bessel.rs's
+`gauss48_integrate` made pub(crate)) — dense nodes at the shared split endpoint resolve the mode; ~96 evals vs 768.
+
+Measured (same box; scipy pinned): serial-loop N=100k 1373 → 340ms = 4.03x self-speedup. ACCURACY unchanged: max
+rel err vs scipy = 3.47e-8 over a 252-pt (a,b,x) grid — matches the OLD uniform-Simpson ~3.2e-8 plateau (the floor
+is the log-space interval truncation, NOT the quadrature rule, so gauss48 hits the same floor with 8x fewer evals).
+Conformance golden `diff_special_hyperu` PASSES + 10 hyperu unit tests pass + fsci-special lib 1121/1121 green.
+
+REAL vs-scipy win via the ALREADY-PARALLEL tensor path (hyperu_dispatch uses par_map_indices across array
+elements): fsci array hyperu N=100k = 9.09ms vs scipy ufunc 63.94ms = **7.0x FASTER** — up from ~1.7x before (the
+4x kernel speedup lifts the parallel win). Lifts every hyperu caller. HONEST: fsci hyperu's ~3e-8 accuracy floor
+(pre-existing, from the log-space integral method) is looser than scipy's ~machine-precision Kummer-series; a full
+Kummer/connection-formula path would remove the integral AND close the accuracy gap but has cancellation risk near
+integer b (why the integral fallback exists) — deferred. LEVER (reconfirmed, 3rd time incl. kv/wofz): a fixed-step
+uniform quadrature in a special-fn kernel over a smooth unimodal integrand → peak-split Gauss-Legendre = ~8x fewer
+evals at equal accuracy. grep `STEPS`/`for i in 0..=N`/`h = (upper-lower)/N` in per-point kernels.
