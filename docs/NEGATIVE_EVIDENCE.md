@@ -12562,3 +12562,30 @@ DOES buy accuracy → not a candidate. Contrast: quadrature→Gauss is a win ONL
 (oracle-verified), which requires an mpmath check the golden cannot provide. hyperu is a WALL for the
 speed-via-fewer-evals lever; the only real hyperu speedup is a Kummer/connection-formula rewrite (removes the
 integral, keeps machine precision) — deferred (cancellation near integer b).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched f_oneway_many/kruskal_many (multi-group mass-univariate vmap) — f_oneway 894-1073x, kruskal 274-518x vs the scipy loop
+
+Completes the stats-vmap hypothesis-test family with the MULTI-GROUP tests (one-way ANOVA / Kruskal-Wallis across
+many independent group-sets — a common mass-univariate workflow). SciPy has no batched f_oneway/kruskal, so a
+caller loops them in Python. Added f_oneway_many/kruskal_many (batch = `&[Vec<Vec<f64>>]`, each element a set of k
+groups) via the existing `par_pair_index_map`. CORRECTNESS gate first (fixed data, not scipy-buggy fns): fsci
+f_oneway stat=0.084142394822006 p=0.919837864978402 vs scipy p=...401 (~1e-15); kruskal stat/p EXACT vs scipy.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1). fsci `_many` absolute (best-of-5, ms) vs the scipy loop:
+
+| batch | fsci many (f_oneway/kruskal ms) | vs scipy-loop | self (many vs fsci serial) | bit-mism |
+| --- | --- | --- | --- | --- |
+| N=3000 K=4 m=50  | 0.98 / 2.07 | f_oneway 1073x, kruskal 518x | 2.34x / 10.79x | 0 |
+| N=2000 K=3 m=100 | 0.72 / 2.53 | f_oneway 894x, kruskal 274x | 2.69x / 8.54x | 0 |
+
+scipy-loop baselines: N=3000 f_oneway 1051ms / kruskal 1072ms; N=2000 644 / 693ms. Python-overhead lever (fsci
+f_oneway serial is ~2ms vs scipy's ~1051ms — the gap is scipy's per-call Python dispatch × N). kruskal's fsci
+serial is heavier (~22ms — sort + tie ranks) so its self-speedup is larger (parallelism helps more) but its
+vs-scipy ratio is smaller than f_oneway. Byte-identical to the fsci serial loop (0 mismatches). fsci-stats lib
+2003/2003 green (batch bit-identity test extended to f_oneway/kruskal).
+
+STATS-VMAP HYPOTHESIS-TEST FAMILY NOW COMPLETE: pearsonr/spearmanr (correlation) + ttest_ind/linregress
+(parametric) + mannwhitneyu/ks_2samp (rank-based 2-sample) + f_oneway/kruskal (multi-group). All via
+`par_pair_index_map`, all Python-overhead-lever wins (100-1400x), all byte-identical to the serial loop, all
+correctness-gated vs scipy on fixed data. Only wilcoxon deliberately excluded (pre-existing normal-approx parity
+gap — a fast wrong answer). chisquare remains as a possible further member.

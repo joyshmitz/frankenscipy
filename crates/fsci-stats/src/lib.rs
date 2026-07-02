@@ -32283,6 +32283,29 @@ pub fn ks_2samp_many(data1: &[Vec<f64>], data2: &[Vec<f64>]) -> Vec<GoodnessOfFi
     par_pair_index_map(data1.len(), 128, |i| ks_2samp(&data1[i], &data2[i]))
 }
 
+/// Vectorised one-way ANOVA [`f_oneway`] over `n` independent test-sets, each a
+/// `Vec` of `k` group samples — parallel across the batch (see
+/// [`pearsonr_many`]). SciPy has no batched `f_oneway`, so a mass-univariate
+/// caller loops it in Python; each entry equals `f_oneway` of the corresponding
+/// group-set.
+#[must_use]
+pub fn f_oneway_many(sets: &[Vec<Vec<f64>>]) -> Vec<TtestResult> {
+    par_pair_index_map(sets.len(), 128, |i| {
+        let groups: Vec<&[f64]> = sets[i].iter().map(Vec::as_slice).collect();
+        f_oneway(&groups)
+    })
+}
+
+/// Vectorised Kruskal-Wallis H-test [`kruskal`] over `n` independent test-sets;
+/// see [`f_oneway_many`].
+#[must_use]
+pub fn kruskal_many(sets: &[Vec<Vec<f64>>]) -> Vec<TtestResult> {
+    par_pair_index_map(sets.len(), 128, |i| {
+        let groups: Vec<&[f64]> = sets[i].iter().map(Vec::as_slice).collect();
+        kruskal(&groups)
+    })
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -83869,6 +83892,25 @@ mod tests {
             small[1].statistic.to_bits(),
             pearsonr(&xs[1], &ys[1]).statistic.to_bits()
         );
+
+        // Multi-group batch APIs (ANOVA / Kruskal-Wallis) — bit-identical to the
+        // serial per-set loop.
+        let sets: Vec<Vec<Vec<f64>>> = (0..n)
+            .map(|i| vec![xs[i].clone(), ys[i].clone(), xs[(i + 1) % n].clone()])
+            .collect();
+        let fo = f_oneway_many(&sets);
+        let kw = kruskal_many(&sets);
+        assert_eq!(fo.len(), n);
+        assert_eq!(kw.len(), n);
+        for i in 0..n {
+            let g: Vec<&[f64]> = sets[i].iter().map(Vec::as_slice).collect();
+            let f0 = f_oneway(&g);
+            assert_eq!(fo[i].statistic.to_bits(), f0.statistic.to_bits());
+            assert_eq!(fo[i].pvalue.to_bits(), f0.pvalue.to_bits());
+            let k0 = kruskal(&g);
+            assert_eq!(kw[i].statistic.to_bits(), k0.statistic.to_bits());
+            assert_eq!(kw[i].pvalue.to_bits(), k0.pvalue.to_bits());
+        }
 
         // Nonparametric batch APIs (rank-based) — same bit-identity guarantee.
         let mw = mannwhitneyu_many(&xs, &ys);
