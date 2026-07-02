@@ -1235,6 +1235,19 @@ pub fn cumulative_trapezoid_axis_2d(
     integrate_rows_parallel(rows.len(), |i| cumulative_trapezoid(&rows[i], x))
 }
 
+/// Cumulative Simpson's-rule integral of each row of a 2-D array against shared
+/// sample coordinates `x`, matching `scipy.integrate.cumulative_simpson(Y, x=x,
+/// axis=1)` (no `initial`, so each output row is one shorter than the input).
+///
+/// Byte-identical to calling [`cumulative_simpson`] per row (independent rows fan
+/// across cores).
+pub fn cumulative_simpson_axis_2d(
+    rows: &[Vec<f64>],
+    x: &[f64],
+) -> Result<Vec<Vec<f64>>, IntegrateValidationError> {
+    integrate_rows_parallel(rows.len(), |i| cumulative_simpson(&rows[i], x))
+}
+
 /// Cumulatively integrate y with uniform spacing using the trapezoidal rule.
 ///
 /// Matches `scipy.integrate.cumulative_trapezoid(y, dx=dx)`.
@@ -4138,15 +4151,22 @@ mod tests {
         let tr = trapezoid_axis_2d(&rows, &x).expect("trap");
         let si = simpson_axis_2d(&rows, &x).expect("simp");
         let ct = cumulative_trapezoid_axis_2d(&rows, &x).expect("cumtrap");
+        let cs = cumulative_simpson_axis_2d(&rows, &x).expect("cumsimp");
         assert_eq!(tr.len(), nr);
         assert_eq!(si.len(), nr);
         assert_eq!(ct.len(), nr);
+        assert_eq!(cs.len(), nr);
         for i in 0..nr {
             assert_eq!(tr[i].to_bits(), trapezoid(&rows[i], &x).unwrap().integral.to_bits());
             assert_eq!(si[i].to_bits(), simpson(&rows[i], &x).unwrap().integral.to_bits());
             let cti = cumulative_trapezoid(&rows[i], &x).unwrap();
             assert_eq!(ct[i].len(), cti.len());
             for (a, b) in ct[i].iter().zip(&cti) {
+                assert_eq!(a.to_bits(), b.to_bits());
+            }
+            let csi = cumulative_simpson(&rows[i], &x).unwrap();
+            assert_eq!(cs[i].len(), csi.len());
+            for (a, b) in cs[i].iter().zip(&csi) {
                 assert_eq!(a.to_bits(), b.to_bits());
             }
         }

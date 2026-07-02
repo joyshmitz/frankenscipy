@@ -13290,3 +13290,18 @@ memory-touching ops because scipy's numpy builds big intermediates the single-pa
 
 NEG this sweep (already-dominant, don't re-hunt): BarycentricInterpolator eval_many 8.4x (par_query_map),
 Krogh 6.2ms fast, CubicSpline/Pchip/Akima eval_many already par_query_map.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — cumulative_simpson_axis_2d — 25x FASTER than scipy
+
+Extends the axis-2D integration lever to `scipy.integrate.cumulative_simpson(Y, x=x, axis=1)` (347.6ms for a
+2000×3000 array — the slowest of the axis-integration family; scipy's cumulative_simpson is a newer, heavier
+per-panel scheme). fsci had only 1-D `cumulative_simpson`; added `cumulative_simpson_axis_2d` (parallel across
+rows via the same `integrate_rows_parallel` helper, byte-identical to the per-row 1-D call).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), Y = 2000×3000, shared x: 13.74ms vs scipy 347.6ms = **25x**.
+Correctness: matches scipy to **1.44e-15** (per-row, 20×41 reference); byte-identical to the fsci 1-D per-row loop
+(0 mismatches, folded into `axis_2d_integration_matches_per_row_loop_bit_for_bit`). fsci-integrate 267/267 green.
+Axis-2D integration set now complete: trapezoid/simpson/cumulative_trapezoid/cumulative_simpson (9-25x).
+
+NEG this sweep (candidates measured, not yet pursued): binned_statistic 1M mean/std 51ms, binned_statistic_2d
+38.9ms, NearestNDInterpolator 76.8ms — check whether fsci has them / already parallel next cycle.
