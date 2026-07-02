@@ -32455,6 +32455,54 @@ pub fn anderson_many(datasets: &[Vec<f64>], dist: &str) -> Vec<AndersonResult> {
     par_pair_index_map(datasets.len(), 128, |i| anderson(&datasets[i], dist))
 }
 
+/// Vectorised one-sample t-test [`ttest_1samp`] over `n` datasets against a shared
+/// `popmean`; see [`pearsonr_many`]. Each entry equals `ttest_1samp(&datasets[k],
+/// popmean)`.
+#[must_use]
+pub fn ttest_1samp_many(datasets: &[Vec<f64>], popmean: f64) -> Vec<TtestResult> {
+    par_pair_index_map(datasets.len(), 256, |i| ttest_1samp(&datasets[i], popmean))
+}
+
+/// Vectorised paired t-test [`ttest_rel`] over `n` independent `(a, b)` sample
+/// pairs (shared `alternative`); see [`pearsonr_many`]. Fallible per pair.
+#[must_use]
+pub fn ttest_rel_many(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    alternative: Option<&str>,
+) -> Vec<Result<TtestResult, StatsError>> {
+    assert_eq!(a.len(), b.len(), "ttest_rel_many: a and b length mismatch");
+    par_pair_index_map(a.len(), 256, |i| ttest_rel(&a[i], &b[i], alternative))
+}
+
+/// Vectorised Mood's two-sample scale test [`mood`] over `n` independent `(x, y)`
+/// pairs; see [`pearsonr_many`].
+#[must_use]
+pub fn mood_many(x: &[Vec<f64>], y: &[Vec<f64>]) -> Vec<TtestResult> {
+    assert_eq!(x.len(), y.len(), "mood_many: x and y length mismatch");
+    par_pair_index_map(x.len(), 256, |i| mood(&x[i], &y[i]))
+}
+
+/// Vectorised Bartlett equal-variance test [`bartlett`] over `n` independent
+/// group-sets (each a `Vec` of groups); see [`f_oneway_many`].
+#[must_use]
+pub fn bartlett_many(sets: &[Vec<Vec<f64>>]) -> Vec<VarianceTestResult> {
+    par_pair_index_map(sets.len(), 128, |i| {
+        let groups: Vec<&[f64]> = sets[i].iter().map(Vec::as_slice).collect();
+        bartlett(&groups)
+    })
+}
+
+/// Vectorised Levene equal-variance test [`levene`] over `n` independent
+/// group-sets; see [`bartlett_many`].
+#[must_use]
+pub fn levene_many(sets: &[Vec<Vec<f64>>]) -> Vec<VarianceTestResult> {
+    par_pair_index_map(sets.len(), 128, |i| {
+        let groups: Vec<&[f64]> = sets[i].iter().map(Vec::as_slice).collect();
+        levene(&groups)
+    })
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -84209,6 +84257,59 @@ mod tests {
             assert_eq!(ad[i].statistic.to_bits(), a0.statistic.to_bits());
             assert_eq!(ad[i].critical_values, a0.critical_values);
         }
+    }
+
+    #[test]
+    fn variance_and_ttest_many_match_serial_loop_bit_for_bit() {
+        // ttest_1samp_many / ttest_rel_many / mood_many / bartlett_many /
+        // levene_many must be bit-identical to the serial per-item loop.
+        let mut s = 0x2545F4914F6CDD1D_u64;
+        let mut nrm = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            let u1 = ((s >> 11) as f64 / (1u64 << 53) as f64).max(1e-12);
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            let u2 = (s >> 11) as f64 / (1u64 << 53) as f64;
+            (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+        };
+        let n = 700usize; // above the 256/128 gates
+        let a: Vec<Vec<f64>> = (0..n).map(|_| (0..120).map(|_| nrm()).collect()).collect();
+        let b: Vec<Vec<f64>> = (0..n).map(|_| (0..120).map(|_| nrm()).collect()).collect();
+        let sets: Vec<Vec<Vec<f64>>> = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| vec![x.clone(), y.clone()])
+            .collect();
+
+        let t1 = ttest_1samp_many(&a, 0.25);
+        let tr = ttest_rel_many(&a, &b, Some("greater"));
+        let md = mood_many(&a, &b);
+        let ba = bartlett_many(&sets);
+        let le = levene_many(&sets);
+        assert_eq!(t1.len(), n);
+        for i in 0..n {
+            let s0 = ttest_1samp(&a[i], 0.25);
+            assert_eq!(t1[i].statistic.to_bits(), s0.statistic.to_bits());
+            assert_eq!(t1[i].pvalue.to_bits(), s0.pvalue.to_bits());
+            let r0 = ttest_rel(&a[i], &b[i], Some("greater")).unwrap();
+            let rm = tr[i].as_ref().unwrap();
+            assert_eq!(rm.statistic.to_bits(), r0.statistic.to_bits());
+            assert_eq!(rm.pvalue.to_bits(), r0.pvalue.to_bits());
+            let m0 = mood(&a[i], &b[i]);
+            assert_eq!(md[i].statistic.to_bits(), m0.statistic.to_bits());
+            assert_eq!(md[i].pvalue.to_bits(), m0.pvalue.to_bits());
+            let g: Vec<&[f64]> = sets[i].iter().map(Vec::as_slice).collect();
+            let b0 = bartlett(&g);
+            assert_eq!(ba[i].statistic.to_bits(), b0.statistic.to_bits());
+            assert_eq!(ba[i].pvalue.to_bits(), b0.pvalue.to_bits());
+            let l0 = levene(&g);
+            assert_eq!(le[i].statistic.to_bits(), l0.statistic.to_bits());
+            assert_eq!(le[i].pvalue.to_bits(), l0.pvalue.to_bits());
+        }
+        assert!(ttest_1samp_many(&[], 0.0).is_empty());
     }
 
     #[test]

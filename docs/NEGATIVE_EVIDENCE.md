@@ -13028,3 +13028,35 @@ NOTE (fresh gap surfaced, not landed): `scipy.interpolate.RBFInterpolator(neighb
 = KDTree + per-query k×k solve, parallel-friendly, NOT the LAPACK-wall of dense RBF) — fsci's `RbfInterpolator` is
 DENSE-only (capped at MAX_RBF_POINTS). The scalable neighbors-mode local RBF is a genuine feature gap + a
 substantial (~150-line, correctness-risky) implementation — a good dedicated-cycle target, not a quick win.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — ttest_1samp/ttest_rel/mood/bartlett/levene _many (two-sample & variance-test vmap) — 152-1193x FASTER than the scipy Python loops
+
+Extends the vmap-over-scipy-Python-loop lever from one-sample GoF into the two-sample / variance-test family.
+`scipy.stats.{ttest_1samp, ttest_rel, mood, bartlett, levene}` each loop in Python over independent datasets.
+Added five batch wrappers via `par_pair_index_map` (byte-identical to the serial per-item loop):
+- `ttest_1samp_many(datasets, popmean) -> Vec<TtestResult>` (shared popmean; gate 256)
+- `ttest_rel_many(a, b, alternative) -> Vec<Result<TtestResult, StatsError>>` (paired, fallible per pair; gate 256)
+- `mood_many(x, y) -> Vec<TtestResult>` (Mood's two-sample scale test over (x,y) pairs; gate 256)
+- `bartlett_many(sets: &[Vec<Vec<f64>>]) -> Vec<VarianceTestResult>` (each set = a Vec of groups; gate 128)
+- `levene_many(sets: &[Vec<Vec<f64>>]) -> Vec<VarianceTestResult>` (gate 128)
+
+Correctness gate FIRST: all five match scipy EXACTLY to 12+ digits on fixed data before wrapping
+(ttest_1samp stat 0.9017804641610814 / p 0.38649304195727213; ttest_rel 0.162574577848 / 0.873801465293;
+bartlett 0.718711764615 / 0.396566799056; levene 0.721495246046 / 0.404802703260; mood 1.048864108105 /
+0.294240666720 — all == scipy).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), 3000 datasets × 300 pts:
+
+| test | fsci serial → many | self | scipy loop | vs scipy |
+| --- | --- | --- | --- | --- |
+| ttest_1samp | 1.96 → 0.85ms | 2.3x | 1011ms | 1193x |
+| ttest_rel | 2.47 → 0.85ms | 2.9x | 928ms | 1096x |
+| bartlett | 4.45 → 1.17ms | 3.8x | 1350ms | 1154x |
+| levene | 36.3 → 3.95ms | 9.2x | 973ms | 246x |
+| mood | 51.8 → 7.10ms | 7.3x | 1076ms | 152x |
+
+Byte-identical to the fsci serial loop (0 statistic/pvalue mismatches on all five, verified in the new
+`variance_and_ttest_many_match_serial_loop_bit_for_bit` conformance test, n=700 crossing the gates + empty-input
+guard). Win magnitude tracks per-item cost: cheap tests (ttest_1samp/rel, bartlett) are dominated by Python
+overhead → ~1100x; heavy tests (levene's per-group centering, mood's joint rank) get 7-9x self-parallelism on top →
+150-250x. fsci-stats lib 2007/2007 green.
