@@ -1613,6 +1613,24 @@ fn bisect_increasing<F>(mut lo: f64, mut hi: f64, target: f64, f: F) -> f64
 where
     F: Fn(f64) -> f64,
 {
+    // Fast path: when the endpoints finitely bracket the root, solve with the
+    // superlinear Illinois method (~12 evals) instead of DISTRIBUTION_INVERSE_ITERS
+    // bisection steps — bdtrik/nbdtrik were ~13-15× SciPy losses (50µs, each iter a
+    // full bdtr/nbdtr). Fall back to the robust bisection for non-finite / unbracketed
+    // endpoints so all edge cases behave exactly as before.
+    let (flo, fhi) = (f(lo), f(hi));
+    if flo.is_finite() && fhi.is_finite() {
+        let (glo, ghi) = (flo - target, fhi - target);
+        if glo == 0.0 {
+            return lo;
+        }
+        if ghi == 0.0 {
+            return hi;
+        }
+        if glo < 0.0 && ghi > 0.0 {
+            return illinois_root(|m| f(m) - target, lo, hi, glo, ghi);
+        }
+    }
     for _ in 0..DISTRIBUTION_INVERSE_ITERS {
         let mid = lo + (hi - lo) * 0.5;
         let value = f(mid);
@@ -1629,6 +1647,21 @@ fn bisect_decreasing<F>(mut lo: f64, mut hi: f64, target: f64, f: F) -> f64
 where
     F: Fn(f64) -> f64,
 {
+    // Illinois fast path on the sign-flipped residual (f is decreasing, so
+    // g = target − f is increasing); robust bisection fallback for edge cases.
+    let (flo, fhi) = (f(lo), f(hi));
+    if flo.is_finite() && fhi.is_finite() {
+        let (glo, ghi) = (target - flo, target - fhi);
+        if glo == 0.0 {
+            return lo;
+        }
+        if ghi == 0.0 {
+            return hi;
+        }
+        if glo < 0.0 && ghi > 0.0 {
+            return illinois_root(|m| target - f(m), lo, hi, glo, ghi);
+        }
+    }
     for _ in 0..DISTRIBUTION_INVERSE_ITERS {
         let mid = lo + (hi - lo) * 0.5;
         let value = f(mid);

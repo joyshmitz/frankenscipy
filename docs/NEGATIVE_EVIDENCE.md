@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: bisect_increasing/decreasing → illinois — bdtrik flip 13× loss → 1.34× WIN
+
+- Target: the SHARED `bisect_increasing`/`bisect_decreasing` helpers in `beta.rs` (feed the discrete
+  parameter-inversions bdtrik/bdtrin/nbdtrik/nbdtrin). They ran DISTRIBUTION_INVERSE_ITERS bisection
+  steps, each a full bdtr/nbdtr — bdtrik/nbdtrik measured **13-15× SLOWER than SciPy** (50-51µs).
+- Fix: illinois fast path when the endpoints finitely bracket the root (~12 evals), with the original
+  bisection kept as fallback for non-finite / unbracketed / endpoint-is-root cases (glo==0→lo,
+  ghi==0→hi — the same illinois endpoint gotcha caught on fdtridfd). For the decreasing helper,
+  Illinois runs on the sign-flipped residual g = target − f.
+- MEASURED (same box; scipy 1.17.1): bdtrik(0.3,20,0.3) **50.0µs → 2.87µs = 17.4× self, 1.34× FASTER**
+  than scipy (3.84µs) — was 13× SLOWER; nbdtrik(0.3,10,0.3) 51.6µs → 4.88µs = 10.6× self, 1.41×
+  ~parity (was 14.9× slower; nbdtr is a costlier per-eval kernel). Value inversions bdtri/pdtri/nbdtri
+  already fast (delegate to the fixed btdtri/gammainccinv — 1.02-1.6× faster than scipy).
+- Verification: 87 beta-module + bdtr (7/7) + nbdtr (3/3) tests green (illinois only on a clean finite
+  bracket; bisection fallback preserves all edge cases).
+
 ## 2026-07-02 - BlackThrush (cc) - PARTIAL/KEEP: erfcinv deep-tail iterate-break — 3× self (loss-reduction, not a flip)
 
 - Target: `fsci_special::convenience::erfcinv_conv` deep-tail branch (y < 2e-3). Its log-space Newton
