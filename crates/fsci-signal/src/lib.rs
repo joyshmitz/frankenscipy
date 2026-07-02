@@ -2032,6 +2032,55 @@ pub fn hilbert(x: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
     Ok(analytic)
 }
 
+/// Worker count for [`hilbert_many`], or 1 to stay serial. Each signal costs an
+/// rfft+ifft (~`len·log len`), so only batches whose total sample count clearly
+/// amortises thread spawn fan out; threads are capped by work so a batch of many
+/// tiny signals does not over-subscribe.
+fn hilbert_many_thread_count(nsig: usize, total_samples: u64) -> usize {
+    if total_samples < 1 << 14 || nsig < 4 {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    cores
+        .min(nsig)
+        .min((total_samples / (1 << 13)) as usize)
+        .max(1)
+}
+
+/// Vectorized analytic signal over a batch of real signals — parallel across the
+/// batch. `scipy.signal.hilbert(X, axis=-1)` loops the per-signal FFT
+/// single-threaded; this fans the independent signals across threads in
+/// contiguous chunks (one spawn-set), assembled in batch order, so each entry
+/// equals [`hilbert`] of the corresponding input — identical to the serial map.
+pub fn hilbert_many(signals: &[Vec<f64>]) -> Result<Vec<Vec<(f64, f64)>>, SignalError> {
+    if signals.is_empty() {
+        return Ok(Vec::new());
+    }
+    let total: u64 = signals.iter().map(|s| s.len() as u64).sum();
+    let nthreads = hilbert_many_thread_count(signals.len(), total);
+    if nthreads <= 1 {
+        return signals.iter().map(|s| hilbert(s)).collect();
+    }
+    let chunk = signals.len().div_ceil(nthreads);
+    let chunk_results: Vec<Result<Vec<Vec<(f64, f64)>>, SignalError>> =
+        std::thread::scope(|scope| {
+            signals
+                .chunks(chunk)
+                .map(|batch| scope.spawn(move || batch.iter().map(|s| hilbert(s)).collect()))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("hilbert_many worker panicked"))
+                .collect()
+        });
+    let mut out = Vec::with_capacity(signals.len());
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
 /// Build the per-axis analytic-signal multiplier of length `n` used by
 /// [`hilbert2`]: DC weighted 1, positive frequencies `1..(n+1)/2` weighted 2,
 /// and everything from `(n+1)/2` on (including the Nyquist bin for even `n`)
@@ -28225,6 +28274,40 @@ mod tests {
     fn hilbert_empty_input_rejected() {
         let err = hilbert(&[]).expect_err("empty");
         assert!(err.is_argument_error());
+    }
+
+    #[test]
+    fn hilbert_many_matches_serial_loop_bit_for_bit() {
+        // hilbert_many must be bit-identical to the serial per-signal loop
+        // (parallel-across-signals is an order-preserving map). Enough signals
+        // and length to exercise the parallel path (past the work gate).
+        let mut s = 0x9E3779B97F4A7C15u64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let nsig = 200usize;
+        let signals: Vec<Vec<f64>> = (0..nsig)
+            .map(|k| {
+                // mixed even/odd lengths
+                let len = if k % 2 == 0 { 256 } else { 129 };
+                (0..len).map(|_| rng()).collect()
+            })
+            .collect();
+        let many = hilbert_many(&signals).expect("hilbert_many");
+        assert_eq!(many.len(), nsig);
+        for (sig, got) in signals.iter().zip(&many) {
+            let serial = hilbert(sig).expect("hilbert");
+            assert_eq!(got.len(), serial.len());
+            for (&(gr, gi), &(sr, si)) in got.iter().zip(&serial) {
+                assert_eq!(gr.to_bits(), sr.to_bits(), "hilbert_many re mismatch");
+                assert_eq!(gi.to_bits(), si.to_bits(), "hilbert_many im mismatch");
+            }
+        }
+        // Empty batch -> empty result.
+        assert!(hilbert_many(&[]).expect("empty batch").is_empty());
     }
 
     #[test]

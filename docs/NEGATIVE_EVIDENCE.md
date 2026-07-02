@@ -12634,3 +12634,29 @@ Byte-identical (all 8 matrix_power tests pass — zero/one/two/negative-power/no
 lib 495/495 green. par_dmatmul now serves expm (+cosm/sinm via the shared kernel) AND matrix_power. LEVER: any
 top-level nalgebra-DMatrix repeated/large matmul (matrix_power, expm squaring) → bit-identical column-split
 `par_dmatmul` for a ~2-8x win on large matrices; logm/sqrtm are Schur-based (not matmul-bound) so out of scope.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched hilbert_many (analytic-signal vmap) — 1.7-5.7x FASTER than scipy's 2D hilbert (byte-identical)
+
+New vmap family (signal transforms). `scipy.signal.hilbert(X, axis=-1)` computes the analytic signal of many
+rows by looping the per-signal FFT SINGLE-THREADED in C. fsci's per-signal `hilbert` (rfft+ifft, ~2x less work
+than a full complex FFT) is already competitive-to-faster than scipy per row (serial-loop 1.57-1.65x faster at
+L=512/4096), so a parallel-across-signals `hilbert_many` adds the cores on top. Added `hilbert_many` (thread::scope
+over contiguous signal-chunks, work-gated `hilbert_many_thread_count` capping threads by total samples so a batch
+of tiny signals doesn't over-subscribe), order-preserving ⇒ bit-identical to the serial map.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1):
+
+| batch | fsci serial → many (ms) | scipy hilbert(2D) | many vs scipy | self |
+| --- | --- | --- | --- | --- |
+| nsig=2000 L=512  | 17.1 → 8.19 | 24.33ms | 2.97x FASTER | 2.09x |
+| nsig=500  L=4096 | 49.8 → 8.90 | 50.32ms | 5.65x FASTER | 5.59x |
+| nsig=1000 L=1024 | 16.6 → 5.43 |  9.25ms | 1.70x FASTER | 3.05x |
+
+Byte-identical to the fsci serial loop (0 re/im bit-mismatches across the sweep, mixed even/odd lengths). fsci
+`hilbert` matches scipy to ~1e-15 per-signal (verified fixed-signal cross-check). fsci-signal lib 666/666 green
+(+ `hilbert_many_matches_serial_loop_bit_for_bit`). The self-speedup is modest (2-5.6x, not 64x) because each
+`hilbert` allocates its own FFT plan and the transform is memory-bandwidth-bound, but the vs-scipy win is solid
+across sizes. LEVER: scipy FFT-based per-signal transforms with an axis loop (hilbert, and candidates
+resample/decimate/detrend over many signals) are single-threaded C → a parallel `_many`/batched form wins when
+fsci's per-signal kernel is competitive; verify the per-signal FFT isn't mid-radix-walled first (power-of-2 L is
+safe — fsci's radix-2² is competitive).
