@@ -7336,6 +7336,52 @@ pub fn pinv_many(
     par_batch_index_map(mats.len(), |i| pinv(&mats[i], options))
 }
 
+/// Vectorized singular value decomposition over a batch; see [`det_many`]. Each
+/// entry equals [`svd`] of the corresponding input. SVD is the heaviest dense
+/// factorization, so the batch fan-out wins with no tiny-matrix crossover.
+pub fn svd_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<SvdResult>, LinalgError> {
+    par_batch_index_map(mats.len(), |i| svd(&mats[i], options))
+}
+
+/// Vectorized symmetric/Hermitian eigendecomposition over a batch; see
+/// [`det_many`]. Each entry equals [`eigh`] of the corresponding input.
+pub fn eigh_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<EighResult>, LinalgError> {
+    par_batch_index_map(mats.len(), |i| eigh(&mats[i], options))
+}
+
+/// Vectorized QR decomposition over a batch; see [`det_many`]. Each entry equals
+/// [`qr`] of the corresponding input.
+pub fn qr_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<QrResult>, LinalgError> {
+    par_batch_index_map(mats.len(), |i| qr(&mats[i], options))
+}
+
+/// Vectorized symmetric eigenvalues over a batch; see [`det_many`]. Each entry
+/// equals [`eigvalsh`] of the corresponding input.
+pub fn eigvalsh_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    par_batch_index_map(mats.len(), |i| eigvalsh(&mats[i], options))
+}
+
+/// Vectorized singular values over a batch; see [`det_many`]. Each entry equals
+/// [`svdvals`] of the corresponding input.
+pub fn svdvals_many(
+    mats: &[Vec<Vec<f64>>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    par_batch_index_map(mats.len(), |i| svdvals(&mats[i], options))
+}
+
 /// Scaling and squaring method with truncated Taylor series.
 ///
 /// Algorithm: scale A by 2^(-s) so ||A/2^s|| is small, compute exp via
@@ -32127,6 +32173,50 @@ mod proptest_tests {
             let par_flat = r.pseudo_inverse.iter().flatten();
             for (x, y) in serial_flat.zip(par_flat) {
                 assert_eq!(x.to_bits(), y.to_bits(), "pinv_many mismatch");
+            }
+        }
+
+        // Decomposition batch APIs (svd/eigh/qr + values-only) — bit-identical
+        // to the serial per-matrix decomposition.
+        let svd_par = svd_many(&mats, DecompOptions::default()).unwrap();
+        for (m, r) in mats.iter().zip(&svd_par) {
+            let serial = svd(m, DecompOptions::default()).unwrap();
+            for (x, y) in serial.s.iter().zip(&r.s) {
+                assert_eq!(x.to_bits(), y.to_bits(), "svd_many singular-value mismatch");
+            }
+        }
+        let eigh_par = eigh_many(&mats, DecompOptions::default()).unwrap();
+        for (m, r) in mats.iter().zip(&eigh_par) {
+            let serial = eigh(m, DecompOptions::default()).unwrap();
+            for (x, y) in serial.eigenvalues.iter().zip(&r.eigenvalues) {
+                assert_eq!(x.to_bits(), y.to_bits(), "eigh_many eigenvalue mismatch");
+            }
+        }
+        let qr_par = qr_many(&mats, DecompOptions::default()).unwrap();
+        for (m, r) in mats.iter().zip(&qr_par) {
+            let serial = qr(m, DecompOptions::default()).unwrap();
+            let sflat = serial.r.iter().flatten();
+            let pflat = r.r.iter().flatten();
+            for (x, y) in sflat.zip(pflat) {
+                assert_eq!(x.to_bits(), y.to_bits(), "qr_many R mismatch");
+            }
+        }
+        let evh_par = eigvalsh_many(&mats, DecompOptions::default()).unwrap();
+        let svv_par = svdvals_many(&mats, DecompOptions::default()).unwrap();
+        for (i, m) in mats.iter().enumerate() {
+            for (x, y) in eigvalsh(m, DecompOptions::default())
+                .unwrap()
+                .iter()
+                .zip(&evh_par[i])
+            {
+                assert_eq!(x.to_bits(), y.to_bits(), "eigvalsh_many mismatch");
+            }
+            for (x, y) in svdvals(m, DecompOptions::default())
+                .unwrap()
+                .iter()
+                .zip(&svv_par[i])
+            {
+                assert_eq!(x.to_bits(), y.to_bits(), "svdvals_many mismatch");
             }
         }
 

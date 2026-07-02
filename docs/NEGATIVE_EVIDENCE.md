@@ -12356,3 +12356,28 @@ Dense-linalg-batch vmap sub-vein now: det/inv/solve/lstsq/pinv + expm/logm/sqrtm
 ops (lstsq/pinv, and by extension a future svd_many/eigh_many/qr_many) are the STRONGEST members — no tiny-matrix
 floor. Remaining single-matrix linalg APIs a caller could loop: svd/eigh/qr/cho_solve/lu_solve (cho_solve/lu_solve
 take pre-factored inputs, niche; svd/eigh/qr are the next clean high-value _many candidates).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched svd_many/eigh_many/qr_many + eigvalsh_many/svdvals_many (vmap capstone) — 4.7-9.1x vs numpy BATCHED svd/eigh, 2.1-4.6x qr
+
+Capstone of the dense-linalg-batch vmap sub-vein (after det/inv/solve + lstsq/pinv). Added svd_many/eigh_many/
+qr_many (+ values-only eigvalsh_many/svdvals_many) via `par_batch_index_map`. These are the heaviest dense
+factorizations, so the batch fan-out wins comfortably vs BOTH the scipy loop AND numpy's batched-single-threaded
+forms — numpy batches all of svd/eigh/qr (stacked arrays), yet fsci across all cores still beats numpy-batched-1thr.
+
+Measured (same box, pinned OPENBLAS/OMP/MKL=1). fsci `_many` absolute (best-of-4, ms) + speedups vs numpy-batched:
+
+| batch | fsci many (svd/eigh/qr ms) | svd (scipy/numpy-batch) | eigh (scipy/numpy-batch) | qr (scipy/numpy-batch) |
+| --- | --- | --- | --- | --- |
+| nb=300 n=32 | 4.95 / 3.70 / 4.09 | 7.4x / 6.6x | 8.2x / 5.5x | 3.2x / 2.1x |
+| nb=150 n=64 | 10.50 / 4.46 / 4.79 | 6.9x / 6.3x | 11.2x / 9.1x | 3.4x / 3.5x |
+| nb=80 n=96  | 16.72 / 6.30 / 5.31 | 4.8x / 4.7x | 9.2x / 7.1x | 3.9x / 4.6x |
+
+svd 4.7-6.6x, eigh 5.5-9.1x, qr 2.1-4.6x faster than numpy-batched-1thr (qr is the cheapest per-item → most
+modest, like det). Byte-identical to the serial fsci loop (0 mismatches on s/eigenvalues/R/eigvalsh/svdvals across
+the sweep). Conformance fsci-linalg lib 495/495 green (extended the batch bit-identity test to all five).
+
+DENSE-LINALG-BATCH VMAP SUB-VEIN COMPLETE: det/inv/solve/lstsq/pinv/svd/eigh/qr/eigvalsh/svdvals +
+expm/logm/sqrtm/cosm/sinm. LAW confirmed within the vein: win ∝ per-item cost — SVD/eig/pinv/lstsq (decomp-heavy)
+5-15x with NO tiny-matrix floor; det/qr (cheap) 2-4x and det hits a numpy-C-batch crossover at n<=16. Remaining
+single-matrix APIs are niche (cho_solve/lu_solve take pre-factored inputs; eig returns complex). This vein is now
+exhausted; next hunt = a genuinely different primitive or a less-trodden crate.
