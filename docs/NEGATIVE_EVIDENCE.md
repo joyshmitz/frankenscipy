@@ -11917,3 +11917,27 @@ the low-order eigenvalues of the truncated matrix go negative and shift the sort
 (=3rd-smallest eig) vs scipy 15.01 (=2nd-smallest). scipy's cva2 tracks the specific mode by analytic
 continuation from q=0, not sorted-index. Conformance misses it (test grid avoids the crossover region).
 BACKLOG: port specfun `cva2` — would fix BOTH the ~53x speed gap AND the large-q labeling bug in one rewrite.
+
+## 2026-07-01 — BlackThrush (cc): KEEP — spheroidal pro_cv_many/obl_cv_many (15.6x/27.5x scipy) + pro_cv/obl_cv scalar Sturm bisection (~7.4x)
+
+Broad scipy per-point scan flagged the spheroidal characteristic values as extreme scipy WALLS (specfun,
+~9-21 µs/pt: pro_cv 11811, obl_cv 20610 ns/pt at c∈[0,30]). fsci's `pro_cv`/`obl_cv` are ACCURATE (max|rel|
+2.9e-14/6.2e-14 vs scipy over a 1940-pt m×n×c grid) but used the same matrix method as mathieu:
+`spheroidal_cv` built a ~50–110-wide symmetric tridiagonal and ran a full Golub-Welsch QL (O(dim³) + all
+eigenvectors) to read ONE eigenvalue by index. TWO levers, both shipped in one commit:
+
+(1) SCALAR — routed `spheroidal_cv` through last cycle's `tridiagonal_kth_eigenvalue` (Sturm negative-pivot
+bisection, O(dim·iters), no eigenvectors): pro_cv(0,1) 150.7→20.5 µs/pt = ~7.4x scalar (bigger win than
+mathieu's 4x because dim is larger); faithful — accuracy after refactor 6.3e-15/3.9e-14, 0/1940 >1e-9. Lifts
+every caller (pro_ang1/pro_rad1/obl_* all call pro_cv/obl_cv internally).
+
+(2) BATCH — added order-preserving parallel `pro_cv_many(m,n,&c)` / `obl_cv_many(m,n,&c)`. Same box, 100k pts,
+c∈[0,30]: pro_cv_many 75.77ms vs scipy 1181ms = **15.6x faster**; obl_cv_many 74.93ms vs scipy 2061ms =
+**27.5x faster**. 0 bit-identity mismatches vs serial. Conformance 1121 lib (incl. spheroidal_cv/ang1/rad1
+golden tests) green.
+
+UNLIKE mathieu (which had a large-q sorted-index labeling bug and scipy uses a lighter non-matrix cva2), the
+spheroidal cv matches scipy across the whole tested grid AND scipy's specfun is itself a heavy matrix/iterative
+method (~9-21µs/pt) — so here fsci genuinely BEATS scipy (Sturm scalar already only ~2.3x slower serial, then
+parallel flips to 15-27x). The Sturm-refactor lever now paid out on BOTH matrix-eigenvalue special-fn families
+(mathieu + spheroidal). NEXT: spheroidal ang1/rad1 `_many` (scipy pro_ang1 ~13.9µs/pt) if fsci scalar competitive.

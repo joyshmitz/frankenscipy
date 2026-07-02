@@ -1180,7 +1180,9 @@ fn spheroidal_cv(m: u32, n: u32, c: f64, prolate: bool) -> f64 {
     let off: Vec<f64> = (0..dim - 1)
         .map(|k| (a_coef(r_of(k)) * c_coef(r_of(k + 1))).sqrt())
         .collect();
-    symmetric_tridiagonal_eigenvalues(&diag, &off)[(n - m) as usize / 2]
+    // Only the ⌊(n−m)/2⌋-th eigenvalue is needed — Sturm bisection reads it in
+    // O(dim·iters) instead of the O(dim³) full QL over a ~50–110-wide matrix.
+    tridiagonal_kth_eigenvalue(&diag, &off, (n - m) as usize / 2)
 }
 
 /// Characteristic value of the prolate spheroidal wave functions of order `m`,

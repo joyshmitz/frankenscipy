@@ -3533,6 +3533,26 @@ pub fn besselpoly_many(a: &[f64], lambda: f64, nu: f64) -> Vec<f64> {
     par_map_indices(a.len(), |i| Ok::<f64, SpecialError>(besselpoly(a[i], lambda, nu)))
         .expect("besselpoly is infallible")
 }
+/// Vectorized prolate-spheroidal characteristic value `pro_cv(m, n, c)` over many
+/// `c` for a fixed `(m, n)`; see [`fresnel_many`]. Each `pro_cv` diagonalises a
+/// ~50–110-wide tridiagonal, so SciPy's specfun ufunc is very slow (~9 µs/pt);
+/// the order-preserving parallel fan of the (bit-identical) scalar wins large.
+#[must_use]
+pub fn pro_cv_many(m: u32, n: u32, c: &[f64]) -> Vec<f64> {
+    par_map_indices(c.len(), |i| {
+        Ok::<f64, SpecialError>(crate::orthopoly::pro_cv(m, n, c[i]))
+    })
+    .expect("pro_cv is infallible")
+}
+/// Vectorized oblate-spheroidal characteristic value `obl_cv(m, n, c)` over many
+/// `c` for a fixed `(m, n)`; see [`pro_cv_many`].
+#[must_use]
+pub fn obl_cv_many(m: u32, n: u32, c: &[f64]) -> Vec<f64> {
+    par_map_indices(c.len(), |i| {
+        Ok::<f64, SpecialError>(crate::orthopoly::obl_cv(m, n, c[i]))
+    })
+    .expect("obl_cv is infallible")
+}
 
 /// Weighted integral of the Bessel function of the first kind,
 /// `besselpoly(a, λ, ν) = ∫₀¹ xˡ Jᵥ(2·a·x) dx`.
