@@ -720,6 +720,76 @@ fn symmetric_tridiagonal_eigenvalues(diagonal: &[f64], offdiagonal: &[f64]) -> V
     values
 }
 
+/// The `k`-th smallest eigenvalue (0-indexed) of a symmetric tridiagonal matrix
+/// via Sturm-sequence bisection. The Mathieu characteristic values need a single
+/// eigenvalue *by index* — not the whole spectrum, and not the eigenvectors — so
+/// this runs in `O(n · iters)` instead of the `O(n³)` QL sweep in
+/// [`symmetric_tridiagonal_eigenvalues`] (which allocated and fully diagonalised
+/// a ~40–50-wide matrix just to read one entry). Returns exactly the value that
+/// `symmetric_tridiagonal_eigenvalues(diagonal, offdiagonal)[k]` would (ascending
+/// order). The squared off-diagonals absorb the `q√2` first entry naturally.
+fn tridiagonal_kth_eigenvalue(diagonal: &[f64], offdiagonal: &[f64], k: usize) -> f64 {
+    let n = diagonal.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    if n == 1 {
+        return diagonal[0];
+    }
+    let e2: Vec<f64> = offdiagonal.iter().map(|&e| e * e).collect();
+
+    // Gershgorin disc union brackets the whole spectrum.
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for i in 0..n {
+        let left = if i > 0 { offdiagonal[i - 1].abs() } else { 0.0 };
+        let right = if i < n - 1 { offdiagonal[i].abs() } else { 0.0 };
+        let r = left + right;
+        lo = lo.min(diagonal[i] - r);
+        hi = hi.max(diagonal[i] + r);
+    }
+    let pad = (hi - lo).abs() * 1e-12 + f64::MIN_POSITIVE;
+    lo -= pad;
+    hi += pad;
+
+    // count(x) = number of eigenvalues strictly below x (negatives in the Sturm
+    // sequence dᵢ = (Dᵢ−x) − eᵢ₋₁²/dᵢ₋₁), monotone non-decreasing in x.
+    let count = |x: f64| -> usize {
+        let mut c = 0usize;
+        let mut d = diagonal[0] - x;
+        if d < 0.0 {
+            c += 1;
+        }
+        for i in 1..n {
+            d = if d == 0.0 {
+                // zero-pivot guard (LAPACK dstebz style)
+                (diagonal[i] - x) - offdiagonal[i - 1].abs() / f64::EPSILON
+            } else {
+                (diagonal[i] - x) - e2[i - 1] / d
+            };
+            if d < 0.0 {
+                c += 1;
+            }
+        }
+        c
+    };
+
+    // Bisect to the smallest x whose count reaches k+1 = the k-th eigenvalue.
+    let target = k + 1;
+    for _ in 0..200 {
+        let mid = lo + (hi - lo) * 0.5;
+        if mid <= lo || mid >= hi {
+            break; // collapsed to adjacent f64s
+        }
+        if count(mid) >= target {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    lo + (hi - lo) * 0.5
+}
+
 /// Fourier-mode count for the Mathieu recurrence matrix: large enough that the
 /// `m`-th characteristic value has converged for non-centrality `q`.
 fn mathieu_matrix_dim(m: u32, q: f64) -> usize {
@@ -739,12 +809,12 @@ pub fn mathieu_a(m: u32, q: f64) -> f64 {
         let diag: Vec<f64> = (0..n).map(|k| (2 * k as i64).pow(2) as f64).collect();
         let mut off = vec![q; n - 1];
         off[0] = q * std::f64::consts::SQRT_2;
-        symmetric_tridiagonal_eigenvalues(&diag, &off)[m as usize / 2]
+        tridiagonal_kth_eigenvalue(&diag, &off, m as usize / 2)
     } else {
         let mut diag: Vec<f64> = (0..n).map(|k| (2 * k as i64 + 1).pow(2) as f64).collect();
         diag[0] = 1.0 + q;
         let off = vec![q; n - 1];
-        symmetric_tridiagonal_eigenvalues(&diag, &off)[(m as usize - 1) / 2]
+        tridiagonal_kth_eigenvalue(&diag, &off, (m as usize - 1) / 2)
     }
 }
 
@@ -765,12 +835,12 @@ pub fn mathieu_b(m: u32, q: f64) -> f64 {
     if m % 2 == 0 {
         let diag: Vec<f64> = (0..n).map(|k| (2 * k as i64 + 2).pow(2) as f64).collect();
         let off = vec![q; n - 1];
-        symmetric_tridiagonal_eigenvalues(&diag, &off)[m as usize / 2 - 1]
+        tridiagonal_kth_eigenvalue(&diag, &off, m as usize / 2 - 1)
     } else {
         let mut diag: Vec<f64> = (0..n).map(|k| (2 * k as i64 + 1).pow(2) as f64).collect();
         diag[0] = 1.0 - q;
         let off = vec![q; n - 1];
-        symmetric_tridiagonal_eigenvalues(&diag, &off)[(m as usize - 1) / 2]
+        tridiagonal_kth_eigenvalue(&diag, &off, (m as usize - 1) / 2)
     }
 }
 

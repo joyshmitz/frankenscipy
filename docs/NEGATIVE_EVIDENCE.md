@@ -11895,3 +11895,25 @@ FOUND (deferred to next commit): `mathieu_a(1,q)` fsci scalar is **~51 µs/pt = 
 225 ns/pt** — it builds a growing symmetric-tridiagonal matrix and computes ALL eigenvalues to pick one
 (orthopoly.rs `symmetric_tridiagonal_eigenvalues`). Accurate (rel 6.2e-14 vs scipy) but the wrong algorithm;
 even parallel `_many` can't beat scipy. Fix = selective single-eigenvalue Sturm-sequence bisection.
+
+## 2026-07-01 — BlackThrush (cc): KEEP — mathieu_a/mathieu_b single-eigenvalue Sturm bisection (4.2-4.5x scalar, faithful to QL) + FOUND pre-existing large-q labeling bug
+
+`mathieu_a`/`mathieu_b` built a ~40-60-wide symmetric-tridiagonal Fourier matrix and ran a full
+Golub-Welsch QL (`symmetric_tridiagonal_eigenvalues`, O(n³) + eigenvectors) just to read ONE eigenvalue by
+index — anomaly caught by broad-sweep timing: fsci scalar ~51µs/pt vs scipy's specfun `cva2` ~225ns/pt.
+Replaced with `tridiagonal_kth_eigenvalue`: Sturm-sequence (negative-pivot count) bisection for the k-th
+eigenvalue only — O(n·iters), no eigenvectors. Same-binary A/B: m=1 5132→1234ms (4.16x), m=8 6254→1398ms
+(4.47x) for 100k; faithful to the QL result to max|rel| 2.96e-14 (verified against numpy k-th-smallest of the
+identical matrix, 1900-pt m×q grid incl. negative q). Conformance 1121 lib + 5 mathieu tests green. The coef
+functions (`mathieu_even_coef`/`odd_coef`) still use full QL — they need the eigenVECTOR, not just the value.
+
+HONEST SCOPE: this is a self-speedup (removes the O(n³)+eigenvector waste), NOT a scipy-beating win — fsci
+mathieu scalar is still ~53x slower than scipy's cva2 continued-fraction/shooting method even after the fix,
+so a parallel `_many` would only reach ~1.2x scipy (not shipped).
+
+FOUND — PRE-EXISTING CORRECTNESS BUG (both old QL and new Sturm, orthogonal to this perf change): for large q
+the low-order eigenvalues of the truncated matrix go negative and shift the sorted index, so the fixed
+`[k=(m-1)/2 or m/2]` selection returns the WRONG characteristic value. e.g. mathieu_a(5, 20.95): fsci 37.42
+(=3rd-smallest eig) vs scipy 15.01 (=2nd-smallest). scipy's cva2 tracks the specific mode by analytic
+continuation from q=0, not sorted-index. Conformance misses it (test grid avoids the crossover region).
+BACKLOG: port specfun `cva2` — would fix BOTH the ~53x speed gap AND the large-q labeling bug in one rewrite.
