@@ -12985,3 +12985,23 @@ moment kernels (Python-overhead-elimination, fsci serial already 400-800x); cram
 CDF evals) so parallelism helps a lot (14.6x self) → 118x. fsci-stats lib 2006/2006 green (test extended).
 ONE-SAMPLE GoF `_many` SET DONE: normaltest/jarque_bera/shapiro/skewtest/kurtosistest/cramervonmises. Remaining:
 kstest (KstestTarget param), anderson (returns critical-value struct, not stat/p).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — kstest_many (one-sample KS vmap) — 487x FASTER than the scipy.stats.kstest loop
+
+Final common one-sample GoF `_many`. `scipy.stats.kstest` loops in Python (1794ms over 3000 datasets). Added
+`kstest_many(datasets, target)` against a SHARED `KstestTarget` (a reference CDF `fn(f64)->f64` or a reference
+sample) — added `#[derive(Clone, Copy)]` to `KstestTarget` (both variants are Copy: fn pointer / &[f64]) so it
+threads through the parallel closure. Each entry equals `kstest(&datasets[k], target)` (sort + KS statistic +
+Kolmogorov p-value, parallel across datasets).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), 3000 datasets × 300 pts vs a normal CDF:
+
+| test | fsci serial → many | scipy loop | vs scipy |
+| --- | --- | --- | --- |
+| kstest | 35.37 → 3.68ms | 1794ms | 487x |
+
+Byte-identical to the fsci serial loop (0 stat/p mismatches, verified in the extended GoF test with the exact
+`standard_normal_cdf`). kstest is HEAVY per item (sort + KS stat + Kolmogorov series) → parallelism contributes
+strongly (9.6x self) on top of the Python-overhead elimination. fsci-stats lib 2006/2006 green. ONE-SAMPLE GoF
+`_many` SET COMPLETE: normaltest/jarque_bera/shapiro/skewtest/kurtosistest/cramervonmises/kstest. Only `anderson`
+(returns a critical-value struct, not stat/p) is unbatched — deliberately, its result shape differs.

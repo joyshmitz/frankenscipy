@@ -32435,6 +32435,16 @@ where
     })
 }
 
+/// Vectorised Kolmogorov-Smirnov [`kstest`] over `n` independent datasets against
+/// a SHARED `target` (a reference CDF or a reference sample); see
+/// [`normaltest_many`]. `scipy.stats.kstest` loops in Python; each entry here
+/// equals `kstest(&datasets[k], target)` (sort + KS-statistic + Kolmogorov
+/// p-value, run in parallel across datasets).
+#[must_use]
+pub fn kstest_many(datasets: &[Vec<f64>], target: KstestTarget<'_>) -> Vec<GoodnessOfFitResult> {
+    par_pair_index_map(datasets.len(), 128, |i| kstest(&datasets[i], target))
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -35397,6 +35407,7 @@ pub enum AndersonKSampleVariant {
 }
 
 /// Target distribution or reference sample for `kstest`.
+#[derive(Clone, Copy)]
 pub enum KstestTarget<'a> {
     /// One-sample KS against a reference CDF.
     Cdf(fn(f64) -> f64),
@@ -84162,6 +84173,8 @@ mod tests {
         let sk = skewtest_many(&datasets, None, None);
         let ku = kurtosistest_many(&datasets, None, None);
         let cv = cramervonmises_many(&datasets, ncdf);
+        let target = KstestTarget::Cdf(standard_normal_cdf);
+        let ks = kstest_many(&datasets, target);
         for i in 0..n {
             let s0 = skewtest(&datasets[i], None, None).unwrap();
             let sm = sk[i].as_ref().unwrap();
@@ -84173,6 +84186,9 @@ mod tests {
             let c0 = cramervonmises(&datasets[i], ncdf);
             assert_eq!(cv[i].statistic.to_bits(), c0.statistic.to_bits());
             assert_eq!(cv[i].pvalue.to_bits(), c0.pvalue.to_bits());
+            let ks0 = kstest(&datasets[i], target);
+            assert_eq!(ks[i].statistic.to_bits(), ks0.statistic.to_bits());
+            assert_eq!(ks[i].pvalue.to_bits(), ks0.pvalue.to_bits());
         }
     }
 
