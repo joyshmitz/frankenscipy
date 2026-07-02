@@ -6,6 +6,28 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: COO from_triplets(sum_duplicates) counting sort — 1.4× self, widens SciPy win
+
+- Target: `fsci_sparse::formats` `CooMatrix::from_triplets(.., sum_duplicates=true)` — a global
+  O(nnz·log nnz) `sort_unstable_by_key((row,col))` + adjacent dedup. It feeds `sparse.random`
+  (construct.rs) and the graph-Laplacian builders. Replaced with a GATED counting sort by row
+  (O(nnz+rows)) + per-row stable column sort + duplicate sum, producing the same row-major
+  sorted-unique COO.
+- GATE (important): `sparse.random` supports enormous shapes with ~0 nnz (e.g. 1e9×1e9), where the
+  O(rows) histogram would blow memory — so counting sort only when `nnz ≥ 4096 && rows ≤ 8·nnz`
+  (bounded); huge-shape/tiny-nnz keeps the comparison sort (cheap there).
+- MEASURED (same local 64-core box, criterion median, clean git-stash A/B, unsorted+dup, nnz=2M;
+  per-iter input clone in both arms so the ratio is fair): n=20k **172.1 → 123.2 ms = 1.40× self**;
+  n=100k **168.5 → 123.5 ms = 1.36× self**. vs SciPy `coo.sum_duplicates()` (np.lexsort, ~355-408 ms
+  incl. build): fsci was already ~2.1× faster (old) and is now ~2.9× faster — a WIDEN, not a flip
+  (SciPy's lexsort path is slow). Serial (this path is less hot than to_csr/to_csc, which are the
+  parallel counting-sort versions); parallelizing is a further lever if it ever shows up hot.
+- Correctness: all 357 sparse lib + 56 integration tests green (from_triplets is used crate-wide).
+  Sorted-unique COO identical to old for duplicate-free input; duplicate sums now in per-row
+  encounter order (stable) like the CSR/CSC counting-sort paths. Completes the sparse counting-sort
+  vein (COO→CSR, COO→CSC, sum_duplicates); remaining sparse comparison sorts are niche (nalgebra
+  bridge, LIL). Verified same-box: spmm is parity-to-1.13×-win, so not a target.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: COO→CSC counting sort — FLIP 3.2× loss → 2.56× SciPy WIN (denser rows)
 
 - Target: `fsci_sparse::ops` `CooMatrix::to_csc`. It was the WORST conversion path in the crate:

@@ -494,6 +494,61 @@ impl CooMatrix {
             });
         }
 
+        let nnz = data.len();
+        // Counting sort by row (O(nnz + rows)) beats the global O(nnz·log nnz)
+        // `sort_unstable_by_key((row,col))` — SciPy's `coo.sum_duplicates()` uses a
+        // (slow) `np.lexsort`, and this path feeds `sparse.random` + graph builds.
+        // GATE: only when rows are bounded relative to nnz, since `sparse.random`
+        // supports enormous shapes with ~0 nnz (e.g. 1e9×1e9) where the O(rows)
+        // histogram would blow memory — those keep the comparison sort (nnz tiny).
+        if nnz >= 4096 && shape.rows <= nnz.saturating_mul(8).max(1 << 16) {
+            let nrow = shape.rows;
+            let mut row_ptr = vec![0usize; nrow + 1];
+            for &r in &row_indices {
+                row_ptr[r + 1] += 1;
+            }
+            for r in 0..nrow {
+                row_ptr[r + 1] += row_ptr[r];
+            }
+            let mut pairs: Vec<(usize, f64)> = vec![(0usize, 0.0f64); nnz];
+            let mut next = row_ptr[..nrow].to_vec();
+            for i in 0..nnz {
+                let r = row_indices[i];
+                let p = next[r];
+                pairs[p] = (col_indices[i], data[i]);
+                next[r] = p + 1;
+            }
+            let mut merged_rows = Vec::with_capacity(nnz);
+            let mut merged_cols = Vec::with_capacity(nnz);
+            let mut merged_data = Vec::with_capacity(nnz);
+            for r in 0..nrow {
+                let seg = &mut pairs[row_ptr[r]..row_ptr[r + 1]];
+                // Stable so duplicate sums land in per-row encounter order (matches
+                // the CSR/CSC counting-sort paths); short rows use insertion sort.
+                seg.sort_by_key(|&(c, _)| c);
+                let mut j = 0;
+                while j < seg.len() {
+                    let c = seg[j].0;
+                    let mut v = seg[j].1;
+                    let mut k = j + 1;
+                    while k < seg.len() && seg[k].0 == c {
+                        v += seg[k].1;
+                        k += 1;
+                    }
+                    merged_rows.push(r);
+                    merged_cols.push(c);
+                    merged_data.push(v);
+                    j = k;
+                }
+            }
+            return Ok(Self {
+                shape,
+                data: merged_data,
+                row_indices: merged_rows,
+                col_indices: merged_cols,
+            });
+        }
+
         let mut triplets: Vec<(usize, usize, f64)> = row_indices
             .into_iter()
             .zip(col_indices)

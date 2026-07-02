@@ -391,6 +391,43 @@ fn bench_coo_to_csr(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_coo_sum_duplicates(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_coo_sum_duplicates");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
+
+    for (n, nnz) in [(100_000usize, 2_000_000usize), (20_000, 2_000_000)] {
+        let mut st = 0xC0FF_EE00_1234_5678u64 ^ (n as u64);
+        let mut next = || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (st >> 33) as usize
+        };
+        let rows: Vec<usize> = (0..nnz).map(|_| next() % n).collect();
+        let cols: Vec<usize> = (0..nnz).map(|_| next() % n).collect();
+        let data: Vec<f64> = (0..nnz).map(|_| (next() % 1000) as f64 + 1.0).collect();
+        group.bench_with_input(
+            BenchmarkId::new(format!("n{n}_nnz{nnz}"), nnz),
+            &(rows, cols, data),
+            |bi, (rows, cols, data)| {
+                bi.iter(|| {
+                    let coo = CooMatrix::from_triplets(
+                        Shape2D::new(n, n),
+                        black_box(data).clone(),
+                        black_box(rows).clone(),
+                        black_box(cols).clone(),
+                        true,
+                    )
+                    .expect("coo");
+                    black_box(coo.nnz());
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 fn bench_coo_to_csc(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_coo_to_csc");
     group.sample_size(10);
@@ -455,6 +492,7 @@ fn bench_block_diag(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_coo_sum_duplicates,
     bench_coo_to_csr,
     bench_coo_to_csc,
     bench_block_diag,
