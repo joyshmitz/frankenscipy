@@ -293,7 +293,8 @@ pub use convenience::{
     zeta_scalar,
 };
 pub use elliptic::{
-    ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, ellipkm1, elliprc,
+    ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipj_many, ellipk, ellipkinc, ellipkm1,
+    elliprc,
     elliprd, elliprf, elliprg, elliprj, exp1, expi, expn_scalar, lambertw,
 };
 pub use error::{

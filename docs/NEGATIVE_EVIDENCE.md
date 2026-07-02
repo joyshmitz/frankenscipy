@@ -11941,3 +11941,20 @@ spheroidal cv matches scipy across the whole tested grid AND scipy's specfun is 
 method (~9-21µs/pt) — so here fsci genuinely BEATS scipy (Sturm scalar already only ~2.3x slower serial, then
 parallel flips to 15-27x). The Sturm-refactor lever now paid out on BOTH matrix-eigenvalue special-fn families
 (mathieu + spheroidal). NEXT: spheroidal ang1/rad1 `_many` (scipy pro_ang1 ~13.9µs/pt) if fsci scalar competitive.
+
+## 2026-07-01 — BlackThrush (cc): KEEP — ellipj_many (Jacobi elliptic sn/cn/dn/ph) 7.3x scipy; + BLOCKER: spheroidal pro_ang1/obl_ang1 only ~1e-5 accurate at large c
+
+KEEP: `ellipj` (AGM/Landen, no quadrature) matches scipy to ~6e-15 and its scalar is at PARITY with scipy's
+cephes ufunc (both ~192 ns/pt at u∈[-8,8], m=0.5) — scipy's ufunc is single-threaded, so an order-preserving
+parallel `ellipj_many(u:&[f64], m)` wins purely on the fan: 2M pts 52.23ms vs scipy 383.1ms = **7.3x faster**,
+7.4x its own serial map, 0 bit-identity mismatches. Conformance 1121/1121 green. Purely additive. (Parallel-
+vs-single-threaded-scipy lever, same class as mmwrite/wav/KDTree.)
+
+BLOCKER (not shipped): spheroidal ANGULAR functions `pro_ang1`/`obl_ang1` are a POOR `_many` target — fsci
+matches scipy only to ~1e-8 for small c but degrades to **~1e-5 at c≳12** (1816/1920 grid pts >1e-9 rel; the
+conformance test uses abs<1e-8 on a narrow small-c grid so it passes). Root: `spheroidal_coefficients`
+truncation/normalization at large c. Also fsci pro_ang1 is ~4.9x SLOWER than scipy per-point (68 vs 13.9µs —
+recomputes cv+coefficients per x). A correct `_many` would (a) fix the large-c coefficient accuracy first, then
+(b) hoist cv+coefficients out of the x-loop (they're x-independent) + parallelize — the vmap-over-shared-setup
+lever. Deferred: accuracy fix is the gate. NOTE the Sturm cv speedup (last commit) already lifted these via the
+shared `spheroidal_cv`. scipy pro_rad1 is only ~2.1µs/pt (thinner margin) — check its accuracy before pursuing.
