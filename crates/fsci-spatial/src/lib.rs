@@ -7756,6 +7756,30 @@ pub fn rotations_as_euler_many(rotations: &[Rotation], seq: &str) -> Vec<[f64; 3
     })
 }
 
+/// Build many rotations from Euler angles (shared sequence `seq`), matching
+/// `scipy.spatial.transform.Rotation.from_euler` on an `(N, 3)` angle array.
+///
+/// Byte-identical to mapping [`Rotation::from_euler`], fanned across cores. SciPy
+/// composes each rotation from three elementary quaternions in a Python-wrapped
+/// `numpy` loop, so this is a large win at scale.
+#[must_use]
+pub fn rotations_from_euler_many(seq: &str, angles: &[[f64; 3]]) -> Vec<Rotation> {
+    rotation_par_index_map(angles.len(), ROTATION_BATCH_GATE, |i| {
+        Rotation::from_euler(seq, angles[i])
+    })
+}
+
+/// Rotation vectors (axis · angle) for many rotations, matching
+/// `scipy.spatial.transform.Rotation.as_rotvec` on a rotation stack.
+///
+/// Byte-identical to mapping [`Rotation::as_rotvec`], fanned across cores.
+#[must_use]
+pub fn rotations_as_rotvec_many(rotations: &[Rotation]) -> Vec<[f64; 3]> {
+    rotation_par_index_map(rotations.len(), ROTATION_BATCH_GATE, |i| {
+        rotations[i].as_rotvec()
+    })
+}
+
 impl RigidTransform {
     /// The identity transform (no rotation, no translation).
     #[must_use]
@@ -11716,10 +11740,13 @@ mod tests {
         let b: Vec<Rotation> = (0..n).map(|_| mkq(&mut u)).collect();
         let mats: Vec<[[f64; 3]; 3]> = a.iter().map(Rotation::as_matrix).collect();
 
+        let angs: Vec<[f64; 3]> = (0..n).map(|_| [u() * 3.0, u() * 3.0, u() * 3.0]).collect();
         let mul = rotations_multiply_many(&a, &b);
         let fm = rotations_from_matrix_many(&mats);
         let eu = rotations_as_euler_many(&a, "xyz");
         let ez = rotations_as_euler_many(&a, "ZYX");
+        let fe = rotations_from_euler_many("xyz", &angs);
+        let rv = rotations_as_rotvec_many(&a);
         assert_eq!(mul.len(), n);
         assert_eq!(fm.len(), n);
         for i in 0..n {
@@ -11727,6 +11754,8 @@ mod tests {
             assert_eq!(fm[i].as_quat(), Rotation::from_matrix(mats[i]).as_quat());
             assert_eq!(eu[i], a[i].as_euler("xyz"));
             assert_eq!(ez[i], a[i].as_euler("ZYX"));
+            assert_eq!(fe[i].as_quat(), Rotation::from_euler("xyz", angs[i]).as_quat());
+            assert_eq!(rv[i], a[i].as_rotvec());
             // from_matrix round-trips: recovered rotation reproduces the matrix.
             let rec = fm[i].as_matrix();
             for r in 0..3 {

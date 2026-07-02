@@ -13155,3 +13155,27 @@ Tait-Bryan/proper-Euler scipy reference values) — existing `rotation_euler_rou
 With the scalar fixed, shipped `rotations_as_euler_many(rots, seq)` (was withheld last commit as it would have
 batched a wrong kernel): 4.08ms vs scipy 18.4ms at N=200k = **5x**, byte-identical to the scalar loop. This is a
 CORRECTNESS fix (fsci previously returned wrong Euler angles) plus a batch speedup.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — rotations_from_euler_many (33x) / rotations_as_rotvec_many (15x)
+
+Extends the batch-Rotation lever (fsci scalar kernel + slow scipy vectorized stack) to two more ops. Verified the
+scalar kernels match scipy at machine precision FIRST (from_euler across all 12 sequences: worst 2.22e-16 quat;
+as_rotvec from random quats: worst 4.44e-16) — the discipline that caught the as_euler bug last cycle. Added:
+- `rotations_from_euler_many(seq, angles)` — scipy `Rotation.from_euler` on `(N,3)` (composes 3 elementary quats/row)
+- `rotations_as_rotvec_many(rots)` — scipy `Rotation.as_rotvec`
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), N=200k:
+
+| op | fsci many | scipy | vs scipy |
+| --- | --- | --- | --- |
+| rotations_from_euler_many | 4.97ms | 163.1ms | 33x |
+| rotations_as_rotvec_many | 3.39ms | 50.2ms | 15x |
+
+Byte-identical to the fsci scalar per-element loop (0 mismatches, verified in the extended
+`rotations_batch_many_match_scalar_loop_bit_for_bit`). fsci-spatial 227/227 green.
+
+NEG (measured this sweep, not shipped): `inv` 0.79ms / `mean` 1.23ms / `reduce` ~0ms / `from_rotvec` 4.70ms /
+`magnitude` 4.96ms — scipy already fast (small or trivially vectorized), not worth batching. `RigidTransform`
+compose 94.3ms is a genuine target but fsci's `RigidTransform` is scalar and lacks a batch stack type — a larger
+feature add (deferred). Rotation batch set now: multiply/from_matrix/as_euler/from_euler/as_rotvec (5 ops,
+13-33x).
