@@ -13220,3 +13220,30 @@ kernel (verified in `freqz_and_sosfreqz_parallel_match_serial_bit_for_bit`, n=20
 `.to_bits()` compare at sampled indices). fsci-signal 668/668 green. LEVER (recurring): a serial `for i in 0..n`
 sweep whose per-i kernel is independent → parallel ordered-chunk fill, byte-identical; here it also FLIPPED a loss
 by removing a mis-gated FFT fast path.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — parallel freqz_zpk (20x) / bode (3.7x) / group_delay (0.3x→3x) sweeps
+
+Siblings of the freqz/sosfreqz parallel-sweep lever — three more serial `for i in 0..n` frequency sweeps in
+fsci-signal, each an independent per-ω kernel. Added `freqz_par_collect` (generic ordered parallel collect for
+non-triple outputs) and routed `freqz_zpk_with_whole`, `group_delay`, and `bode` through the sweep helpers.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), order-8 Butterworth, 500k frequencies:
+
+| op | fsci before | fsci after | scipy | vs scipy |
+| --- | --- | --- | --- | --- |
+| freqz_zpk | 95ms-ish serial | 4.50ms | 95.4ms | **21x** |
+| bode | 54.8ms serial | 31.2ms | 114.4ms | **3.7x** (was 2.1x) |
+| group_delay | 133.7ms serial | 15.5ms | 46.1ms | **3.0x** (was 0.3x LOSS) |
+
+Correctness: freqz_zpk matches scipy 3.69e-12, bode 8.24e-13. All three parallel sweeps are BIT-identical to their
+serial per-ω kernel (verified in `freqz_zpk_and_group_delay_parallel_match_serial_bit_for_bit`, n=20k crossing the
+gate, `.to_bits()` compare). fsci-signal 669/669 green.
+
+CAVEAT (pre-existing, surfaced not introduced): fsci `group_delay` matches scipy to ~6.7e-5 away from the filter's
+numerator singularity but DIVERGES near ω=π (Butterworth order-8 has all zeros at z=-1 → group delay singular;
+scipy special-cases those bins). This commit is byte-identical to the prior fsci serial group_delay output — it is
+a pure SPEED win (0.3x→3x), not a correctness change; the near-singularity scipy-match gap is a separate
+pre-existing discrepancy in the scalar kernel (candidate for a dedicated fix, like the as_euler port).
+
+SIGNAL frequency-sweep vein now worked out: freqz/sosfreqz/freqz_zpk/group_delay/bode all parallel (3-21x). NEG:
+freqs (analog, 12.8ms scipy) small; dfreqresp/dbode delegate to the same kernels.

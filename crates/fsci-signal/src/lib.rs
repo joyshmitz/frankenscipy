@@ -9748,6 +9748,43 @@ where
     FreqzResult { w, h_mag, h_phase }
 }
 
+/// Collect `kernel(0..n)` into a `Vec<T>` across disjoint contiguous chunks,
+/// byte-identical to `(0..n).map(kernel).collect()`. For per-frequency sweeps
+/// whose output is not the `(ω, |H|, ∠H)` triple (e.g. group delay `f64`, complex
+/// response `(re, im)`). Serial when `nthreads <= 1`.
+fn freqz_par_collect<T, F>(n: usize, nthreads: usize, kernel: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(usize) -> T + Sync,
+{
+    if nthreads <= 1 {
+        return (0..n).map(&kernel).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let kernel = &kernel;
+    let parts: Vec<Vec<T>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let s0 = t * chunk;
+                if s0 >= n {
+                    return None;
+                }
+                let s1 = (s0 + chunk).min(n);
+                Some(scope.spawn(move || (s0..s1).map(kernel).collect::<Vec<T>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("freqz sweep worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(n);
+    for p in parts {
+        out.extend(p);
+    }
+    out
+}
+
 /// Compute the frequency response of a digital filter over half or the whole unit circle.
 ///
 /// Matches `scipy.signal.freqz(b, a, worN, whole=...)`.
@@ -9908,17 +9945,14 @@ pub fn freqz_zpk_with_whole(
         return Err(SignalError::InvalidArgument("n_freqs must be > 0".into()));
     }
 
-    let mut w = Vec::with_capacity(n);
-    let mut h_mag = Vec::with_capacity(n);
-    let mut h_phase = Vec::with_capacity(n);
-
-    for i in 0..n {
+    // Each ω evaluates the ZPK product form independently → fan a large sweep
+    // across cores, byte-identical to the serial loop (ordered slots, pure kernel).
+    let kernel = |i: usize| -> (f64, f64, f64) {
         let omega = if whole {
             std::f64::consts::TAU * i as f64 / n as f64
         } else {
             std::f64::consts::PI * i as f64 / n as f64
         };
-        w.push(omega);
 
         // e^{jω} = cos(ω) + j·sin(ω). f64::sin_cos returns (sin, cos)
         // — destructure accordingly.
@@ -9950,17 +9984,17 @@ pub fn freqz_zpk_with_whole(
 
         let denom_mag_sq = den_re * den_re + den_im * den_im;
         if denom_mag_sq < 1e-30 {
-            h_mag.push(f64::INFINITY);
-            h_phase.push(0.0);
+            (omega, f64::INFINITY, 0.0)
         } else {
             let h_re = (num_re * den_re + num_im * den_im) / denom_mag_sq;
             let h_im = (num_im * den_re - num_re * den_im) / denom_mag_sq;
-            h_mag.push((h_re * h_re + h_im * h_im).sqrt());
-            h_phase.push(h_im.atan2(h_re));
+            (omega, (h_re * h_re + h_im * h_im).sqrt(), h_im.atan2(h_re))
         }
-    }
+    };
 
-    Ok(FreqzResult { w, h_mag, h_phase })
+    let work = (zpk.zeros_re.len() + zpk.poles_re.len()).saturating_mul(4).max(8);
+    let nthreads = freqz_response_thread_count(n, work);
+    Ok(freqz_parallel_fill(n, nthreads, kernel))
 }
 
 /// Compute the frequency response of a digital filter from SOS form.
@@ -10324,15 +10358,17 @@ pub fn bode(num: &[f64], den: &[f64], w: &[f64]) -> Result<BodeTriplet, SignalEr
     }
     validate_ba_coefficients_finite(num, den, "bode")?;
     validate_real_values_finite(w, "bode frequencies must be finite")?;
-    let h: Vec<(f64, f64)> = w
-        .iter()
-        .map(|&omega| {
-            let (br, bi) = eval_analog_poly(num, omega);
-            let (ar, ai) = eval_analog_poly(den, omega);
-            let denom = ar * ar + ai * ai;
-            ((br * ar + bi * ai) / denom, (bi * ar - br * ai) / denom)
-        })
-        .collect();
+    // Each frequency's complex response is independent → fan the sweep across cores,
+    // byte-identical to the serial `w.iter().map(...)`.
+    let work = (num.len() + den.len()).saturating_mul(2).max(8);
+    let nthreads = freqz_response_thread_count(w.len(), work);
+    let h: Vec<(f64, f64)> = freqz_par_collect(w.len(), nthreads, |i| {
+        let omega = w[i];
+        let (br, bi) = eval_analog_poly(num, omega);
+        let (ar, ai) = eval_analog_poly(den, omega);
+        let denom = ar * ar + ai * ai;
+        ((br * ar + bi * ai) / denom, (bi * ar - br * ai) / denom)
+    });
     Ok(bode_from_complex(&h, w))
 }
 
@@ -10426,14 +10462,20 @@ pub fn group_delay(
     // Group delay = Re{ (B'·conj(B))/(|B|²) - (A'·conj(A))/(|A|²) }
     // where B' = Σ (-jk) b[k] e^{-jkω}
 
-    let mut w_out = Vec::with_capacity(n);
-    let mut gd_out = Vec::with_capacity(n);
-
-    for i in 0..n {
+    // Each ω's group delay is an independent analytic poly evaluation → fan a
+    // large sweep across cores, byte-identical to the serial loop.
+    let work = (b.len() + a.len()).saturating_mul(4).max(8);
+    let nthreads = freqz_response_thread_count(n, work);
+    let pairs: Vec<(f64, f64)> = freqz_par_collect(n, nthreads, |i| {
         // Match scipy endpoint=False: w[i] = i * pi / n
         let omega = std::f64::consts::PI * i as f64 / n as f64;
-        w_out.push(omega);
-        gd_out.push(group_delay_at_frequency(b, a, omega));
+        (omega, group_delay_at_frequency(b, a, omega))
+    });
+    let mut w_out = Vec::with_capacity(n);
+    let mut gd_out = Vec::with_capacity(n);
+    for (om, gd) in pairs {
+        w_out.push(om);
+        gd_out.push(gd);
     }
 
     Ok((w_out, gd_out))
@@ -24462,6 +24504,58 @@ mod tests {
         assert_eq!(par_ba.h_mag.len(), n);
         for i in [0usize, 4096, 9999, n - 1] {
             assert!((par_ba.h_mag[i] - par.h_mag[i]).abs() < 1e-9, "ba vs sos at {i}");
+        }
+    }
+
+    #[test]
+    fn freqz_zpk_and_group_delay_parallel_match_serial_bit_for_bit() {
+        // The parallel freqz_zpk / group_delay sweeps must be BIT-identical to the
+        // serial per-ω kernel. n crosses the 4096 thread gate → parallel path.
+        let coeffs = butter(6, &[0.2], FilterType::Lowpass).expect("butter");
+        let zpk = tf2zpk(&coeffs.b, &coeffs.a).expect("tf2zpk");
+        let n = 20_000usize;
+
+        let par = freqz_zpk(&zpk, Some(n)).expect("freqz_zpk parallel");
+        let (gw, gd) = group_delay(&coeffs.b, &coeffs.a, Some(n)).expect("group_delay parallel");
+        assert_eq!(par.w.len(), n);
+        assert_eq!(gd.len(), n);
+        for i in [0usize, 1, 4095, 4096, 9999, n / 2, n - 1] {
+            let omega = std::f64::consts::PI * i as f64 / n as f64;
+            // freqz_zpk: recompute the ZPK product form serially.
+            let (e_im, e_re) = omega.sin_cos();
+            let mut nr = zpk.gain;
+            let mut ni = 0.0f64;
+            for k in 0..zpk.zeros_re.len() {
+                let (dr, di) = (e_re - zpk.zeros_re[k], e_im - zpk.zeros_im[k]);
+                let (a, b) = (nr * dr - ni * di, nr * di + ni * dr);
+                nr = a;
+                ni = b;
+            }
+            let mut dr2 = 1.0f64;
+            let mut di2 = 0.0f64;
+            for k in 0..zpk.poles_re.len() {
+                let (dr, di) = (e_re - zpk.poles_re[k], e_im - zpk.poles_im[k]);
+                let (a, b) = (dr2 * dr - di2 * di, dr2 * di + di2 * dr);
+                dr2 = a;
+                di2 = b;
+            }
+            let dms = dr2 * dr2 + di2 * di2;
+            let (emag, ephase) = if dms < 1e-30 {
+                (f64::INFINITY, 0.0)
+            } else {
+                let hr = (nr * dr2 + ni * di2) / dms;
+                let hi = (ni * dr2 - nr * di2) / dms;
+                ((hr * hr + hi * hi).sqrt(), hi.atan2(hr))
+            };
+            assert_eq!(par.h_mag[i].to_bits(), emag.to_bits(), "zpk mag @ {i}");
+            assert_eq!(par.h_phase[i].to_bits(), ephase.to_bits(), "zpk phase @ {i}");
+            // group_delay: same kernel the parallel path calls.
+            assert_eq!(gw[i].to_bits(), omega.to_bits());
+            assert_eq!(
+                gd[i].to_bits(),
+                group_delay_at_frequency(&coeffs.b, &coeffs.a, omega).to_bits(),
+                "group_delay @ {i}"
+            );
         }
     }
 
