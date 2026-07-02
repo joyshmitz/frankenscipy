@@ -12873,3 +12873,27 @@ BUT that's unfair (scipy also computes the correlation coefficient); vs the fair
 fsci is 0.76-0.86x SLOWER (~1.2-1.3x). Both are O(n²) MEMORY-BOUND with the same L3→RAM cache cliff (scatter-write
 into the condensed n²/2 array); scipy's tight C scatter wins by a constant. cophenet is a memory-bound wall, not
 winnable without a fundamentally more cache-friendly layout — leave it.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — spearmanr_matrix (all-pairs Spearman, rank-once + parallel Pearson) — 45x FASTER than scipy.stats.spearmanr(matrix)
+
+Broad scipy timing sweep flagged `scipy.stats.spearmanr(200×2000 matrix)` = 885.6ms — the all-pairs Spearman
+rank-correlation matrix, notably slow. fsci had `kendalltau_matrix`/`weightedtau_matrix`/etc. (all-pairs) but NO
+Spearman analog. Added `spearmanr_matrix(variables)`. KEY LEVER: `spearmanr(a, b) == pearsonr(rankdata(a),
+rankdata(b))`, so rank each variable ONCE up front (vs the naive all-pairs loop that re-ranks each variable O(m)
+times), then run the cheap O(n) Pearson-of-ranks in parallel across pairs via the existing
+`all_pairs_symmetric_matrix` harness. Uses a stat-only Pearson closure that replicates `pearsonr`'s statistic
+bit-for-bit (same means/accumulation order/denom-zero→NaN/clamp) but skips its per-pair p-value (betainc).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1):
+
+| workload | fsci spearmanr_matrix | scipy spearmanr | vs scipy |
+| --- | --- | --- | --- |
+| 200 vars × 2000 obs | 19.84ms | 885.6ms | 45x |
+
+BYTE-IDENTICAL to looping fsci `spearmanr(a,b).statistic` for n≥3 (0 mismatches on an 8×8 matrix + the 8-var
+test incl. a tied column; symmetric, diagonal 1.0), and matches scipy to 5.55e-17. n≤2 keeps scipy's special
+length-2 path (looped). fsci-stats lib 2004/2004 green (+ `spearmanr_matrix_matches_pairwise_spearmanr`). LEVER
+(rank-once): any all-pairs "rank-based correlation" (Spearman) should rank each variable ONCE then all-pairs
+Pearson — the naive per-pair kernel re-ranks O(m) times. The betainc p-value removal was minor (~7%); the O(m²·n)
+correlation dominates. Completes the stats correlation/distance _matrix family (pearson via corrcoef, spearman,
+kendall, weightedtau, wasserstein, energy, ks_2samp, mannwhitneyu).

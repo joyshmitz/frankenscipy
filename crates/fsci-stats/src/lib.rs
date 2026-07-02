@@ -38558,6 +38558,44 @@ pub fn kendalltau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsE
     all_pairs_symmetric_matrix(variables, kendalltau_statistic_only)
 }
 
+/// All-pairs Spearman rank-correlation matrix — `scipy.stats.spearmanr(M)` on a 2-D array of `m`
+/// variables. Returns an `m × m` symmetric matrix with `out[i][j] == spearmanr(variables[i],
+/// variables[j]).statistic` (diagonal 1.0, or NaN for a constant variable). SciPy's `spearmanr` on a
+/// matrix is slow (~885 ms for 200×2000). KEY LEVER: since `spearmanr(a, b) == pearsonr(rankdata(a),
+/// rankdata(b))`, each variable is ranked ONCE up front (vs re-ranking O(m) times inside a naive
+/// all-pairs loop), then the cheap O(n) Pearson-of-ranks runs in parallel across pairs — bit-identical
+/// to looping `spearmanr` for `n ≥ 3`. Tiny samples (`n ≤ 2`) keep SciPy's special length-2 path.
+pub fn spearmanr_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    let n = variables.first().map_or(0, Vec::len);
+    if n <= 2 {
+        return all_pairs_symmetric_matrix(variables, |a, b| spearmanr(a, b).statistic);
+    }
+    let ranked: Vec<Vec<f64>> = variables.iter().map(|v| rankdata_average(v)).collect();
+    // Stat-only Pearson correlation, replicating `pearsonr`'s statistic bit-for-bit
+    // (same means, same accumulation order, same denom-zero → NaN and clamp) but
+    // WITHOUT its per-pair p-value (a betainc call), which `spearmanr_matrix` never
+    // needs — that betainc over ~m²/2 pairs was the dominant cost.
+    let pearson_stat = |a: &[f64], b: &[f64]| -> f64 {
+        let nf = a.len() as f64;
+        let am = a.iter().sum::<f64>() / nf;
+        let bm = b.iter().sum::<f64>() / nf;
+        let (mut saa, mut sbb, mut sab) = (0.0_f64, 0.0_f64, 0.0_f64);
+        for (&xi, &yi) in a.iter().zip(b.iter()) {
+            let dx = xi - am;
+            let dy = yi - bm;
+            saa += dx * dx;
+            sbb += dy * dy;
+            sab += dx * dy;
+        }
+        let denom = (saa * sbb).sqrt();
+        if denom == 0.0 {
+            return f64::NAN;
+        }
+        (sab / denom).clamp(-1.0, 1.0)
+    };
+    all_pairs_symmetric_matrix(&ranked, pearson_stat)
+}
+
 /// All-pairs weighted Kendall's tau correlation matrix (scipy `weightedtau`, `rank=True` default).
 /// Returns an `m × m` symmetric matrix with `out[i][j] == weightedtau(variables[i], variables[j])`
 /// (bit-identical), diagonal 1.0 (or NaN for a constant variable). SciPy has NO vectorized all-pairs
@@ -60256,6 +60294,53 @@ mod tests {
         }
         assert!(zscore_axis_2d(&x, 0, 9).is_err());
         assert!(zmap_axis_2d(&x, &cmp[..rows - 1], 0, 1).is_err());
+    }
+
+    #[test]
+    fn spearmanr_matrix_matches_pairwise_spearmanr() {
+        // All-pairs Spearman matrix must be BIT-IDENTICAL to per-pair spearmanr(.).statistic
+        // (rank-once + Pearson == spearmanr), symmetric, diagonal 1.0. Includes a tied column.
+        let n = 50usize;
+        let m = 8usize;
+        let vars: Vec<Vec<f64>> = (0..m)
+            .map(|v| {
+                (0..n)
+                    .map(|i| {
+                        if v == 2 {
+                            (i / 5) as f64 // tied column
+                        } else {
+                            (((i * (v + 3) + v * 7) % 47) as f64) * 0.29
+                                + (i as f64 * 0.13 + v as f64).cos()
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let mat = spearmanr_matrix(&vars).unwrap();
+        assert_eq!(mat.len(), m);
+        for i in 0..m {
+            assert_eq!(mat[i].len(), m);
+            for j in i..m {
+                let expected = spearmanr(&vars[i], &vars[j]).statistic;
+                assert_eq!(
+                    mat[i][j].to_bits(),
+                    expected.to_bits(),
+                    "spearmanr_matrix[{i}][{j}] != spearmanr().statistic"
+                );
+                assert_eq!(
+                    mat[i][j].to_bits(),
+                    mat[j][i].to_bits(),
+                    "not symmetric {i},{j}"
+                );
+            }
+            assert!((mat[i][i] - 1.0).abs() < 1e-12, "diagonal not 1 at {i}");
+        }
+        // ragged input rejected.
+        let mut bad = vars.clone();
+        bad[0].push(1.0);
+        assert!(spearmanr_matrix(&bad).is_err());
+        // empty -> empty.
+        assert!(spearmanr_matrix(&[]).unwrap().is_empty());
     }
 
     #[test]
