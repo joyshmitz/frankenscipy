@@ -13102,3 +13102,36 @@ NEG (confirmed already-dominant this sweep, not re-chase): welch 12.5x / csd 14.
 (all parallel-over-segments, all have `_axis_2d` multichannel variants); permutation_test / monte_carlo_test
 already parallel (thread-count-independent); solve_circulant 0.8ms (FFT, fast). solve_toeplitz single-RHS ≈ scipy
 parity (both O(n²) Levinson).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — rotations_multiply_many / rotations_from_matrix_many (batch Rotation) — 13-18x FASTER than scipy, matches scipy exactly
+
+fsci's `Rotation` is a SCALAR (single rotation); `scipy.spatial.transform.Rotation` is inherently vectorized (a
+stack of N rotations) and its elementwise batch ops are surprisingly slow — the per-element work is wrapped in a
+Python-object `numpy` vectorization whose overhead dominates (compose is ~0.4 µs for a ~30-flop quaternion
+product). Added two array-of-rotations free functions (parallel index-map, work-gated at 1<<15, byte-identical to
+the scalar loop):
+- `rotations_multiply_many(a, b)` — elementwise compose `a[i]*b[i]` (scipy `r1 * r2` on two stacks)
+- `rotations_from_matrix_many(mats)` — N 3×3 matrices → rotations (scipy `Rotation.from_matrix` on `(N,3,3)`)
+
+Correctness: fsci's scalar kernels match scipy EXACTLY on reference inputs (compose quat
+[0.494950579911797, 0.11342617456312, 0.639311165719404, 0.57744234323043] == scipy; from_matrix quat
+[0.2, -0.4, -0.4, 0.8] == scipy) and from_matrix round-trips (`from_matrix(M).as_matrix() == M` to 1e-12).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), N=200k:
+
+| op | fsci many | scipy | vs scipy |
+| --- | --- | --- | --- |
+| rotations_multiply_many | 4.24ms | 78.3ms | 18x |
+| rotations_from_matrix_many | 5.07ms | 67.1ms | 13x |
+
+Byte-identical to the fsci scalar per-element loop (0 quat mismatches, verified in
+`rotations_batch_many_match_scalar_loop_bit_for_bit`, n=40k crossing the gate + round-trip + below-gate + empty
+guard). fsci-spatial 226/226 + integration green.
+
+REJECTED same cycle: `rotations_apply_many` (elementwise rotation[i]·vector[i]) = 4.44 vs scipy 3.72ms = 0.8x LOSS
+— scipy's stack-apply is a fast vectorized einsum and at N=200k the AoS access is latency-bound; not a win (and
+`Rotation::apply_many` already covers the one-rotation→many-vectors case). `rotations_as_euler_many` NOT SHIPPED:
+DISCOVERED BUG — fsci's scalar `Rotation::as_euler` does NOT match scipy for general asymmetric sequences
+(from_matrix([[0.36,0.48,-0.8],[-0.8,0.6,0.0],[0.48,0.64,0.6]]).as_euler("xyz") gives fsci [-0.927,-0.927,0.0]
+vs scipy [0.817645,-0.500655,-1.147942]) — a real conformance gap in the scalar kernel (separate fix; batching a
+wrong scalar would only propagate it).

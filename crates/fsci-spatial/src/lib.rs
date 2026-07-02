@@ -7648,6 +7648,84 @@ where
     out
 }
 
+/// Parallel index map `0..n → Vec<T>`, byte-identical to `(0..n).map(op).collect()`
+/// (chunks run in input order and are concatenated in order). Serial below `gate`
+/// so small batches avoid thread-spawn overhead; used by the batch `Rotation`
+/// kernels, whose per-element work is cheap but whose SciPy peer is a slow
+/// Python-object-wrapped `numpy` vectorization.
+fn rotation_par_index_map<T, F>(n: usize, gate: usize, op: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(usize) -> T + Sync,
+{
+    if n == 0 {
+        return Vec::new();
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(64);
+    let nthreads = if n < gate || cores <= 1 {
+        1
+    } else {
+        cores.min(n)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(&op).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let op = &op;
+    let parts: Vec<Vec<T>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let s0 = t * chunk;
+                if s0 >= n {
+                    return None;
+                }
+                let s1 = (s0 + chunk).min(n);
+                Some(scope.spawn(move || (s0..s1).map(op).collect::<Vec<T>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("rotation batch worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(n);
+    for p in parts {
+        out.extend(p);
+    }
+    out
+}
+
+/// Per-element parallel gate for the batch `Rotation` kernels. The per-item work
+/// (a few dozen flops on an AoS `[f64; N]`) is cheap, so keep small batches serial;
+/// the working set spills L3 and the win appears well before this threshold.
+const ROTATION_BATCH_GATE: usize = 1 << 15;
+
+/// Compose `a[i] * b[i]` for every `i` (elementwise rotation composition), matching
+/// `scipy.spatial.transform.Rotation.__mul__` on two equal-length rotation stacks.
+///
+/// Byte-identical to `a.iter().zip(b).map(|(x, y)| x.multiply(y))`, fanned across
+/// cores. SciPy composes via a Python-wrapped `numpy` quaternion product whose
+/// per-element overhead dominates (~0.4 µs/compose), so this is a large win at scale.
+#[must_use]
+pub fn rotations_multiply_many(a: &[Rotation], b: &[Rotation]) -> Vec<Rotation> {
+    assert_eq!(a.len(), b.len(), "rotations_multiply_many: length mismatch");
+    rotation_par_index_map(a.len(), ROTATION_BATCH_GATE, |i| a[i].multiply(&b[i]))
+}
+
+/// Convert many 3×3 rotation matrices to [`Rotation`]s, matching
+/// `scipy.spatial.transform.Rotation.from_matrix` on a `(N, 3, 3)` stack.
+///
+/// Byte-identical to mapping [`Rotation::from_matrix`], fanned across cores.
+#[must_use]
+pub fn rotations_from_matrix_many(matrices: &[[[f64; 3]; 3]]) -> Vec<Rotation> {
+    rotation_par_index_map(matrices.len(), ROTATION_BATCH_GATE, |i| {
+        Rotation::from_matrix(matrices[i])
+    })
+}
+
 impl RigidTransform {
     /// The identity transform (no rotation, no translation).
     #[must_use]
@@ -11581,6 +11659,55 @@ mod tests {
                 r.apply(big[i]),
                 "parallel apply_many != apply at index {i}"
             );
+        }
+    }
+
+    #[test]
+    fn rotations_batch_many_match_scalar_loop_bit_for_bit() {
+        // rotations_multiply_many / rotations_from_matrix_many must be byte-identical
+        // to the scalar per-element loop. n crosses ROTATION_BATCH_GATE (1<<15).
+        let mut s: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut u = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / 9.007_199_254_740_992e15 * 2.0 - 1.0
+        };
+        let mkq = |u: &mut dyn FnMut() -> f64| {
+            let mut q = [u(), u(), u(), u()];
+            let nn = (q.iter().map(|v| v * v).sum::<f64>()).sqrt();
+            for v in &mut q {
+                *v /= nn;
+            }
+            Rotation::from_quat(q)
+        };
+        let n = 40_000usize; // above the gate
+        let a: Vec<Rotation> = (0..n).map(|_| mkq(&mut u)).collect();
+        let b: Vec<Rotation> = (0..n).map(|_| mkq(&mut u)).collect();
+        let mats: Vec<[[f64; 3]; 3]> = a.iter().map(Rotation::as_matrix).collect();
+
+        let mul = rotations_multiply_many(&a, &b);
+        let fm = rotations_from_matrix_many(&mats);
+        assert_eq!(mul.len(), n);
+        assert_eq!(fm.len(), n);
+        for i in 0..n {
+            assert_eq!(mul[i].as_quat(), a[i].multiply(&b[i]).as_quat());
+            assert_eq!(fm[i].as_quat(), Rotation::from_matrix(mats[i]).as_quat());
+            // from_matrix round-trips: recovered rotation reproduces the matrix.
+            let rec = fm[i].as_matrix();
+            for r in 0..3 {
+                for c in 0..3 {
+                    assert!((rec[r][c] - mats[i][r][c]).abs() < 1e-12);
+                }
+            }
+        }
+        assert!(rotations_multiply_many(&[], &[]).is_empty());
+        // Below-gate stays serial and byte-identical.
+        let small_a = &a[..8];
+        let small_b = &b[..8];
+        let sm = rotations_multiply_many(small_a, small_b);
+        for i in 0..8 {
+            assert_eq!(sm[i].as_quat(), small_a[i].multiply(&small_b[i]).as_quat());
         }
     }
 
