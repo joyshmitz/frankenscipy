@@ -32,7 +32,8 @@ pub use beta::{
     betaincc, betaincc_scalar, betainccinv, betainccinv_scalar, betaln, betaln_scalar, btdtr,
     btdtrc, btdtri, btdtria, btdtrib, fdtr, fdtrc, fdtri, fdtridfd, log_betainc_scalar, nbdtr,
     nbdtrc, nbdtri, nbdtrik, nbdtrik_many, nbdtrin, ncfdtr, ncfdtri, ncfdtri_many, ncfdtridfd,
-    ncfdtridfn, ncfdtrinc, ncfdtrinc_many, nctdtr, nctdtridf, nctdtrinc, nctdtrinc_many, nctdtrit,
+    ncfdtridfn, ncfdtrinc, ncfdtrinc_many, nctdtr, nctdtr_many, nctdtridf, nctdtrinc,
+    nctdtrinc_many, nctdtrit,
     nctdtrit_many, stdtr, stdtrc, stdtridf, stdtrit, stdtrit_many,
 };
 pub use convenience::{

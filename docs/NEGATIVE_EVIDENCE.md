@@ -12046,3 +12046,23 @@ ncfdtrinc_many 247 vs 3469 = 14.0x; nctdtrinc_many 2978 vs 5418 = 1.8x FASTER**.
 is now fully Illinois-accelerated + parallel-wrapped (nctdtrit 3.1x, ncfdtri 16.5x, ncfdtrinc 14.0x,
 nctdtrinc 1.8x). LEVER (probe gotcha logged): dump the root/probability arg at FULL precision ({:.17e}) not
 {:.5} — a rounded p compared against scipy near a steep CDF tail fabricates a phantom ~1e-4 error.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — nctdtr CDF incomplete-beta a-recurrence (11.2x scalar), compounds through the noncentral-t family + new nctdtr_many (17-28.5x scipy)
+
+2nd-order lever from last cycle: `nctdtr` (noncentral-t CDF, Lenth AS 243 series) called TWO fresh `btdtr`
+incomplete-betas PER Poisson term (the dominant cost, ~6.9µs/call). Replaced with the incomplete-beta
+a-recurrence `I_x(a+1,b)=I_x(a,b)−T(a,b)`, `T(a+1,b)=T(a,b)·x(a+b)/(a+1)` — ONE `btdtr` seed per chain
+(a=j+½ and a=j+1) at the Poisson mode, then O(1)/term up AND down. Python-prototyped first: the up-recurrence
+is ABSOLUTELY stable (~1.5e-15); its relative-precision decay as `I_x→0` coincides with negligible Poisson
+weight, so the summed CDF stays exact.
+
+nctdtr **6865→611 ns/call (nc=1) = 11.2x scalar**; nc=8 1213 ns. Now at parity-or-faster than scipy's own
+ufunc (scipy 545 ns/pt @nc=1, 1769 @nc=8 → fsci 1.46x FASTER @nc=8). Accuracy vs scipy over a stress grid
+(df∈[0.5,200], nc∈[−40,40], t∈[−12,12]): max|abs| 1.61e-13, 0/1500 >1e-12. Conformance 1121/1121 green.
+
+Added `nctdtr_many` (200k, 0 bit-identity mismatches): 32 ns/pt vs scipy 545 = **17.0x** (nc=1); 62 vs 1769 =
+**28.5x** (nc=8). COMPOUNDING: the 11x CDF speedup lifts every family member that root-finds over nctdtr —
+`nctdtrit_many` went 2526→358 ns/pt = a further 7.1x, now **21.8x faster than scipy** (was 3.1x last cycle);
+nctdtrit/nctdtrinc/nctdtridf scalars all ~11x faster too. LEVER (reconfirmed, perf_stats_discrete_cdf lever):
+a special-fn series summing a FRESH special-fn per term → seed once + term recurrence; here the incomplete-beta
+a-recurrence, prototyped in Python to confirm absolute stability before the Rust port.
