@@ -12296,3 +12296,37 @@ CONCURRENTLY with a scipy python process → fsci logm_many 29→393ms (13x), sq
 a bogus 200-1750x "win". Re-measured fsci in ISOLATION + scipy PINNED for the honest 3.6-48x. Always isolate the
 fsci run and pin scipy BLAS threads for matrix-function timing. LEVER: scipy has no batched matrix-function API —
 `_many` (parallel across matrices) is a clean vmap win for the whole family, no per-matrix kernel change needed.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched dense linalg det_many/inv_many/solve_many (vmap lever) — 1.9-4.8x faster than numpy's batched single-threaded det/inv/solve for n>=32, 3-11.5x vs the scipy loop
+
+Follow-on to the expm_many matrix-function batch win, same lever (`scipy.linalg` exposes ONLY single-matrix
+`det`/`inv`/`solve`, so a caller with N matrices loops single-threaded). Added `det_many` (Vec<f64>),
+`inv_many` (Vec<InvResult>), `solve_many` ((A,b)-paired, Vec<SolveResult>) — parallel across the batch via a new
+generic `par_batch_index_map` (index-parameterised sibling of `par_matrix_batch_map`; contiguous index ranges
+fanned in one spawn-set, assembled in index order → bit-identical to the serial `(0..nb).map(f)`). Gated `nb<2`
+stays serial (skips the availability syscall). Purely additive.
+
+Measured (same box, `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run --release
+-p fsci-linalg --bin perf_batch_linalg_tmp`; scipy/numpy baselines pinned OPENBLAS/OMP/MKL=1 per the
+oversubscription-artifact rule). fsci `_many` absolute (best-of-5, ms) and speedups:
+
+| batch | fsci many (det/inv/solve ms) | vs scipy-loop | vs numpy-batched(1thr) | self (many vs fsci serial loop) |
+| --- | --- | --- | --- | --- |
+| nb=1000 n=32 | 2.79 / 6.51 / 3.20 | det 3.64x inv 3.50x solve 11.06x | det 2.10x inv 2.11x solve 2.01x | inv 6.90x solve 5.10x |
+| nb=500 n=64  | 3.86 / 9.02 / 5.72 | det 3.04x inv 3.63x solve 5.15x  | det 2.60x inv 3.00x solve 1.86x | inv 9.94x solve 6.19x |
+| nb=200 n=128 | 3.81 / 17.52 / 7.35 | det 4.13x inv 3.23x solve 3.96x | det 4.80x inv 3.24x solve 2.54x | inv 12.89x solve 10.92x |
+| nb=2000 n=16 | 3.16 / 6.04 / 4.64 | det 3.68x inv 3.60x solve 11.51x | det 0.79x inv 0.97x solve 0.63x | inv 4.19x solve 2.44x |
+
+HONEST caveat: numpy DOES batch these (`np.linalg.det/inv/solve` over stacked arrays loop in C, single-threaded),
+so numpy-batched-1thr is the stronger fair baseline, not the scipy loop. fsci wins 1.9-4.8x there for n>=32 (all
+cores vs numpy's serial C batch). At n=16 numpy's tight C inner loop over the batch beats fsci's per-matrix
+Vec<Vec> + thread coordination (0.63-0.97x) — fsci still beats the scipy loop 3.7-11.5x there, but the tiny-matrix
+crossover is real. Byte-identical to the serial fsci loop (0 bit mismatches on det/inv/solve outputs across the
+whole sweep). Conformance fsci-linalg lib 495/495 (40 ignored) green — added
+`batch_det_inv_solve_many_match_serial_loop_bit_for_bit` (bit-identity + dim-mismatch error + empty batch).
+
+LEVER (reconfirmed, now covers dense linalg factorizations too): any scipy single-matrix API a caller loops over
+N inputs → `_many` parallel across the batch wins even when fsci's per-matrix kernel is slower, because scipy has
+no batch-parallelism. The dense-linalg-batch sub-vein (det/inv/solve/expm/logm/sqrtm/cosm/sinm) now mirrors the
+callback-solver vmap set. Tiny-matrix (n<=16) batches are the boundary where numpy's C batch loop wins — deeper
+below that would need a flat-buffer batched LU, not the Vec<Vec> per-matrix path.

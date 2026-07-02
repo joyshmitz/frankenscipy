@@ -7221,6 +7221,91 @@ pub fn sinm_many(
     par_matrix_batch_map(mats, |m| sinm(m, options))
 }
 
+/// Map an index-parameterised fallible closure over `0..nb`, fanning contiguous
+/// index ranges across threads in one spawn-set (mirrors [`par_matrix_batch_map`]
+/// but returns any `Send` output type, so it serves the scalar `det_many`,
+/// diagnostic-rich `inv_many`, and `(A, b)`-paired `solve_many` batch APIs).
+/// Chunks are assembled in index order, so the result is identical to the serial
+/// `(0..nb).map(f).collect()`.
+fn par_batch_index_map<T, F>(nb: usize, f: F) -> Result<Vec<T>, LinalgError>
+where
+    T: Send,
+    F: Fn(usize) -> Result<T, LinalgError> + Sync,
+{
+    let nthreads = if nb < 2 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nb)
+    };
+    if nthreads <= 1 {
+        return (0..nb).map(|i| f(i)).collect();
+    }
+    let chunk = nb.div_ceil(nthreads);
+    let f = &f;
+    let chunk_results: Vec<Result<Vec<T>, LinalgError>> = std::thread::scope(|scope| {
+        (0..nb)
+            .step_by(chunk)
+            .map(|start| {
+                scope.spawn(move || {
+                    let end = (start + chunk).min(nb);
+                    (start..end).map(|i| f(i)).collect::<Result<Vec<_>, _>>()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("linalg batch worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(nb);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
+/// Vectorized determinant over a batch of matrices — parallel across the batch
+/// (see [`par_batch_index_map`]). SciPy exposes only the single-matrix
+/// [`scipy.linalg.det`], so an N-matrix caller loops single-threaded; each entry
+/// here equals [`det`] of the corresponding input.
+pub fn det_many(
+    mats: &[Vec<Vec<f64>>],
+    mode: RuntimeMode,
+    check_finite: bool,
+) -> Result<Vec<f64>, LinalgError> {
+    par_batch_index_map(mats.len(), |i| det(&mats[i], mode, check_finite))
+}
+
+/// Vectorized matrix inverse over a batch; see [`det_many`]. Each entry equals
+/// [`inv`] of the corresponding input (diagnostics preserved per matrix).
+pub fn inv_many(
+    mats: &[Vec<Vec<f64>>],
+    options: InvOptions,
+) -> Result<Vec<InvResult>, LinalgError> {
+    par_batch_index_map(mats.len(), |i| inv(&mats[i], options))
+}
+
+/// Vectorized linear solve over a batch of `(A, b)` pairs; see [`det_many`].
+/// `mats[k]` is solved against `rhs[k]`; each entry equals [`solve`] of that pair.
+pub fn solve_many(
+    mats: &[Vec<Vec<f64>>],
+    rhs: &[Vec<f64>],
+    options: SolveOptions,
+) -> Result<Vec<SolveResult>, LinalgError> {
+    if mats.len() != rhs.len() {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!(
+                "solve_many: got {} matrices but {} right-hand sides",
+                mats.len(),
+                rhs.len()
+            ),
+        });
+    }
+    par_batch_index_map(mats.len(), |i| solve(&mats[i], &rhs[i], options))
+}
+
 /// Scaling and squaring method with truncated Taylor series.
 ///
 /// Algorithm: scale A by 2^(-s) so ||A/2^s|| is small, compute exp via
@@ -31941,5 +32026,66 @@ mod proptest_tests {
         // Shape mismatch -> error.
         let bad_e = vec![vec![1.0, 2.0, 3.0]];
         assert!(expm_frechet(&a, &bad_e, DecompOptions::default()).is_err());
+    }
+
+    #[test]
+    fn batch_det_inv_solve_many_match_serial_loop_bit_for_bit() {
+        // det_many / inv_many / solve_many must be bit-identical to the serial
+        // per-matrix loop (parallel-across-batch is an order-preserving map).
+        let mut s = 0x9E3779B97F4A7C15u64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let n = 12usize;
+        let nb = 40usize;
+        let mats: Vec<Vec<Vec<f64>>> = (0..nb)
+            .map(|_| {
+                (0..n)
+                    .map(|i| {
+                        (0..n)
+                            .map(|j| rng() + if i == j { n as f64 } else { 0.0 })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        let rhs: Vec<Vec<f64>> = (0..nb).map(|_| (0..n).map(|_| rng()).collect()).collect();
+
+        let det_ser: Vec<f64> = mats
+            .iter()
+            .map(|m| det(m, RuntimeMode::Strict, true).unwrap())
+            .collect();
+        let det_par = det_many(&mats, RuntimeMode::Strict, true).unwrap();
+        assert_eq!(det_par.len(), nb);
+        for (a, b) in det_ser.iter().zip(&det_par) {
+            assert_eq!(a.to_bits(), b.to_bits(), "det_many mismatch");
+        }
+
+        let inv_par = inv_many(&mats, InvOptions::default()).unwrap();
+        for (m, r) in mats.iter().zip(&inv_par) {
+            let serial = inv(m, InvOptions::default()).unwrap();
+            let serial_flat = serial.inverse.iter().flatten();
+            let par_flat = r.inverse.iter().flatten();
+            for (x, y) in serial_flat.zip(par_flat) {
+                assert_eq!(x.to_bits(), y.to_bits(), "inv_many mismatch");
+            }
+        }
+
+        let solve_par = solve_many(&mats, &rhs, SolveOptions::default()).unwrap();
+        for ((m, b), r) in mats.iter().zip(&rhs).zip(&solve_par) {
+            let serial = solve(m, b, SolveOptions::default()).unwrap();
+            for (x, y) in serial.x.iter().zip(&r.x) {
+                assert_eq!(x.to_bits(), y.to_bits(), "solve_many mismatch");
+            }
+        }
+
+        // Mismatched batch lengths -> error, not a panic.
+        assert!(solve_many(&mats, &rhs[..nb - 1], SolveOptions::default()).is_err());
+
+        // Empty batch -> empty result.
+        assert!(det_many(&[], RuntimeMode::Strict, true).unwrap().is_empty());
     }
 }
