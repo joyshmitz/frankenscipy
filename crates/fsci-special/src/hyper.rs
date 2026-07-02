@@ -2404,6 +2404,36 @@ fn hyp2f1_scalar(a: f64, b: f64, c: f64, z: f64, mode: RuntimeMode) -> Result<f6
                     return Ok(result);
                 }
             }
+        } else if cab.round() == 0.0 && a > 0.0 && b > 0.0 {
+            // Integer c−a−b = 0 (c = a+b): the 15.8.4 gamma prefactors diverge, so use
+            // the DLMF 15.8.10 LOGARITHMIC form (limit m→0):
+            //   2F1(a,b;a+b;z) = −Γ(a+b)/(Γ(a)Γ(b)) Σ_k (a)_k(b)_k/(k!)² (1−z)^k
+            //                    · [ln(1−z) − 2ψ(k+1) + ψ(a+k) + ψ(b+k)]
+            // converging in the small (1−z). (Validated vs SciPy to ~1e-16.) Other
+            // integer c−a−b (m≠0) fall through to the normal path (deferred).
+            let omz = 1.0 - z;
+            let ln_omz = omz.ln();
+            let pref = gamma_ratio_for_hyp2f1(a + b, 1.0, a, b);
+            if pref.is_finite() {
+                let mut sum = 0.0_f64;
+                let mut coeff = 1.0_f64; // (a)_k(b)_k/(k!)² · (1−z)^k
+                for k in 0..600 {
+                    let kf = k as f64;
+                    let log_part = ln_omz - 2.0 * crate::convenience::digamma_scalar(kf + 1.0)
+                        + crate::convenience::digamma_scalar(a + kf)
+                        + crate::convenience::digamma_scalar(b + kf);
+                    let term = coeff * log_part;
+                    sum += term;
+                    if k > 2 && term.abs() <= 1e-17 * sum.abs().max(1e-300) {
+                        break;
+                    }
+                    coeff *= (a + kf) * (b + kf) / ((kf + 1.0) * (kf + 1.0)) * omz;
+                }
+                let result = -pref * sum;
+                if result.is_finite() {
+                    return Ok(result);
+                }
+            }
         }
     }
 
@@ -4446,6 +4476,33 @@ mod tests {
             (0.5, 1.5, 3.2, 0.995, 1.568_712_1),
             (1.0, 2.0, 3.7, 0.999, 3.740_952_9),
             (2.0, 1.0, 4.3, 0.9995, 2.531_491_0),
+        ];
+        for (a, b, c, z, expected) in cases {
+            let got = get_scalar(&hyp2f1(
+                &scalar(a),
+                &scalar(b),
+                &scalar(c),
+                &scalar(z),
+                RuntimeMode::Strict,
+            ))
+            .unwrap_or(f64::NAN);
+            assert!(
+                (got - expected).abs() <= 1e-6 * expected.abs().max(1.0),
+                "2F1({a},{b};{c};{z}) = {got}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn hyp2f1_near_unit_argument_c_equals_a_plus_b_matches_scipy() {
+        // Integer c−a−b = 0 (c = a+b) near z=1: the 15.8.4 prefactors diverge, so the
+        // DLMF 15.8.10 logarithmic form is used. References from scipy.special.hyp2f1.
+        let cases = [
+            (1.0, 1.0, 2.0, 0.99, 4.651687056553627),
+            (1.0, 1.0, 2.0, 0.9999, 9.211261498126108),
+            (0.5, 0.5, 1.0, 0.99, 2.3527158167797424),
+            (1.0, 2.0, 3.0, 0.995, 8.693350908407435),
+            (2.5, 1.5, 4.0, 0.999, 25.648290580560698),
         ];
         for (a, b, c, z, expected) in cases {
             let got = get_scalar(&hyp2f1(

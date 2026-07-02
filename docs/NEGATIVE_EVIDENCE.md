@@ -6,6 +6,21 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: hyp2f1 c=a+b near z→1 log connection formula — fixes NaN + 3.4-4.4× WIN
+
+- Extends the prior 2F1 near-z=1 fix to the integer c−a−b = 0 (c = a+b) case, where the 15.8.4 gamma
+  prefactors diverge. Used the DLMF 15.8.10 LOGARITHMIC form (m→0 limit):
+  `2F1(a,b;a+b;z) = −Γ(a+b)/(Γ(a)Γ(b)) Σ_k (a)_k(b)_k/(k!)² (1−z)^k [ln(1−z) − 2ψ(k+1) + ψ(a+k) + ψ(b+k)]`,
+  converging in the small (1−z) via `digamma_scalar`. Prototyped in Python first — matches SciPy to
+  ~1e-16. Gated `z∈[0.9,1) && round(c−a−b)==0 && a>0 && b>0`, finite-result fallthrough. m≠0 integer
+  (c=a+b±1,…) has a prototype bug and is deferred (falls through to slow/NaN — rarer).
+- MEASURED (same box; scipy 1.17.1): hyp2f1(1,1,2,0.99) 5.62µs → **0.50µs** = ~11× self, **3.4× FASTER**
+  than scipy (1.70µs); hyp2f1(1,1,2,0.9999) **NaN → 9.211261 (CORRECT), 4.4× FASTER**; (2.5,1.5,4,0.999)
+  0.35µs matches scipy 25.648. Correctness + perf.
+- Verification: new `hyp2f1_near_unit_argument_c_equals_a_plus_b_matches_scipy` (5 scipy refs) + all 90
+  hyper-module tests green. Together with the non-integer branch, hyp2f1 near z=1 is now correct+fast
+  for non-integer c−a−b AND c=a+b; only c=a+b±k (k≥1) remains (needs full 15.8.10, m≠0).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: hyp2f1 near z→1 connection formula — fixes NaN + 5.5-7× SciPy WIN
 
 - BUG + PERF found via measurement: `hyp2f1` near z→1 with non-integer c−a−b ran the direct series
