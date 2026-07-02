@@ -13351,3 +13351,28 @@ rows in parallel (and prefer a closed form over a sequential recurrence when one
 NEG this sweep (already-dominant): convolve2d 13.7x / correlate2d 17.9x, median_filter 30.5x / rank_filter 28.5x
 (2D-float rank/median NOT a dead-end anymore — parallel quickselect wins), griddata linear/cubic fast. pascal(1500)
 scipy 37.6s is exact-BIG-INT vs fsci f64 — apples-to-oranges, not a real target.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — parallel structured-matrix constructors: 4 LOSSES flipped (circulant/toeplitz/hankel/hilbert) + fiedler
+
+Loss-hunt follow-on to dft/hadamard. fsci's remaining structured-matrix constructors were SERIAL n²-cell fills and
+scipy's single-threaded `as_strided`+copy actually BEAT them at large n. Added a shared `par_fill_rows(nrows,
+ncols, fill_row)` helper (each output row written by one thread in place, byte-identical to the serial fill,
+work-gated n·m≥1<<16) and routed circulant/toeplitz/hankel/hilbert/fiedler through it (each cell is an independent
+closed form of `(i,j)`).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), 7000×7000 (fiedler 5000):
+
+| op | fsci before | fsci after | scipy | vs scipy |
+| --- | --- | --- | --- | --- |
+| circulant | 306.9ms | 49.9ms | 227.8ms | 0.7x → **4.6x** |
+| toeplitz | 256.1ms | 44.9ms | 208.0ms | 0.8x → **4.6x** |
+| hankel | 247.2ms | 46.9ms | 205.8ms | 0.8x → **4.4x** |
+| hilbert | 173.3ms | 32.9ms | 143.3ms | 0.8x → **4.4x** |
+| fiedler | 117.5ms | 23.5ms | 247.3ms | 2.1x → **10.5x** |
+
+Four clean LOSS→WIN flips + fiedler. Byte-identical by construction (each row written identically to the serial
+fill); existing scipy-conformance tests (27 across these constructors) still pass. fsci-linalg 496/496 green.
+Constructor family now: dft 75x / hadamard 3.6x / circulant·toeplitz·hankel·hilbert 4.4-4.6x / fiedler 10.5x /
+helmert ~19x. LEVER (reusable helper shipped): any `Vec<Vec<f64>>` constructor whose cells are a closed form of
+(i,j) → `par_fill_rows`. GOTCHA: scipy's `as_strided` view constructors are single-threaded on materialization, so
+a SERIAL fsci fill silently LOSES — grep serial `for i..for j` n² constructor loops.

@@ -14541,24 +14541,58 @@ fn toeplitz_fft_column(
     Some((0..m).map(|i| yfull[i].0).collect())
 }
 
+/// Fill an `nrows × ncols` row-major matrix by an INDEPENDENT per-row closure,
+/// fanned across cores above a work gate. Byte-identical to the serial fill (each
+/// row is written by exactly one thread, in place). Used by the structured-matrix
+/// constructors whose cells are a closed form of `(i, j)` — scipy materializes
+/// these with a single-threaded `as_strided`+copy, so the parallel fill both
+/// saturates write bandwidth and beats it.
+fn par_fill_rows<F>(nrows: usize, ncols: usize, fill_row: F) -> Vec<Vec<f64>>
+where
+    F: Fn(usize, &mut [f64]) + Sync,
+{
+    let mut m = vec![vec![0.0f64; ncols]; nrows];
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if nrows.saturating_mul(ncols) < (1 << 16) || cores <= 1 {
+        1
+    } else {
+        cores.min(nrows)
+    };
+    if nthreads <= 1 {
+        for (i, row) in m.iter_mut().enumerate() {
+            fill_row(i, row);
+        }
+    } else {
+        let fr = &fill_row;
+        let chunk = nrows.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (ci, rows_chunk) in m.chunks_mut(chunk).enumerate() {
+                let i0 = ci * chunk;
+                scope.spawn(move || {
+                    for (di, row) in rows_chunk.iter_mut().enumerate() {
+                        fr(i0 + di, row);
+                    }
+                });
+            }
+        });
+    }
+    m
+}
+
 pub fn toeplitz(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
     let n = c.len();
     let row = r.unwrap_or(c);
     let m = row.len();
-
-    let mut result = vec![vec![0.0; m]; n];
-    for i in 0..n {
-        for j in 0..m {
-            // Lower triangle + diagonal come from the first column `c`; the
-            // strict upper triangle comes from the first row `r`. This keeps the
-            // diagonal at c[0] for every i and ignores row[0] entirely, matching
-            // scipy.linalg.toeplitz (where r[0] is documented as ignored). The
-            // previous split put row[0] on the diagonal for i>0, corrupting it
-            // whenever r[0] != c[0].
-            result[i][j] = if i >= j { c[i - j] } else { row[j - i] };
+    // Lower triangle + diagonal come from the first column `c`; the strict upper
+    // triangle comes from the first row `r` (r[0] ignored, diagonal stays c[0]) —
+    // matching scipy.linalg.toeplitz. Each output row is independent.
+    par_fill_rows(n, m, |i, out| {
+        for (j, entry) in out.iter_mut().enumerate() {
+            *entry = if i >= j { c[i - j] } else { row[j - i] };
         }
-    }
-    result
+    })
 }
 
 /// Construct a circulant matrix whose first column is `c`.
@@ -14574,14 +14608,12 @@ pub fn toeplitz(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
 /// FIRST ROW (returning the transpose of the scipy convention).
 pub fn circulant(c: &[f64]) -> Vec<Vec<f64>> {
     let n = c.len();
-    let mut result = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            // (i - j) mod n via signed-safe arithmetic.
-            result[i][j] = c[(i + n - j) % n];
+    // result[i][j] = c[(i - j) mod n]; each row is an independent cyclic read of c.
+    par_fill_rows(n, n, |i, out| {
+        for (j, entry) in out.iter_mut().enumerate() {
+            *entry = c[(i + n - j) % n];
         }
-    }
-    result
+    })
 }
 
 /// Construct the discrete Fourier transform matrix.
@@ -14893,13 +14925,12 @@ pub fn matrix_balance(
 /// H_{ij} = 1 / (i + j + 1) for i,j starting at 0. The Hilbert matrix
 /// is a classic example of an ill-conditioned matrix.
 pub fn hilbert(n: usize) -> Vec<Vec<f64>> {
-    let mut result = vec![vec![0.0; n]; n];
-    for (i, row) in result.iter_mut().enumerate().take(n) {
-        for (j, entry) in row.iter_mut().enumerate().take(n) {
+    // H[i][j] = 1/(i+j+1); each row independent.
+    par_fill_rows(n, n, |i, out| {
+        for (j, entry) in out.iter_mut().enumerate() {
             *entry = 1.0 / (i + j + 1) as f64;
         }
-    }
-    result
+    })
 }
 
 /// Construct the inverse of a Hilbert matrix.
@@ -15175,13 +15206,13 @@ pub fn dft_matrix(n: usize) -> Vec<Vec<(f64, f64)>> {
 /// Matches `scipy.linalg.fiedler`.
 pub fn fiedler(a: &[f64]) -> Vec<Vec<f64>> {
     let n = a.len();
-    let mut f = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            f[i][j] = (a[i] - a[j]).abs();
+    // F[i][j] = |a[i] − a[j]|; each row independent.
+    par_fill_rows(n, n, |i, out| {
+        let ai = a[i];
+        for (j, entry) in out.iter_mut().enumerate() {
+            *entry = (ai - a[j]).abs();
         }
-    }
-    f
+    })
 }
 
 /// Fiedler companion matrix from polynomial coefficients.
@@ -15472,9 +15503,9 @@ pub fn hankel(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
     };
     let m = r_vals.len();
 
-    let mut h = vec![vec![0.0; m]; n];
-    for (i, row) in h.iter_mut().enumerate().take(n) {
-        for (j, item) in row.iter_mut().enumerate().take(m) {
+    // h[i][j] = c[i+j] on/above the anti-diagonal, else r[i+j-n+1]; each row independent.
+    par_fill_rows(n, m, |i, out| {
+        for (j, item) in out.iter_mut().enumerate() {
             let idx = i + j;
             *item = if idx < n {
                 c[idx]
@@ -15484,8 +15515,7 @@ pub fn hankel(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
                 0.0
             };
         }
-    }
-    h
+    })
 }
 
 /// Helmert matrix (orthogonal contrast matrix), `(n - 1, n)` form.
