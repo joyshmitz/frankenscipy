@@ -2469,3 +2469,15 @@ byte-identical to serial struve (0 mismatches), matches scipy to 6.9e-10. 1121/1
 LEVER: a scalar-only fsci special fn whose scipy peer is a SLOW vectorized ufunc → add a parallel vectorized
 wrapper (par_map over the fast scalar kernel) = huge gapfill win. grep fsci-special for `_scalar`-only fns
 with no tensor sibling.
+
+### 2026-07-01 (AmberKestrel, cc) — vectorized Kelvin ber/bei/ker/kei(+primes)_many: ~172x faster than scipy (8-fn gapfill)
+Continuing the scalar-only-fn gapfill vein (after struve 1206x). Broad scipy.special speed sweep of fsci's
+scalar-only public fns found the KELVIN family the slowest scipy peers: **ber/bei/ker/kei ~1272-1419ms/2M
+(~640-710 ns/pt)**. fsci had them SCALAR-ONLY, correct (max rel err 7.2e-11 vs scipy across all 8) and fast
+(ber ~33ns/pt, ~19x faster than scipy even SERIAL). GAPFILL: added ber_many/bei_many/ker_many/kei_many +
+berp/beip/kerp/keip_many — par_map_indices over the scalar kernels (non-breaking; scalars + re-exports
+untouched). RESULT: ber_many(2M) **7.4ms vs scipy 1272ms = 172x FASTER** (on a load-47 box; true ratio higher).
+Byte-identical to serial (0 mismatches across all 8), 1121/1121 special tests green. LEVER (same as struve):
+grep fsci-special `_scalar`-only fns whose scipy peer is a slow ufunc → add parallel `*_many` wrapper. Remaining
+slow-peer scalar-only candidates for follow-on: itj0y0/iti0k0 (~580-601ms), expn (440ms), shichi (288ms),
+fresnel (165ms), sici/poch (~90ms) — all vectorizable the same way.

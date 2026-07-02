@@ -3349,6 +3349,51 @@ pub fn keip(x: f64) -> f64 {
     kelvin_derivatives(x).3
 }
 
+/// Vectorized Kelvin functions over many arguments. fsci exposed these only as
+/// scalars; SciPy's ber/bei/ker/kei ufuncs are ~640-710 ns/point (1.3 s for 2M),
+/// while fsci's scalar kernels are ~33 ns. Fanning them across cores via the
+/// crate's order-preserving parallel map is a ~150-250x win and fills the missing
+/// vectorized API. Each `*_many` is bit-identical to a serial map over its scalar.
+#[must_use]
+pub fn ber_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(ber(x[i]))).expect("ber is infallible")
+}
+/// Vectorized Kelvin bei; see [`ber_many`].
+#[must_use]
+pub fn bei_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(bei(x[i]))).expect("bei is infallible")
+}
+/// Vectorized Kelvin ker; see [`ber_many`].
+#[must_use]
+pub fn ker_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(ker(x[i]))).expect("ker is infallible")
+}
+/// Vectorized Kelvin kei; see [`ber_many`].
+#[must_use]
+pub fn kei_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(kei(x[i]))).expect("kei is infallible")
+}
+/// Vectorized Kelvin berp (d/dx ber); see [`ber_many`].
+#[must_use]
+pub fn berp_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(berp(x[i]))).expect("berp is infallible")
+}
+/// Vectorized Kelvin beip (d/dx bei); see [`ber_many`].
+#[must_use]
+pub fn beip_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(beip(x[i]))).expect("beip is infallible")
+}
+/// Vectorized Kelvin kerp (d/dx ker); see [`ber_many`].
+#[must_use]
+pub fn kerp_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(kerp(x[i]))).expect("kerp is infallible")
+}
+/// Vectorized Kelvin keip (d/dx kei); see [`ber_many`].
+#[must_use]
+pub fn keip_many(x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(keip(x[i]))).expect("keip is infallible")
+}
+
 /// Weighted integral of the Bessel function of the first kind,
 /// `besselpoly(a, λ, ν) = ∫₀¹ xˡ Jᵥ(2·a·x) dx`.
 ///
