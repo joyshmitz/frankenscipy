@@ -7297,27 +7297,87 @@ impl Rotation {
     /// `seq` is a 3-character string like "xyz", "zyx", etc.
     #[must_use]
     pub fn as_euler(&self, seq: &str) -> [f64; 3] {
-        let m = self.as_matrix();
-        let intrinsic = seq.chars().next().is_some_and(|c| c.is_uppercase());
-        let axes: Vec<char> = seq.to_lowercase().chars().collect();
+        use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-        if axes.len() != 3 {
+        // Faithful port of `scipy.spatial.transform.Rotation.as_euler`
+        // (Bernardes & Viollet 2022 quaternion method, via scipy's `_get_angles`).
+        // Operates DIRECTLY on the quaternion `[x, y, z, w]` and reproduces scipy
+        // across all 12 sequences (extrinsic lower-case / intrinsic upper-case),
+        // including the gimbal-lock singular cases. The previous matrix-formula
+        // implementation did NOT match scipy for asymmetric (Tait–Bryan) sequences.
+        if seq.len() != 3 {
             return [0.0, 0.0, 0.0];
         }
+        let intrinsic = seq.chars().next().is_some_and(char::is_uppercase);
+        let extrinsic = !intrinsic;
+        let lower: Vec<char> = seq.to_lowercase().chars().collect();
+        let mut axes = [
+            Self::axis_index(lower[0]),
+            Self::axis_index(lower[1]),
+            Self::axis_index(lower[2]),
+        ];
+        // The algorithm assumes extrinsic; intrinsic reverses the axis order.
+        if intrinsic {
+            axes.reverse();
+        }
+        let (i, j) = (axes[0], axes[1]);
+        let mut k = axes[2];
+        let symmetric = i == k;
+        if symmetric {
+            k = 3 - i - j;
+        }
+        // Levi-Civita sign of the permutation (i, j, k); the product is ±2.
+        let sign = ((i as i32 - j as i32) * (j as i32 - k as i32) * (k as i32 - i as i32) / 2) as f64;
 
-        let (i, j, k) = (
-            Self::axis_index(axes[0]),
-            Self::axis_index(axes[1]),
-            Self::axis_index(axes[2]),
-        );
-
-        let (a, b, c) = if i == k {
-            Self::euler_symmetric(&m, i, j)
+        let q = self.quat; // [x, y, z, w]
+        let w = q[3];
+        let (a, b, c, d) = if symmetric {
+            (w, q[i], q[j], q[k] * sign)
         } else {
-            Self::euler_asymmetric(&m, i, j, k)
+            (w - q[j], q[i] + q[k] * sign, q[j] + w, q[k] * sign - q[i])
         };
 
-        if intrinsic { [a, b, c] } else { [c, b, a] }
+        let eps = 1e-7;
+        let half_sum = b.atan2(a);
+        let half_diff = d.atan2(c);
+        let mut angles = [0.0f64; 3];
+        angles[1] = 2.0 * c.hypot(d).atan2(a.hypot(b));
+
+        let angle_first = if extrinsic { 0 } else { 2 };
+        let angle_third = if extrinsic { 2 } else { 0 };
+
+        let case1 = angles[1].abs() <= eps;
+        let case2 = (angles[1] - PI).abs() <= eps;
+        let case0 = !(case1 || case2);
+
+        // The assignment ORDER mirrors scipy's `_get_angles` exactly: `angles[0]`
+        // is set first, then `angle_first`, then `angle_third` — so a singular
+        // (non-case0) fallback reads whatever the array holds at that moment.
+        angles[0] = if case1 {
+            2.0 * half_sum
+        } else {
+            2.0 * half_diff * if extrinsic { -1.0 } else { 1.0 }
+        };
+        angles[angle_first] = if case0 {
+            half_sum - half_diff
+        } else {
+            angles[angle_first]
+        };
+        let mut a3 = if case0 {
+            half_sum + half_diff
+        } else {
+            angles[angle_third]
+        };
+        if !symmetric {
+            a3 *= sign;
+            angles[1] -= FRAC_PI_2;
+        }
+        angles[angle_third] = a3;
+
+        for ang in &mut angles {
+            *ang = (*ang + PI).rem_euclid(TAU) - PI;
+        }
+        angles
     }
 
     fn axis_index(c: char) -> usize {
@@ -7327,47 +7387,6 @@ impl Rotation {
             'z' => 2,
             _ => 0,
         }
-    }
-
-    fn euler_symmetric(m: &[[f64; 3]; 3], i: usize, j: usize) -> (f64, f64, f64) {
-        let k = 3 - i - j;
-        let sign = if (j as i32 - i as i32 + 3) % 3 == 1 {
-            1.0
-        } else {
-            -1.0
-        };
-
-        let b = m[i][i].clamp(-1.0, 1.0).acos();
-        let (a, c) = if b.sin().abs() < 1e-10 {
-            (m[j][k].atan2(m[j][j]), 0.0)
-        } else {
-            (
-                (m[i][j] * sign).atan2(m[i][k]),
-                (m[j][i] * sign).atan2(-m[k][i]),
-            )
-        };
-
-        (a, b, c)
-    }
-
-    fn euler_asymmetric(m: &[[f64; 3]; 3], i: usize, j: usize, k: usize) -> (f64, f64, f64) {
-        let sign = if (j as i32 - i as i32 + 3) % 3 == 1 {
-            1.0
-        } else {
-            -1.0
-        };
-
-        let b = (sign * m[i][k]).clamp(-1.0, 1.0).asin();
-        let (a, c) = if b.cos().abs() < 1e-10 {
-            ((-sign * m[j][i]).atan2(m[j][j]), 0.0)
-        } else {
-            (
-                (-sign * m[j][k]).atan2(m[k][k]),
-                (-sign * m[i][j]).atan2(m[i][i]),
-            )
-        };
-
-        (a, b, c)
     }
 
     /// Apply this rotation to a 3D vector.
@@ -7723,6 +7742,17 @@ pub fn rotations_multiply_many(a: &[Rotation], b: &[Rotation]) -> Vec<Rotation> 
 pub fn rotations_from_matrix_many(matrices: &[[[f64; 3]; 3]]) -> Vec<Rotation> {
     rotation_par_index_map(matrices.len(), ROTATION_BATCH_GATE, |i| {
         Rotation::from_matrix(matrices[i])
+    })
+}
+
+/// Euler angles (sequence `seq`) for many rotations, matching
+/// `scipy.spatial.transform.Rotation.as_euler` on a rotation stack.
+///
+/// Byte-identical to mapping [`Rotation::as_euler`], fanned across cores.
+#[must_use]
+pub fn rotations_as_euler_many(rotations: &[Rotation], seq: &str) -> Vec<[f64; 3]> {
+    rotation_par_index_map(rotations.len(), ROTATION_BATCH_GATE, |i| {
+        rotations[i].as_euler(seq)
     })
 }
 
@@ -11688,11 +11718,15 @@ mod tests {
 
         let mul = rotations_multiply_many(&a, &b);
         let fm = rotations_from_matrix_many(&mats);
+        let eu = rotations_as_euler_many(&a, "xyz");
+        let ez = rotations_as_euler_many(&a, "ZYX");
         assert_eq!(mul.len(), n);
         assert_eq!(fm.len(), n);
         for i in 0..n {
             assert_eq!(mul[i].as_quat(), a[i].multiply(&b[i]).as_quat());
             assert_eq!(fm[i].as_quat(), Rotation::from_matrix(mats[i]).as_quat());
+            assert_eq!(eu[i], a[i].as_euler("xyz"));
+            assert_eq!(ez[i], a[i].as_euler("ZYX"));
             // from_matrix round-trips: recovered rotation reproduces the matrix.
             let rec = fm[i].as_matrix();
             for r in 0..3 {
@@ -11723,6 +11757,56 @@ mod tests {
         assert!((rv1[0] - rv2[0]).abs() < 1e-10);
         assert!((rv1[1] - rv2[1]).abs() < 1e-10);
         assert!((rv1[2] - rv2[2]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rotation_as_euler_matches_scipy() {
+        // Reference values from scipy.spatial.transform.Rotation (v1.17.1).
+        // A generic (non-gimbal) rotation exercised across extrinsic + intrinsic,
+        // asymmetric (Tait-Bryan) + symmetric (proper-Euler) sequences.
+        let r = Rotation::from_matrix([
+            [0.36, 0.48, -0.8],
+            [-0.8, 0.6, 0.0],
+            [0.48, 0.64, 0.6],
+        ]);
+        let close = |g: [f64; 3], e: [f64; 3], seq: &str| {
+            for a in 0..3 {
+                assert!(
+                    (g[a] - e[a]).abs() < 1e-12,
+                    "as_euler({seq})[{a}] = {} vs scipy {}",
+                    g[a],
+                    e[a]
+                );
+            }
+        };
+        // scipy: Rotation.from_matrix(m).as_euler(seq)
+        close(
+            r.as_euler("xyz"),
+            [0.817645045832702, -0.500654712404588, -1.147942400661956],
+            "xyz",
+        );
+        close(
+            r.as_euler("ZYX"),
+            [-1.1479424006619559, -0.5006547124045881, 0.8176450458327023],
+            "ZYX",
+        );
+        // Symmetric sequence from a known quaternion (scipy reference).
+        let mut qa = [0.1, 0.2, 0.3, 0.9];
+        let na = (qa.iter().map(|v| v * v).sum::<f64>()).sqrt();
+        for v in &mut qa {
+            *v /= na;
+        }
+        let ra = Rotation::from_quat(qa);
+        close(
+            ra.as_euler("zyx"),
+            [0.627070662589018, 0.457944420467095, 0.070471344578796],
+            "zyx",
+        );
+        close(
+            ra.as_euler("ZXZ"),
+            [1.4288992721907325, 0.46295472794035675, -0.7853981633974483],
+            "ZXZ",
+        );
     }
 
     #[test]

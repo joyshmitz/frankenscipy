@@ -13135,3 +13135,23 @@ DISCOVERED BUG — fsci's scalar `Rotation::as_euler` does NOT match scipy for g
 (from_matrix([[0.36,0.48,-0.8],[-0.8,0.6,0.0],[0.48,0.64,0.6]]).as_euler("xyz") gives fsci [-0.927,-0.927,0.0]
 vs scipy [0.817645,-0.500655,-1.147942]) — a real conformance gap in the scalar kernel (separate fix; batching a
 wrong scalar would only propagate it).
+
+## 2026-07-02 — BlackThrush (cc): FIX + KEEP — Rotation::as_euler now matches scipy (was WRONG for Tait-Bryan seqs) + rotations_as_euler_many 5x
+
+Follow-on to the batch-Rotation cycle, which surfaced that fsci's scalar `Rotation::as_euler` did NOT match scipy
+for general asymmetric (Tait–Bryan) sequences (it used an ad-hoc matrix-element formula:
+as_euler("xyz") on a generic rotation gave [-0.927,-0.927,0.0] vs scipy [0.8176,-0.5007,-1.1479]). Replaced it with
+a faithful port of scipy's algorithm (`Rotation.as_euler` → `_get_angles`, the Bernardes & Viollet 2022 quaternion
+method) operating directly on the quaternion `[x,y,z,w]`: axis-permutation `(i,j,k)` with Levi-Civita `sign`,
+`(a,b,c,d)` permutation, `half_sum`/`half_diff`, the 3-case gimbal-lock handling, and the `(θ+π) mod 2π − π` wrap —
+mirroring scipy's exact assignment ORDER so singular fallbacks read the same partial state.
+
+VALIDATED vs scipy v1.17.1 across ALL 12 sequences × {extrinsic, intrinsic} on 420 rotations (random + gimbal-lock
+cases built from `from_euler` at second-angle 0, ±π/2, π, ~0): **worst error 8.88e-16 (machine precision), 0
+mismatches** (angles compared mod 2π). Locked with `rotation_as_euler_matches_scipy` (extrinsic/intrinsic ×
+Tait-Bryan/proper-Euler scipy reference values) — existing `rotation_euler_roundtrip` and
+`spherical_voronoi_hull_euler_invariant_random` still pass. fsci-spatial 227/227 green.
+
+With the scalar fixed, shipped `rotations_as_euler_many(rots, seq)` (was withheld last commit as it would have
+batched a wrong kernel): 4.08ms vs scipy 18.4ms at N=200k = **5x**, byte-identical to the scalar loop. This is a
+CORRECTNESS fix (fsci previously returned wrong Euler angles) plus a batch speedup.
