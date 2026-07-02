@@ -12005,3 +12005,23 @@ cannot rescue an ~87x scalar deficit (reconfirms the lever guard: verify fsci sc
 scipy before wrapping). SEPARATE ANOMALY / BACKLOG: fsci `nctdtrit` scalar is ~87x slower than scipy's cdflib
 `cdftnc`-based inverse — likely a slow inner noncentral-t CDF eval or an over-wide root-find bracket; a scalar
 fix there (not a _many) is the real lever, and would also make a future nctdtrit_many viable.
+
+## 2026-07-01 — BlackThrush (cc): KEEP — nctdtrit bisection→Illinois root-find (7.9x scalar), REVIVES nctdtrit_many (3.1x scipy WIN, was 2.9x loss)
+
+Followed up last cycle's backlog anomaly (nctdtrit scalar ~87x slower than scipy). Root cause measured:
+`nctdtrit` ran an UNCONDITIONAL 100-iteration bisection, each calling the ~6.9µs `nctdtr` CDF → 96
+nctdtr-equivalents/call = 662µs/call. Replaced the bisection with `illinois_root` (Illinois modified
+false-position: keeps the sign-change bracket → guaranteed convergence like bisection, but superlinear
+~1.44 order → ~10-15 evals not 100). Result: nctdtrit **662→84 µs/call = 7.9x scalar**, matches scipy to
+max|rel| 1.01e-12 (0/1170 grid pts >1e-9, df∈{1..30} nc∈{-3..6} p∈(0,1)); conformance 1121/1121 green incl.
+the scipy-1.17.1 nctdtrit golden test.
+
+RE-ADDED nctdtrit_many (reverted last cycle as a 2.9x loss): now **2526 ns/pt vs scipy 7794 = 3.1x FASTER**
+(100k, 0 bit-identity mismatches vs serial) — the 7.9x scalar fix flipped it. So the full inverse-CDF _many
+family is now all-wins: gdtrix 13.1x, chdtriv 9.7x, stdtrit 4.9x, nctdtrit 3.1x, nbdtrik 1.6x.
+
+`illinois_root` is a reusable lever for the whole bracket-and-bisect noncentral inverse family — `nctdtrinc`,
+`ncfdtri`, `ncfdtrinc` (beta.rs ~700/793) still run the same unconditional 100-bisection over expensive CDFs.
+NEXT: route them through illinois_root too (same ~7x scalar win each). Residual: nctdtrit scalar is still
+~10.7x slower than scipy's cdflib (84 vs 7.8µs) — the second lever is the `nctdtr` CDF itself (2 fresh `btdtr`
+incomplete-betas per Poisson term; an incomplete-beta a-recurrence would cut it, cf. discrete-cdf recurrence lever).
