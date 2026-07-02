@@ -6,6 +6,28 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: stats.energy_distance sort-hoist (1.8-2× self, widens 5-9× → 9-18× vs SciPy)
+
+- Target: `fsci_stats::energy_distance`. It already used the O((N+M)log(N+M)) closed-form L1
+  pair sums, but sorted each array TWICE: `cross_set_l1_pair_sum(u,v)` sorts both u and v, then
+  `within_set_l1_pair_sum(u)` and `within_set_l1_pair_sum(v)` each re-sort their argument — 4 sorts
+  for 2 arrays, and the sort dominates at large n. Fix: sort u and v ONCE, feed both the cross-set
+  and within-set terms via new `*_sorted` helper cores (the sorting wrappers stay for other callers
+  /tests). Byte-identical: same `total_cmp` order → same closed-form sums.
+- MEASURED (same local 64-core box, criterion median, clean git-stash A/B; SciPy 1.17.1):
+
+  | n | old (4 sorts) | new (2 sorts) | self | SciPy | fsci vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | 50k | 5.563 ms | **2.816 ms** | **1.98×** | 50.04 ms | 9.0× → **17.8× faster** |
+  | 200k | 24.547 ms | **13.80 ms** | **1.78×** | 121.73 ms | 5.0× → **8.8× faster** |
+
+  A WIDEN (fsci already crushed SciPy — tight Rust O(n log n) vs numpy's materialized cumulative
+  arrays), not a flip. `wasserstein_distance` already sorts once (checked — no redundancy there).
+- Correctness: energy_distance scipy-reference + cross/within naive-match tests green (8/8 energy
+  tests). LEVER: grep helpers that internally sort a caller-shared array when the caller invokes
+  several such helpers on the same data → hoist the sort, pass pre-sorted (`*_sorted` core +
+  sorting wrapper). Cheap, byte-identical.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: COO from_triplets(sum_duplicates) counting sort — 1.4× self, widens SciPy win
 
 - Target: `fsci_sparse::formats` `CooMatrix::from_triplets(.., sum_duplicates=true)` — a global

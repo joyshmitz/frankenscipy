@@ -26647,21 +26647,25 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
     let nu = u.len() as f64;
     let nv = v.len() as f64;
 
-    // E|X-Y|: mean of |u_i - v_j| over all pairs.
-    // Resolves [frankenscipy-ggmrw]: closed-form sweep on sorted u and v,
-    // O((N+M) log(N+M)) total instead of the previous O(N·M) double loop.
-    // For each sorted u_i with c = #{v_j ≤ u_i} and S = Σ_{v_j ≤ u_i} v_j,
-    //   Σ_j |u_i − v_j| = (2c − M)·u_i + S_total − 2·S.
-    let e_xy = cross_set_l1_pair_sum(u, v) / (nu * nv);
+    // Sort u and v ONCE and reuse for all three L1-pair-sum terms. The previous
+    // code re-sorted each array a second time (cross_set sorts both u and v, then
+    // each within_set re-sorted its argument — 4 sorts for 2 arrays); at large n
+    // the sort dominates, so this is ~2× on the hot path. Byte-identical: same
+    // total_cmp order feeds the same closed-form sums.
+    let mut su: Vec<f64> = u.to_vec();
+    su.sort_unstable_by(|a, b| a.total_cmp(b));
+    let mut sv: Vec<f64> = v.to_vec();
+    sv.sort_unstable_by(|a, b| a.total_cmp(b));
 
-    // E|X-X'|: mean of |u_i - u_j| over all pairs.
-    // Resolves [frankenscipy-6nuo5]: for sorted s of length n, the
-    // upper-triangle sum  Σ_{i<j} (s[j] - s[i])  has the closed form
-    //   Σ_i s[i] · (2i − n + 1)         (0-indexed)
-    // dropping the inner pair from O(N²) to O(N) after one O(N log N)
-    // sort.
-    let e_xx = within_set_l1_pair_sum(u) * 2.0 / (nu * nu);
-    let e_yy = within_set_l1_pair_sum(v) * 2.0 / (nv * nv);
+    // E|X-Y|: mean of |u_i - v_j| over all pairs, via the O((N+M)) sweep on the
+    // sorted inputs (frankenscipy-ggmrw). For each sorted u_i with c = #{v_j ≤ u_i}
+    // and S = Σ_{v_j ≤ u_i} v_j,  Σ_j |u_i − v_j| = (2c − M)·u_i + S_total − 2·S.
+    let e_xy = cross_set_l1_pair_sum_sorted(&su, &sv) / (nu * nv);
+
+    // E|X-X'|: mean of |u_i - u_j| over all pairs (frankenscipy-6nuo5): for sorted
+    // s of length n, Σ_{i<j}(s[j]-s[i]) = Σ_i s[i]·(2i − n + 1), O(N) after sort.
+    let e_xx = within_set_l1_pair_sum_sorted(&su) * 2.0 / (nu * nu);
+    let e_yy = within_set_l1_pair_sum_sorted(&sv) * 2.0 / (nv * nv);
 
     let d_sq = 2.0 * e_xy - e_xx - e_yy;
     if d_sq.is_nan() {
@@ -26680,7 +26684,11 @@ fn cross_set_l1_pair_sum(u: &[f64], v: &[f64]) -> f64 {
     su.sort_unstable_by(|a, b| a.total_cmp(b));
     let mut sv: Vec<f64> = v.to_vec();
     sv.sort_unstable_by(|a, b| a.total_cmp(b));
+    cross_set_l1_pair_sum_sorted(&su, &sv)
+}
 
+/// [`cross_set_l1_pair_sum`] on inputs already sorted ascending by `total_cmp`.
+fn cross_set_l1_pair_sum_sorted(su: &[f64], sv: &[f64]) -> f64 {
     let m = sv.len();
     let m_f = m as f64;
     let s_total_v: f64 = sv.iter().sum();
@@ -26688,7 +26696,7 @@ fn cross_set_l1_pair_sum(u: &[f64], v: &[f64]) -> f64 {
     let mut total = 0.0_f64;
     let mut j = 0_usize;
     let mut s_le_v = 0.0_f64;
-    for &ui in &su {
+    for &ui in su {
         while j < m && sv[j] <= ui {
             s_le_v += sv[j];
             j += 1;
@@ -26704,12 +26712,20 @@ fn cross_set_l1_pair_sum(u: &[f64], v: &[f64]) -> f64 {
 /// O(N²) double loop; used by energy_distance and any other test that
 /// needs the within-set L1 pair sum.
 fn within_set_l1_pair_sum(x: &[f64]) -> f64 {
-    let n = x.len();
-    if n < 2 {
+    if x.len() < 2 {
         return 0.0;
     }
     let mut sorted: Vec<f64> = x.to_vec();
     sorted.sort_unstable_by(|a, b| a.total_cmp(b));
+    within_set_l1_pair_sum_sorted(&sorted)
+}
+
+/// [`within_set_l1_pair_sum`] on an input already sorted ascending by `total_cmp`.
+fn within_set_l1_pair_sum_sorted(sorted: &[f64]) -> f64 {
+    let n = sorted.len();
+    if n < 2 {
+        return 0.0;
+    }
     let mut sum = 0.0_f64;
     let n_f = n as f64;
     for (i, &val) in sorted.iter().enumerate() {
