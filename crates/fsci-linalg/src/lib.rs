@@ -4056,6 +4056,57 @@ fn transpose_rows(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .collect()
 }
 
+/// Row-parallel matmul: splits the rows of `a` into contiguous blocks across
+/// threads, each block computed by the serial register-blocked [`matmul`] on its
+/// own row-slice, then concatenated in row order. Every `c[i][j]` is produced by
+/// the identical monotonic-k reduction as `matmul(a, b)`, so the result is
+/// BIT-IDENTICAL to the serial call — the rows are merely distributed. Gated on
+/// FLOP work so only genuinely large products fan out (small products — including
+/// any nested inside batch callers — reuse the serial kernel and never
+/// over-subscribe). Used by [`randomized_svd`], whose range-finder is dominated
+/// by a handful of large `m×n · n×l` products.
+fn par_matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let m = a.len();
+    if m == 0 || b.is_empty() {
+        return matmul(a, b);
+    }
+    let ka = a[0].len();
+    let n = b[0].len();
+    let work = (m as u64)
+        .saturating_mul(ka as u64)
+        .saturating_mul(n as u64);
+    // ~4M FMAs before parallelising; below this the serial register-blocked
+    // kernel wins (thread spawn ~tens of µs would dominate) and any matmul
+    // nested inside a batch `_many` caller (small per-item matrices) stays
+    // serial, avoiding oversubscription.
+    const PAR_MATMUL_WORK_GATE: u64 = 1 << 22;
+    if work < PAR_MATMUL_WORK_GATE || m < 64 {
+        return matmul(a, b);
+    }
+    let avail = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    // At least 32 rows per worker so each thread does substantial GEMM work.
+    let nthreads = (m / 32).clamp(1, avail);
+    if nthreads <= 1 {
+        return matmul(a, b);
+    }
+    let chunk = m.div_ceil(nthreads);
+    let block_results: Vec<Result<Vec<Vec<f64>>, LinalgError>> = std::thread::scope(|scope| {
+        a.chunks(chunk)
+            .map(|arows| scope.spawn(move || matmul(arows, b)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("par_matmul worker panicked"))
+            .collect()
+    });
+    let mut c = Vec::with_capacity(m);
+    for block in block_results {
+        c.extend(block?);
+    }
+    Ok(c)
+}
+
 /// Truncated SVD of `a` (m×n) via randomized range finding (Halko–Martinsson–Tropp).
 ///
 /// Returns the leading `k` singular triplet `(U: m×k, s: k descending, Vᵀ: k×n)`. The cost
@@ -4107,12 +4158,14 @@ pub fn randomized_svd(
         .map(|_| (0..l).map(|_| next_gauss()).collect())
         .collect();
 
-    // Range finder: Y = (A Aᵀ)^{n_iter} A Ω  (m×l), then orthonormalise.
+    // Range finder: Y = (A Aᵀ)^{n_iter} A Ω  (m×l), then orthonormalise. These are
+    // the dominant products (m×n · n×l), so they fan out across rows via the
+    // bit-identical `par_matmul`.
     let at = transpose_rows(a);
-    let mut y = matmul(a, &omega)?;
+    let mut y = par_matmul(a, &omega)?;
     for _ in 0..n_iter {
-        let aty = matmul(&at, &y)?; // n×l
-        y = matmul(a, &aty)?; // m×l
+        let aty = par_matmul(&at, &y)?; // n×l
+        y = par_matmul(a, &aty)?; // m×l
     }
     let q_full = qr(&y, opts)?.q;
     // Keep the first `l` orthonormal columns (qr may return a full m×m Q).
@@ -4121,11 +4174,13 @@ pub fn randomized_svd(
         .map(|row| row[..l.min(row.len())].to_vec())
         .collect();
 
-    // Project: B = Qᵀ A (l×n), then SVD the small matrix and lift U back.
-    let qt = transpose_rows(&q);
-    let b = matmul(&qt, a)?;
+    // Project: B = Qᵀ A (l×n), then SVD the small matrix and lift U back. Qᵀ A has
+    // only `l` rows (too few to fan out), so compute it as (Aᵀ Q)ᵀ — Aᵀ Q is n×l
+    // with n rows, so `par_matmul` parallelises it, and transposing is bit-identical
+    // to Qᵀ A (each entry is the same monotonic-k reduction).
+    let b = transpose_rows(&par_matmul(&at, &q)?);
     let svd_b = svd(&b, opts)?;
-    let u_full = matmul(&q, &svd_b.u)?; // m×min(l,n)
+    let u_full = par_matmul(&q, &svd_b.u)?; // m×min(l,n)
 
     let trunc = kk.min(svd_b.s.len());
     let u: Vec<Vec<f64>> = u_full

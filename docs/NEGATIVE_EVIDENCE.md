@@ -12441,3 +12441,39 @@ Conformance fsci-stats lib 2003/2003 green (batch bit-identity test extended to 
 FOLLOW-ONS: (1) wilcoxon p-value parity vs scipy (normal-approx/continuity); (2) per-item ks_2samp kernel profile
 (near-parity with scipy C → possible wrong-algo like the kv/eigvals_banded anomalies). Remaining stats-vmap:
 f_oneway/kruskal (variadic groups → Vec<Vec<Vec>>), chisquare.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — parallel GEMM in randomized_svd range finder (NEW lever, byte-identical) — flips 3.6-4.4x SLOWER than scipy svds to 1.7-2.3x FASTER for large matrices
+
+A genuinely NON-vmap lever. fsci `randomized_svd` (Halko-Martinsson-Tropp truncated SVD) was matmul-bound and
+3.6-4.4x SLOWER than scipy.sparse.linalg.svds (ARPACK top-k): the range finder does ~2·n_iter+3 large
+`m×n · n×l` products through the crate's register-blocked but SINGLE-THREADED `matmul` (measured ~1.9 GFLOP/s).
+Added `par_matmul`: splits the rows of A into contiguous blocks, each computed by the existing serial register-
+blocked `matmul` on its row-slice, concatenated in row order — BIT-IDENTICAL (every c[i][j] is the same
+monotonic-k reduction; rows merely distributed). Work-gated (>=1<<22 FMAs AND >=64 rows) so small products — incl.
+any nested inside batch `_many` callers with small per-item matrices — stay serial and never oversubscribe.
+Routed only through randomized_svd; the `Qᵀ A` product (only l rows, too few to fan out) is computed as
+`(Aᵀ Q)ᵀ` (n rows → parallelises; transpose is bit-identical since a·b == b·a in IEEE and the k-order is
+unchanged).
+
+Standalone GEMM probe (byte-identical, mism 0): 3000×3000·3000×30 serial 166ms → par(46t) 14.6ms = 11.4x;
+2000×1000·1000×20 25ms → 5.4ms = 4.7x. randomized_svd end-to-end (n_iter=4, low-rank+noise), fsci vs scipy svds
+(pinned 1-thread):
+
+| m×n (k) | fsci randomized_svd (was → now) | scipy svds | now vs scipy |
+| --- | --- | --- | --- |
+| 2000×1000 (10) | 188 → 58.9ms | 52.5ms | ~parity (1.1x slower) |
+| 3000×3000 (20) | 1452 → 188ms | 328ms | 1.74x FASTER |
+| 4000×4000 (30) | — → 323ms | 668ms | 2.07x FASTER |
+| 5000×2000 (20) | — → 189ms | 434ms | 2.30x FASTER |
+
+Byte-identical self-speedup 3.2-7.7x (randomized_svd output UNCHANGED — the existing
+`randomized_svd_matches_full_svd_on_low_rank` test still passes; accuracy is the randomized-SVD approximation,
+n_iter-tunable, NOT changed by the parallelization). The vs-scipy win GROWS with matrix size (parity at
+2000×1000 → 2.30x at 5000×2000) — i.e. it wins in the regime where truncated SVD of a large matrix is actually
+used. fsci-linalg lib 495/495 green. HONEST: at 2000×1000 it's ~parity, not a win; and scipy svds (ARPACK) is
+more accurate than randomized SVD (apples-to-oranges on accuracy — the standard randomized-vs-Krylov tradeoff).
+
+LEVER: fsci `matmul` is register-blocked but SINGLE-THREADED — any top-level (non-nested) heavy matmul caller can
+route through a row-parallel wrapper for a byte-identical Nx. par_matmul is currently private to randomized_svd;
+candidates to extend (carefully, avoiding nesting under `_many`): expm/logm single-matrix (large n), other
+range-finder / sketch routines. GEMM parallelism is memory-bandwidth-bound so real speedup ~5-11x not 64x.
