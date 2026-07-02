@@ -11831,3 +11831,24 @@ BOX CONTEXT: measured under load avg 20-26 / 80 concurrent build+bench procs —
 ~1.6-10x (pow2 rfft 2^19 read 20ms vs ~12ms quiet); FFT perf work here needs a QUIET box + same-binary atomic
 A/B. DEFERRED: the fsci-fft SoA-SIMD restructure is a genuine multi-cycle project for a dedicated quiet-box
 session, not a 60-min lever. Updated the arc map accordingly.
+
+## 2026-07-01 — BlackThrush (cc): KEEP — vectorized fresnel/sici/shichi/iti0k0/itj0y0/expn/poch `_many` (7-fn gapfill, up to 29.5x scipy)
+
+fsci exposed these sine/cosine + Bessel/Airy integral special functions only as SCALARS while SciPy's ufuncs
+are slow per-array. Added order-preserving parallel `_many` wrappers (crate `par_map_indices`, bit-identical to
+a serial map). Same-box benchmark, 2M points in [0,8]:
+
+| fn | scipy ufunc (ms) | fsci `_many` (ms) | ratio |
+|----|-----------------:|------------------:|------:|
+| fresnel | 120.3 | 9.7 | 12.4x |
+| sici    | 52.1  | 27.3 | 1.9x |
+| shichi  | 228.3 | 16.1 | 14.2x |
+| iti0k0  | 484.9 | 20.9 | 23.2x |
+| itj0y0  | 461.2 | 15.6 | 29.5x |
+| expn(2) | 402.2 | 16.7 | 24.1x |
+| poch    | 9.6   | 6.4  | 1.5x |
+
+fresnel_many 9.7ms vs 59.2ms fsci serial map = 6.1x self-speedup. Bit-identity vs serial: 0 mismatches across
+all 7 fns (2M pts). Conformance 1121/1121 green. Purely additive (new pub fns). Extends the special `_many`
+vein (Kelvin, struve, kv). itairy intentionally NOT wrapped — its scalar disagrees with SciPy.
+Bench: `cargo run -p fsci-special --release --bin <tmp>` (fsci) + scipy.special ufuncs, same 64-core box.

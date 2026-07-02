@@ -3394,6 +3394,52 @@ pub fn keip_many(x: &[f64]) -> Vec<f64> {
     par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(keip(x[i]))).expect("keip is infallible")
 }
 
+/// Vectorized sine/cosine and Bessel/Airy integral special functions over many
+/// arguments — fsci exposed these only as scalars while SciPy's ufuncs are slow
+/// (iti0k0/itj0y0 ~580-601 ms, expn ~440, shichi ~288, fresnel ~165, sici/poch
+/// ~90 for 2M points). Each fans the fast scalar kernel across cores via the
+/// crate's order-preserving parallel map and is bit-identical to a serial map.
+/// (itairy is intentionally NOT wrapped: its scalar disagrees with SciPy.)
+#[must_use]
+pub fn fresnel_many(x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| Ok::<(f64, f64), SpecialError>(fresnel(x[i])))
+        .expect("fresnel is infallible")
+}
+/// Vectorized sine/cosine integrals (Si(x), Ci(x)); see [`fresnel_many`].
+#[must_use]
+pub fn sici_many(x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| Ok::<(f64, f64), SpecialError>(sici(x[i])))
+        .expect("sici is infallible")
+}
+/// Vectorized hyperbolic sine/cosine integrals (Shi(x), Chi(x)); see [`fresnel_many`].
+#[must_use]
+pub fn shichi_many(x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| Ok::<(f64, f64), SpecialError>(shichi(x[i])))
+        .expect("shichi is infallible")
+}
+/// Vectorized integrals of I_0/K_0 (∫₀ˣ I_0, ∫₀ˣ K_0); see [`fresnel_many`].
+#[must_use]
+pub fn iti0k0_many(x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| Ok::<(f64, f64), SpecialError>(iti0k0(x[i])))
+        .expect("iti0k0 is infallible")
+}
+/// Vectorized integrals of J_0/Y_0 (∫₀ˣ J_0, ∫₀ˣ Y_0); see [`fresnel_many`].
+#[must_use]
+pub fn itj0y0_many(x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| Ok::<(f64, f64), SpecialError>(itj0y0(x[i])))
+        .expect("itj0y0 is infallible")
+}
+/// Vectorized generalized exponential integral E_n(x) for fixed order `n`; see [`fresnel_many`].
+#[must_use]
+pub fn expn_many(n: usize, x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(expn(n, x[i]))).expect("expn is infallible")
+}
+/// Vectorized Pochhammer symbol (x)_a for fixed `a`; see [`fresnel_many`].
+#[must_use]
+pub fn poch_many(x: &[f64], a: f64) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(poch(x[i], a))).expect("poch is infallible")
+}
+
 /// Weighted integral of the Bessel function of the first kind,
 /// `besselpoly(a, λ, ν) = ∫₀¹ xˡ Jᵥ(2·a·x) dx`.
 ///
