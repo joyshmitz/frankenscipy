@@ -13005,3 +13005,26 @@ Byte-identical to the fsci serial loop (0 stat/p mismatches, verified in the ext
 strongly (9.6x self) on top of the Python-overhead elimination. fsci-stats lib 2006/2006 green. ONE-SAMPLE GoF
 `_many` SET COMPLETE: normaltest/jarque_bera/shapiro/skewtest/kurtosistest/cramervonmises/kstest. Only `anderson`
 (returns a critical-value struct, not stat/p) is unbatched — deliberately, its result shape differs.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — anderson_many (Anderson-Darling vmap) — 252x FASTER than the scipy.stats.anderson loop; ONE-SAMPLE GoF _many SET FULLY COMPLETE
+
+The last one-sample GoF test. Earlier deferred (`anderson` returns `AndersonResult` = statistic + critical
+values, not stat/p) — but that's still a clean vmap, just a different result type. `scipy.stats.anderson` loops in
+Python (872ms over 3000 datasets). Added `anderson_many(datasets, dist)` → `Vec<AndersonResult>`. Correctness:
+fsci anderson EXACT vs scipy (stat 0.11455717624086503 + all 5 critical values [0.538,0.605,0.721,0.837,0.992]).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), 3000 datasets × 300 pts:
+
+| test | fsci serial → many | scipy loop | vs scipy |
+| --- | --- | --- | --- |
+| anderson | 37.75 → 3.46ms | 872ms | 252x |
+
+Byte-identical to the fsci serial loop (0 statistic mismatches + critical-value arrays equal, both paths).
+Anderson-Darling is heavy per item (sort + weighted-sum) → parallelism contributes 10.9x self. fsci-stats lib
+2006/2006 green. ONE-SAMPLE GoF `_many` SET FULLY COMPLETE: normaltest/jarque_bera/shapiro/skewtest/kurtosistest/
+cramervonmises/kstest/anderson.
+
+NOTE (fresh gap surfaced, not landed): `scipy.interpolate.RBFInterpolator(neighbors=k)` = 479ms PINNED (local RBF
+= KDTree + per-query k×k solve, parallel-friendly, NOT the LAPACK-wall of dense RBF) — fsci's `RbfInterpolator` is
+DENSE-only (capped at MAX_RBF_POINTS). The scalable neighbors-mode local RBF is a genuine feature gap + a
+substantial (~150-line, correctness-risky) implementation — a good dedicated-cycle target, not a quick win.

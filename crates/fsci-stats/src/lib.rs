@@ -32445,6 +32445,16 @@ pub fn kstest_many(datasets: &[Vec<f64>], target: KstestTarget<'_>) -> Vec<Goodn
     par_pair_index_map(datasets.len(), 128, |i| kstest(&datasets[i], target))
 }
 
+/// Vectorised Anderson-Darling [`anderson`] over `n` independent datasets against
+/// a shared distribution `dist` ("norm", "expon", …); see [`normaltest_many`].
+/// Each entry equals `anderson(&datasets[k], dist)` — statistic + the (n-dependent,
+/// data-independent) critical values. `scipy.stats.anderson` loops in Python; this
+/// runs the sort + weighted-sum kernel in parallel across datasets.
+#[must_use]
+pub fn anderson_many(datasets: &[Vec<f64>], dist: &str) -> Vec<AndersonResult> {
+    par_pair_index_map(datasets.len(), 128, |i| anderson(&datasets[i], dist))
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -84189,6 +84199,15 @@ mod tests {
             let ks0 = kstest(&datasets[i], target);
             assert_eq!(ks[i].statistic.to_bits(), ks0.statistic.to_bits());
             assert_eq!(ks[i].pvalue.to_bits(), ks0.pvalue.to_bits());
+        }
+
+        // anderson_many (returns AndersonResult: statistic + critical values).
+        let ad = anderson_many(&datasets, "norm");
+        assert_eq!(ad.len(), n);
+        for i in 0..n {
+            let a0 = anderson(&datasets[i], "norm");
+            assert_eq!(ad[i].statistic.to_bits(), a0.statistic.to_bits());
+            assert_eq!(ad[i].critical_values, a0.critical_values);
         }
     }
 
