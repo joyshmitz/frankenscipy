@@ -820,6 +820,26 @@ pub fn gdtrix(a: f64, b: f64, p: f64) -> f64 {
     gammaincinv(b, p) / a
 }
 
+/// Vectorized inverse gamma CDF w.r.t. `x`, `gdtrix(a, b, p)`, over many
+/// probabilities `p` for fixed `(a, b)`. SciPy's `gdtrix` ufunc is a
+/// single-threaded per-point root-find (~330 ns/pt); this fans the
+/// (bit-identical) fsci scalar across cores via the crate's order-preserving
+/// parallel map.
+#[must_use]
+pub fn gdtrix_many(a: f64, b: f64, p: &[f64]) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(gdtrix(a, b, p[i])))
+        .expect("gdtrix is infallible")
+}
+
+/// Vectorized inverse chi-square CDF w.r.t. degrees of freedom,
+/// `chdtriv(p, x)`, over many `p` for a fixed `x`. SciPy's ufunc is very slow
+/// here (~2 µs/pt); see [`gdtrix_many`].
+#[must_use]
+pub fn chdtriv_many(p: &[f64], x: f64) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(chdtriv(p[i], x)))
+        .expect("chdtriv is infallible")
+}
+
 /// Inverse gamma distribution CDF with respect to rate `a`.
 ///
 /// Matches `scipy.special.gdtria(p, b, x)`.

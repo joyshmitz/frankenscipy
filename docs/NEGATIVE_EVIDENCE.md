@@ -11958,3 +11958,27 @@ recomputes cv+coefficients per x). A correct `_many` would (a) fix the large-c c
 (b) hoist cv+coefficients out of the x-loop (they're x-independent) + parallelize — the vmap-over-shared-setup
 lever. Deferred: accuracy fix is the gate. NOTE the Sturm cv speedup (last commit) already lifted these via the
 shared `spheroidal_cv`. scipy pro_rad1 is only ~2.1µs/pt (thinner margin) — check its accuracy before pursuing.
+
+## 2026-07-01 — BlackThrush (cc): PARTIAL — parallel inverse-CDF _many wrappers (accuracy+scipy-cost MEASURED; throughput UNVERIFIED, bench interrupted)
+
+Added order-preserving parallel `_many` wrappers for 5 inverse-CDF (root-finding) special functions that had
+scalar-only fsci APIs: `stdtrit_many`, `nctdtrit_many`, `nbdtrik_many` (beta.rs), `gdtrix_many`, `chdtriv_many`
+(gamma.rs), re-exported at the crate root. Each fans the existing scalar across cores via the module's
+order-preserving `par_map_indices` (bit-identical to a serial map by construction — the same pattern verified
+0-mismatch across this campaign's besselpoly_many/ellipj_many/spheroidal/etc.).
+
+MEASURED (same box, 1M pts):
+- Accuracy fsci scalar vs scipy: gdtrix 4.5e-15, nctdtrit 6.6e-15, stdtrit 9.4e-14, chdtriv 2.2e-12,
+  nbdtrik 2.5e-11 — all accurate.
+- scipy single-threaded ufunc cost: stdtrit 302, gdtrix 326, chdtriv 1993, nctdtrit 7750 ns/pt.
+- fsci stdtrit SCALAR: 1657 ns/pt serial (i.e. ~5.5x SLOWER per-point than scipy's 302).
+
+HONEST CAVEAT / BLOCKER: the parallel `_many` throughput-vs-scipy ratio was NOT captured this cycle (the bench
+run was interrupted). Analysis from the measured serial cost: stdtrit_many is likely MARGINAL (~1.3x — the ~7x
+parallel fan barely overcomes the 5.5x scalar deficit vs scipy's fast cephes stdtrit). chdtriv_many /
+nctdtrit_many are likely LARGE wins (scipy 1993 / 7750 ns/pt is 6-25x slower than its own stdtrit, and if
+fsci's scalars there are not proportionally slower the parallel fan should flip decisively) — but fsci's scalar
+cost for those was not measured (probe stalled on the 1M nctdtrit serial map). Code is additive + accurate +
+safe regardless; NEXT CYCLE: measure `_many` throughput vs scipy per-fn (same box) and record ratios; drop or
+keep stdtrit_many based on its measured margin. LEVER GUARD reconfirmed: parallel-vs-single-threaded only wins
+when fsci's per-point scalar is not far slower than scipy's — verify the scalar ratio BEFORE claiming a _many win.

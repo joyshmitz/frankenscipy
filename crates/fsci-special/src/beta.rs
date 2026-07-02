@@ -1050,6 +1050,33 @@ pub fn stdtrit(v: f64, p: f64) -> f64 {
     sign * (v * (1.0 - z) / z).sqrt()
 }
 
+/// Vectorized inverse Student's-t CDF `stdtrit(v, p)` over many probabilities
+/// `p` for a fixed `v`. SciPy's `stdtrit` ufunc is a single-threaded per-point
+/// inverse-beta root-find (~300 ns/pt); this fans the (bit-identical) fsci
+/// scalar across cores via the crate's order-preserving parallel map.
+#[must_use]
+pub fn stdtrit_many(v: f64, p: &[f64]) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(stdtrit(v, p[i])))
+        .expect("stdtrit is infallible")
+}
+
+/// Vectorized inverse noncentral-t CDF `nctdtrit(df, nc, p)` over many `p` for
+/// fixed `(df, nc)`. SciPy's ufunc is especially slow here (~7.8 µs/pt); see
+/// [`stdtrit_many`].
+#[must_use]
+pub fn nctdtrit_many(df: f64, nc: f64, p: &[f64]) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(nctdtrit(df, nc, p[i])))
+        .expect("nctdtrit is infallible")
+}
+
+/// Vectorized inverse negative-binomial CDF w.r.t. successes, `nbdtrik(y, n, p)`,
+/// over many CDF values `y` for fixed `(n, p)`; see [`stdtrit_many`].
+#[must_use]
+pub fn nbdtrik_many(y: &[f64], n: f64, p: f64) -> Vec<f64> {
+    par_map_indices(y.len(), |i| Ok::<f64, SpecialError>(nbdtrik(y[i], n, p)))
+        .expect("nbdtrik is infallible")
+}
+
 /// Inverse Student's t distribution CDF with respect to degrees of freedom.
 ///
 /// Returns v such that P(T <= t) = p where T follows a Student's t
