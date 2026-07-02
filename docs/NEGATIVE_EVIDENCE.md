@@ -12108,3 +12108,25 @@ Conformance fsci-signal 665/665 green. LEVER: when a mature op has a fast sub-me
 top-level dispatcher never selects, add it to the cost-based method picker — the win is routing, not new math.
 FFT-kernel wall (fsci non-pow2 ~4x slower than pocketfft: fftconvolve 200k/512 still 43 vs scipy 10.85) stays
 the deferred multi-cycle SoA-SIMD project — OA routing sidesteps it for convolve/correlate.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — parallelize convolve/correlate DIRECT path (1.5-2.5x scipy, long-signal/small-kernel)
+
+Follow-on to last cycle's OA-routing: audited the OTHER branch of `convolve`. The direct (time-domain) path —
+taken for the long-signal / small-kernel regime where the FFT gate declines — was a SERIAL axpy, while scipy's
+`np.convolve`/`correlate` direct is also single-threaded. Parallelized it: fan the independent output cells
+across cores, each thread GATHERS `full[k]=Σ_i outer[i]·inner[k−i]` over increasing i — the SAME summation
+order as the serial scatter, so BYTE-IDENTICAL (0/40299 mismatches vs a naive-scatter reference), each cell
+written by one thread. Work-gated (serial below na·nb<2²⁰ or full_len<4096) so small inputs (all conformance
+cases) stay on the contiguous auto-vectorized scatter.
+
+Same box, direct regime: convolve **500k/64 2.97 vs scipy 5.64 = 1.9x; 1M/32 4.23 vs 9.46 = 2.2x; 200k/200
+3.28 vs 4.88 = 1.5x; 2M/16 6.87 vs 17.23 = 2.5x**. correlate benefits identically (delegates to convolve).
+Conformance fsci-signal 665/665 green. Together with last cycle's OA routing, the whole convolve/correlate
+family now beats scipy across regimes (direct 1.5-2.5x, OA 1.8-2.2x, full-FFT still the deferred non-pow2 wall).
+
+CYCLE ALSO CONFIRMED MATURE (measurement-first, don't re-hunt): csgraph johnson/eccentricity already parallel;
+stats-distribution pdf/cdf/ppf/sf/isf `_many` already parallel (par_continuous_map); signal axis-2d filters
+(sosfilt/filtfilt/lfilter) already fan across lines; RbfInterpolator.eval_many already parallel; convolve2d
+already BEATS scipy's direct-only convolve2d everywhere (3-14x), losing only to scipy fftconvolve at 512² k=31
+(the 2D non-pow2 FFT wall). LEVER RESTATED: audit each auto-dispatcher's chosen sub-path — if one branch (here
+the direct loop) is serial while its siblings parallelize, parallelize it (byte-id via gather in scatter order).

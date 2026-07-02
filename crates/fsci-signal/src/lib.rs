@@ -1063,10 +1063,49 @@ pub fn convolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>, Si
     let mut full = vec![0.0; full_len];
     let (outer, inner) = if na >= nb { (a, b) } else { (b, a) };
     let inner_len = inner.len();
-    for (i, &oi) in outer.iter().enumerate() {
-        for (d, &iv) in full[i..i + inner_len].iter_mut().zip(inner.iter()) {
-            *d += oi * iv;
+    let outer_len = outer.len();
+    // scipy's direct convolve is single-threaded; the direct regime here is the
+    // long-signal / small-kernel case (the FFT gate declined). Output cells are
+    // independent, so fan them across cores. Each thread GATHERS its outputs —
+    // full[k] = Σ_i outer[i]·inner[k−i] over increasing i — the SAME summation
+    // order as the serial scatter below, hence byte-identical, and each cell is
+    // written by exactly one thread. Gated so small inputs stay on the contiguous
+    // auto-vectorized scatter.
+    let work = (na as u64) * (nb as u64);
+    let nthreads = if work < (1 << 20) || full_len < 4096 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(full_len / 2048)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        for (i, &oi) in outer.iter().enumerate() {
+            for (d, &iv) in full[i..i + inner_len].iter_mut().zip(inner.iter()) {
+                *d += oi * iv;
+            }
         }
+    } else {
+        let chunk = full_len.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (c, out_chunk) in full.chunks_mut(chunk).enumerate() {
+                let k0 = c * chunk;
+                scope.spawn(move || {
+                    for (off, slot) in out_chunk.iter_mut().enumerate() {
+                        let k = k0 + off;
+                        let i_lo = k.saturating_sub(inner_len - 1);
+                        let i_hi = k.min(outer_len - 1);
+                        let mut acc = 0.0f64;
+                        for i in i_lo..=i_hi {
+                            acc += outer[i] * inner[k - i];
+                        }
+                        *slot = acc;
+                    }
+                });
+            }
+        });
     }
 
     match mode {
