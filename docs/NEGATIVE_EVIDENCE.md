@@ -13060,3 +13060,45 @@ Byte-identical to the fsci serial loop (0 statistic/pvalue mismatches on all fiv
 guard). Win magnitude tracks per-item cost: cheap tests (ttest_1samp/rel, bartlett) are dominated by Python
 overhead → ~1100x; heavy tests (levene's per-group centering, mood's joint rank) get 7-9x self-parallelism on top →
 150-250x. fsci-stats lib 2007/2007 green.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — solve_toeplitz_many (shared-predictor multi-RHS Levinson) — 9-18x FASTER than scipy, BYTE-IDENTICAL
+
+Genuinely different primitive from vmap: amortize-shared-factorization + parallel-across-RHS (like
+make_smoothing_spline selected-inverse / nnls incremental-Cholesky). MEASURED anomaly:
+`scipy.linalg.solve_toeplitz((c,r), B)` scales ~LINEARLY in the number of RHS columns — it re-runs the full
+O(n²) Levinson–Durbin recursion for EVERY column (n=3000: 1 rhs 10.95ms → 8 rhs 91.7ms → 32 rhs 370ms → 64 rhs
+763ms ≈ 12ms/rhs flat). But the Levinson forward/backward predictors (`f`, `bk`) depend ONLY on the Toeplitz
+coefficients `c`/`r`, NOT on the RHS — so they can be computed ONCE and shared.
+
+Added `solve_toeplitz_many(c, r, bs) -> Vec<Vec<f64>>`: runs the predictor recursion once, stores the per-step
+backward-predictor history, then runs each RHS's independent O(n²) x-update — fanned across cores (work-gated).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1):
+
+| n | k (rhs) | fsci many | fsci serial loop | scipy | vs scipy |
+| --- | --- | --- | --- | --- | --- |
+| 1500 | 32 | 9.77ms | 152.6ms | 90.2ms | 9x |
+| 1500 | 64 | 11.79ms | 312.4ms | 183.3ms | 16x |
+| 3000 | 32 | 43.12ms | 621.3ms | 370.1ms | 9x |
+| 3000 | 64 | 42.47ms | 1267.7ms | 762.9ms | 18x |
+
+BIT-IDENTICAL to looping single-RHS `solve_toeplitz` (0 mismatches, maxerr 0.0 across all cases — the shared
+predictor replays the exact same `bk` values in the exact same arithmetic order). Win scales with RHS count
+(more amortization + parallelism). Verified in `solve_toeplitz_many_matches_single_rhs_loop_bit_for_bit`
+(n=260 × 40 rhs, symmetric + non-symmetric + empty guard). fsci-linalg 496/496 + integration green.
+
+## 2026-07-02 — BlackThrush (cc): WALL (reverted) — lfilter order-1/order-2 parallel associative-scan is memory-bandwidth-bound
+
+Dug the alien-graveyard steer (parallel-prefix scan for linear recurrences). fsci ALREADY has a chunked
+associative-scan parallel `lfilter` on the `nfilt>=4` path (order-4: 13.45ms/4M vs scipy 19.97ms = 1.5x). The
+`nfilt<=3` low-order path (order-1 single-pole / order-2 biquad — the MOST common filters) is serial-only, so I
+routed it through the same scan. Result: order-1 at n=1M REGRESSED (4.58ms vs 4.27ms serial / 4.29ms scipy) and
+order-2 at 4M barely moved (18.10 vs 19.95ms). Low-order recurrences are ~2 flops/element = pure RAM streaming;
+the scan's 3x-flops + double memory traversal only breaks even. Same memory-bandwidth wall the nfilt>=4 path hits
+(only 1.5x for the same reason). REVERTED — not worth the numeric-non-identity for a marginal, regression-prone
+result. (Consistent with the cophenet/distance_matrix O(n²)-scatter memory-bound walls.)
+
+NEG (confirmed already-dominant this sweep, not re-chase): welch 12.5x / csd 14.3x / coherence 26.7x single-signal
+(all parallel-over-segments, all have `_axis_2d` multichannel variants); permutation_test / monte_carlo_test
+already parallel (thread-count-independent); solve_circulant 0.8ms (FFT, fast). solve_toeplitz single-RHS ≈ scipy
+parity (both O(n²) Levinson).

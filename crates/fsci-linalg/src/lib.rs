@@ -8489,6 +8489,149 @@ pub fn solve_toeplitz(c: &[f64], r: Option<&[f64]>, b: &[f64]) -> Result<Vec<f64
     Ok(x)
 }
 
+/// Solve a single Toeplitz system `T x = b` for *many* right-hand sides that share
+/// the same first column `c` and first row `r` (`r=None` ⇒ symmetric, `r=c`).
+///
+/// Equivalent to — and BIT-IDENTICAL to — calling [`solve_toeplitz`] once per `b`
+/// in `bs`, but the Levinson–Durbin **predictor recursion (forward/backward
+/// predictors `f`, `bk`) depends only on `c`/`r`, not on `b`** — so it is run ONCE
+/// and its per-step backward-predictor history is shared across every right-hand
+/// side; each rhs then contributes only its own O(n²) `x`-update, and those are
+/// independent so they run in parallel across cores.
+///
+/// `scipy.linalg.solve_toeplitz((c, r), B)` re-runs the full recursion for every
+/// column of `B` (its cost is linear in the number of columns), so this both saves
+/// the shared predictor work and fans the per-column solves across all cores.
+///
+/// Returns one solution vector per entry of `bs`, in order.
+pub fn solve_toeplitz_many(
+    c: &[f64],
+    r: Option<&[f64]>,
+    bs: &[Vec<f64>],
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let n = c.len();
+    let row = r.unwrap_or(c);
+    if row.len() != n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (n, row.len()),
+            b_len: n,
+        });
+    }
+    for b in bs {
+        if b.len() != n {
+            return Err(LinalgError::IncompatibleShapes {
+                a_shape: (n, n),
+                b_len: b.len(),
+            });
+        }
+    }
+    if bs.is_empty() {
+        return Ok(Vec::new());
+    }
+    if n == 0 {
+        return Ok(bs.iter().map(|_| Vec::new()).collect());
+    }
+
+    let t0 = c[0];
+    if t0 == 0.0 {
+        return Err(LinalgError::SingularMatrix);
+    }
+
+    // ---- Shared predictor recursion (rhs-independent), run ONCE. ----
+    // Store the POST-swap backward predictor `bk[0..=m]` at each step m so every
+    // rhs replays the exact same values in the exact same arithmetic order as the
+    // single-rhs `solve_toeplitz` loop → bit-identical. `bk_hist[m]` has length m+1.
+    let mut f = vec![0.0f64; n];
+    let mut bk = vec![0.0f64; n];
+    let mut f_tmp = vec![0.0f64; n];
+    let mut b_tmp = vec![0.0f64; n];
+    f[0] = 1.0 / t0;
+    bk[0] = 1.0 / t0;
+    let mut bk_hist: Vec<Vec<f64>> = Vec::with_capacity(n);
+    bk_hist.push(vec![1.0 / t0]);
+    for m in 1..n {
+        let mut ef = 0.0;
+        let mut eb = 0.0;
+        for j in 0..m {
+            ef += c[m - j] * f[j];
+            eb += row[j + 1] * bk[j];
+        }
+        let denom = 1.0 - ef * eb;
+        if denom == 0.0 {
+            return Err(LinalgError::SingularMatrix);
+        }
+        for i in 0..=m {
+            let fi = if i < m { f[i] } else { 0.0 };
+            let bi = if i == 0 { 0.0 } else { bk[i - 1] };
+            f_tmp[i] = (fi - ef * bi) / denom;
+            b_tmp[i] = (bi - eb * fi) / denom;
+        }
+        std::mem::swap(&mut f, &mut f_tmp);
+        std::mem::swap(&mut bk, &mut b_tmp);
+        bk_hist.push(bk[..=m].to_vec());
+    }
+
+    // ---- Per-rhs x-solve: independent, bit-identical to the single-rhs loop. ----
+    let bk_hist = &bk_hist;
+    let solve_one = move |b: &[f64]| -> Vec<f64> {
+        let mut x = vec![0.0f64; n];
+        x[0] = b[0] / t0;
+        for m in 1..n {
+            let mut ex = 0.0;
+            for j in 0..m {
+                ex += c[m - j] * x[j];
+            }
+            let theta = b[m] - ex;
+            let bkm = &bk_hist[m];
+            for (xi, &bki) in x[..=m].iter_mut().zip(bkm.iter()) {
+                *xi += theta * bki;
+            }
+        }
+        x
+    };
+
+    let k = bs.len();
+    // Each rhs solve is O(n²); gate parallelism on total work so tiny problems stay
+    // serial (byte-identical either way — results land in per-rhs ordered slots).
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let work = (n as u64).saturating_mul(n as u64).saturating_mul(k as u64);
+    let nthreads = if k < 2 || work < (1 << 22) || cores <= 1 {
+        1
+    } else {
+        cores.min(k)
+    };
+
+    if nthreads <= 1 {
+        return Ok(bs.iter().map(|b| solve_one(b)).collect());
+    }
+
+    let mut out: Vec<Vec<f64>> = Vec::with_capacity(k);
+    let chunk = k.div_ceil(nthreads);
+    let solve_ref = &solve_one;
+    let chunks: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let s0 = t * chunk;
+                if s0 >= k {
+                    return None;
+                }
+                let s1 = (s0 + chunk).min(k);
+                Some(scope.spawn(move || bs[s0..s1].iter().map(|b| solve_ref(b)).collect::<Vec<_>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("solve_toeplitz_many worker panicked"))
+            .collect()
+    });
+    for cr in chunks {
+        out.extend(cr);
+    }
+    Ok(out)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Matrix Property Checks
 // ══════════════════════════════════════════════════════════════════════
@@ -18992,6 +19135,45 @@ mod tests {
         for (g, ex) in x.iter().zip(&e) {
             assert!((g - ex).abs() < 1e-11, "toeplitz: {g} vs {ex}");
         }
+    }
+
+    #[test]
+    fn solve_toeplitz_many_matches_single_rhs_loop_bit_for_bit() {
+        // solve_toeplitz_many must be BIT-IDENTICAL to looping solve_toeplitz per
+        // rhs — the shared predictor recursion + parallel per-rhs solve changes
+        // nothing observable. n crosses the parallel work gate.
+        let mut s = 0x1234_5678_9abc_def1_u64;
+        let mut u = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+        };
+        let n = 260usize;
+        let mut c: Vec<f64> = (0..n).map(|_| u()).collect();
+        c[0] = c[0].abs() + n as f64; // diagonally dominant → non-singular minors
+        let mut r: Vec<f64> = (0..n).map(|_| u()).collect();
+        r[0] = c[0];
+        let bs: Vec<Vec<f64>> = (0..40).map(|_| (0..n).map(|_| u()).collect()).collect();
+
+        let many = solve_toeplitz_many(&c, Some(&r), &bs).expect("many");
+        assert_eq!(many.len(), bs.len());
+        for (mi, b) in many.iter().zip(&bs) {
+            let one = solve_toeplitz(&c, Some(&r), b).expect("single");
+            assert_eq!(mi.len(), one.len());
+            for (a, e) in mi.iter().zip(&one) {
+                assert_eq!(a.to_bits(), e.to_bits());
+            }
+        }
+        // Symmetric case (r=None) + empty-input guard.
+        let sym = solve_toeplitz_many(&c, None, &bs).expect("sym");
+        for (mi, b) in sym.iter().zip(&bs) {
+            let one = solve_toeplitz(&c, None, b).expect("single sym");
+            for (a, e) in mi.iter().zip(&one) {
+                assert_eq!(a.to_bits(), e.to_bits());
+            }
+        }
+        assert!(solve_toeplitz_many(&c, Some(&r), &[]).unwrap().is_empty());
     }
 
     #[test]
