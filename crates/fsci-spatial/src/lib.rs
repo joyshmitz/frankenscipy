@@ -7780,6 +7780,22 @@ pub fn rotations_as_rotvec_many(rotations: &[Rotation]) -> Vec<[f64; 3]> {
     })
 }
 
+/// Compose `a[i] * b[i]` for every `i` (elementwise rigid-transform composition),
+/// matching `scipy.spatial.transform.RigidTransform.__mul__` on two equal-length
+/// transform stacks.
+///
+/// Byte-identical to `a.iter().zip(b).map(|(x, y)| x.compose(y))`, fanned across
+/// cores. Like the `Rotation` stack, SciPy composes via a Python-wrapped `numpy`
+/// path whose per-element overhead dominates the ~40-flop work.
+#[must_use]
+pub fn rigid_transforms_compose_many(
+    a: &[RigidTransform],
+    b: &[RigidTransform],
+) -> Vec<RigidTransform> {
+    assert_eq!(a.len(), b.len(), "rigid_transforms_compose_many: length mismatch");
+    rotation_par_index_map(a.len(), ROTATION_BATCH_GATE, |i| a[i].compose(&b[i]))
+}
+
 impl RigidTransform {
     /// The identity transform (no rotation, no translation).
     #[must_use]
@@ -11772,6 +11788,36 @@ mod tests {
         for i in 0..8 {
             assert_eq!(sm[i].as_quat(), small_a[i].multiply(&small_b[i]).as_quat());
         }
+    }
+
+    #[test]
+    fn rigid_transforms_compose_many_matches_scalar_loop_bit_for_bit() {
+        // rigid_transforms_compose_many must be byte-identical to the scalar
+        // per-element compose loop. n crosses ROTATION_BATCH_GATE.
+        let mut s: u64 = 0xD1B5_4A32_D192_ED03;
+        let mut u = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / 9.007_199_254_740_992e15 * 2.0 - 1.0
+        };
+        let mk = |u: &mut dyn FnMut() -> f64| {
+            let mut q = [u(), u(), u(), u()];
+            let nn = (q.iter().map(|v| v * v).sum::<f64>()).sqrt();
+            for v in &mut q {
+                *v /= nn;
+            }
+            RigidTransform::from_components([u(), u(), u()], Rotation::from_quat(q))
+        };
+        let n = 40_000usize;
+        let a: Vec<RigidTransform> = (0..n).map(|_| mk(&mut u)).collect();
+        let b: Vec<RigidTransform> = (0..n).map(|_| mk(&mut u)).collect();
+        let c = rigid_transforms_compose_many(&a, &b);
+        assert_eq!(c.len(), n);
+        for i in 0..n {
+            assert_eq!(c[i].as_matrix(), a[i].compose(&b[i]).as_matrix());
+        }
+        assert!(rigid_transforms_compose_many(&[], &[]).is_empty());
     }
 
     #[test]

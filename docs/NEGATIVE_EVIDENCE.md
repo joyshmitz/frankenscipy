@@ -13179,3 +13179,19 @@ NEG (measured this sweep, not shipped): `inv` 0.79ms / `mean` 1.23ms / `reduce` 
 compose 94.3ms is a genuine target but fsci's `RigidTransform` is scalar and lacks a batch stack type — a larger
 feature add (deferred). Rotation batch set now: multiply/from_matrix/as_euler/from_euler/as_rotvec (5 ops,
 13-33x).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — rigid_transforms_compose_many — 20x FASTER than scipy RigidTransform compose
+
+The `RigidTransform` compose gap noted last cycle turned out NOT to need a new batch stack type — fsci's scalar
+`RigidTransform::compose` already matches scipy's `RigidTransform.__mul__` (verified via 4×4 matrix: worst
+2.22e-15 over 200 random transform pairs, `from_components(translation, rotation)` signature matches scipy 1.17),
+so a batch free function over slices of the existing scalar type wins directly.
+
+Added `rigid_transforms_compose_many(a, b)` (parallel index-map, work-gated, byte-identical to the scalar loop).
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), N=200k: 4.66ms vs scipy 94.3ms = **20x**, 0 mismatches vs the
+scalar `compose` loop (`rigid_transforms_compose_many_matches_scalar_loop_bit_for_bit`). fsci-spatial 228/228 green.
+
+BATCH TRANSFORM SET (this arc): Rotation multiply/from_matrix/as_euler/from_euler/as_rotvec (13-33x) +
+RigidTransform compose (20x) + the as_euler correctness fix. Remaining transform ops measured scipy-already-fast
+(inv/mean/reduce/from_rotvec/magnitude, RigidTransform.apply 5.71ms vectorized) — batch vein for the transform
+module is now worked out.
