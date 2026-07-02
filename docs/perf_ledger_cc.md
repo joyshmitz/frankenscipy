@@ -2428,3 +2428,17 @@ median/percentile filters 20-35x FASTER (wins). Gaps: binary_erosion 1.35x, dist
 1.51x. cdt interior chamfer iterated all 8 offsets w/ sign branch (used 4); pre-split fwd/bwd → byte-identical
 ~1.10x (same-binary A/B) but STILL 1.33x vs scipy (offset iter not dominant; strided neighbour reads + raster
 stepping = C-chamfer/memory wall). Reverted (near-zero + no scipy beat). See docs/NEGATIVE_EVIDENCE.md.
+
+### 2026-07-01 (AmberKestrel, cc) — eigvals_banded: wrong-tool Lanczos → dense values-only, 4.3x self (fixes pathological anomaly)
+Broad scipy sweep found the biggest gap vs ORIG: **eigvals_banded(1500,bw3) = 3097ms, 90x SLOWER than scipy
+(34.3ms) AND 3.5x SLOWER than fsci's own eig_banded (896ms, values+VECTORS)** — an absurd inversion.
+ROOT CAUSE: eig_banded's eigvals_only path called symmetric_lower_band_lanczos_eigenvalues — LANCZOS to compute
+ALL n eigenvalues (Lanczos targets k≪n; all-n drives full reorthogonalization → pathologically slow + less
+accurate; wrong tool). FIX: route eigvals_only through the SAME dense reduction the eigenvector path uses,
+minus eigenvector accumulation (nalgebra symmetric_eigenvalues, ascending total_cmp = scipy convention).
+RESULT: **3097 → 713.6ms = 4.3x self**; anomaly fixed (713 < eig_banded 874, values-only now correctly
+cheaper). Conformance GREEN (10/10 eig_banded/eigvals_banded tests incl. eigvals_banded_matches_scipy_
+pentadiagonal + eig_banded_lanczos_values_match_dense_reference; matches dense/scipy to tolerance). Dead
+Lanczos cluster (8 fns) marked #[allow(dead_code)] (still exercised by the values-match test). STILL 20x vs
+scipy (dense O(n³) vs banded O(n²·bw)) — the scipy-PARITY follow-on is a real band→tridiagonal reduction
+(dsbtrd), a dedicated numerical task. This ships the bug fix + 4.3x; dsbtrd flagged for a future cycle.
