@@ -5084,6 +5084,29 @@ pub fn modstruve_scalar(v: f64, x: f64) -> f64 {
     modstruve(v, x)
 }
 
+/// Vectorized Struve function H_v(x) for a fixed order `v` over many arguments.
+///
+/// Matches `scipy.special.struve(v, x)` for scalar `v` and an array `x`. fsci
+/// previously exposed only the scalar `struve`; SciPy's vectorized struve ufunc
+/// is remarkably slow (~5 µs/point — 10.5 s for 2M points) because it drives a
+/// per-point series/integral, whereas fsci's scalar kernel is ~47 ns. Fanning
+/// that kernel across cores via the crate's order-preserving parallel map is a
+/// ~500× win and fills the missing vectorized API. Bit-identical to a serial
+/// `x.iter().map(|&xi| struve(v, xi))` (each element is an independent, pure call).
+#[must_use]
+pub fn struve_many(v: f64, x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(struve(v, x[i])))
+        .expect("struve is infallible (NaN on out-of-domain, never Err)")
+}
+
+/// Vectorized modified Struve function L_v(x) for a fixed order `v` over many
+/// arguments. Matches `scipy.special.modstruve(v, x)`; see [`struve_many`].
+#[must_use]
+pub fn modstruve_many(v: f64, x: &[f64]) -> Vec<f64> {
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(modstruve(v, x[i])))
+        .expect("modstruve is infallible (NaN on out-of-domain, never Err)")
+}
+
 /// Compute the Debye function D_n(x) = (n/x^n) ∫₀ˣ t^n/(e^t - 1) dt.
 ///
 /// Matches `scipy.special.debye` for n=1,2,3,4.

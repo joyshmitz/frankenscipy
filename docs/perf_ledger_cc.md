@@ -2456,3 +2456,16 @@ v=0.5..5.5 × z=0.3..50 (more accurate than the quadrature it replaces). 1121/11
 all half-integer kv AND kve (shares kv_scaled_value). General non-integer v still uses the quadrature (a K_v
 continued-fraction is the follow-on, cf. the wofz CF lever). LEVER: half-integer Bessel (jv/yv/iv/kv/spherical)
 → closed-form recurrence beats general quadrature; grep special kernels routing to fixed-step quadrature.
+
+### 2026-07-01 (AmberKestrel, cc) — struve_many / modstruve_many: vectorized Struve gapfill, 1206x faster than scipy
+Broad scipy.special sweep confirmed fsci DOMINATES everywhere (yv 8.5-91x, hyp 4.6-6.3x, gammaincinv 18x,
+betaincinv 15x, lambertw 39x, airy 6.5x, ellip 14-19x, erfcx/dawsn 6-8x FASTER). ONE gap: **fsci had only
+SCALAR struve** (`struve(v,x)->f64`) while scipy.special.struve is a vectorized ufunc — and scipy's is
+pathologically slow (**10490ms for 2M points = 5.2µs/point**, per-point series/integral). fsci's struve_scalar
+is ~47ns/point and correct (6.9e-10 vs scipy). GAPFILL: added `struve_many(v, x)` + `modstruve_many` — fan the
+scalar kernel across cores via the crate's order-preserving par_map_indices (non-breaking; the bare `struve`
+scalar + internal callers untouched). RESULT: struve_many(1) 2M **8.7ms vs scipy 10490.8ms = 1206x FASTER**;
+byte-identical to serial struve (0 mismatches), matches scipy to 6.9e-10. 1121/1121 special tests green.
+LEVER: a scalar-only fsci special fn whose scipy peer is a SLOW vectorized ufunc → add a parallel vectorized
+wrapper (par_map over the fast scalar kernel) = huge gapfill win. grep fsci-special for `_scalar`-only fns
+with no tensor sibling.
