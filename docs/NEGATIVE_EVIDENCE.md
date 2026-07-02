@@ -32,12 +32,12 @@ ledger above so the project has one source of truth.
   builds operands past the gate and asserts `indptr`/`indices` equal and `data`
   **bit-identical** (`to_bits()`) to an independent serial naive-triple-loop reference;
   10/10 construct kron tests green, `cargo check -p fsci-sparse` clean.
-- HONEST CAVEAT: the post-change release criterion re-measure was interrupted before it
-  finished, so the widened multicore number is not captured here. The change is
-  byte-identical and monotone by construction (parallel fill of an independent-per-row loop,
-  gated to trigger only when it amortizes spawn), so it cannot regress the 25.16 ms serial
-  baseline and only widens the already-measured 1.74× win vs `scipy` CSR. Re-measure on next
-  bench window to log the exact multicore figure.
+- POST-CHANGE MEASURED (2026-07-02, same box/config, criterion median): fsci `kron`
+  **14.60 ms** (was 25.16 ms serial ⇒ **1.72× self-speedup**). Head-to-head now:
+  **2.99× FASTER** than `scipy.sparse.kron(format='csr')` (43.70 ms), and **parity** with
+  `scipy.sparse.kron` default COO (14.58 ms) — the parallel fill FLIPPED the COO framing
+  from a 1.7× loss to parity and widened the CSR-framing win from 1.74× to 2.99×. fsci now
+  wins-or-ties SciPy in both framings.
 - LEVER (transferable): the same "serial construction over independent output rows +
   single-threaded SciPy peer → parallel pre-sized disjoint-slice fill" pattern that flipped
   the linalg structured constructors applies to sparse constructors; `kron_via_coo`,
