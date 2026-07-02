@@ -11882,3 +11882,16 @@ REJECTED: pbdv's scipy ufunc is already fast (19 ns/pt) and fsci's pbvv scalar D
 (fsci 1.16e5 vs scipy 4.3e261 @x=-8) — would be a wrong "win". LEVER (reconfirmed): grep fixed-step
 Simpson/Gauss `for i in 0..steps` inside special-fn scalar kernels → term-by-term series with incremental
 recurrence; gate by cancellation domain, keep quadrature fallback.
+
+## 2026-07-01 — BlackThrush (cc): KEEP — besselpoly_many (61.7x scipy; scalar series already 3.3x faster serial)
+
+Gapfill: fsci exposed `besselpoly(a,λ,ν)` only as a scalar. Its convergent term-by-term series is already
+~3.3x faster than SciPy's cephes ufunc even single-threaded (fsci serial 202.7ms vs scipy 671.3ms for 2M pts,
+a∈[0,3], λ=2, ν=3), so the order-preserving parallel `besselpoly_many(a:&[f64], λ, ν)` fan is a large win:
+**10.88ms = 61.7x faster than scipy**, 18.6x its own serial map, 0 bit-identity mismatches vs serial, fsci
+scalar matches scipy to 1.67e-15. Conformance 1121/1121 green. Purely additive.
+
+FOUND (deferred to next commit): `mathieu_a(1,q)` fsci scalar is **~51 µs/pt = ~226x SLOWER than scipy's
+225 ns/pt** — it builds a growing symmetric-tridiagonal matrix and computes ALL eigenvalues to pick one
+(orthopoly.rs `symmetric_tridiagonal_eigenvalues`). Accurate (rel 6.2e-14 vs scipy) but the wrong algorithm;
+even parallel `_many` can't beat scipy. Fix = selective single-eigenvalue Sturm-sequence bisection.

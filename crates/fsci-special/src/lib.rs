@@ -55,6 +55,7 @@ pub use convenience::{
     berp_many,
     berp_zeros,
     besselpoly,
+    besselpoly_many,
     // Convenience wrappers
     betaincinv,
     betaincinv_scalar,
