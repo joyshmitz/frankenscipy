@@ -1237,26 +1237,51 @@ fn next_regular_fft_len(n: usize) -> usize {
     if n <= 2 {
         return n.max(1);
     }
+    // For SMALL transforms (fit in cache) the minimal-point even-5-smooth length
+    // is fastest — radix-3/5 stages are cheap when the data stays resident. But
+    // for LARGE transforms fsci's mixed-radix per-point cost rises sharply with
+    // the number of radix-3/5 stages (their non-pow2 strides thrash cache), so a
+    // length with a bigger power-of-2 factor is far faster even at a few more
+    // points — e.g. n≈200 511 pads to 202 500 = 2²·3⁴·5⁴ (8.3 ms rfft) under the
+    // minimal rule but 204 800 = 2¹³·5² costs only 2.5 ms (same magnitude, 3.4×
+    // faster). So above a cache-size threshold pick the length minimising an
+    // fsci-cost model `L·(1 + 0.05·#{radix-3/5 stages})` instead of raw minimal.
+    // (Any even-5-smooth length ≥ n yields the same linear convolution after
+    // trimming; this only changes FFT round-off.)
+    let large = n >= 32_768;
     let mut best = usize::MAX;
+    let mut best_cost = f64::INFINITY;
     let mut p5 = 1usize;
+    let mut c = 0u32; // power of 5 in p5
     while p5 < n.saturating_mul(2) {
         let mut p35 = p5;
+        let mut b = 0u32; // power of 3 in p35
         while p35 < n.saturating_mul(2) {
             // q = p35 · 2^a, a ≥ 1 (force even), grown until ≥ n.
             let mut q = p35.saturating_mul(2);
             while q < n {
                 q = q.saturating_mul(2);
             }
-            best = best.min(q);
+            if large {
+                let cost = (q as f64) * (1.0 + 0.05 * f64::from(b + c));
+                if cost < best_cost {
+                    best_cost = cost;
+                    best = q;
+                }
+            } else {
+                best = best.min(q);
+            }
             if p35 > n {
                 break;
             }
             p35 = p35.saturating_mul(3);
+            b += 1;
         }
         if p5 > n {
             break;
         }
         p5 = p5.saturating_mul(5);
+        c += 1;
     }
     best
 }

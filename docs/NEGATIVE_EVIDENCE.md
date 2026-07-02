@@ -12178,3 +12178,25 @@ that needs a QUIET box for trustworthy same-process A/B (per AmberKestrel 2026-0
 RECOMMENDATION: next cycle either (a) commit a dedicated fsci-fft SoA-SIMD restructure session on a quiet box,
 or (b) treat the port as complete on accessible levers and shift to breadth (new scipy API surface / missing
 deterministic functions) rather than perf. No risky non-winning fft-partial shipped this cycle.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — next_regular_fft_len cost-aware for large N (flips fftconvolve/convolve at odd-factor-heavy lengths; 100k×100k 2.2x LOSS → 1.05x WIN). CORRECTS the "5-smooth always beats pow2" memory.
+
+Fresh fsci-fft-vs-numpy sweep (best-of-2000) OVERTURNS the blanket "non-pow2 = 3.6x wall": fsci rfft/fft cost
+is dominated by FACTORIZATION, not size. Large-pow2 lengths are competitive-or-FASTER than numpy (rfft 262144=2¹⁸
+2.40 vs numpy 3.04ms; 1048576=2²⁰ 12.8 vs 15.3), but odd-factor-heavy 5-smooth lengths are ~3.4x slower
+(rfft 202500=2²·3⁴·5⁴ **8.31ms** vs 204800=2¹³·5² **2.46ms** vs 262144 2.40ms — same magnitude, 3.4x apart;
+the radix-3/5 stages thrash cache with few radix-2 stages to interleave). `next_regular_fft_len` (used by
+fftconvolve/convolve2d) returned the MINIMAL even-5-smooth, which for n≈200 511 is the bad 202500.
+
+FIX: for n ≥ 32 768 (above cache), pick the even-5-smooth length minimising `L·(1 + 0.05·#{radix-3/5 stages})`
+instead of raw minimal — favours a bigger power-of-2 factor (e.g. 199 999 → 204 800 not 202 500). Small n keeps
+the minimal-points rule (cache-fit: fewer points wins, odd radix cheap — this is why the OLD memory saw 5-smooth
+beat pow2; it only holds below cache). Any even-5-smooth L ≥ full_len gives the same convolution (result diff
+0.00 vs convolve). Same box: **fftconvolve 100k×100k 25.2ms(last cycle)→10.81ms, flips 2.2x SLOWER → 1.05x
+FASTER than scipy** (11.31ms); improves every large full-FFT convolution that landed on an odd-heavy length. No
+regression (small-n path byte-identical; the minimality test uses n≤16384 < threshold). Conformance 665/665.
+
+HONEST: PARTIAL — medium sizes on already-good factorizations still lose to scipy's kernel/overhead (60k×60k
+6.14 vs 1.96; 250k×200k 41 vs 28) — the residual is the SoA-SIMD constant (deferred). But the odd-heavy-length
+penalty (a length-SELECTION bug, not the kernel) is now fixed. Lever: fsci-fft cost ∝ radix-3/5 stage count at
+large N — any FFT-length chooser should penalise odd factors above cache, not just minimise points.
