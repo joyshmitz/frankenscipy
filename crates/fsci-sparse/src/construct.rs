@@ -299,6 +299,23 @@ pub fn block_diag(matrices: &[&CsrMatrix]) -> SparseResult<CsrMatrix> {
     })?;
     let shape = Shape2D::new(total_rows, total_cols);
 
+    // Fast path: when every block is already canonical (sorted + deduplicated), the
+    // block-diagonal output is canonical by construction — block `b` occupies the
+    // disjoint output rows `[row_offset_b .. +rows_b)` and columns
+    // `[col_offset_b .. +cols_b)`, so each output row is exactly one block row with
+    // its columns shifted right by `col_offset_b` (order preserved ⇒ still sorted).
+    // Build the CSR directly (skipping the COO triplets + the O(nnz log nnz)/O(nnz)
+    // `to_csr` pass) and fill it in parallel across blocks, which write disjoint
+    // slices. Byte-identical to the COO path's `sorted_unique_coo_to_csr` result
+    // (same values, same positions, same canonical meta). SciPy's `sparse.block_diag`
+    // routes through COO stacking and is single-threaded, so this is a clean win.
+    if matrices.iter().all(|m| {
+        let c = m.canonical_meta();
+        c.sorted_indices && c.deduplicated
+    }) {
+        return block_diag_canonical_csr(matrices, shape);
+    }
+
     let mut rows = Vec::new();
     let mut cols = Vec::new();
     let mut data = Vec::new();
@@ -323,6 +340,107 @@ pub fn block_diag(matrices: &[&CsrMatrix]) -> SparseResult<CsrMatrix> {
 
     let coo = CooMatrix::from_triplets(shape, data, rows, cols, false)?;
     coo.to_csr()
+}
+
+/// Direct canonical-CSR construction for [`block_diag`] when all blocks are
+/// canonical (see the fast-path comment there). `indptr` is built serially
+/// (O(total_rows), cheap); the `indices`/`data` fill fans across blocks — each
+/// block owns a disjoint, pre-sized nnz slice — gated by [`kron_fill_threads`].
+fn block_diag_canonical_csr(matrices: &[&CsrMatrix], shape: Shape2D) -> SparseResult<CsrMatrix> {
+    let total_rows = shape.rows;
+    let nblocks = matrices.len();
+    let mut col_offsets = Vec::with_capacity(nblocks);
+    let mut nnz_offsets = Vec::with_capacity(nblocks);
+    let mut col_acc = 0usize;
+    let mut nnz_acc = 0usize;
+    for &mat in matrices {
+        col_offsets.push(col_acc);
+        nnz_offsets.push(nnz_acc);
+        col_acc += mat.shape().cols;
+        nnz_acc += mat.nnz();
+    }
+    let total_nnz = nnz_acc;
+
+    // Global indptr: each block contributes its per-row nnz in output-row order.
+    let mut indptr = Vec::with_capacity(total_rows + 1);
+    indptr.push(0usize);
+    let mut acc = 0usize;
+    for &mat in matrices {
+        let bp = mat.indptr();
+        for i in 0..mat.shape().rows {
+            acc += bp[i + 1] - bp[i];
+            indptr.push(acc);
+        }
+    }
+
+    let nthreads = kron_fill_threads(total_rows, total_nnz);
+
+    let (data, indices) = if nthreads <= 1 {
+        let mut data = Vec::with_capacity(total_nnz);
+        let mut indices = Vec::with_capacity(total_nnz);
+        for (b, &mat) in matrices.iter().enumerate() {
+            let co = col_offsets[b];
+            data.extend_from_slice(mat.data());
+            indices.extend(mat.indices().iter().map(|&ix| co + ix));
+        }
+        (data, indices)
+    } else {
+        let mut data = vec![0.0f64; total_nnz];
+        let mut indices = vec![0usize; total_nnz];
+        // Contiguous, nnz-balanced block bands so uneven block sizes still split
+        // the fill work evenly.
+        let target = total_nnz.div_ceil(nthreads).max(1);
+        let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(nthreads);
+        let mut start = 0usize;
+        while start < nblocks {
+            let base = nnz_offsets[start];
+            let mut end = start + 1;
+            while end < nblocks && nnz_offsets[end] - base < target {
+                end += 1;
+            }
+            ranges.push((start, end));
+            start = end;
+        }
+        let mut idx_rest: &mut [usize] = &mut indices;
+        let mut dat_rest: &mut [f64] = &mut data;
+        type FillJob<'a> = (usize, usize, &'a mut [usize], &'a mut [f64]);
+        let mut jobs: Vec<FillJob<'_>> = Vec::with_capacity(ranges.len());
+        for &(b0, b1) in &ranges {
+            let band_nnz = if b1 < nblocks {
+                nnz_offsets[b1]
+            } else {
+                total_nnz
+            } - nnz_offsets[b0];
+            let (ih, it) = idx_rest.split_at_mut(band_nnz);
+            let (dh, dt) = dat_rest.split_at_mut(band_nnz);
+            idx_rest = it;
+            dat_rest = dt;
+            jobs.push((b0, b1, ih, dh));
+        }
+        let col_offsets_s: &[usize] = &col_offsets;
+        std::thread::scope(|scope| {
+            for (b0, b1, mut idx_slice, mut dat_slice) in jobs {
+                scope.spawn(move || {
+                    for b in b0..b1 {
+                        let mat = matrices[b];
+                        let bn = mat.nnz();
+                        let co = col_offsets_s[b];
+                        let (this_idx, rest_idx) = idx_slice.split_at_mut(bn);
+                        let (this_dat, rest_dat) = dat_slice.split_at_mut(bn);
+                        this_dat.copy_from_slice(mat.data());
+                        for (dst, &src) in this_idx.iter_mut().zip(mat.indices()) {
+                            *dst = co + src;
+                        }
+                        idx_slice = rest_idx;
+                        dat_slice = rest_dat;
+                    }
+                });
+            }
+        });
+        (data, indices)
+    };
+
+    CsrMatrix::from_components(shape, data, indices, indptr, true)
 }
 
 /// Construct a sparse matrix from a block layout of sparse matrices.
@@ -1300,6 +1418,72 @@ mod tests {
         let result = block_diag(&[&a]).expect("block_diag single");
         assert_eq!(result.shape(), Shape2D::new(3, 3));
         assert_eq!(result.nnz(), 3);
+    }
+
+    #[test]
+    fn block_diag_canonical_parallel_is_byte_identical_to_reference() {
+        // Many canonical blocks, total_nnz past the parallel gate: the direct-CSR
+        // fast path (parallel across blocks) must reproduce the block-diagonal
+        // emission order exactly, bit-for-bit.
+        fn canonical_csr(rows: usize, cols: usize, per_row: usize, seed: u64) -> CsrMatrix {
+            let mut state = seed;
+            let mut next = || {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (state >> 33) as usize
+            };
+            let mut data = Vec::new();
+            let mut indices = Vec::new();
+            let mut indptr = vec![0usize];
+            for _ in 0..rows {
+                let mut cs: Vec<usize> = (0..per_row).map(|_| next() % cols).collect();
+                cs.sort_unstable();
+                cs.dedup();
+                for &c in &cs {
+                    indices.push(c);
+                    data.push(((next() % 1000) as f64) + 1.0);
+                }
+                indptr.push(indices.len());
+            }
+            CsrMatrix::from_components(Shape2D::new(rows, cols), data, indices, indptr, false)
+                .expect("canonical csr")
+        }
+
+        let blocks: Vec<CsrMatrix> = (0..1500)
+            .map(|i| canonical_csr(40, 40, 6, 0xABCD_0001 ^ (i as u64).wrapping_mul(0x9E37)))
+            .collect();
+        let refs: Vec<&CsrMatrix> = blocks.iter().collect();
+        let total_nnz: usize = blocks.iter().map(CsrMatrix::nnz).sum();
+        assert!(total_nnz >= 1 << 16, "too small to hit the parallel gate");
+
+        let result = block_diag(&refs).expect("block_diag");
+
+        // Independent block-diagonal reference.
+        let mut ref_indptr = vec![0usize];
+        let mut ref_indices = Vec::new();
+        let mut ref_data = Vec::new();
+        let mut col_off = 0usize;
+        let mut acc = 0usize;
+        for blk in &blocks {
+            let bp = blk.indptr();
+            for i in 0..blk.shape().rows {
+                for idx in bp[i]..bp[i + 1] {
+                    ref_indices.push(col_off + blk.indices()[idx]);
+                    ref_data.push(blk.data()[idx]);
+                    acc += 1;
+                }
+                ref_indptr.push(acc);
+            }
+            col_off += blk.shape().cols;
+        }
+
+        assert_eq!(result.indptr(), ref_indptr.as_slice(), "indptr mismatch");
+        assert_eq!(result.indices(), ref_indices.as_slice(), "indices mismatch");
+        assert!(
+            result.data().iter().zip(&ref_data).all(|(x, y)| x.to_bits() == y.to_bits()),
+            "data not bit-identical to reference"
+        );
+        let meta = result.canonical_meta();
+        assert!(meta.sorted_indices && meta.deduplicated);
     }
 
     #[test]

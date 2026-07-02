@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IluOptions, Shape2D, SolveOptions, add_csr,
-    diags, eye, kron, random, scale_csr, spilu, spmm, spmv_csr, spsolve,
+    block_diag, diags, eye, kron, random, scale_csr, spilu, spmm, spmv_csr, spsolve,
 };
 use std::hint::black_box;
 use std::time::Duration;
@@ -353,8 +353,34 @@ fn bench_random_tiny_density(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_block_diag(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_block_diag");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
+
+    for (nblocks, bs, dens) in [(2000usize, 40usize, 0.1f64), (500, 120, 0.05)] {
+        let blocks: Vec<CsrMatrix> = (0..nblocks)
+            .map(|i| make_random_rect_csr(bs, bs, dens, SEED ^ (i as u64).wrapping_mul(0x9E37)))
+            .collect();
+        let refs: Vec<&CsrMatrix> = blocks.iter().collect();
+        let nnz: usize = blocks.iter().map(CsrMatrix::nnz).sum();
+        group.bench_with_input(
+            BenchmarkId::new(format!("nblocks{nblocks}_bs{bs}_nnz{nnz}"), nnz),
+            &refs,
+            |bi, refs| {
+                bi.iter(|| {
+                    let out = block_diag(black_box(refs)).expect("block_diag");
+                    black_box(out.nnz());
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_block_diag,
     bench_csr_construction,
     bench_spmv,
     bench_format_conversion,

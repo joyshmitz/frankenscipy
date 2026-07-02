@@ -45,6 +45,32 @@ ledger above so the project has one source of truth.
   serial O(nnz) `validate_compressed` in `from_components(true)` is the remaining floor
   (a provably-canonical output could skip it or validate in parallel).
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: sparse.block_diag direct canonical-CSR build + parallel across blocks
+
+- Target: `fsci_sparse::construct::block_diag`. It emitted COO triplets (rows/cols/data,
+  3 vecs of total nnz) serially block-by-block, then `CooMatrix::from_triplets` + `to_csr`.
+  The block-diagonal output is canonical by construction when every block is canonical
+  (block `b` owns disjoint output rows `[row_off_b..)` and cols `[col_off_b..)`; each output
+  row is one block row with columns shifted by `col_off_b`, order preserved ⇒ still sorted).
+- Lever (byte-identical): fast path builds the CSR **directly** — `indptr` from per-block
+  per-row nnz (serial, O(total_rows)); `indices`/`data` filled **in parallel across blocks**,
+  each block copying `data()` and `col_off + indices()` into its disjoint pre-sized nnz slice.
+  Skips the COO triplets and the `to_csr` pass entirely. Non-canonical blocks fall back to the
+  unchanged COO path. Gated `total_nnz ≥ 64K && total_rows ≥ 1024` (`kron_fill_threads`).
+- Measured (same box, criterion median, clean git-stash A/B; scipy 1.17.1):
+  - nblocks 2000 × 40×40 d0.1 (out 80000², nnz 320K): **8.67 → 5.12 ms = 1.69× self**;
+    vs `scipy.sparse.block_diag(...,format='csr')` 62.79 ms ⇒ **12.3× FASTER** (was 7.2×).
+  - nblocks 500 × 120×120 d0.05 (out 60000², nnz 360K): **9.29 → 4.78 ms = 1.94× self**;
+    vs SciPy 20.36 ms ⇒ **4.26× FASTER** (was 2.19×).
+- Verification: new unit test `block_diag_canonical_parallel_is_byte_identical_to_reference`
+  (1500 canonical blocks past the gate) asserts `indptr`/`indices` equal and `data`
+  bit-identical (`to_bits()`) to an independent block-diagonal reference; 6/6 block_diag tests
+  green, `cargo check -p fsci-sparse` clean.
+- Same lever as the kron canonical-CSR fill (this ledger, above). Residual floor is the serial
+  O(nnz) `validate_compressed` in `from_components(true)` (~2-3 ms at 350K nnz) — a
+  provably-canonical output could skip it. `bmat` is already COO-optimized; `kron_via_coo`
+  (non-canonical kron fallback) remains the next serial-fill follow-on.
+
 ## 2026-06-28 - GreenFalcon (codex) - KEEP: watershed_ift default 2D cross bucket queue avoids generic coordinate loop
 
 - Land-or-dig audit: after fetch, the only `.scratch` / `.worktrees`
