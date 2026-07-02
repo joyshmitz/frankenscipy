@@ -12684,3 +12684,22 @@ own FFT plan (per-call plan-alloc is the serial bottleneck, not thread count —
 threads). A batched resample that builds the length-L forward + length-num inverse plans ONCE and reuses them
 across all lines would lift both cases to a clear win — deferred (needs a plan-reuse resample API). Value now:
 byte-identical API gap-fill + a real pow-2 win.
+
+## 2026-07-02 — BlackThrush (cc): SURFACE THE BLOCKER — FFT-batch parallel ceiling (~2-5x) is MEMORY BANDWIDTH, not plan/twiddle reuse (corrects a prior note)
+
+Investigated the documented follow-on "a plan-reuse batched FFT would lift hilbert_many/resample_axis_2d from
+~2x self-speedup to clean multi-x wins." FALSE — verified against fsci_fft internals:
+- The COMPUTE path (rfft/ifft → cooley_tukey) does NOT lock the shared plan cache per call; `lookup_shared_plan`/
+  `store_shared_plan` are only touched on a diagnostics/planning path (transforms.rs ~4316), not the hot loop.
+- Twiddles are ALREADY optimally cached: `TWIDDLE_CACHE: RwLock<HashMap<(n,inverse), Arc<[Complex64]>>>` returns
+  a CHEAP `Arc` clone (not a deep copy), AND there's a `thread_local! LOCAL_TWIDDLE_CACHE` lock-free fast path in
+  front of the global RwLock (so 64 workers don't ping-pong the reader counter). Twiddle fetch is ~free on repeat.
+So there is NO per-call plan/twiddle allocation to amortize — the ~2x self-speedup ceiling (hilbert_many 2.1-5.6x,
+resample_axis_2d 2.1-2.4x) is genuinely MEMORY-BANDWIDTH-bound: many independent FFTs saturate memory bandwidth
+well before 64 cores are busy (FFT is a classic bandwidth-bound kernel). A plan-reuse refactor would NOT help;
+this is a hardware wall. The landed hilbert_many/resample_axis_2d wins (1.7-5.7x vs scipy) stand and are near the
+achievable ceiling. LESSON: before proposing "reuse the plan/twiddles across a batch" as an FFT lever, CHECK the
+fft crate — fsci_fft already has Arc-shared twiddles + a thread-local cache, so batch FFT parallelism is
+bandwidth-limited, not allocation-limited. Don't re-chase this. Also confirmed this cycle: welch/csd/spectrogram/
+decimate/resample_poly/lfilter/sosfilt/filtfilt `_axis_2d` are ALL already parallel (decimate delegates to the
+parallel filtfilt_axis_2d) — the signal-transform vmap family is fully covered; no serial `_axis` gaps remain.
