@@ -27,7 +27,7 @@ pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, anderson,
     root_many,
     bisect, brenth, brentq, brentq_many, broyden1, broyden2, df_sane, fsolve, halley, lm_root,
-    newton,
+    newton, newton_many,
     newton_krylov, newton_scalar, ridder, root, root_scalar, secant, toms748,
 };
 pub use types::{

@@ -284,6 +284,89 @@ where
     out
 }
 
+/// Vectorised Newton's-method root find over `n` independent parameter rows —
+/// the vmap-over-solver sibling of [`brentq_many`] for [`newton`] with an
+/// analytic derivative. `func(x, params)` and `fprime(x, params)` are inlined
+/// Rust closures (no per-iteration Python callback, unlike a looped
+/// `scipy.optimize.newton`), and the independent solves fan across threads.
+/// Entry `k` equals `newton(|x| func(x, &param_rows[k]), x0, Some(fprime …), …)`.
+pub fn newton_many<F, G>(
+    func: F,
+    fprime: G,
+    x0: f64,
+    param_rows: &[Vec<f64>],
+    tol: f64,
+    rtol: f64,
+    maxiter: usize,
+) -> Vec<Result<RootResult, OptError>>
+where
+    F: Fn(f64, &[f64]) -> f64 + Sync,
+    G: Fn(f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let f_ref = &func;
+    let fp_ref = &fprime;
+    let solve_one = move |params: &[f64]| -> Result<RootResult, OptError> {
+        let fp = |x: f64| fp_ref(x, params);
+        newton(
+            |x| f_ref(x, params),
+            x0,
+            Some(&fp),
+            None,
+            None,
+            tol,
+            rtol,
+            maxiter,
+        )
+    };
+
+    // A scalar Newton solve with inlined Rust closures is very cheap (~0.1µs for a
+    // simple `func`), so the WIN here is eliminating SciPy's per-solve Python
+    // overhead (~69µs/solve) — a serial Rust loop already beats the scipy loop
+    // ~700x. Threading such tiny work over-subscribes (64 threads' spawn dwarfs the
+    // solves), so cap workers by WORK: each thread takes >=2048 solves, keeping
+    // typical batches serial and only very large batches (or an expensive `func`)
+    // fanning out. Order-preserving ⇒ bit-identical to the serial map.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows / 2048).max(1);
+    if nthreads <= 1 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<RootResult, OptError>>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= nrows {
+                    return None;
+                }
+                let hi = (lo + chunk).min(nrows);
+                Some(scope.spawn(move || {
+                    (lo..hi)
+                        .map(|i| solve_one(&param_rows[i]))
+                        .collect::<Vec<_>>()
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("newton_many worker panicked"))
+            .collect()
+    });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 /// Root finder dispatched as `brenth`.
 ///
 /// # Implementation note
@@ -2545,7 +2628,8 @@ mod tests {
     };
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, brentq_many, df_sane,
-        halley, newton, newton_krylov, newton_scalar, ridder, root_scalar, secant, toms748,
+        halley, newton, newton_krylov, newton_many, newton_scalar, ridder, root_scalar, secant,
+        toms748,
     };
 
     #[derive(Debug, Serialize)]
@@ -3481,6 +3565,52 @@ mod tests {
         }
         assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() == nrows);
         assert!(brentq_many(f, bracket, &[], opts).is_empty());
+    }
+
+    #[test]
+    fn newton_many_byte_identical_to_per_param() {
+        // Newton sweep: solve x^3 - p = 0 with fprime = 3x^2 over many p. The batched
+        // solve must equal looping newton per parameter, bit-for-bit. nrows crosses the
+        // work-capped serial->parallel gate (>= 2*2048) so the parallel path is exercised.
+        let f = |x: f64, p: &[f64]| x * x * x - p[0];
+        let fp = |x: f64, _p: &[f64]| 3.0 * x * x;
+        let mut s = 11u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            1.0 + 900.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 5000usize;
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng()]).collect();
+
+        let batched = newton_many(f, fp, 1.5, &params, 1e-12, 0.0, 50);
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let single = newton(
+                |x| f(x, p),
+                1.5,
+                Some(&|x| fp(x, p)),
+                None,
+                None,
+                1e-12,
+                0.0,
+                50,
+            )
+            .expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(
+                many.root.to_bits(),
+                single.root.to_bits(),
+                "root mismatch {i}"
+            );
+            // root should be the real cube root of p.
+            assert!(
+                (many.root - p[0].cbrt()).abs() < 1e-9,
+                "root {} vs {}",
+                many.root,
+                p[0].cbrt()
+            );
+        }
+        assert!(newton_many(f, fp, 1.5, &[], 1e-12, 0.0, 50).is_empty());
     }
 
     #[test]

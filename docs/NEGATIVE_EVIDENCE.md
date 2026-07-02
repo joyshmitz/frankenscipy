@@ -12777,3 +12777,32 @@ SPECIAL-FN AMORTIZE LEVER NOW FULLY MAPPED:
   spherical/ordinary-Bessel recurrence replacing the per-term recompute (accuracy risk vs the scalar; deferred).
 RULE (reconfirmed): amortize-invariant-solve + parallelize wins iff the residual per-x eval is cheap-competitive
 with scipy's C; a per-term Bessel recompute is the wall. Special-fn `_many` vein (angular families) is exhausted.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — newton_many (vmap-over-solver, Python-overhead lever) — 495-986x FASTER than the scipy.optimize.newton loop
+
+Extends the vmap-over-solver family (brentq_many/root_many/minimize_many/…) to `scipy.optimize.newton` with an
+analytic derivative — the classic quadratic-convergence scalar root find. scipy loops it in Python, calling the
+Python `func` AND `fprime` on EVERY iteration (~69µs/solve for a trivial func — almost all Python overhead). fsci
+`newton_many(func, fprime, x0, param_rows, …)` inlines both as Rust closures (`Fn(f64, &[f64])`) over the
+independent parameter rows. Entry k equals `newton(|x| func(x,&rows[k]), x0, Some(fprime…), …)`.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1):
+
+| workload | fsci newton_many | scipy newton loop | vs scipy |
+| --- | --- | --- | --- |
+| x³−p=0, N=3000 (cheap func) | 0.36ms | 206.8ms | 574x |
+| x³−p=0, N=10000 | 0.70ms | ~689ms | 986x |
+| eˣ−p=0, N=3000 (exp func) | 0.63ms | 311.9ms | 495x |
+
+Byte-identical to the fsci serial loop (0 root bit-mismatches, both serial + parallel paths); roots correct to
+machine precision (max|root − ln(p)| = 4.44e-16 for the exp case; cube-root case verified). fsci-opt lib 321/321
+green (+ `newton_many_byte_identical_to_per_param`, nrows=5000 crossing the parallel gate).
+
+KEY TUNING (cheap-per-solve, cf. chisquare_many): a scalar Newton solve with inlined closures is ~0.1µs, so the
+WIN is PYTHON-OVERHEAD ELIMINATION (serial Rust already beats the scipy loop ~700x), NOT parallelism — at the
+default low gate the parallel path OVER-SUBSCRIBED (64 threads' spawn dwarfed the solves: N=3000 many 4.16ms vs
+serial 0.27ms = 0.1x self). Capped workers by WORK (`cores.min(nrows/2048)`) → typical batches stay serial (self
+0.7-1.0x, no regression), only very large N (or an expensive `func`) fan out. LEVER (reconfirmed): vmap-over-solver
+wins ∝ scipy's per-solve Python-callback density; for a SCALAR solver with a cheap func the ratio is 500-1000x
+(pure overhead elimination) and the thread gate MUST be work-capped or parallelism regresses vs serial. Remaining
+scalar-solver `_many` candidates: fixed_point, halley, secant, ridder (same recipe, same high gate).
