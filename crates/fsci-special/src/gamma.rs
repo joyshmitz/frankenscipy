@@ -2412,17 +2412,16 @@ fn invert_monotone(f: impl Fn(f64) -> f64, target: f64, a: f64, b: f64) -> f64 {
     if target >= fa.max(fb) {
         return if fa >= fb { a } else { b };
     }
-    let increasing = fb >= fa;
-    let (mut lo, mut hi) = (a, b);
-    for _ in 0..200 {
-        let mid = 0.5 * (lo + hi);
-        if (f(mid) < target) == increasing {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
+    // Superlinear Illinois (~12 evals) instead of 200 fixed bisection steps — each
+    // eval here is a full chndtr (Poisson-weighted mixture), so this is a large win
+    // for chndtridf/chndtrinc. The clamp guards above guarantee `target` is strictly
+    // inside (min(fa,fb), max(fa,fb)), so neither endpoint is the root. Illinois
+    // solves an INCREASING residual, so flip the sign when f is decreasing.
+    if fb >= fa {
+        crate::beta::illinois_root(|m| f(m) - target, a, b, fa - target, fb - target)
+    } else {
+        crate::beta::illinois_root(|m| target - f(m), a, b, target - fa, target - fb)
     }
-    0.5 * (lo + hi)
 }
 
 /// Inverse of [`chndtr`] in the degrees of freedom `df`.

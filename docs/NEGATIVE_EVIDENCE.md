@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - PARTIAL/KEEP: invert_monotone → illinois — chndtridf 16× self (kernel-walled, not a flip)
+
+- Target: the shared `invert_monotone` helper (gamma.rs) — a 200-iteration bisection with NO
+  early-break, feeding `chndtridf`/`chndtrinc` (noncentral-χ² parameter inversions). Each eval is a
+  full `chndtr` (Poisson-weighted mixture). Converted to `illinois_root` (made `pub(crate)`), running
+  on the increasing residual (or `target − f` when the auto-detected direction is decreasing). The
+  helper's clamp guards already exclude the endpoint-is-root case, so no extra guards needed.
+- MEASURED (same box; scipy 1.17.1): chndtridf(10,0.3,2) ≈ **380µs → 23.2µs = ~16× self** (200
+  bisection evals → ~12 illinois evals). HONEST: still **8.3× SLOWER** than scipy (2.81µs) — the wall
+  is fsci's `chndtr` kernel (~1.9µs/eval; scipy's noncentral-χ² CDF is faster), NOT the iteration
+  count. Illinois removes the wasteful bisection but can't beat the kernel. NOT a SciPy flip.
+- Verification: 157 gamma-module + chndtr (3/3) tests green; fsci chndtridf(10,0.3,2)=11.36055 matches
+  scipy 11.360546. Also lifts any future invert_monotone callers. To flip: speed up the `chndtr`
+  Poisson-sum kernel (separate deep target). LEVER (shared): one helper edit + `illinois_root` exposed
+  pub(crate) → reusable by any bracketed monotone inversion crate-wide.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: bisect_increasing/decreasing → illinois — bdtrik flip 13× loss → 1.34× WIN
 
 - Target: the SHARED `bisect_increasing`/`bisect_decreasing` helpers in `beta.rs` (feed the discrete

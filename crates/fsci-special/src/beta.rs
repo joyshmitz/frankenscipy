@@ -717,7 +717,13 @@ pub fn ncfdtrinc(dfn: f64, dfd: f64, p: f64, f: f64) -> f64 {
 /// of expensive `f` evaluations from ~100 (plain bisection) to ~10-15 — the
 /// dominant cost of the noncentral-t/F inverse CDFs, whose `f` is itself a
 /// several-µs series. Returns the root to full `f64` precision.
-fn illinois_root<F: Fn(f64) -> f64>(f: F, mut lo: f64, mut hi: f64, mut flo: f64, mut fhi: f64) -> f64 {
+pub(crate) fn illinois_root<F: Fn(f64) -> f64>(
+    f: F,
+    mut lo: f64,
+    mut hi: f64,
+    mut flo: f64,
+    mut fhi: f64,
+) -> f64 {
     let mut side = 0i32;
     let mut mid = 0.5 * (lo + hi);
     for _ in 0..100 {
