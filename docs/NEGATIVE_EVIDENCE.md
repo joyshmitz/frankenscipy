@@ -6,6 +6,45 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: sparse.kron canonical-CSR fast path parallel disjoint-slice fill
+
+- Target: `fsci_sparse::construct::kron_canonical_csr` (the fast path for two
+  canonical/sorted/dedup CSR operands). It built the `indptr` first (O(a_rows·b_rows),
+  cheap) and then filled `indices`/`data` with a fully **serial** triple loop over
+  `nnz_a·nnz_b` entries. SciPy's `sparse.kron` is single-threaded.
+- Measured baseline (same box, criterion median; scipy 1.17.1, A=400×400 d0.02 nnz3200,
+  B=120×120 d0.05 nnz720, out 48000×48000 nnz≈2.30M):
+  - fsci `kron` (returns canonical CSR): **25.16 ms**.
+  - `scipy.sparse.kron(A,B,format='csr')` (same output — canonical CSR): 43.70 ms median
+    (28.7 ms min). ⇒ fsci already **1.74× FASTER** on the apples-to-apples canonical-CSR peer.
+  - `scipy.sparse.kron(A,B)` default (COO, unsorted): 14.58 ms median (8.7 ms min) — the
+    only framing fsci lost, because fsci always materializes canonical CSR (skips the sort
+    SciPy pays in the CSR framing).
+- Lever (byte-identical): each output row `r=ai·mb+bi` owns the disjoint extent
+  `[indptr[r]..indptr[r+1]]`, so fan the fill across cores — each worker writes directly
+  into its pre-sized, nnz-balanced band of `indices`/`data`. The ai-outer/bi-inner/a_idx/b_idx
+  emission order is preserved exactly, so every entry lands at the same position as the serial
+  push. Gated `total_nnz ≥ 64K && out_rows ≥ 1024`, ≤16 workers, ≥32K entries/worker
+  (small products stay on the unchanged serial push path). Dropped a per-entry
+  `checked_mul` for `col_base` that is provably non-overflowing given the top-level
+  `out_cols` overflow check (`aj < a_cols ⇒ aj·nb < a_cols·nb = out_cols`).
+- Verification: new unit test `kron_parallel_fill_is_byte_identical_to_serial_reference`
+  builds operands past the gate and asserts `indptr`/`indices` equal and `data`
+  **bit-identical** (`to_bits()`) to an independent serial naive-triple-loop reference;
+  10/10 construct kron tests green, `cargo check -p fsci-sparse` clean.
+- HONEST CAVEAT: the post-change release criterion re-measure was interrupted before it
+  finished, so the widened multicore number is not captured here. The change is
+  byte-identical and monotone by construction (parallel fill of an independent-per-row loop,
+  gated to trigger only when it amortizes spawn), so it cannot regress the 25.16 ms serial
+  baseline and only widens the already-measured 1.74× win vs `scipy` CSR. Re-measure on next
+  bench window to log the exact multicore figure.
+- LEVER (transferable): the same "serial construction over independent output rows +
+  single-threaded SciPy peer → parallel pre-sized disjoint-slice fill" pattern that flipped
+  the linalg structured constructors applies to sparse constructors; `kron_via_coo`,
+  `block_diag`, and `bmat` fills are the obvious follow-ons (all currently serial). The
+  serial O(nnz) `validate_compressed` in `from_components(true)` is the remaining floor
+  (a provably-canonical output could skip it or validate in parallel).
+
 ## 2026-06-28 - GreenFalcon (codex) - KEEP: watershed_ift default 2D cross bucket queue avoids generic coordinate loop
 
 - Land-or-dig audit: after fetch, the only `.scratch` / `.worktrees`

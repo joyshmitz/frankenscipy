@@ -603,30 +603,115 @@ fn kron_canonical_csr(
         }
     }
 
-    let mut indices = Vec::with_capacity(total_nnz);
-    let mut data = Vec::with_capacity(total_nnz);
+    // The output row `r = ai*mb + bi` has a fixed, already-known extent
+    // `[indptr[r]..indptr[r+1]]`, and each output column `aj*nb + b_col` is bounded
+    // by the top-level `out_cols` overflow check (aj < a_cols ⇒ aj*nb < a_cols*nb =
+    // out_cols, a valid usize), so the per-entry `checked_mul` is redundant here.
+    // Every output row writes a disjoint slice, so the fill fans across cores: each
+    // worker owns a contiguous, nnz-balanced band of output rows and writes directly
+    // into its pre-sized slice of `indices`/`data`. Byte-identical to the serial
+    // push order (the same ai-outer/bi-inner/a_idx/b_idx nesting lands each entry at
+    // the same position). SciPy's `sparse.kron` is single-threaded, so this is a
+    // straight multicore win; gated below `total_nnz` so small products stay serial.
+    let a_rows = a.shape().rows;
+    let b_rows = b_shape.rows;
+    let b_cols = b_shape.cols;
+    let nthreads = kron_fill_threads(shape.rows, total_nnz);
 
-    for ai in 0..a.shape().rows {
-        for bi in 0..b_shape.rows {
-            for a_idx in a_indptr[ai]..a_indptr[ai + 1] {
-                let aj = a_indices[a_idx];
-                let a_val = a_data[a_idx];
-                let col_base =
-                    aj.checked_mul(b_shape.cols)
-                        .ok_or_else(|| SparseError::IndexOverflow {
-                            message: "kron output col index overflow".to_string(),
-                        })?;
-                for b_idx in b_indptr[bi]..b_indptr[bi + 1] {
-                    indices.push(col_base + b_indices[b_idx]);
-                    data.push(a_val * b_data[b_idx]);
+    let (data, indices) = if nthreads <= 1 {
+        let mut indices = Vec::with_capacity(total_nnz);
+        let mut data = Vec::with_capacity(total_nnz);
+        for ai in 0..a_rows {
+            for bi in 0..b_rows {
+                for a_idx in a_indptr[ai]..a_indptr[ai + 1] {
+                    let aj = a_indices[a_idx];
+                    let a_val = a_data[a_idx];
+                    let col_base = aj * b_cols;
+                    for b_idx in b_indptr[bi]..b_indptr[bi + 1] {
+                        indices.push(col_base + b_indices[b_idx]);
+                        data.push(a_val * b_data[b_idx]);
+                    }
                 }
             }
         }
-    }
+        (data, indices)
+    } else {
+        let mut indices = vec![0usize; total_nnz];
+        let mut data = vec![0.0f64; total_nnz];
+        // Contiguous, nnz-balanced output-row bands (each ≈ total_nnz/nthreads
+        // entries) so uneven rows still split the fill work evenly.
+        let target = total_nnz.div_ceil(nthreads).max(1);
+        let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(nthreads);
+        let mut start = 0usize;
+        while start < shape.rows {
+            let base = indptr[start];
+            let mut end = start + 1;
+            while end < shape.rows && indptr[end] - base < target {
+                end += 1;
+            }
+            ranges.push((start, end));
+            start = end;
+        }
+        // Carve one disjoint mutable slice per band up front (indptr gives the exact
+        // extent), then fill them concurrently.
+        let indptr_s: &[usize] = &indptr;
+        let mut idx_rest: &mut [usize] = &mut indices;
+        let mut dat_rest: &mut [f64] = &mut data;
+        type FillJob<'a> = (usize, usize, &'a mut [usize], &'a mut [f64]);
+        let mut jobs: Vec<FillJob<'_>> = Vec::with_capacity(ranges.len());
+        for &(r0, r1) in &ranges {
+            let len = indptr_s[r1] - indptr_s[r0];
+            let (ih, it) = idx_rest.split_at_mut(len);
+            let (dh, dt) = dat_rest.split_at_mut(len);
+            idx_rest = it;
+            dat_rest = dt;
+            jobs.push((r0, r1, ih, dh));
+        }
+        std::thread::scope(|scope| {
+            for (r0, r1, mut idx_slice, mut dat_slice) in jobs {
+                scope.spawn(move || {
+                    for r in r0..r1 {
+                        let ai = r / b_rows;
+                        let bi = r % b_rows;
+                        let row_len = indptr_s[r + 1] - indptr_s[r];
+                        let (this_idx, rest_idx) = idx_slice.split_at_mut(row_len);
+                        let (this_dat, rest_dat) = dat_slice.split_at_mut(row_len);
+                        let mut pos = 0usize;
+                        for a_idx in a_indptr[ai]..a_indptr[ai + 1] {
+                            let aj = a_indices[a_idx];
+                            let a_val = a_data[a_idx];
+                            let col_base = aj * b_cols;
+                            for b_idx in b_indptr[bi]..b_indptr[bi + 1] {
+                                this_idx[pos] = col_base + b_indices[b_idx];
+                                this_dat[pos] = a_val * b_data[b_idx];
+                                pos += 1;
+                            }
+                        }
+                        idx_slice = rest_idx;
+                        dat_slice = rest_dat;
+                    }
+                });
+            }
+        });
+        (data, indices)
+    };
 
     Ok(Some(CsrMatrix::from_components(
         shape, data, indices, indptr, true,
     )?))
+}
+
+/// Thread count for the [`kron_canonical_csr`] disjoint-slice fill. Serial below
+/// 64K output entries or 1024 output rows (thread-spawn cost dominates); otherwise
+/// caps at 16 cores with ≥32K entries per worker so each spawn is amortized.
+fn kron_fill_threads(out_rows: usize, total_nnz: usize) -> usize {
+    if total_nnz < 1 << 16 || out_rows < 1024 {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    cores.min(16).min(total_nnz / 32_768).max(1)
 }
 
 fn kron_via_coo(a: &CsrMatrix, b: &CsrMatrix, shape: Shape2D) -> SparseResult<CsrMatrix> {
@@ -1560,6 +1645,74 @@ mod tests {
             dense_from_csr(&result),
             vec![vec![0.0, 0.0, 5.0, 0.0], vec![0.0, 0.0, 0.0, 5.0]]
         );
+    }
+
+    #[test]
+    fn kron_parallel_fill_is_byte_identical_to_serial_reference() {
+        // Build canonical CSR operands large enough that `kron_canonical_csr`
+        // exceeds the parallel-fill gate (total_nnz ≥ 64K, out_rows ≥ 1024): the
+        // fanned disjoint-slice fill must reproduce the serial push order exactly.
+        fn canonical_csr(rows: usize, cols: usize, per_row: usize, seed: u64) -> CsrMatrix {
+            let mut state = seed;
+            let mut next = || {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (state >> 33) as usize
+            };
+            let mut data = Vec::new();
+            let mut indices = Vec::new();
+            let mut indptr = vec![0usize];
+            for _ in 0..rows {
+                // Distinct, sorted columns for this row.
+                let mut cs: Vec<usize> = (0..per_row).map(|_| next() % cols).collect();
+                cs.sort_unstable();
+                cs.dedup();
+                for &c in &cs {
+                    indices.push(c);
+                    data.push(((next() % 1000) as f64) + 1.0);
+                }
+                indptr.push(indices.len());
+            }
+            CsrMatrix::from_components(Shape2D::new(rows, cols), data, indices, indptr, false)
+                .expect("canonical csr")
+        }
+
+        let a = canonical_csr(220, 60, 6, 0x1234_5678);
+        let b = canonical_csr(40, 40, 6, 0x9abc_def0);
+        // out_rows = 220*40 = 8800 ≥ 1024; nnz_a*nnz_b comfortably ≥ 64K.
+        assert!(a.nnz() * b.nnz() >= 1 << 16, "operands too small to hit gate");
+
+        let result = kron(&a, &b).expect("kron");
+
+        // Independent serial reference (naive triple loop, canonical by construction).
+        let (a_ip, a_ix, a_d) = (a.indptr(), a.indices(), a.data());
+        let (b_ip, b_ix, b_d) = (b.indptr(), b.indices(), b.data());
+        let (b_rows, b_cols) = (b.shape().rows, b.shape().cols);
+        let mut ref_indptr = vec![0usize];
+        let mut ref_indices = Vec::new();
+        let mut ref_data = Vec::new();
+        for ai in 0..a.shape().rows {
+            for bi in 0..b_rows {
+                for a_idx in a_ip[ai]..a_ip[ai + 1] {
+                    let col_base = a_ix[a_idx] * b_cols;
+                    let a_val = a_d[a_idx];
+                    for b_idx in b_ip[bi]..b_ip[bi + 1] {
+                        ref_indices.push(col_base + b_ix[b_idx]);
+                        ref_data.push(a_val * b_d[b_idx]);
+                    }
+                }
+                ref_indptr.push(ref_indices.len());
+            }
+        }
+
+        assert_eq!(result.indptr(), ref_indptr.as_slice(), "indptr mismatch");
+        assert_eq!(result.indices(), ref_indices.as_slice(), "indices mismatch");
+        // Byte-identical values (same multiply/emit order), not just approx-equal.
+        assert!(
+            result.data().iter().zip(&ref_data).all(|(x, y)| x.to_bits() == y.to_bits()),
+            "data not bit-identical to serial reference"
+        );
+        let meta = result.canonical_meta();
+        assert!(meta.sorted_indices && meta.deduplicated);
     }
 
     #[test]
