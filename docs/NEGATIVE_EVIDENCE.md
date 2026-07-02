@@ -12025,3 +12025,24 @@ family is now all-wins: gdtrix 13.1x, chdtriv 9.7x, stdtrit 4.9x, nctdtrit 3.1x,
 NEXT: route them through illinois_root too (same ~7x scalar win each). Residual: nctdtrit scalar is still
 ~10.7x slower than scipy's cdflib (84 vs 7.8µs) — the second lever is the `nctdtr` CDF itself (2 fresh `btdtr`
 incomplete-betas per Poisson term; an incomplete-beta a-recurrence would cut it, cf. discrete-cdf recurrence lever).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — Illinois root-find + _many across the rest of the noncentral inverse family (ncfdtri 16.5x / ncfdtrinc 14.0x / nctdtrinc 1.8x scipy)
+
+Extended last cycle's `illinois_root` lever (nctdtrit) to the 3 remaining unconditional-100-bisection inverses
+in beta.rs: `ncfdtri` (increasing in f), `ncfdtrinc`, `nctdtrinc` (decreasing in nc → solved via g(x)=p−CDF(x)).
+Fixed an `illinois_root` bug found here: false-position often keeps one endpoint stale so the bracket never
+shrinks; the old `(hi-lo)<=tol` exit never fired and it returned `0.5*(lo+hi)` (midpoint of a WIDE bracket) —
+now it returns the last interpolant `mid` and exits on iterate-step convergence. (nctdtrit had gotten lucky
+with a symmetric bracket; re-verified still 1e-12.)
+
+Accuracy vs scipy (full-precision grid): ncfdtri 1.12e-13; ncfdtrinc/nctdtrinc "disagree" ~2e-4/2e-7 but fsci
+is MORE ACCURATE — round-trip proof at the worst point (dfn5,dfd3,f5,p0.8667): fsci nc round-trips to p to
+1e-12, scipy's nc round-trips to p+6e-6 (scipy's own parameter-inversion is the imprecise one, cf. the hyperu
+finding). Conformance 1121/1121 green (the golden tests already tolerate this, as they did for the original
+bisection). Forward CDFs ncfdtr/nctdtr are exact (2.9e-15 / 1e-15 vs scipy).
+
+Added parallel `_many` (100k, 0 bit-identity mismatches vs serial): **ncfdtri_many 219 vs scipy 3618 = 16.5x;
+ncfdtrinc_many 247 vs 3469 = 14.0x; nctdtrinc_many 2978 vs 5418 = 1.8x FASTER**. The noncentral-inverse family
+is now fully Illinois-accelerated + parallel-wrapped (nctdtrit 3.1x, ncfdtri 16.5x, ncfdtrinc 14.0x,
+nctdtrinc 1.8x). LEVER (probe gotcha logged): dump the root/probability arg at FULL precision ({:.17e}) not
+{:.5} — a rounded p compared against scipy near a steep CDF tail fabricates a phantom ~1e-4 error.

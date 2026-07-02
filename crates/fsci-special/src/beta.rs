@@ -649,22 +649,17 @@ pub fn ncfdtri(dfn: f64, dfd: f64, nc: f64, p: f64) -> f64 {
         return f64::INFINITY;
     }
     let mut hi = 1.0_f64;
-    while ncfdtr(dfn, dfd, nc, hi) < p {
+    let mut fhi = ncfdtr(dfn, dfd, nc, hi) - p;
+    while fhi < 0.0 {
         hi *= 2.0;
         if hi > 1e300 {
             return f64::INFINITY;
         }
+        fhi = ncfdtr(dfn, dfd, nc, hi) - p;
     }
-    let mut lo = 0.0_f64;
-    for _ in 0..100 {
-        let mid = 0.5 * (lo + hi);
-        if ncfdtr(dfn, dfd, nc, mid) < p {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    0.5 * (lo + hi)
+    let lo = 0.0_f64;
+    let flo = ncfdtr(dfn, dfd, nc, lo) - p; // ncfdtr(f=0) = 0 < p
+    illinois_root(|x| ncfdtr(dfn, dfd, nc, x) - p, lo, hi, flo, fhi)
 }
 
 /// Inverse of [`ncfdtr`] in the non-centrality `nc`.
@@ -698,17 +693,12 @@ pub fn ncfdtrinc(dfn: f64, dfd: f64, p: f64, f: f64) -> f64 {
             return f64::INFINITY;
         }
     }
-    let mut lo = 0.0_f64;
-    for _ in 0..100 {
-        let mid = 0.5 * (lo + hi);
-        // CDF decreasing in nc: value above target ⇒ nc too small.
-        if ncfdtr(dfn, dfd, mid, f) > p {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    0.5 * (lo + hi)
+    let lo = 0.0_f64;
+    // CDF is decreasing in nc, so g(x) = p − ncfdtr(…,x,…) is increasing with
+    // g(lo) < 0 (guaranteed by the p ≥ ncfdtr(…,0,…) guard above) < g(hi).
+    let flo = p - ncfdtr(dfn, dfd, lo, f);
+    let fhi = p - ncfdtr(dfn, dfd, hi, f);
+    illinois_root(|x| p - ncfdtr(dfn, dfd, x, f), lo, hi, flo, fhi)
 }
 
 /// Root of a monotone-increasing `f` in the bracket `[lo, hi]` with
@@ -720,20 +710,31 @@ pub fn ncfdtrinc(dfn: f64, dfd: f64, p: f64, f: f64) -> f64 {
 /// several-µs series. Returns the root to full `f64` precision.
 fn illinois_root<F: Fn(f64) -> f64>(f: F, mut lo: f64, mut hi: f64, mut flo: f64, mut fhi: f64) -> f64 {
     let mut side = 0i32;
+    let mut mid = 0.5 * (lo + hi);
     for _ in 0..100 {
         // False-position estimate; fall back to the midpoint if the secant is
-        // degenerate (equal / non-finite endpoint values).
+        // degenerate (equal / non-finite endpoint values) or lands outside the
+        // bracket.
         let denom = fhi - flo;
-        let mid = if denom.is_finite() && denom != 0.0 {
+        let candidate = if denom.is_finite() && denom != 0.0 {
             (lo * fhi - hi * flo) / denom
         } else {
             0.5 * (lo + hi)
         };
-        // Guard against a false-position step that lands outside the bracket.
-        let mid = if mid > lo && mid < hi { mid } else { 0.5 * (lo + hi) };
-        if (hi - lo).abs() <= 4.0 * f64::EPSILON * mid.abs().max(1.0) {
-            return mid;
+        let next = if candidate > lo && candidate < hi {
+            candidate
+        } else {
+            0.5 * (lo + hi)
+        };
+        let tol = 4.0 * f64::EPSILON * next.abs().max(1.0);
+        // Converged once the iterate stops moving or the bracket is negligible.
+        // NOTE: with false-position one endpoint can stay stale so `hi - lo`
+        // need not shrink to zero — the *iterate* is the answer, so we return
+        // `mid` (the last interpolant), never `0.5*(lo+hi)`.
+        if (next - mid).abs() <= tol || (hi - lo).abs() <= tol {
+            return next;
         }
+        mid = next;
         let fmid = f(mid);
         if fmid == 0.0 {
             return mid;
@@ -754,7 +755,7 @@ fn illinois_root<F: Fn(f64) -> f64>(f: F, mut lo: f64, mut hi: f64, mut flo: f64
             side = -1;
         }
     }
-    0.5 * (lo + hi)
+    mid
 }
 
 /// Inverse of [`nctdtr`] in the argument `t`.
@@ -832,15 +833,11 @@ pub fn nctdtrinc(df: f64, p: f64, t: f64) -> f64 {
             return f64::NEG_INFINITY;
         }
     }
-    for _ in 0..100 {
-        let mid = 0.5 * (lo + hi);
-        if nctdtr(df, mid, t) > p {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    0.5 * (lo + hi)
+    // Decreasing in nc, so g(x) = p − nctdtr(df, x, t) is increasing with
+    // g(lo) ≤ 0 ≤ g(hi) from the brackets above.
+    let flo = p - nctdtr(df, lo, t);
+    let fhi = p - nctdtr(df, hi, t);
+    illinois_root(|x| p - nctdtr(df, x, t), lo, hi, flo, fhi)
 }
 
 // Solve g(x) = target for a positive parameter x ∈ [1e-8, 1e12], with g (numerically) monotone,
@@ -1118,6 +1115,33 @@ pub fn nctdtrit_many(df: f64, nc: f64, p: &[f64]) -> Vec<f64> {
 pub fn nbdtrik_many(y: &[f64], n: f64, p: f64) -> Vec<f64> {
     par_map_indices(y.len(), |i| Ok::<f64, SpecialError>(nbdtrik(y[i], n, p)))
         .expect("nbdtrik is infallible")
+}
+
+/// Vectorized inverse noncentral-F CDF w.r.t. `f`, `ncfdtri(dfn, dfd, nc, p)`,
+/// over many `p` for fixed `(dfn, dfd, nc)`. SciPy's ufunc is single-threaded
+/// cdflib (~3.6 µs/pt); with the [`illinois_root`] scalar the parallel fan wins.
+/// See [`stdtrit_many`].
+#[must_use]
+pub fn ncfdtri_many(dfn: f64, dfd: f64, nc: f64, p: &[f64]) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(ncfdtri(dfn, dfd, nc, p[i])))
+        .expect("ncfdtri is infallible")
+}
+
+/// Vectorized inverse noncentral-F CDF w.r.t. non-centrality,
+/// `ncfdtrinc(dfn, dfd, p, f)`, over many `p` for fixed `(dfn, dfd, f)`; see
+/// [`ncfdtri_many`].
+#[must_use]
+pub fn ncfdtrinc_many(dfn: f64, dfd: f64, p: &[f64], f: f64) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(ncfdtrinc(dfn, dfd, p[i], f)))
+        .expect("ncfdtrinc is infallible")
+}
+
+/// Vectorized inverse noncentral-t CDF w.r.t. non-centrality,
+/// `nctdtrinc(df, p, t)`, over many `p` for fixed `(df, t)`; see [`ncfdtri_many`].
+#[must_use]
+pub fn nctdtrinc_many(df: f64, p: &[f64], t: f64) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(nctdtrinc(df, p[i], t)))
+        .expect("nctdtrinc is infallible")
 }
 
 /// Inverse Student's t distribution CDF with respect to degrees of freedom.
