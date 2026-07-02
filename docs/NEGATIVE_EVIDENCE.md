@@ -6,6 +6,33 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - PARTIAL/KEEP: COO→CSR counting sort (self 1.8-2x) — NOT yet a SciPy win
+
+- Target: `fsci_sparse::ops` `CooMatrix::to_csr` unsorted path. It collected all nnz
+  triplets and ran ONE global `sort_unstable_by_key((row,col))` — O(nnz·log nnz) over
+  24-byte tuples with poor locality. Replaced with SciPy's algorithm: O(nnz) counting sort
+  by row (histogram → offsets → stable scatter) + per-row stable column sort + duplicate sum
+  (`coo_to_canonical_csr_counting`/`dedup_sorted_row`). Rows are independent so the sort+dedup
+  phase is fanned across cores (gather-then-concat, gated `parallel_chunk_count`).
+- MEASURED (same box, criterion median, scipy 1.17.1, unsorted+dup triplets, nnz=2M):
+  - SERIAL counting sort: n=100k **153.77 → 78.06 ms = 1.97× self**; n=20k **153.43 → 84.63 ms
+    = 1.81× self**.
+  - vs FAIR scipy (pre-built COO, `tocsr()+sort_indices()` only): 46.10 ms (n=100k) / 56.82 ms
+    (n=20k). ⇒ fsci is still **1.69× / 1.49× SLOWER** — the counting sort closes the gap from
+    ~2.1-3.3× slower to ~1.5-1.7× but does NOT flip it. **No SciPy win is claimed.**
+  - PARALLEL path: correctness-verified (new `coo_to_csr_counting_sort_matches_dense_*` asserts
+    both serial and parallel outputs bit-identical to a dense encounter-order reference; all 356
+    sparse lib + 56 integration tests green) but its head-to-head bench was interrupted, so its
+    speedup is UNMEASURED.
+- Semantics: canonical CSR (sorted columns, dups summed), identical to the old path for the
+  common duplicate-free input; duplicate sums now land in SciPy's per-row encounter order
+  (stable sort) instead of the old unstable global-sort order (both were non-scipy-exact before;
+  new is closer to scipy). Byte-identical parallel↔serial (same per-row dedup, concat in row order).
+- BLOCKER (one sentence): SciPy's `coo_tocsr` is tuned single-thread C that the serial counting
+  sort alone can't beat (still ~1.5× slower); the gated parallel-across-rows path is the candidate
+  to flip it but its win-confirming bench was interrupted (re-run `sparse_coo_to_csr` next window)
+  — landing the algorithmically-superior + tested code now as a self-speedup, not a SciPy win.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: sparse.kron canonical-CSR fast path parallel disjoint-slice fill
 
 - Target: `fsci_sparse::construct::kron_canonical_csr` (the fast path for two
