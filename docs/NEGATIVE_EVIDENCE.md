@@ -34,9 +34,25 @@ ledger above so the project has one source of truth.
   outputs bit-identical (`to_bits`) to a dense encounter-order reference; all 356 sparse lib + 56
   integration tests green. Canonical CSR identical to the old path for duplicate-free input;
   duplicate sums now use SciPy's per-row encounter order (stable) not the old unstable global sort.
-- REMAINING (to flip the very-sparse regime): parallelize the serial counting-sort SCATTER via
-  per-thread partial histograms + prefix merge (standard parallel counting sort); that removes the
-  n=100k bottleneck. LESSON: rch routes benches to varying remote workers (hz2/vmi, ±2× under
+- VERY-SPARSE REGIME IS WALLED (two attempts, both same-box local, 2026-07-02):
+  1. **Concat-free two-pass — REJECTED (regression).** Replaced the gather-into-private-Vecs +
+     concat with: Pass A sort-in-place + distinct-count, prefix-sum → indptr, Pass B parallel
+     direct-write to final slices (no concat). Result n=20k **30.5 → 57.2 ms (≈1.9× WORSE)**,
+     n=100k 68 → 65.6 ms (~flat). Separating the sort (Pass A) from the dedup-read (Pass B)
+     evicts each sorted segment from cache before Pass B re-reads it; the lost sort↔dedup fusion
+     costs far more than the concat it removes. Reverted (stash `coo_to_csr two-pass … REJECT`).
+     Byte-identical (tests pass) — a pure perf regression. DON'T RETRY.
+  2. **Parallel counting-sort SCATTER — BLOCKED by `#![forbid(unsafe_code)]`.** Per-thread partial
+     histograms give each thread disjoint-but-INTERLEAVED write positions across one `pairs`
+     buffer (row r's thread-t block is scattered among other threads' blocks), which safe Rust
+     can't express (no `split_at_mut` for non-contiguous index sets). The serial O(nnz) scatter
+     (~20 ms, cache-miss-bound for 100k random row-writes) is therefore a floor. This is the same
+     "safe parallel strided/scatter writes under forbid(unsafe)" wall noted for ndimage axis-0.
+  ⇒ The n=100k (20 nnz/row) regime stays ~1.5× behind SciPy's lean single-thread in-place C;
+  the shipped gather-concat path (1.86× win at 100 nnz/row) is the best safe option. Flipping the
+  very-sparse case needs a genuinely different cache-friendly layout, not concat-elim or a
+  naive parallel scatter.
+- LESSON: rch routes benches to varying remote workers (hz2/vmi, ±2× under
   contention) while scipy runs local — ALWAYS bench fsci LOCALLY for same-box scipy comparison at
   sub-2× margins; the earlier cross-box "1.5× slower / no win" was an artifact.
 
