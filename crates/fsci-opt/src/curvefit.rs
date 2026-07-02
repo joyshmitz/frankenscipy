@@ -709,6 +709,68 @@ where
     Ok(out)
 }
 
+/// Vectorised [`least_squares`] over `n` independent parameter rows — the
+/// vmap-over-solver form for `scipy.optimize.least_squares`. `residuals(x, params)`
+/// is an inlined Rust closure (no per-iteration Python callback, unlike a looped
+/// scipy `least_squares`), and the independent (heavy, iterative LM/finite-diff)
+/// solves fan whole-row across cores; a tiny batch stays serial. Entry `k` equals
+/// `least_squares(|x| residuals(x, &param_rows[k]), x0, options)`.
+pub fn least_squares_many<F>(
+    residuals: F,
+    x0: &[f64],
+    param_rows: &[Vec<f64>],
+    options: LeastSquaresOptions,
+) -> Vec<Result<LeastSquaresResult, OptError>>
+where
+    F: Fn(&[f64], &[f64]) -> Vec<f64> + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let r_ref = &residuals;
+    let solve_one = move |params: &[f64]| least_squares(|x| r_ref(x, params), x0, options);
+
+    // Each solve is a heavy iterative LM fit → fan whole rows across cores, capped
+    // by the row count; a tiny batch stays serial to dodge the spawn floor.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 4 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<LeastSquaresResult, OptError>>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || {
+                        (lo..hi)
+                            .map(|i| solve_one(&param_rows[i]))
+                            .collect::<Vec<_>>()
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("least_squares_many worker panicked"))
+                .collect()
+        });
+
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 /// Batched box-constrained curve fitting — [`curve_fit_bounded`] fanned across many `ydata`
 /// rows, the bounded analogue of [`curve_fit_many`]. Row `i` is byte-identical to
 /// `curve_fit_bounded(f, xdata, &ydata_rows[i], lower, upper, options).popt`.
@@ -1330,6 +1392,47 @@ mod tests {
             }
         }
         assert!(curve_fit_many(model, &x, &[], opts()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn least_squares_many_byte_identical_to_per_param() {
+        // Fit y = a*exp(-b*t): residuals(x, y) = a*exp(-b*t) - y, swept over many
+        // noisy datasets. The batched solve must equal looping least_squares per
+        // param, bit-for-bit, and converge near the generating (a, b).
+        let t: Vec<f64> = (0..40).map(|i| 3.0 * i as f64 / 39.0).collect();
+        let resid = |x: &[f64], y: &[f64]| -> Vec<f64> {
+            t.iter()
+                .zip(y)
+                .map(|(&ti, &yi)| x[0] * (-x[1] * ti).exp() - yi)
+                .collect()
+        };
+        let mut s = 19u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let nrows = 40usize;
+        let truth: Vec<(f64, f64)> = (0..nrows)
+            .map(|_| (1.0 + 2.0 * rng(), 0.5 + 1.5 * rng()))
+            .collect();
+        let ys: Vec<Vec<f64>> = truth
+            .iter()
+            .map(|&(a, b)| t.iter().map(|&ti| a * (-b * ti).exp()).collect())
+            .collect();
+        let opt = LeastSquaresOptions::default();
+
+        let batched = least_squares_many(resid, &[1.5, 1.0], &ys, opt);
+        assert_eq!(batched.len(), nrows);
+        for (i, y) in ys.iter().enumerate() {
+            let single = least_squares(|x| resid(x, y), &[1.5, 1.0], opt).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(many.x[0].to_bits(), single.x[0].to_bits(), "a mismatch {i}");
+            assert_eq!(many.x[1].to_bits(), single.x[1].to_bits(), "b mismatch {i}");
+            // noiseless data => recovers the generating parameters.
+            assert!((many.x[0] - truth[i].0).abs() < 1e-6, "a {i}");
+            assert!((many.x[1] - truth[i].1).abs() < 1e-6, "b {i}");
+        }
+        assert!(least_squares_many(resid, &[1.5, 1.0], &[], opt).is_empty());
     }
 
     #[test]

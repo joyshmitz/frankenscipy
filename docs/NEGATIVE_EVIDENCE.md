@@ -12830,3 +12830,25 @@ bookkeeping). SCALAR-SOLVER `_many` FAMILY NOW COVERED: newton/secant/fixed_poin
 minimize/… from the broader vmap-over-solver vein). Remaining niche: halley (needs fprime2), ridder/bisect/toms748
 (bracketing, like brentq). LEVER (reconfirmed): any scipy scalar solver a caller loops in Python → `_many`
 inlined + work-capped = 500-2000x (Python-overhead elimination).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — least_squares_many (vmap-over-solver) — 121.6x FASTER than the scipy.optimize.least_squares loop
+
+Fills the one gap in the vmap-over-solver core: fsci had curve_fit_many (which wraps least_squares) but no direct
+`least_squares_many`. `scipy.optimize.least_squares` loops a Python residual callback per LM/finite-diff
+iteration; fsci `least_squares_many(residuals, x0, param_rows, options)` inlines `residuals(x, params)` as a Rust
+closure over the independent parameter rows, fanning the heavy iterative solves whole-row across cores (low gate
+like curve_fit_many; per-item Result so one non-converged fit doesn't sink the batch).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), 500 exp-decay fits (y = a·e^{−b·t}, 40 pts):
+
+| workload | fsci serial → many | scipy loop | vs scipy |
+| --- | --- | --- | --- |
+| N=500 least_squares | 4.71 → 3.99ms | 485.6ms | 121.6x |
+
+Byte-identical to the fsci serial loop (0 param bit-mismatches, both paths); noiseless fits recover the
+generating (a, b) to <1e-6. fsci-opt lib 324/324 green (+ `least_squares_many_byte_identical_to_per_param`).
+The win is dominated by PYTHON-OVERHEAD ELIMINATION (fsci serial 4.71ms vs scipy 485.6ms = 103x — scipy's per-fit
+Python residual callbacks); the parallel fan adds a modest 1.2x here because fsci's LM per-solve is already fast
+(~9µs). VMAP-OVER-SOLVER CORE COMPLETE: curve_fit/curve_fit_bounded/least_squares/minimize/minimize_scalar/root/
+newton/secant/fixed_point/brentq/quad/dblquad/tplquad/nquad/solve_ivp/solve_bvp — all `_many`, all byte-identical,
+all Python-overhead-lever wins (13-1950x by callback density).
