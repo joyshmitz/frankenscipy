@@ -13247,3 +13247,21 @@ pre-existing discrepancy in the scalar kernel (candidate for a dedicated fix, li
 
 SIGNAL frequency-sweep vein now worked out: freqz/sosfreqz/freqz_zpk/group_delay/bode all parallel (3-21x). NEG:
 freqs (analog, 12.8ms scipy) small; dfreqresp/dbode delegate to the same kernels.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — Slerp rotation interpolator (NEW type, feature gap) — 21x FASTER than scipy, matches exactly
+
+fsci had NO `Slerp` type (only pairwise `Rotation::slerp` + `RotationSpline`); `scipy.spatial.transform.Slerp`
+interpolates a sequence of key rotations at arbitrary query times and is slow at scale (Python-object overhead):
+253ms for 500k queries over 200 keys. Implemented `Slerp` as a faithful port of scipy's algorithm (read from the
+installed `_rotation.py`): construction precomputes `rotvecs[i] = (R_i⁻¹·R_{i+1}).as_rotvec()` per interval;
+evaluation at `t ∈ [t_i, t_{i+1}]` returns `R_i · from_rotvec(rotvecs[i]·α)`, `α = (t−t_i)/(t_{i+1}−t_i)`, with
+scipy's `searchsorted(times,t,'left')-1` interval rule (incl. the `t==times[0]→0` special case) and inclusive
+range check. Reuses fsci's already-scipy-verified `inv`/`multiply`/`as_rotvec`/`from_rotvec`. `eval_many` validates
+range then interpolates each query in parallel across cores.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), 500k queries over 200 keys: 11.80ms vs scipy 253.0ms =
+**21x**. Correctness: matches scipy to **4.44e-16** (worst quat error over 3000 queries, up-to-sign); endpoints
+recover the key rotations; out-of-range times error like scipy. Batch is byte-identical to the serial eval loop
+(0 mismatches). Locked with `slerp_matches_scipy_and_batch_is_bit_identical` (scipy reference values + endpoints +
+byte-id + error cases). fsci-spatial 229/229 green. LEVER: fsci scalar-op present but MISSING scipy's stateful
+batch INTERPOLATOR class (Slerp) → port the class + parallelize its `__call__`; win ∝ scipy's per-query overhead.

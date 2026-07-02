@@ -7780,6 +7780,107 @@ pub fn rotations_as_rotvec_many(rotations: &[Rotation]) -> Vec<[f64; 3]> {
     })
 }
 
+/// Spherical-linear rotation interpolator over a sequence of key rotations at
+/// strictly increasing key times, matching `scipy.spatial.transform.Slerp`.
+///
+/// Construction precomputes, for each key interval `[t_i, t_{i+1}]`, the relative
+/// rotation vector `rotvec_i = (R_i⁻¹ · R_{i+1}).as_rotvec()`. Evaluation at a query
+/// time `t ∈ [t_i, t_{i+1}]` returns `R_i · from_rotvec(rotvec_i · α)` with
+/// `α = (t − t_i)/(t_{i+1} − t_i)` — the exact formulation scipy uses.
+pub struct Slerp {
+    times: Vec<f64>,
+    timedelta: Vec<f64>,
+    rotations: Vec<Rotation>, // key rotations 0..n-1 (left endpoints)
+    rotvecs: Vec<[f64; 3]>,   // relative rotvec per interval
+}
+
+impl Slerp {
+    /// Build a `Slerp` from `n` key `times` (strictly increasing) and `n` key
+    /// `rotations`. Matches `scipy.spatial.transform.Slerp(times, rotations)`.
+    pub fn new(times: &[f64], rotations: &[Rotation]) -> Result<Self, SpatialError> {
+        if rotations.len() <= 1 {
+            return Err(SpatialError::InvalidArgument(
+                "`rotations` must be a sequence of at least 2 rotations.".to_string(),
+            ));
+        }
+        if times.len() != rotations.len() {
+            return Err(SpatialError::InvalidArgument(format!(
+                "Expected number of rotations to be equal to number of timestamps given, got {} rotations and {} timestamps.",
+                rotations.len(),
+                times.len()
+            )));
+        }
+        let timedelta: Vec<f64> = times.windows(2).map(|w| w[1] - w[0]).collect();
+        if timedelta.iter().any(|&d| d <= 0.0) {
+            return Err(SpatialError::InvalidArgument(
+                "Times must be in strictly increasing order.".to_string(),
+            ));
+        }
+        // rotvec_i = as_rotvec(R_i⁻¹ · R_{i+1}) — the relative rotation over interval i.
+        let rotvecs: Vec<[f64; 3]> = (0..rotations.len() - 1)
+            .map(|i| rotations[i].inv().multiply(&rotations[i + 1]).as_rotvec())
+            .collect();
+        Ok(Self {
+            times: times.to_vec(),
+            timedelta,
+            rotations: rotations[..rotations.len() - 1].to_vec(),
+            rotvecs,
+        })
+    }
+
+    /// Locate the interval index for query time `t` (scipy: `searchsorted(times, t,
+    /// side='left') - 1`, with `t == times[0]` mapped to interval 0), or an error if
+    /// `t` is outside `[times[0], times[last]]`.
+    #[inline]
+    fn interval(&self, t: f64) -> Result<usize, SpatialError> {
+        let pp = self.times.partition_point(|&x| x < t);
+        let ind = if t == self.times[0] {
+            0isize
+        } else {
+            pp as isize - 1
+        };
+        if ind < 0 || ind > self.rotations.len() as isize - 1 {
+            return Err(SpatialError::InvalidArgument(format!(
+                "Interpolation times must be within the range [{}, {}], both inclusive.",
+                self.times[0],
+                self.times[self.times.len() - 1]
+            )));
+        }
+        Ok(ind as usize)
+    }
+
+    #[inline]
+    fn interp_valid(&self, t: f64, ind: usize) -> Rotation {
+        let alpha = (t - self.times[ind]) / self.timedelta[ind];
+        let rv = self.rotvecs[ind];
+        self.rotations[ind]
+            .multiply(&Rotation::from_rotvec([rv[0] * alpha, rv[1] * alpha, rv[2] * alpha]))
+    }
+
+    /// Interpolate a single rotation at query time `t`.
+    pub fn eval(&self, t: f64) -> Result<Rotation, SpatialError> {
+        let ind = self.interval(t)?;
+        Ok(self.interp_valid(t, ind))
+    }
+
+    /// Interpolate rotations at many query times, matching `Slerp.__call__` on an
+    /// array of times. Errors if ANY time is out of range (as scipy does). The valid
+    /// per-time interpolations run in parallel across cores, byte-identical to the
+    /// serial `ts.iter().map(|t| self.eval(t))`.
+    pub fn eval_many(&self, ts: &[f64]) -> Result<Vec<Rotation>, SpatialError> {
+        // Validate range up front (scipy raises on any out-of-range time).
+        for &t in ts {
+            self.interval(t)?;
+        }
+        Ok(rotation_par_index_map(ts.len(), ROTATION_BATCH_GATE, |i| {
+            let t = ts[i];
+            // interval() cannot fail here (validated above); recompute the index.
+            let ind = self.interval(t).unwrap_or(0);
+            self.interp_valid(t, ind)
+        }))
+    }
+}
+
 /// Compose `a[i] * b[i]` for every `i` (elementwise rigid-transform composition),
 /// matching `scipy.spatial.transform.RigidTransform.__mul__` on two equal-length
 /// transform stacks.
@@ -11788,6 +11889,75 @@ mod tests {
         for i in 0..8 {
             assert_eq!(sm[i].as_quat(), small_a[i].multiply(&small_b[i]).as_quat());
         }
+    }
+
+    #[test]
+    fn slerp_matches_scipy_and_batch_is_bit_identical() {
+        // Reference values from scipy.spatial.transform.Slerp (v1.17.1).
+        let mk = |q: [f64; 4]| {
+            let n = (q.iter().map(|v| v * v).sum::<f64>()).sqrt();
+            Rotation::from_quat([q[0] / n, q[1] / n, q[2] / n, q[3] / n])
+        };
+        let kt = [0.0, 1.0, 3.0, 6.0];
+        let kr = [
+            mk([0.0, 0.0, 0.0, 1.0]),
+            mk([0.1, 0.2, 0.3, 0.9]),
+            mk([0.5, -0.1, 0.2, 0.8]),
+            mk([-0.2, 0.3, 0.1, 0.7]),
+        ];
+        let sl = Slerp::new(&kt, &kr).expect("slerp");
+        let cases: [(f64, [f64; 4]); 6] = [
+            (0.0, [0.0, 0.0, 0.0, 1.0]),
+            (
+                0.5,
+                [0.05231070742733861, 0.10462141485467721, 0.1569321222820158, 0.9806580741717876],
+            ),
+            (
+                1.0,
+                [0.10259783520851541, 0.20519567041703082, 0.3077935056255462, 0.9233805168766387],
+            ),
+            (
+                2.0,
+                [0.32082346922827804, 0.05295281370689373, 0.2667409875261423, 0.9072582579874562],
+            ),
+            (
+                4.5,
+                [0.14813911965010984, 0.15436725350922376, 0.18663685531798327, 0.9588494337018318],
+            ),
+            (
+                6.0,
+                [-0.2519763153394849, 0.37796447300922736, 0.12598815766974245, 0.8819171036881969],
+            ),
+        ];
+        for (t, want) in cases {
+            let q = sl.eval(t).expect("eval").as_quat();
+            // Quaternion sign is arbitrary; compare up to sign.
+            let d_pos: f64 = (0..4).map(|i| (q[i] - want[i]).abs()).fold(0.0, f64::max);
+            let d_neg: f64 = (0..4).map(|i| (q[i] + want[i]).abs()).fold(0.0, f64::max);
+            assert!(d_pos.min(d_neg) < 1e-12, "slerp t={t}: {q:?} vs scipy {want:?}");
+        }
+        // Endpoints exactly recover the key rotations (continuity).
+        assert!(sl.eval(3.0).unwrap().multiply(&kr[2].inv()).is_identity(1e-12));
+
+        // Batch is bit-identical to the serial eval loop (n crosses the gate).
+        let mut s: u64 = 0xABCD_1234_5678_9EF1;
+        let mut u = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / 9.007_199_254_740_992e15
+        };
+        let ts: Vec<f64> = (0..40_000).map(|_| 6.0 * u()).collect();
+        let batch = sl.eval_many(&ts).expect("eval_many");
+        assert_eq!(batch.len(), ts.len());
+        for (t, r) in ts.iter().zip(&batch) {
+            assert_eq!(r.as_quat(), sl.eval(*t).unwrap().as_quat());
+        }
+        // Out-of-range times error (matches scipy).
+        assert!(sl.eval(-0.1).is_err());
+        assert!(sl.eval(6.1).is_err());
+        assert!(sl.eval_many(&[1.0, 7.0]).is_err());
+        assert!(Slerp::new(&[0.0], &[kr[0].clone()]).is_err());
     }
 
     #[test]
