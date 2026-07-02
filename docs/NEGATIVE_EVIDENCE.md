@@ -13265,3 +13265,28 @@ recover the key rotations; out-of-range times error like scipy. Batch is byte-id
 (0 mismatches). Locked with `slerp_matches_scipy_and_batch_is_bit_identical` (scipy reference values + endpoints +
 byte-id + error cases). fsci-spatial 229/229 green. LEVER: fsci scalar-op present but MISSING scipy's stateful
 batch INTERPOLATOR class (Slerp) → port the class + parallelize its `__call__`; win ∝ scipy's per-query overhead.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — trapezoid/simpson/cumulative_trapezoid axis-2D (vmap over rows) — 9-17x vs scipy
+
+fsci-integrate had only 1-D `trapezoid`/`simpson`/`cumulative_trapezoid`; scipy's 2-D `X(Y, x=x, axis=1)` integrate
+per-row (each row independent). Added `trapezoid_axis_2d`, `simpson_axis_2d`, `cumulative_trapezoid_axis_2d`
+(parallel across rows, byte-identical to the per-row 1-D call). This is NOT a memory-bound wash despite being a
+2-D reduction/scan: scipy's numpy path builds several 6M-element intermediates (`np.diff`, broadcast sums), while
+fsci integrates each row in a single pass (no intermediates) + fans rows across cores.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), Y = 2000×3000, shared x:
+
+| op | fsci | scipy | vs scipy |
+| --- | --- | --- | --- |
+| trapezoid_axis_2d | 3.46ms | 59.9ms | 17.3x |
+| simpson_axis_2d | 3.51ms | 34.8ms | 9.9x |
+| cumulative_trapezoid_axis_2d | 10.98ms | 98.5ms | 9.0x |
+
+Byte-identical to the fsci 1-D per-row loop (0 mismatches on all three, verified in
+`axis_2d_integration_matches_per_row_loop_bit_for_bit`, nr=200 > gate, odd nc exercising Simpson's even-interval
+Cartwright path) — and the 1-D routines already match scipy. fsci-integrate 267/267 green. LEVER: fsci has the 1-D
+reduction/scan but MISSES scipy's per-axis 2-D form → vmap over rows (parallel, byte-id); wins even for
+memory-touching ops because scipy's numpy builds big intermediates the single-pass Rust avoids.
+
+NEG this sweep (already-dominant, don't re-hunt): BarycentricInterpolator eval_many 8.4x (par_query_map),
+Krogh 6.2ms fast, CubicSpline/Pchip/Akima eval_many already par_query_map.

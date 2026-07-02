@@ -1145,6 +1145,96 @@ pub fn cumulative_trapezoid(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateV
     Ok(result)
 }
 
+/// Threads for a per-row 2-D integration sweep: serial for a handful of rows,
+/// else one chunk per core capped by the row count.
+fn axis_2d_thread_count(nrows: usize) -> usize {
+    if nrows < 8 {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(nrows)
+}
+
+/// Map a fallible per-row integrator across `rows` in parallel (ordered chunks),
+/// byte-identical to `rows.iter().map(op).collect()`. Propagates the first error
+/// in row order.
+fn integrate_rows_parallel<T, F>(
+    nrows: usize,
+    op: F,
+) -> Result<Vec<T>, IntegrateValidationError>
+where
+    T: Send,
+    F: Fn(usize) -> Result<T, IntegrateValidationError> + Sync,
+{
+    let nthreads = axis_2d_thread_count(nrows);
+    if nthreads <= 1 {
+        return (0..nrows).map(op).collect();
+    }
+    let chunk = nrows.div_ceil(nthreads);
+    let op = &op;
+    let chunk_results: Vec<Result<Vec<T>, IntegrateValidationError>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || (lo..hi).map(op).collect::<Result<Vec<T>, _>>()))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("axis-2d integrate worker panicked"))
+                .collect()
+        });
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
+/// Trapezoidal integral of each row of a 2-D array against shared sample
+/// coordinates `x`, matching `scipy.integrate.trapezoid(Y, x=x, axis=1)`.
+///
+/// Byte-identical to calling [`trapezoid`] per row (independent rows fan across
+/// cores). Returns one integral per row.
+pub fn trapezoid_axis_2d(
+    rows: &[Vec<f64>],
+    x: &[f64],
+) -> Result<Vec<f64>, IntegrateValidationError> {
+    integrate_rows_parallel(rows.len(), |i| {
+        trapezoid(&rows[i], x).map(|r| r.integral)
+    })
+}
+
+/// Simpson's-rule integral of each row of a 2-D array against shared sample
+/// coordinates `x`, matching `scipy.integrate.simpson(Y, x=x, axis=1)`.
+///
+/// Byte-identical to calling [`simpson`] per row (independent rows fan across cores).
+pub fn simpson_axis_2d(
+    rows: &[Vec<f64>],
+    x: &[f64],
+) -> Result<Vec<f64>, IntegrateValidationError> {
+    integrate_rows_parallel(rows.len(), |i| simpson(&rows[i], x).map(|r| r.integral))
+}
+
+/// Cumulative trapezoidal integral of each row of a 2-D array against shared
+/// sample coordinates `x`, matching `scipy.integrate.cumulative_trapezoid(Y, x=x,
+/// axis=1)` (no `initial`, so each output row is one shorter than the input).
+///
+/// Byte-identical to calling [`cumulative_trapezoid`] per row (independent rows
+/// fan across cores).
+pub fn cumulative_trapezoid_axis_2d(
+    rows: &[Vec<f64>],
+    x: &[f64],
+) -> Result<Vec<Vec<f64>>, IntegrateValidationError> {
+    integrate_rows_parallel(rows.len(), |i| cumulative_trapezoid(&rows[i], x))
+}
+
 /// Cumulatively integrate y with uniform spacing using the trapezoidal rule.
 ///
 /// Matches `scipy.integrate.cumulative_trapezoid(y, dx=dx)`.
@@ -4027,6 +4117,41 @@ mod tests {
         for (g, e) in r2.iter().zip(&[2.5, 9.0]) {
             assert!((g - e).abs() < 1e-12, "cumtrapz2: {g} vs {e}");
         }
+    }
+
+    #[test]
+    fn axis_2d_integration_matches_per_row_loop_bit_for_bit() {
+        // trapezoid_axis_2d / simpson_axis_2d / cumulative_trapezoid_axis_2d must be
+        // bit-identical to calling the 1-D routine per row. nrows crosses the gate (8).
+        let mut s: u64 = 0x1357_9BDF_2468_ACE1;
+        let mut u = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / 9.007_199_254_740_992e15 * 2.0 - 1.0
+        };
+        let (nr, nc) = (200usize, 51usize); // odd nc exercises Simpson's even-interval path
+        let rows: Vec<Vec<f64>> = (0..nr).map(|_| (0..nc).map(|_| u()).collect()).collect();
+        let mut x: Vec<f64> = (0..nc).map(|_| u() * 10.0 + 10.0).collect();
+        x.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let tr = trapezoid_axis_2d(&rows, &x).expect("trap");
+        let si = simpson_axis_2d(&rows, &x).expect("simp");
+        let ct = cumulative_trapezoid_axis_2d(&rows, &x).expect("cumtrap");
+        assert_eq!(tr.len(), nr);
+        assert_eq!(si.len(), nr);
+        assert_eq!(ct.len(), nr);
+        for i in 0..nr {
+            assert_eq!(tr[i].to_bits(), trapezoid(&rows[i], &x).unwrap().integral.to_bits());
+            assert_eq!(si[i].to_bits(), simpson(&rows[i], &x).unwrap().integral.to_bits());
+            let cti = cumulative_trapezoid(&rows[i], &x).unwrap();
+            assert_eq!(ct[i].len(), cti.len());
+            for (a, b) in ct[i].iter().zip(&cti) {
+                assert_eq!(a.to_bits(), b.to_bits());
+            }
+        }
+        // Empty input and error propagation (mismatched x length in one row shape).
+        assert!(trapezoid_axis_2d(&[], &x).unwrap().is_empty());
     }
 
     #[test]
