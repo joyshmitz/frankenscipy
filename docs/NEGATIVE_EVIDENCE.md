@@ -12897,3 +12897,22 @@ length-2 path (looped). fsci-stats lib 2004/2004 green (+ `spearmanr_matrix_matc
 Pearson — the naive per-pair kernel re-ranks O(m) times. The betainc p-value removal was minor (~7%); the O(m²·n)
 correlation dominates. Completes the stats correlation/distance _matrix family (pearson via corrcoef, spearman,
 kendall, weightedtau, wasserstein, energy, ks_2samp, mannwhitneyu).
+
+## 2026-07-02 — BlackThrush (cc): SWEEP SUMMARY — "find scipy's slow ops" vein largely TAPPED (stats/signal/spatial/cluster/csgraph); + the BLAS-oversubscription phantom trap
+
+Ran 6 rounds of `python3 -c` timing sweeps (pinned OPENBLAS/OMP/MKL=1) across scipy modules to find slow ops
+(>50ms) fsci might beat. RESULT: this lever produced 2 genuine wins earlier this session — cut_tree_multi (802x,
+scipy's cut_tree is algorithmically slow) and spearmanr_matrix (45x, missing all-pairs form) — and is now largely
+TAPPED. Every OTHER slow op checked is ALREADY a fsci win (measured, no code to land):
+- theilslopes 17.5x, siegelslopes 21.6x (selection-based fast path, byte-exact) · rankdata_axis_2d 15.3x ·
+  gstd_axis_2d 19.2x · median_abs_deviation_axis_2d 48.5x · lombscargle/dijkstra_all_pairs (parallel, done).
+CRITICAL TRAP (cost me a probe, now recorded): scipy LAPACK-heavy ops (sqrtm/polar/svd/RBFInterpolator) showed
+896ms/618ms/388ms UNPINNED but 54.6ms/30.7ms PINNED — pure OpenBLAS OVERSUBSCRIPTION on the shared 64-core box.
+ALWAYS pin OPENBLAS_NUM_THREADS=1 in the sweep or BLAS ops read 10-16x inflated (a phantom, not a target). Those
+are gemm-walled, not winnable. Other non-wins: cophenet / distance_matrix / squareform = O(n²) MEMORY-BOUND
+scatter (fsci ~parity-to-1.3x-slower, scipy's C wins the constant). INVALID-COMPARE guard: scipy.special.zeta(x,q)
+is 2-arg HURWITZ; fsci `zeta` is 1-arg RIEMANN — different functions, don't compare. The remaining scipy slow ops
+are all (a) already-won, (b) BLAS-oversubscription phantoms, or (c) memory-bound / LAPACK / FFT-SIMD / Qhull /
+HiGHS walls. The productive fresh-gap pattern was "fsci has a fast SINGLE primitive but MISSES scipy's slow
+BATCH/MATRIX wrapper" (cut_tree_multi, spearmanr_matrix) — that specific pattern now appears exhausted across the
+swept modules.
