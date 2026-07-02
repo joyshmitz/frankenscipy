@@ -32306,6 +32306,29 @@ pub fn kruskal_many(sets: &[Vec<Vec<f64>>]) -> Vec<TtestResult> {
     })
 }
 
+/// Vectorised chi-square goodness-of-fit [`chisquare`] over `n` independent
+/// observed-frequency vectors; see [`f_oneway_many`]. Each entry is the `(chi2,
+/// pvalue)` for `f_obs[k]` against `f_exp[k]` (or uniform when `f_exp` is `None`).
+/// Panics if `f_exp` is `Some` with a length differing from `f_obs`.
+#[must_use]
+pub fn chisquare_many(f_obs: &[Vec<f64>], f_exp: Option<&[Vec<f64>]>) -> Vec<(f64, f64)> {
+    if let Some(exp) = f_exp {
+        assert_eq!(
+            f_obs.len(),
+            exp.len(),
+            "chisquare_many: f_obs and f_exp length mismatch"
+        );
+    }
+    // chisquare's per-test kernel is very cheap (one Σ(o-e)²/e + one gammaincc for
+    // the p-value, ~hundreds of ns), so a high per-thread gate keeps typical batches
+    // SERIAL — the win here is eliminating SciPy's per-call Python overhead (fsci
+    // serial already beats the scipy loop ~400-900x), and threading such tiny work
+    // only over-subscribes; only very large N amortises the spawn.
+    par_pair_index_map(f_obs.len(), 4096, |i| {
+        chisquare(&f_obs[i], f_exp.map(|e| e[i].as_slice()))
+    })
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -83910,6 +83933,18 @@ mod tests {
             let k0 = kruskal(&g);
             assert_eq!(kw[i].statistic.to_bits(), k0.statistic.to_bits());
             assert_eq!(kw[i].pvalue.to_bits(), k0.pvalue.to_bits());
+        }
+
+        // chisquare goodness-of-fit batch (uniform expected) — bit-identical.
+        let obs: Vec<Vec<f64>> = (0..n)
+            .map(|i| xs[i].iter().map(|v| v.abs() + 1.0).collect())
+            .collect();
+        let cs = chisquare_many(&obs, None);
+        assert_eq!(cs.len(), n);
+        for i in 0..n {
+            let (s0, p0) = chisquare(&obs[i], None);
+            assert_eq!(cs[i].0.to_bits(), s0.to_bits());
+            assert_eq!(cs[i].1.to_bits(), p0.to_bits());
         }
 
         // Nonparametric batch APIs (rank-based) — same bit-identity guarantee.

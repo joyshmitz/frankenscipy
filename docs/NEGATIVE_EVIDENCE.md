@@ -12589,3 +12589,27 @@ STATS-VMAP HYPOTHESIS-TEST FAMILY NOW COMPLETE: pearsonr/spearmanr (correlation)
 `par_pair_index_map`, all Python-overhead-lever wins (100-1400x), all byte-identical to the serial loop, all
 correctness-gated vs scipy on fixed data. Only wilcoxon deliberately excluded (pre-existing normal-approx parity
 gap — a fast wrong answer). chisquare remains as a possible further member.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched chisquare_many (goodness-of-fit vmap) — 449-930x vs the scipy loop (serial win, high gate avoids over-subscription)
+
+Final member of the stats-vmap hypothesis-test family. SciPy has no batched `chisquare`, so a mass-univariate
+caller loops it in Python (N=5000 m=20: 1060ms). Added `chisquare_many(f_obs, f_exp: Option<..>)` (per-test
+optional expected freqs) via `par_pair_index_map`. Correctness: fsci chisquare EXACT vs scipy
+(chisquare([16,18,16,14,12,12]) = stat 2.0, p 0.849145036084610).
+
+KEY TUNING (the cheap-per-item lesson, cf. perf_available_parallelism_per_call_syscall_tax): chisquare's per-test
+kernel is TINY (one Σ(o-e)²/e + one gammaincc, ~hundreds of ns), so at the default 128-items/thread gate the
+parallel path OVER-SUBSCRIBED and ran SLOWER than serial (N=5000: 2.06ms parallel vs 1.14ms serial). Raised the
+gate to 4096 items/thread → typical batches stay SERIAL (self 1.00x, no regression); only very large N amortises
+the spawn. The win here is NOT parallelism — it's eliminating SciPy's per-call Python overhead:
+
+| batch | fsci many (serial-path, ms) | scipy loop | vs scipy |
+| --- | --- | --- | --- |
+| N=5000 m=20 | 1.14 | 1060ms | 930x |
+| N=3000 m=50 | 1.11 | 498ms | 449x |
+
+Byte-identical to the fsci serial loop (0 mismatches). fsci-stats lib 2003/2003 green. LESSON REINFORCED: for a
+`_many` over an ULTRA-cheap per-item kernel, the vmap win is pure Python-overhead elimination (serial fsci already
+100s×) and the thread gate must be HIGH (4096+/thread) or parallelism regresses — measure serial-vs-parallel, not
+just vs-scipy. STATS-VMAP HYPOTHESIS-TEST FAMILY COMPLETE (9 fns): pearsonr/spearmanr/ttest_ind/linregress/
+mannwhitneyu/ks_2samp/f_oneway/kruskal/chisquare. wilcoxon excluded (parity gap).
