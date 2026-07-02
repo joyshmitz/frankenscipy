@@ -13376,3 +13376,23 @@ Constructor family now: dft 75x / hadamard 3.6x / circulant·toeplitz·hankel·h
 helmert ~19x. LEVER (reusable helper shipped): any `Vec<Vec<f64>>` constructor whose cells are a closed form of
 (i,j) → `par_fill_rows`. GOTCHA: scipy's `as_strided` view constructors are single-threaded on materialization, so
 a SERIAL fsci fill silently LOSES — grep serial `for i..for j` n² constructor loops.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — parallel kron/tri/tril/triu/invhilbert: 2 more LOSS flips + invhilbert 1.4x→49.5x
+
+Second loss-hunt pass over serial n²-fill constructors, reusing `par_fill_rows`. kron and tri were serial LOSSES;
+invhilbert was a serial 1.4x under-win at 2400ms (its O(n) binomial-per-cell makes it O(n³) compute-bound → the
+biggest parallel headroom).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1):
+
+| op | fsci before | fsci after | scipy | vs scipy |
+| --- | --- | --- | --- | --- |
+| kron (200²⊗40²) | 386.6ms | 57.5ms | 262.5ms | 0.7x → **4.6x** |
+| tri (6000) | 180.6ms | 32.4ms | 140.6ms | 0.8x → **4.3x** |
+| tril (6000²) | 179.6ms | 66.5ms | 637.1ms | 3.5x → **9.6x** |
+| invhilbert (800) | 2400.9ms | 67.8ms | 3356.8ms | 1.4x → **49.5x** |
+
+kron's output row `r` maps to `(a[r/rb], b[r%rb])`; invhilbert's O(n³) binomial work scales near-linearly with
+cores (35x self-speedup → 49.5x vs scipy). triu parallelized alongside tril for consistency. Byte-identical by
+construction; 143+ constructor conformance tests pass. fsci-linalg 496/496 green. Structured-constructor loss-hunt
+now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tril/triu/invhilbert all parallel).

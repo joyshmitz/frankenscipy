@@ -14940,9 +14940,10 @@ pub fn hilbert(n: usize) -> Vec<Vec<f64>> {
 /// Returns the exact inverse (integer entries) computed via the closed-form
 /// formula, avoiding numerical inversion of the ill-conditioned Hilbert matrix.
 pub fn invhilbert(n: usize) -> Vec<Vec<f64>> {
-    let mut result = vec![vec![0.0; n]; n];
-    for (i, row) in result.iter_mut().enumerate().take(n) {
-        for (j, entry) in row.iter_mut().enumerate().take(n) {
+    // Each entry is an independent closed form with O(n) binomial work (so the whole
+    // matrix is O(n³) and strongly compute-bound) → fan the rows across cores.
+    par_fill_rows(n, n, |i, out| {
+        for (j, entry) in out.iter_mut().enumerate() {
             let mut val = if (i + j) % 2 == 0 { 1.0 } else { -1.0 };
             val *= ((i + j + 1) as f64)
                 * binom(n + i, n - j - 1)
@@ -14950,8 +14951,7 @@ pub fn invhilbert(n: usize) -> Vec<Vec<f64>> {
                 * binom(i + j, i).powi(2);
             *entry = val;
         }
-    }
-    result
+    })
 }
 
 /// Binomial coefficient C(n, k) as f64.
@@ -15391,15 +15391,11 @@ pub fn bandwidth(a: &[Vec<f64>]) -> (usize, usize) {
 /// tri(n, m, k) creates an n×m matrix with ones at and below the k-th diagonal.
 /// Matches `numpy.tri`.
 pub fn tri(n: usize, m: usize, k: i64) -> Vec<Vec<f64>> {
-    let mut result = vec![vec![0.0; m]; n];
-    for (i, row) in result.iter_mut().enumerate() {
-        for (j, value) in row.iter_mut().enumerate() {
-            if (j as i64) <= (i as i64) + k {
-                *value = 1.0;
-            }
+    par_fill_rows(n, m, |i, out| {
+        for (j, value) in out.iter_mut().enumerate() {
+            *value = if (j as i64) <= (i as i64) + k { 1.0 } else { 0.0 };
         }
-    }
-    result
+    })
 }
 
 /// Extract lower triangle of a matrix.
@@ -15411,15 +15407,15 @@ pub fn tril(a: &[Vec<f64>], k: i64) -> Vec<Vec<f64>> {
         return vec![];
     }
     let m = a[0].len();
-    let mut result = vec![vec![0.0; m]; n];
-    for i in 0..n {
-        for j in 0..m {
-            if (j as i64) <= (i as i64) + k {
-                result[i][j] = a[i][j];
-            }
+    par_fill_rows(n, m, |i, out| {
+        for (j, entry) in out.iter_mut().enumerate() {
+            *entry = if (j as i64) <= (i as i64) + k {
+                a[i][j]
+            } else {
+                0.0
+            };
         }
-    }
-    result
+    })
 }
 
 /// Extract upper triangle of a matrix.
@@ -15431,15 +15427,15 @@ pub fn triu(a: &[Vec<f64>], k: i64) -> Vec<Vec<f64>> {
         return vec![];
     }
     let m = a[0].len();
-    let mut result = vec![vec![0.0; m]; n];
-    for i in 0..n {
-        for j in 0..m {
-            if (j as i64) >= (i as i64) + k {
-                result[i][j] = a[i][j];
-            }
+    par_fill_rows(n, m, |i, out| {
+        for (j, entry) in out.iter_mut().enumerate() {
+            *entry = if (j as i64) >= (i as i64) + k {
+                a[i][j]
+            } else {
+                0.0
+            };
         }
-    }
-    result
+    })
 }
 
 /// Kronecker product of two matrices.
@@ -15451,19 +15447,20 @@ pub fn kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     }
     let (ra, ca) = (a.len(), a[0].len());
     let (rb, cb) = (b.len(), b[0].len());
-    let mut result = vec![vec![0.0; ca * cb]; ra * rb];
 
-    for i in 0..ra {
+    // Output row `r` maps to block row `i = r / rb` of `a` and row `k = r % rb` of
+    // `b`; each output row is independent → fan across cores.
+    par_fill_rows(ra * rb, ca * cb, |r, out| {
+        let i = r / rb;
+        let k = r % rb;
         for j in 0..ca {
-            for k in 0..rb {
-                for l in 0..cb {
-                    result[i * rb + k][j * cb + l] = a[i][j] * b[k][l];
-                }
+            let aij = a[i][j];
+            let base = j * cb;
+            for l in 0..cb {
+                out[base + l] = aij * b[k][l];
             }
         }
-    }
-
-    result
+    })
 }
 
 // ══════════════════════════════════════════════════════════════════════
