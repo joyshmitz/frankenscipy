@@ -12130,3 +12130,23 @@ stats-distribution pdf/cdf/ppf/sf/isf `_many` already parallel (par_continuous_m
 already BEATS scipy's direct-only convolve2d everywhere (3-14x), losing only to scipy fftconvolve at 512² k=31
 (the 2D non-pow2 FFT wall). LEVER RESTATED: audit each auto-dispatcher's chosen sub-path — if one branch (here
 the direct loop) is serial while its siblings parallelize, parallelize it (byte-id via gather in scatter order).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — fftconvolve routes to overlap-add when cheaper (flips 1.5-4.7x LOSSES to 1.5-3.7x scipy WINS)
+
+Residual gap after the convolve/correlate routing: users calling `fftconvolve` DIRECTLY still hit the slow
+non-pow2 full-length transform (200k/512 43 vs scipy 10.85 = 4x loss; 500k/64 53 vs 11.35 = 4.7x; 1M/2048 69.5
+vs 67.5). Since overlap-add IS an FFT-based convolution (pow2 blocks) giving the identical result, routed
+`fftconvolve` through `oa_conv_cheaper_than_full` → `oaconvolve` when cheaper. Same box:
+- fftconvolve 200k/512 43→3.06ms vs scipy 10.85 = **3.5x faster** (was 4x LOSS)
+- fftconvolve 500k/64 53→7.65ms vs scipy 11.35 = **1.5x faster** (was 4.7x LOSS)
+- fftconvolve 1M/2048 69.5→18.45ms vs scipy 67.5 = **3.7x faster**
+Similar-size inputs (100k/100k) correctly stay on the single full-length FFT. Byte-identical to oaconvolve
+(max|abs| 0.00), conformance 665/665 green. Deviates from scipy's single-FFT fftconvolve design but the result
+is the same linear convolution — a legitimate faster FFT method. The whole 1-D convolution family
+(convolve/correlate/fftconvolve/oaconvolve, direct+OA) now beats scipy across regimes.
+
+CYCLE MATURITY SWEEP (measurement-first, all already-optimal — don't re-hunt): griddata Nearest/Linear/Cubic
+eval_many all parallel (par_query_try_map); spatial directed_hausdorff Taha-Hanbury early-break + parallel;
+spatial cdist parallel (cdist_fill); RbfInterpolator.eval_many parallel; integrate quad_vec inherently
+sequential (adaptive GK15). fsci-fft non-pow2 SoA-SIMD kernel remains THE deferred multi-cycle gap (only bites
+full-length transforms now — OA routing sidesteps it for all 1-D convolution entry points).

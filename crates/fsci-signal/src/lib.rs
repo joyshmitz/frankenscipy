@@ -1299,6 +1299,15 @@ pub fn fftconvolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>,
     let nb = b.len();
     let full_len = na + nb - 1;
 
+    // Overlap-add is also an FFT convolution and, for a long signal against a much
+    // shorter kernel, is far cheaper than one full-length transform — and it uses
+    // pow2 blocks, dodging fsci's slower non-pow2 full-length FFT. Route to it when
+    // cheaper (same linear convolution up to ~1e-10 FFT roundoff, already within
+    // tolerance). Similar-size inputs fall through to the single full-length FFT.
+    if oa_conv_cheaper_than_full(na, nb) {
+        return oaconvolve(a, b, mode);
+    }
+
     // Pad to the smallest even 5-smooth length ≥ full_len (≤ next_pow2, and fast
     // under fsci's radix-2/3/4/5 mixed-radix FFT) — 1.2–2.1× faster than pow2.
     let fft_len = next_regular_fft_len(full_len);
