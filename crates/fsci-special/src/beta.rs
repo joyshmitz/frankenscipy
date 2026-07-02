@@ -503,27 +503,36 @@ pub fn fdtridfd(dfn: f64, p: f64, x: f64) -> f64 {
         return UPPER_SENTINEL;
     }
 
-    let mut hi = 1.0;
-    while fdtr(dfn, hi, x) < p {
+    // fdtr is increasing in dfd. Bracket the root two-sidedly from dfd = 1, then
+    // solve with the superlinear Illinois method (~10 evals) instead of the former
+    // 240-iteration bisection (a ~21× SciPy loss — each eval is a full fdtr).
+    let f1 = fdtr(dfn, 1.0, x) - p;
+    let (mut lo, mut flo) = (1.0_f64, f1);
+    let (mut hi, mut fhi) = (1.0_f64, f1);
+    while fhi < 0.0 {
         hi *= 2.0;
         if hi >= UPPER_SENTINEL {
             return UPPER_SENTINEL;
         }
+        fhi = fdtr(dfn, hi, x) - p;
     }
-
-    let mut lo = 0.0;
-    for _ in 0..240 {
-        let mid = lo + (hi - lo) * 0.5;
-        let value = fdtr(dfn, mid, x);
-        if !value.is_finite() || value < p {
-            lo = mid;
-        } else {
-            hi = mid;
+    while flo > 0.0 {
+        lo *= 0.5;
+        if lo <= LOWER_SENTINEL {
+            return LOWER_SENTINEL;
         }
+        flo = fdtr(dfn, lo, x) - p;
+    }
+    // A bracket endpoint can land exactly on the root (illinois excludes endpoints).
+    if flo == 0.0 {
+        return lo;
+    }
+    if fhi == 0.0 {
+        return hi;
     }
 
-    let dfd = lo + (hi - lo) * 0.5;
-    if dfd == 0.0 { LOWER_SENTINEL } else { dfd }
+    let dfd = illinois_root(|m| fdtr(dfn, m, x) - p, lo, hi, flo, fhi);
+    if dfd <= 0.0 { LOWER_SENTINEL } else { dfd }
 }
 
 /// Non-central F cumulative distribution function.
@@ -1279,21 +1288,36 @@ pub fn stdtridf(p: f64, t: f64) -> f64 {
         return UPPER_SENTINEL;
     }
 
-    let mut lo = 0.0;
-    let mut hi = UPPER_SENTINEL;
-
-    for _ in 0..240 {
-        let mid = lo + (hi - lo) * 0.5;
-        let value = stdtr(mid, t);
-        if !value.is_finite() || value < p {
-            lo = mid;
-        } else {
-            hi = mid;
+    // stdtr is increasing in df. Bracket two-sidedly from df = 1, then solve with
+    // the superlinear Illinois method (~10 evals) instead of the former 240-iteration
+    // bisection (each eval is a full stdtr).
+    let f1 = stdtr(1.0, t) - p;
+    let (mut lo, mut flo) = (1.0_f64, f1);
+    let (mut hi, mut fhi) = (1.0_f64, f1);
+    while fhi < 0.0 {
+        hi *= 2.0;
+        if hi >= UPPER_SENTINEL {
+            return UPPER_SENTINEL;
         }
+        fhi = stdtr(hi, t) - p;
+    }
+    while flo > 0.0 {
+        lo *= 0.5;
+        if lo <= MIN_DF_SENTINEL {
+            return MIN_DF_SENTINEL;
+        }
+        flo = stdtr(lo, t) - p;
+    }
+    // A bracket endpoint can land exactly on the root (illinois excludes endpoints).
+    if flo == 0.0 {
+        return lo;
+    }
+    if fhi == 0.0 {
+        return hi;
     }
 
-    let df = lo + (hi - lo) * 0.5;
-    if df == 0.0 { MIN_DF_SENTINEL } else { df }
+    let df = illinois_root(|m| stdtr(m, t) - p, lo, hi, flo, fhi);
+    if df <= 0.0 { MIN_DF_SENTINEL } else { df }
 }
 
 /// Binomial distribution CDF.

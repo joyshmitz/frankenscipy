@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: fdtridfd/stdtridf bisection → illinois_root — flip 21× loss → parity/win (20.8× self)
+
+- Target: `fsci_special::beta::fdtridfd` / `stdtridf` (invert fdtr/stdtr in the df PARAMETER). Both
+  ran a raw 240-iteration BISECTION (each iter a full fdtr/stdtr) where the noncentral siblings
+  (nctdtrit, ncfdtri) already use the crate's superlinear `illinois_root`. Converted to a two-sided
+  bracket (expand hi up / lo down from 1) + `illinois_root` (~10 evals).
+- GOTCHA (caught by tests, fixed): the doubling/halving bracket can land an endpoint EXACTLY on the
+  root (flo==0) — `illinois_root`'s strict `candidate > lo && candidate < hi` then excludes that
+  endpoint and returns a wrong midpoint (fdtridfd_inverse/stdtridf_inverse failed with the "nice"
+  round-number roots 0.5/0.25). Added explicit `if flo==0 {return lo}` / `if fhi==0 {return hi}`.
+- MEASURED (same box, best-of; scipy 1.17.1): fdtridfd(5,0.7,2.0) **56.9µs → 2.74µs = 20.8× self**
+  (was 21× SLOWER than scipy 2.53µs → now 1.08× ~parity); fdtridfd(3,0.3,1.5) 2.75µs = **1.13× FASTER**
+  than scipy (3.11µs); stdtridf(0.9,2.0) 2.87µs ~parity (1.23×). Eliminates the 21× losses; some
+  cases now beat scipy. Derivative-free illinois lands near-parity (Newton would need the awkward
+  d/d(df) incomplete-beta derivative); acceptable for these niche parameter-inversions.
+- Verification: 87 beta-module tests + fdtri (5/5) + stdtr (12/12) green.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: gammaincinv/gammainccinv iterate-break — chdtri flip 4.35× loss → 1.3-3.2× WIN
 
 - Applied the same iterate-convergence-break lever (see betaincinv entry) to the two gamma inverses:
