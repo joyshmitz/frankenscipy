@@ -12758,3 +12758,22 @@ scipy's 5.6µs/pt. Reverted (not a scipy-beating win). Contrast the WINNERS: mat
 pro_ang1 (Legendre, competitive). RULE: amortize-invariant-solve wins iff the residual per-x eval is competitive;
 a per-term-recomputed Bessel series is NOT (would need a single batched-Bessel recurrence — accuracy risk,
 deferred). So: TRIG/POLYNOMIAL per-x series → win; BESSEL/special-fn-per-term series → check eval cost first.
+
+## 2026-07-02 — BlackThrush (cc): NEGATIVE (Bessel-wall confirmed) — modulated Mathieu (modcem/modsem) + spheroidal radial are NOT amortize candidates; special-fn amortize lever fully mapped
+
+Checked the natural completion of the Mathieu family — `mathieu_modcem1/modsem1/modcem2/modsem2` (all delegate to
+`mathieu_mod`). Structure IS amortizable in principle (mathieu_fourier coeffs once + per-x series), BUT the per-x
+series is a BESSEL-PRODUCT sum (`bessel_product` per term → jv_scalar per factor). Measured fsci modcem1
+serial-loop = **417µs/pt** vs scipy 3.6µs/pt (116x slower per-call; correctness ~13 digits at moderate q). Even
+amortizing the Fourier matrix + parallelizing across 64 cores, ~417µs/pt eval → ~7µs/pt > scipy's 3.6µs/pt → a
+LOSS. Same Bessel-wall as pro_rad1_many (0.65-0.81x, reverted), only worse. NOT landed.
+
+SPECIAL-FN AMORTIZE LEVER NOW FULLY MAPPED:
+- WINNERS (per-x eval is trig/polynomial, cheap-competitive): mathieu_cem/sem_many (6.2-14.7x), pro_ang1/
+  obl_ang1_many (5.5-6.0x) — amortize the x-invariant matrix solve + parallelize the cheap series.
+- LOSERS (per-x eval is a Bessel/special-fn-per-term series, slower than scipy's C even amortized+parallel):
+  pro_rad1/obl_rad1 (spheroidal radial), mathieu_modcem/modsem (modulated Mathieu), and by structure pro_rad2/
+  obl_rad2 (rmn2l Neumann series). DO NOT re-attempt these as `_many` — the fix would need a single batched
+  spherical/ordinary-Bessel recurrence replacing the per-term recompute (accuracy risk vs the scalar; deferred).
+RULE (reconfirmed): amortize-invariant-solve + parallelize wins iff the residual per-x eval is cheap-competitive
+with scipy's C; a per-term Bessel recompute is the wall. Special-fn `_many` vein (angular families) is exhausted.
