@@ -28,7 +28,7 @@ pub use root::{
     root_many,
     bisect, brenth, brentq, brentq_many, broyden1, broyden2, df_sane, fsolve, halley, lm_root,
     newton, newton_many,
-    newton_krylov, newton_scalar, ridder, root, root_scalar, secant, toms748,
+    newton_krylov, newton_scalar, ridder, root, root_scalar, secant, secant_many, toms748,
 };
 pub use types::{
     Bound, Bounds, ConvergenceStatus, GradientFunc, LinearConstraint, MinimizeOptions,
@@ -3859,6 +3859,65 @@ where
     })
 }
 
+/// Vectorised [`fixed_point`] iteration over `n` parameter rows — the
+/// vmap-over-solver form for `scipy.optimize.fixed_point`. `f(x, params)` is an
+/// inlined Rust closure (no per-iteration Python callback), and the independent
+/// solves fan across threads with a work-capped gate (a scalar fixed-point
+/// iteration is cheap, so the win is eliminating SciPy's per-solve Python
+/// overhead; typical batches stay serial). Entry `k` equals
+/// `fixed_point(|x| f(x, &param_rows[k]), x0, tol, maxiter)`.
+pub fn fixed_point_many<F>(
+    f: F,
+    x0: f64,
+    param_rows: &[Vec<f64>],
+    tol: f64,
+    maxiter: usize,
+) -> Vec<Result<f64, OptError>>
+where
+    F: Fn(f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let f_ref = &f;
+    let solve_one = move |params: &[f64]| fixed_point(|x| f_ref(x, params), x0, tol, maxiter);
+
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows / 2048).max(1);
+    if nthreads <= 1 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<f64, OptError>>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= nrows {
+                    return None;
+                }
+                let hi = (lo + chunk).min(nrows);
+                Some(scope.spawn(move || {
+                    (lo..hi)
+                        .map(|i| solve_one(&param_rows[i]))
+                        .collect::<Vec<_>>()
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("fixed_point_many worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 /// Non-negative least squares: minimize ||Ax - b||² subject to x >= 0.
 ///
 /// Uses the active-set method (Lawson-Hanson algorithm).
@@ -5851,6 +5910,7 @@ mod tests {
         MinimizeOptions, NonlinearConstraint, OptError, OptimizeMethod, RootOptions, approx_fprime,
         basinhopping, bracket, brent_minimize, brute, check_grad, cobyla, derivative,
         differential_evolution, differential_evolution_constrained, dual_annealing, fixed_point,
+        fixed_point_many,
         golden, gradient_descent, hessian, isotonic_regression, jacobian, linear_sum_assignment,
         linprog, milp, minimize_scalar_bounded, minimize_trisection, nnls, numerical_gradient,
         numerical_hessian, numerical_jacobian, projected_gradient_descent, pso,
@@ -8072,6 +8132,34 @@ mod tests {
             fixed_point(|x| x, 0.5, 1e-10, 0),
             Err(OptError::InvalidArgument { .. })
         ));
+    }
+
+    #[test]
+    fn fixed_point_many_byte_identical_to_per_param() {
+        // Babylonian sqrt: x = 0.5*(x + a/x) -> sqrt(a), swept over many a.
+        // nrows crosses the work-capped serial->parallel gate (>= 2*2048).
+        let g = |x: f64, p: &[f64]| 0.5 * (x + p[0] / x);
+        let mut s = 17u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            0.1 + 100.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 5000usize;
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng()]).collect();
+        let batched = fixed_point_many(g, 1.0, &params, 1e-11, 500);
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let a = p[0];
+            let single = fixed_point(|x| 0.5 * (x + a / x), 1.0, 1e-11, 500).expect("single");
+            let many = *batched[i].as_ref().expect("batched member");
+            assert_eq!(many.to_bits(), single.to_bits(), "value mismatch {i}");
+            assert!(
+                (many - a.sqrt()).abs() < 1e-8,
+                "{many} vs sqrt {}",
+                a.sqrt()
+            );
+        }
+        assert!(fixed_point_many(g, 1.0, &[], 1e-11, 500).is_empty());
     }
 
     #[test]

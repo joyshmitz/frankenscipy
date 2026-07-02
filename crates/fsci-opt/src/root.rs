@@ -367,6 +367,64 @@ where
     out
 }
 
+/// Vectorised derivative-free [`secant`] root find over `n` parameter rows — the
+/// sibling of [`newton_many`] for `scipy.optimize.newton` WITHOUT `fprime` (secant
+/// method). `func(x, params)` is an inlined Rust closure (no per-iteration Python
+/// callback). Work-capped like [`newton_many`] (cheap scalar solve ⇒ the win is
+/// Python-overhead elimination, so typical batches stay serial). Entry `k` equals
+/// `secant(|x| func(x, &param_rows[k]), x0, x1, options)`.
+pub fn secant_many<F>(
+    func: F,
+    x0: f64,
+    x1: Option<f64>,
+    param_rows: &[Vec<f64>],
+    options: RootOptions,
+) -> Vec<Result<RootResult, OptError>>
+where
+    F: Fn(f64, &[f64]) -> f64 + Sync,
+{
+    let nrows = param_rows.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let f_ref = &func;
+    let solve_one = move |params: &[f64]| secant(|x| f_ref(x, params), x0, x1, options);
+
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows / 2048).max(1);
+    if nthreads <= 1 {
+        return param_rows.iter().map(|p| solve_one(p)).collect();
+    }
+    let chunk = nrows.div_ceil(nthreads);
+    let solve_one = &solve_one;
+    let chunk_results: Vec<Vec<Result<RootResult, OptError>>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let lo = t * chunk;
+                if lo >= nrows {
+                    return None;
+                }
+                let hi = (lo + chunk).min(nrows);
+                Some(scope.spawn(move || {
+                    (lo..hi)
+                        .map(|i| solve_one(&param_rows[i]))
+                        .collect::<Vec<_>>()
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("secant_many worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(nrows);
+    for cr in chunk_results {
+        out.extend(cr);
+    }
+    out
+}
+
 /// Root finder dispatched as `brenth`.
 ///
 /// # Implementation note
@@ -2629,7 +2687,7 @@ mod tests {
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, brentq_many, df_sane,
         halley, newton, newton_krylov, newton_many, newton_scalar, ridder, root_scalar, secant,
-        toms748,
+        secant_many, toms748,
     };
 
     #[derive(Debug, Serialize)]
@@ -3611,6 +3669,32 @@ mod tests {
             );
         }
         assert!(newton_many(f, fp, 1.5, &[], 1e-12, 0.0, 50).is_empty());
+    }
+
+    #[test]
+    fn secant_many_byte_identical_to_per_param() {
+        // Derivative-free secant sweep: x^3 - p = 0 over many p, nrows crossing the gate.
+        let f = |x: f64, p: &[f64]| x * x * x - p[0];
+        let opts = RootOptions::default();
+        let mut s = 13u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            1.0 + 900.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let nrows = 5000usize;
+        let params: Vec<Vec<f64>> = (0..nrows).map(|_| vec![rng()]).collect();
+        let batched = secant_many(f, 1.5, None, &params, opts);
+        assert_eq!(batched.len(), nrows);
+        for (i, p) in params.iter().enumerate() {
+            let single = secant(|x| f(x, p), 1.5, None, opts).expect("single");
+            let many = batched[i].as_ref().expect("batched member");
+            assert_eq!(
+                many.root.to_bits(),
+                single.root.to_bits(),
+                "root mismatch {i}"
+            );
+        }
+        assert!(secant_many(f, 1.5, None, &[], opts).is_empty());
     }
 
     #[test]

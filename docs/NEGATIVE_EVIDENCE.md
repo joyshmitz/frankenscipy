@@ -12806,3 +12806,27 @@ serial 0.27ms = 0.1x self). Capped workers by WORK (`cores.min(nrows/2048)`) →
 wins ∝ scipy's per-solve Python-callback density; for a SCALAR solver with a cheap func the ratio is 500-1000x
 (pure overhead elimination) and the thread gate MUST be work-capped or parallelism regresses vs serial. Remaining
 scalar-solver `_many` candidates: fixed_point, halley, secant, ridder (same recipe, same high gate).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — fixed_point_many + secant_many (vmap-over-scalar-solver) — 1920x / 536x FASTER than scipy loops
+
+Completes the scalar-solver batch family (after newton_many). Both `scipy.optimize.fixed_point` and
+`scipy.optimize.newton`-without-fprime (secant) loop a Python callback per iteration; fsci `fixed_point_many` /
+`secant_many` inline the closure over independent parameter rows, work-capped like newton_many
+(`cores.min(nrows/2048)` — cheap scalar solves ⇒ Python-overhead elimination, not parallelism; typical batches
+stay serial, no over-subscription).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), N=3000, fixed params:
+
+| solver | fsci many | scipy loop | vs scipy |
+| --- | --- | --- | --- |
+| fixed_point (Babylonian sqrt) | 0.22ms | 429.5ms | 1920x |
+| secant (x³−p, no fprime) | 0.47ms | 254.2ms | 536x |
+
+Byte-identical to the fsci serial loop (0 mismatches, both paths); values correct (fixed_point → √a to <1e-8,
+secant → cube root). fsci-opt lib 323/323 green (+ `secant_many_byte_identical_to_per_param`,
+`fixed_point_many_byte_identical_to_per_param`, nrows=5000 crossing the parallel gate). fixed_point's 1920x is
+the largest scalar-solver ratio (scipy's fixed_point has heavy per-iteration Python + its own convergence
+bookkeeping). SCALAR-SOLVER `_many` FAMILY NOW COVERED: newton/secant/fixed_point/brentq (+ root/quad/curve_fit/
+minimize/… from the broader vmap-over-solver vein). Remaining niche: halley (needs fprime2), ridder/bisect/toms748
+(bracketing, like brentq). LEVER (reconfirmed): any scipy scalar solver a caller loops in Python → `_many`
+inlined + work-capped = 500-2000x (Python-overhead elimination).
