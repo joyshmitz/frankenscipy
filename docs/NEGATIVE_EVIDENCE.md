@@ -12237,3 +12237,21 @@ odd-power-tail path is a WIN for large-pow2-tail (its design) but thrashes for s
 cache-friendlier there. RESIDUAL true kernel wall: tail=32/64 (100000 6.3ms, 200000) — many odd-combine stages,
 both paths ~kernel-slow (deferred SoA-SIMD). Odd-heavy FFT "wall" was largely a path-selection bug (tail 2-8),
 now fixed; large-pow2 and pure-odd already beat/match numpy.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — odd-power-tail decline generalized to tail≤64 in a SIZE band [2¹⁶,500k]: flips fft(100000/200000/250000) to 1.5-1.7x faster than numpy + fixes a latent large-n recursive regression
+
+Continued the tail-fix arc (ad6b3702 tail==2, cd24fa0b tail 2-8). Measured iterative-vs-recursive across the
+odd-heavy (tail≤64) surface and found the real driver is SIZE, not tail: the recursive `mixed_radix_fft` is
+cache-friendly but SINGLE-THREADED, so it wins for medium n and the PARALLEL iterative path overtakes above
+~500-600k. Data (recursive vs iterative): 100000 t32 1.5 vs 7.2; 200000 t64 3.0 vs 9.7; 250000 t16 3.6 vs 11.9;
+405000 t8 7.4 vs 13; 500000 t32 9.7 (rec wins); 600000 t64 20.4 vs 17 (ITER wins); 781250 t2 42 vs ~20 (ITER
+wins); 810000 t16 33 vs 17 (ITER wins, beats numpy 24).
+
+FIX: decline the iterative plan (→ recursive) for `tail≤64 && n∈[2¹⁶,500000]`. This (a) ADDS medium-odd-heavy
+wins — fft 100000 **1.51 vs numpy 2.22 = 1.47x**, 200000 **3.02 vs 4.63 = 1.53x**, 250000 **3.55 vs 5.91 =
+1.66x** (all were 7-12ms iterative); AND (b) FIXES a latent regression the previous unbounded tail∈{2,4,8}
+guard introduced — 781250 (tail=2) was forced onto recursive at 42ms; the n≤500k upper bound restores it to the
+parallel iterative path (20.6ms) — likewise 600000 20.4→13.4ms. All roundtrips ≤1e-15; conformance 182/182. No
+regression (tail==1, n<2¹⁶, n>500k, tail>64 unchanged). The odd-heavy FFT "wall" was a two-axis
+path-selection problem (small tail + medium n → recursive; else iterative); now resolved. Residual true kernel
+wall: only VERY large odd-heavy (n>500k, e.g. 810000 17ms) — already iterative-parallel & beating numpy there.

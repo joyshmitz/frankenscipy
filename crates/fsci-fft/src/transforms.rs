@@ -209,14 +209,20 @@ fn get_or_compute_odd_power_tail_plan(n: usize) -> Option<OddPowerTailPlanRef> {
     }
 
     let (factors, tail) = odd_power_tail_factorization(n)?;
-    // With `tail == 2` the leaf phase runs `n/2` length-2 leaves, each gathering
-    // two samples `n/2` apart — at large n every one of those ~n reads is a cache
-    // miss, so the transform collapses (n=101250=2·3⁴·5⁴ → 50625 stride-50625
-    // gathers ≈ 13 ms vs ≈ 2 ms on the recursive route). Decline the plan for this
-    // shape at large n so it falls back to the cache-friendlier recursive
-    // mixed_radix_fft. (tail==1 pure-odd stays fast on the iterative path; tail≥4
-    // amortises the gathers over larger contiguous leaf FFTs.)
-    if (2..=8).contains(&tail) && n >= (1 << 16) {
+    // Odd-heavy shapes (small power-of-two `tail`) thrash the iterative tail's
+    // strided leaf gather: it runs `n/tail` leaves, each gathering `tail` samples
+    // `n/tail` apart, so at large n nearly every read is a cache miss (n=101250=
+    // 2·3⁴·5⁴ → tail=2 → 50625 stride-50625 gathers ≈ 13 ms). The recursive
+    // `mixed_radix_fft` is far more cache-friendly and wins for medium n — BUT it
+    // is single-threaded, so above ~500k the iterative path's cross-leaf/stage
+    // parallelism overtakes it (n=600000 recursive 20 ms vs iterative 17;
+    // n=781250 recursive 42 ms). So decline the iterative plan (→ recursive) only
+    // for odd-heavy `tail ≤ 64` in the medium band [2¹⁶, 500 000]; larger n and
+    // larger (more-power-of-two) tails keep the parallel iterative path. Measured
+    // wins vs iterative: 100 000 7.2→1.5 ms, 200 000 9.7→3.1, 250 000 11.9→6.6,
+    // 405 000 13→7.4, 202 500 11.7→3.7, 101 250 13→2.1; tail==1 (pure odd) and
+    // n>500k (e.g. 810 000 iter 17 ms, beats numpy) stay on the iterative path.
+    if (2..=64).contains(&tail) && (1 << 16..=500_000).contains(&n) {
         return None;
     }
     let odd_len = n / tail;
