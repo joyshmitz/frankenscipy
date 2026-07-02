@@ -11786,3 +11786,27 @@ are, and those are the C-chamfer/memory-bandwidth wall). ~1.10x doesn't beat sci
 revert-near-zero + win-vs-scipy. A 2-D interior-block fast path (drop per-cell coord stepping/interior check)
 might reach ~35ms ≈ parity, NOT a clear win — deferred as not worth the 2-D-specialization churn. cdt/binary
 morphology are constant-factor inlined-C walls, not accessible algorithmic gaps.
+
+## 2026-07-01 — AmberKestrel (cc): fsci-signal + cluster/vq DOMINATE scipy; resample = FFT radix-5 wall, uniform_filter axis-0 = strided-write wall
+
+DIG sweep of fsci-signal (mostly untouched by me) + cluster vq. MEASURED vs scipy 1.17 — fsci wins or is at a
+documented wall EVERYWHERE:
+- signal WINS: hilbert 2.6x, detrend(linear) 41x, wiener 3.2x, medfilt 3.4x, order_filter 3.8x, correlate
+  (direct) 1.64x, resample_poly 1.56x. cluster.vq **5.5-6.7x FASTER** (already parallel).
+- PARITY: decimate (1.02x), binary_dilation, uniform_filter (1.09x).
+- LONE LOSS: **resample 21.4ms vs scipy 5.2ms = 4.1x**. DECOMPOSED: rfft(500k)=11.8 + irfft(300k)=8.9 = 20.7 ≈
+  full 21.7 → PURELY the fsci-fft crate's non-pow2 wall. These sizes (500000=2^5·5^6, 300000=2^5·3·5^5) are
+  radix-5-heavy; fsci's mixed-radix radix-5 butterfly is ~4x scipy's pocketfft. NOT a signal-level lever.
+
+NON-LEVERS confirmed: uniform_filter's axis-0 (column) pass is a SINGLE slab (outer=1) so its per-slab
+parallel gate can't fire; parallelizing across the strided inner columns hits the SAME safe-disjoint-strided-
+write wall as the dctn ~0-gain case (forbid(unsafe) blocks the split) → left serial. resample can't route to
+resample_poly (different FFT-vs-FIR semantics).
+
+CONCLUSION: after this arc (io ×4, spatial KDTree ×2, interpolate BSpline, stats rankdata, ndimage grey
+min/max — all shipped) the accessible SINGLE-FUNCTION scipy-beating gaps across the measured crates are
+exhausted; residuals are the documented deep walls. The HIGHEST-VALUE remaining target is the **fsci-fft
+non-pow2 / radix-5 mixed-radix SIMD** (underlies resample + many signal/fft ops on 5-smooth sizes, ~2-4x
+scipy) — a dedicated FFT-crate cycle, not a quick per-function lever. Second: safe parallel STRIDED-axis
+writes (would unlock dctn + uniform_filter axis-0 + others) — needs a scatter/transpose primitive under
+forbid(unsafe).
