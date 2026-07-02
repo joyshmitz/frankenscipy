@@ -391,6 +391,43 @@ fn bench_coo_to_csr(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_coo_to_csc(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_coo_to_csc");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
+
+    for (n, nnz) in [(100_000usize, 2_000_000usize), (20_000, 2_000_000)] {
+        let mut st = 0x0FE1_DEAD_5678_1234u64 ^ (n as u64);
+        let mut next = || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (st >> 33) as usize
+        };
+        let mut rows = Vec::with_capacity(nnz);
+        let mut cols = Vec::with_capacity(nnz);
+        let mut data = Vec::with_capacity(nnz);
+        for _ in 0..nnz {
+            rows.push(next() % n);
+            cols.push(next() % n);
+            data.push((next() % 1000) as f64 + 1.0);
+        }
+        let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+            .expect("coo");
+        group.bench_with_input(
+            BenchmarkId::new(format!("n{n}_nnz{nnz}"), nnz),
+            &coo,
+            |bi, coo| {
+                bi.iter(|| {
+                    let csc = FormatConvertible::to_csc(black_box(coo)).expect("to_csc");
+                    black_box(csc.nnz());
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 fn bench_block_diag(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_block_diag");
     group.sample_size(10);
@@ -419,6 +456,7 @@ fn bench_block_diag(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_coo_to_csr,
+    bench_coo_to_csc,
     bench_block_diag,
     bench_csr_construction,
     bench_spmv,

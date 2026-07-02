@@ -49,10 +49,7 @@ impl FormatConvertible for CooMatrix {
     }
 
     fn to_csc(&self) -> SparseResult<CscMatrix> {
-        let mut triplets = canonical_triplets(self);
-        triplets.sort_unstable_by_key(|(r, c, _)| (*c, *r));
-        let (data, indices, indptr) = compress_triplets(self.shape(), &triplets, true);
-        CscMatrix::from_components(self.shape(), data, indices, indptr, true)
+        Ok(coo_to_canonical_csc_counting(self))
     }
 
     fn to_coo(&self) -> SparseResult<CooMatrix> {
@@ -1007,35 +1004,6 @@ fn csc_to_csr_direct(csc: &CscMatrix) -> SparseResult<CsrMatrix> {
     Ok(result)
 }
 
-fn canonical_triplets(coo: &CooMatrix) -> Vec<(usize, usize, f64)> {
-    let mut triplets: Vec<(usize, usize, f64)> = coo
-        .row_indices()
-        .iter()
-        .copied()
-        .zip(coo.col_indices().iter().copied())
-        .zip(coo.data().iter().copied())
-        .map(|((r, c), v)| (r, c, v))
-        .collect();
-
-    triplets.sort_unstable_by_key(|(r, c, _)| (*r, *c));
-
-    let mut dedup = Vec::with_capacity(triplets.len());
-    for (r, c, v) in triplets {
-        let should_merge = match dedup.last_mut() {
-            Some((lr, lc, lv)) if *lr == r && *lc == c => {
-                *lv += v;
-                true
-            }
-            _ => false,
-        };
-        if !should_merge {
-            dedup.push((r, c, v));
-        }
-    }
-
-    dedup
-}
-
 fn sorted_unique_coo_to_csr(coo: &CooMatrix) -> SparseResult<Option<CsrMatrix>> {
     let rows = coo.row_indices();
     let cols = coo.col_indices();
@@ -1190,6 +1158,121 @@ fn coo_to_canonical_csr_counting(coo: &CooMatrix) -> CsrMatrix {
     csr
 }
 
+/// Canonical COO → CSC, the column-major analogue of
+/// [`coo_to_canonical_csr_counting`]. The prior path was WORSE than the CSR one:
+/// it ran `canonical_triplets` (a global sort by `(row,col)`) and THEN a second
+/// global `sort_unstable_by_key((col,row))` — two O(nnz·log nnz) passes. Counting
+/// sort by column + per-column row-sort + duplicate sum is O(nnz) + short sorts,
+/// with the sort/dedup phase fanned across cores. SciPy's `coo_tocsc` is
+/// single-threaded. Same semantics as the CSR path: canonical CSC (row-sorted
+/// within each column, duplicates summed), byte-identical to the old path for the
+/// common duplicate-free input.
+fn coo_to_canonical_csc_counting(coo: &CooMatrix) -> CscMatrix {
+    let shape = coo.shape();
+    let rows = coo.row_indices();
+    let cols = coo.col_indices();
+    let data = coo.data();
+    let nnz = rows.len();
+    let ncol = shape.cols;
+
+    // Column histogram → column offsets (indptr of the column-grouped scratch).
+    let mut col_ptr = vec![0usize; ncol + 1];
+    for &c in cols {
+        col_ptr[c + 1] += 1;
+    }
+    for c in 0..ncol {
+        col_ptr[c + 1] += col_ptr[c];
+    }
+
+    // Stable scatter into column-grouped (row, value) pairs (encounter order).
+    let mut pairs: Vec<(usize, f64)> = vec![(0usize, 0.0f64); nnz];
+    let mut next = col_ptr[..ncol].to_vec();
+    for i in 0..nnz {
+        let c = cols[i];
+        let p = next[c];
+        pairs[p] = (rows[i], data[i]);
+        next[c] = p + 1;
+    }
+
+    // Per-column: sort rows, sum duplicates, emit canonical CSC (parallel across
+    // columns via the same gather-then-concat as the CSR path).
+    let nthreads = parallel_chunk_count(ncol, nnz);
+    let (out_data, out_indices, indptr) = if nthreads <= 1 {
+        let mut out_indices = Vec::with_capacity(nnz);
+        let mut out_data = Vec::with_capacity(nnz);
+        let mut indptr = Vec::with_capacity(ncol + 1);
+        indptr.push(0usize);
+        for c in 0..ncol {
+            dedup_sorted_row(&mut pairs[col_ptr[c]..col_ptr[c + 1]], &mut out_indices, &mut out_data);
+            indptr.push(out_indices.len());
+        }
+        (out_data, out_indices, indptr)
+    } else {
+        let chunk_cols = ncol.div_ceil(nthreads);
+        let ranges: Vec<(usize, usize)> = (0..nthreads)
+            .map(|t| (t * chunk_cols, ((t + 1) * chunk_cols).min(ncol)))
+            .filter(|(a, b)| a < b)
+            .collect();
+        let col_ptr_s: &[usize] = &col_ptr;
+        let mut rest: &mut [(usize, f64)] = &mut pairs;
+        type Band<'a> = (usize, usize, &'a mut [(usize, f64)]);
+        let mut jobs: Vec<Band<'_>> = Vec::with_capacity(ranges.len());
+        for &(c0, c1) in &ranges {
+            let (head, tail) = rest.split_at_mut(col_ptr_s[c1] - col_ptr_s[c0]);
+            rest = tail;
+            jobs.push((c0, c1, head));
+        }
+        type ChunkOut = (Vec<usize>, Vec<f64>, Vec<usize>);
+        let chunks: Vec<ChunkOut> = std::thread::scope(|scope| {
+            let handles: Vec<_> = jobs
+                .into_iter()
+                .map(|(c0, c1, seg)| {
+                    scope.spawn(move || {
+                        let base = col_ptr_s[c0];
+                        let mut idx = Vec::new();
+                        let mut val = Vec::new();
+                        let mut counts = Vec::with_capacity(c1 - c0);
+                        for c in c0..c1 {
+                            let before = idx.len();
+                            let lo = col_ptr_s[c] - base;
+                            let hi = col_ptr_s[c + 1] - base;
+                            dedup_sorted_row(&mut seg[lo..hi], &mut idx, &mut val);
+                            counts.push(idx.len() - before);
+                        }
+                        (idx, val, counts)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("coo->csc chunk panicked"))
+                .collect()
+        });
+        let total: usize = chunks.iter().map(|(i, _, _)| i.len()).sum();
+        let mut out_indices = Vec::with_capacity(total);
+        let mut out_data = Vec::with_capacity(total);
+        let mut indptr = Vec::with_capacity(ncol + 1);
+        indptr.push(0usize);
+        let mut acc = 0usize;
+        for (idx, val, counts) in &chunks {
+            for &cnt in counts {
+                acc += cnt;
+                indptr.push(acc);
+            }
+            out_indices.extend_from_slice(idx);
+            out_data.extend_from_slice(val);
+        }
+        (out_data, out_indices, indptr)
+    };
+
+    let mut csc = CscMatrix::from_components_unchecked(shape, out_data, out_indices, indptr);
+    csc.canonical = CanonicalMeta {
+        sorted_indices: true,
+        deduplicated: true,
+    };
+    csc
+}
+
 /// Stable-sort one row's `(col, value)` pairs by column and append the
 /// duplicate-summed canonical entries to `out_indices`/`out_data`. Short rows use
 /// std's allocation-free insertion sort; equal columns keep encounter order so the
@@ -1209,44 +1292,6 @@ fn dedup_sorted_row(seg: &mut [(usize, f64)], out_indices: &mut Vec<usize>, out_
         out_indices.push(c);
         out_data.push(v);
         j = k;
-    }
-}
-
-fn compress_triplets(
-    shape: Shape2D,
-    triplets: &[(usize, usize, f64)],
-    by_col: bool,
-) -> (Vec<f64>, Vec<usize>, Vec<usize>) {
-    if by_col {
-        let mut indptr = vec![0usize; shape.cols + 1];
-        for (_, col, _) in triplets {
-            indptr[*col + 1] += 1;
-        }
-        for col in 0..shape.cols {
-            indptr[col + 1] += indptr[col];
-        }
-        let mut data = Vec::with_capacity(triplets.len());
-        let mut indices = Vec::with_capacity(triplets.len());
-        for (row, _, value) in triplets {
-            indices.push(*row);
-            data.push(*value);
-        }
-        (data, indices, indptr)
-    } else {
-        let mut indptr = vec![0usize; shape.rows + 1];
-        for (row, _, _) in triplets {
-            indptr[*row + 1] += 1;
-        }
-        for row in 0..shape.rows {
-            indptr[row + 1] += indptr[row];
-        }
-        let mut data = Vec::with_capacity(triplets.len());
-        let mut indices = Vec::with_capacity(triplets.len());
-        for (_, col, value) in triplets {
-            indices.push(*col);
-            data.push(*value);
-        }
-        (data, indices, indptr)
     }
 }
 
@@ -1367,6 +1412,62 @@ mod tests {
                 assert!(last.is_none_or(|l| l < c), "columns not strictly sorted");
                 last = Some(c);
                 got[r][c] = csr.data()[idx];
+            }
+        }
+        for r in 0..n {
+            for c in 0..n {
+                assert_eq!(
+                    got[r][c].to_bits(),
+                    ref_dense[r][c].to_bits(),
+                    "value mismatch at ({r},{c})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn coo_to_csc_counting_sort_matches_dense_with_unsorted_duplicates() {
+        for (n, nnz) in [(37usize, 4000usize), (1200usize, 200_000usize)] {
+            coo_to_csc_counting_case(n, nnz);
+        }
+    }
+
+    fn coo_to_csc_counting_case(n: usize, nnz: usize) {
+        let mut st = 0x0FE1_DEAD_5678_1234u64 ^ (n as u64);
+        let mut next = || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (st >> 33) as usize
+        };
+        let mut rows = Vec::with_capacity(nnz);
+        let mut cols = Vec::with_capacity(nnz);
+        let mut data = Vec::with_capacity(nnz);
+        let mut ref_dense = vec![vec![0.0f64; n]; n];
+        for _ in 0..nnz {
+            let r = next() % n;
+            let c = next() % n;
+            let v = (next() % 100) as f64 * 0.5 - 25.0;
+            rows.push(r);
+            cols.push(c);
+            data.push(v);
+            ref_dense[r][c] += v;
+        }
+        let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+            .expect("coo");
+        let csc = coo.to_csc().expect("to_csc");
+        let meta = csc.canonical_meta();
+        assert!(meta.sorted_indices && meta.deduplicated);
+
+        // CSC: indptr over columns, indices are rows (strictly sorted per column).
+        let mut got = vec![vec![0.0f64; n]; n];
+        for c in 0..n {
+            let mut last: Option<usize> = None;
+            for idx in csc.indptr()[c]..csc.indptr()[c + 1] {
+                let r = csc.indices()[idx];
+                assert!(last.is_none_or(|l| l < r), "rows not strictly sorted in column {c}");
+                last = Some(r);
+                got[r][c] = csc.data()[idx];
             }
         }
         for r in 0..n {

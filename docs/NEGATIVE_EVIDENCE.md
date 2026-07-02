@@ -6,6 +6,29 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: COO→CSC counting sort — FLIP 3.2× loss → 2.56× SciPy WIN (denser rows)
+
+- Target: `fsci_sparse::ops` `CooMatrix::to_csc`. It was the WORST conversion path in the crate:
+  `canonical_triplets` (a global `sort_unstable_by_key((row,col))`) followed by a SECOND global
+  `sort_unstable_by_key((col,row))` — **two** O(nnz·log nnz) comparison passes. Replaced with the
+  column-major analogue of the CSR counting sort (`coo_to_canonical_csc_counting`): O(nnz) counting
+  sort by column + per-column stable row-sort + duplicate sum, sort/dedup phase fanned across cores.
+  Removed the now-dead `canonical_triplets`/`compress_triplets`.
+- MEASURED (SAME local 64-core box, criterion median, scipy 1.17.1, unsorted+dup triplets, nnz=2M):
+
+  | case (nnz/row) | old double-sort | new counting-sort | scipy tocsc+sort_indices | flip |
+  | --- | ---: | ---: | ---: | --- |
+  | n=20k (100/row) | 246.29 ms | **30.01 ms** (8.2× self) | 76.88 ms | **3.2× loss → 2.56× WIN** |
+  | n=100k (20/row) | 242.76 ms | **73.28 ms** (3.3× self) | 61.41 ms | 4.0× loss → 1.19× (near-parity) |
+
+  A bigger win than COO→CSR (2.56× vs 1.86×) because SciPy's `coo_tocsc` is slower than its
+  `coo_tocsr`. Very-sparse regime (20/row) still ~1.19× behind (same serial-scatter floor + the
+  forbid(unsafe) parallel-scatter wall documented for COO→CSR), but hugely narrowed from 4.0×.
+- Correctness: new `coo_to_csc_counting_sort_matches_dense_*` asserts serial AND parallel outputs
+  bit-identical (`to_bits`) to a dense encounter-order reference (column-major check); all 357 sparse
+  lib + 56 integration tests green; build clean (dead helpers removed). Canonical CSC (row-sorted per
+  column, dups summed), byte-identical to old for duplicate-free input.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: COO→CSR counting sort — same-box SciPy WIN 1.86× (denser rows), loss 1.48× (very-sparse)
 
 - Target: `fsci_sparse::ops` `CooMatrix::to_csr` unsorted path. It collected all nnz
