@@ -2442,3 +2442,17 @@ pentadiagonal + eig_banded_lanczos_values_match_dense_reference; matches dense/s
 Lanczos cluster (8 fns) marked #[allow(dead_code)] (still exercised by the values-match test). STILL 20x vs
 scipy (dense O(n³) vs banded O(n²·bw)) — the scipy-PARITY follow-on is a real band→tridiagonal reduction
 (dsbtrd), a dedicated numerical task. This ships the bug fix + 4.3x; dsbtrd flagged for a future cycle.
+
+### 2026-07-01 (AmberKestrel, cc) — kv half-integer closed-form: 37x self, flips 1.94x scipy LOSS to 19x WIN
+Broad scipy.special sweep (2M pts): fsci jv 13.9x/iv 15.3x/gammainc 9x FASTER than scipy, BUT **kv(1.5) 194.3ms
+= 1.94x SLOWER** than scipy (100.3) — and ~8x slower than fsci's OWN jv/iv (21-24ms). ROOT CAUSE: kv_scaled_
+value routes NON-INTEGER order to kv_integral_scaled = a ~96-point Gauss-48 quadrature (×1-2, split at t*),
+~hundreds of cosh/exp per call (the slow-quadrature-kernel pattern, cf. [[perf_special_quadrature_to_continued_
+fraction]]). LEVER: half-integer order (v=n+1/2, the spherical-Bessel family) has a CLOSED FORM — K_{1/2}·e^z =
+sqrt(π/(2z)), upward recurrence K_{ν+1}=K_{ν-1}+(2ν/z)K_ν (identical for the e^z-scaled values). Added a
+half-integer fast path (v_abs.fract()==0.5) before the integral. RESULT: **kv(1.5) 194.3 → 5.2ms = 37x self;
+flips 1.94x LOSS to 19x FASTER than scipy**. ANALYTICALLY EXACT — max rel err vs scipy 3.9e-16 across
+v=0.5..5.5 × z=0.3..50 (more accurate than the quadrature it replaces). 1121/1121 special tests green. Lifts
+all half-integer kv AND kve (shares kv_scaled_value). General non-integer v still uses the quadrature (a K_v
+continued-fraction is the follow-on, cf. the wofz CF lever). LEVER: half-integer Bessel (jv/yv/iv/kv/spherical)
+→ closed-form recurrence beats general quadrature; grep special kernels routing to fixed-step quadrature.
