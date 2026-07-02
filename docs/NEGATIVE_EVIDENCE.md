@@ -6,6 +6,33 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: hyperu large-x a>0 asymptotic — FLIP 13× loss → 10-41× SciPy WIN
+
+- Target: `fsci_special::hyper::hyperu_scalar`. The `a > 0` branch routed EVERY case straight to
+  `hyperu_positive_a_integral` — a **768-step fixed Simpson** confluent-integral quadrature that
+  measured **13× SLOWER than SciPy** (17.5µs vs ~1.3µs) AND was only ~7e-10 accurate. It never tried
+  the DLMF 13.7.3 large-x asymptotic that the `a < 0` branch already uses (valid for ANY a).
+- Fix: in the `a > 0` branch, try `hyperu_large_x_asymptotic(a, b, x, tol)` FIRST with a tightened
+  gate `tol = 1e-13` (smallest series term ≤ 1e-13·|sum|); accept only when it converges that
+  tightly — its truncation error (≈ smallest term) is then ≤ the quadrature's 7e-10, so accuracy
+  never regresses. Moderate/small x (asymptotic diverges early → None) fall through to the quadrature
+  unchanged. Parametrized the asymptotic's gate (`a<0` caller kept at its original 1e-7).
+- MEASURED (same box, best-of; SciPy 1.17.1):
+  - Large-x a>0 (now asymptotic): hyperu(0.5,0.7,40) 17µs→**0.077µs** = **23.5× > scipy** 1.81µs;
+    (2,3.5,150) →**0.045µs** = **41×**; (3.5,0.7,80) →**0.083µs** = **23.5×**; (1,2.4,80) →0.177µs =
+    **10.3×**. ~200× self-speedup, and MORE accurate (max rel err 4.03e-11 vs 7e-10).
+  - Small-x a>0 (e.g. (2,1,0.5)): stays on quadrature 15.8µs, UNCHANGED (asymptotic doesn't resolve).
+- RULED OUT (negative evidence, prototyped in Python before Rust): (1) **Gauss-Laguerre** on the
+  `∫₀^∞ e^{-u}u^{a-1}(1+u/x)^{b-a-1}du` form — only 1e-3 accurate even at n=96 (the `(1+u/x)` factor
+  is non-polynomial for small x, so GL converges slowly). (2) **Reducing Simpson steps** — 768 is
+  needed for ~7e-10; n=384→3e-6, n=256→1.9e-4 (not overkill). The small-x/integer-b quadrature
+  fallback remains a real ~13× loss whose only fix is porting Cephes's series algorithm (deferred).
+- Verification: new `hyperu_positive_a_large_x_asymptotic_matches_scipy` (11 scipy refs, ≤1e-9) +
+  all 11 hyperu tests green (incl. scipy-reference, integer-b, negative-a regression). Coverage:
+  ~32% of the a>0 grid (all large-x) flips; the win is the "widen a self-validating fast-path gate"
+  lever — grep for expensive fallbacks reached because a cheaper self-validating path is gated to a
+  narrower region than it actually converges on.
+
 ## 2026-07-02 - BlackThrush (cc) - BLOCKER: broad same-box sweep of stats/interpolate/cluster — all already ≥ SciPy
 
 - After shipping the sparse counting-sort vein + `energy_distance` sort-hoist, dug a fresh

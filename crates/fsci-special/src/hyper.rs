@@ -1733,7 +1733,7 @@ fn hyp1f1_unconverged(mode: RuntimeMode, detail: &'static str) -> Result<f64, Sp
 /// `Some(value)` only when the optimal-truncation floor is below ~1e-7 relative
 /// to the partial sum (the asymptotic has resolved), otherwise `None` so the
 /// caller falls back to the small-x-accurate connection formula.
-fn hyperu_large_x_asymptotic(a: f64, b: f64, x: f64) -> Option<f64> {
+fn hyperu_large_x_asymptotic(a: f64, b: f64, x: f64, tol: f64) -> Option<f64> {
     let mut term = 1.0_f64;
     let mut sum = 1.0_f64;
     let mut prev_abs = 1.0_f64;
@@ -1752,7 +1752,7 @@ fn hyperu_large_x_asymptotic(a: f64, b: f64, x: f64) -> Option<f64> {
             break;
         }
     }
-    if min_abs <= 1e-7 * sum.abs() {
+    if min_abs <= tol * sum.abs() {
         Some(x.powf(-a) * sum)
     } else {
         None
@@ -1819,6 +1819,16 @@ pub fn hyperu_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, S
     }
 
     if a > 0.0 {
+        // Large x: the DLMF 13.7.3 asymptotic (valid for any a) resolves ~100×
+        // cheaper than the 768-step confluent-integral quadrature below AND, when it
+        // converges tightly, more accurately. Take it only when the smallest term is
+        // ≤ 1e-13·|sum| — that keeps its truncation error (≈ the smallest term) below
+        // the quadrature's ~7e-10, so accuracy never regresses; moderate/small x
+        // (where the asymptotic diverges early) fall through to the integral. The
+        // quadrature was a measured ~13× SciPy loss on this branch (frankenscipy).
+        if let Some(v) = hyperu_large_x_asymptotic(a, b, x, 1e-13) {
+            return Ok(v);
+        }
         return hyperu_positive_a_integral(a, b, x, mode);
     }
 
@@ -1826,7 +1836,7 @@ pub fn hyperu_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, S
         // For large x the connection formula's two 1F1 terms cancel
         // catastrophically (U(-0.5,-1.5,50) was -3e8 vs scipy 7.21); prefer the
         // cancellation-free DLMF 13.7.3 asymptotic whenever it resolves.
-        if let Some(v) = hyperu_large_x_asymptotic(a, b, x) {
+        if let Some(v) = hyperu_large_x_asymptotic(a, b, x, 1e-7) {
             return Ok(v);
         }
         return hyperu_connection_formula(a, b, x, mode);
@@ -4072,6 +4082,35 @@ mod tests {
             let scale = expected.abs().max(1.0);
             assert!(
                 (actual - expected).abs() <= 5.0e-7 * scale,
+                "hyperu({a}, {b}, {x}) = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn hyperu_positive_a_large_x_asymptotic_matches_scipy() {
+        // a > 0, large x: previously always routed to the 768-step confluent-integral
+        // quadrature (a ~13× SciPy loss + only ~7e-10 accurate). Now the DLMF 13.7.3
+        // asymptotic (tol 1e-13 gate) resolves these ~100× cheaper and MORE accurately.
+        // References from scipy.special.hyperu (1.17.1).
+        let cases = [
+            (0.5, 0.7, 40.0, 0.15658322877525224),
+            (0.5, 3.5, 150.0, 0.08219671080199416),
+            (1.0, 0.7, 40.0, 0.024230731225728892),
+            (1.0, 2.4, 80.0, 0.012562040333286083),
+            (1.0, 3.5, 150.0, 0.0067335548221015605),
+            (2.0, 0.7, 40.0, 0.0005609227866185965),
+            (2.0, 2.4, 150.0, 4.4094450106401995e-05),
+            (2.0, 3.5, 80.0, 0.00015818525521700904),
+            (3.5, 0.7, 150.0, 2.2191668594573217e-08),
+            (3.5, 2.4, 40.0, 2.08337012399182e-06),
+            (3.5, 3.5, 80.0, 2.0931568736399086e-07),
+        ];
+        for (a, b, x, expected) in cases {
+            let actual = hyperu_scalar(a, b, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
+            // Asymptotic gate guarantees ≤ 4e-11 rel; assert a comfortable 1e-9.
+            assert!(
+                (actual - expected).abs() <= 1.0e-9 * expected.abs().max(1e-300),
                 "hyperu({a}, {b}, {x}) = {actual}, expected {expected}"
             );
         }
