@@ -486,6 +486,47 @@ where
     D::fit(data)
 }
 
+/// Vectorised maximum-likelihood [`fit`] over `n` independent datasets — parallel
+/// across the batch. `scipy.stats.<dist>.fit` loops in Python, and for
+/// distributions WITHOUT a closed form (e.g. `weibull_min`, `beta`) it runs a
+/// Nelder-Mead optimiser calling the Python likelihood repeatedly (slow); fsci's
+/// per-dataset `D::fit` is an inlined Rust solver, fanned whole-dataset across
+/// cores. Entry `k` equals `fit::<D>(&datasets[k])`, so the result is identical to
+/// the serial map. (Fit ACCURACY vs SciPy is per-distribution — both approximate
+/// the same MLE; e.g. Weibull agrees to ~1e-5, the optimiser-tolerance gap.)
+#[must_use]
+pub fn fit_many<D>(datasets: &[Vec<f64>]) -> Vec<D>
+where
+    D: ContinuousDistribution + Send,
+{
+    let nrows = datasets.len();
+    if nrows == 0 {
+        return Vec::new();
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(nrows);
+    if nthreads <= 1 || nrows < 8 {
+        return datasets.iter().map(|d| D::fit(d)).collect();
+    }
+    let chunk = nrows.div_ceil(nthreads);
+    let parts: Vec<Vec<D>> = std::thread::scope(|scope| {
+        datasets
+            .chunks(chunk)
+            .map(|c| scope.spawn(move || c.iter().map(|d| D::fit(d)).collect::<Vec<D>>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("fit_many worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(nrows);
+    for part in parts {
+        out.extend(part);
+    }
+    out
+}
+
 fn log_probability(probability: f64) -> f64 {
     if probability < 0.0 {
         f64::NAN
@@ -58800,6 +58841,62 @@ mod tests {
         let u = Uniform::fit(&data);
         assert!((u.loc - 1.0).abs() < 1e-10);
         assert!((u.scale - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn fit_many_byte_identical_to_serial_loop() {
+        // fit_many must be bit-identical to looping fit per dataset. nrows crosses
+        // the serial->parallel gate (>= 8). Covers a numerically-fit dist (Weibull,
+        // Newton MLE) and a closed-form one (Normal).
+        let mut s = 21u64;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let nn = 200usize;
+        let datasets: Vec<Vec<f64>> = (0..nn)
+            .map(|_| {
+                let c = 1.5 + rng();
+                let sc = 1.0 + 2.0 * rng();
+                (0..150)
+                    .map(|_| {
+                        let u = rng().clamp(1e-9, 0.9999);
+                        sc * (-(1.0 - u).ln()).powf(1.0 / c)
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let many_w: Vec<Weibull> = fit_many(&datasets);
+        assert_eq!(many_w.len(), nn);
+        for (d, w) in datasets.iter().zip(&many_w) {
+            let single = Weibull::fit(d);
+            assert_eq!(w.c.to_bits(), single.c.to_bits(), "weibull c mismatch");
+            assert_eq!(
+                w.scale.to_bits(),
+                single.scale.to_bits(),
+                "weibull scale mismatch"
+            );
+        }
+
+        let many_n: Vec<Normal> = fit_many(&datasets);
+        for (d, nrm) in datasets.iter().zip(&many_n) {
+            let single = Normal::fit(d);
+            assert_eq!(
+                nrm.loc.to_bits(),
+                single.loc.to_bits(),
+                "normal loc mismatch"
+            );
+            assert_eq!(
+                nrm.scale.to_bits(),
+                single.scale.to_bits(),
+                "normal scale mismatch"
+            );
+        }
+
+        // empty -> empty.
+        let empty: Vec<Weibull> = fit_many(&[]);
+        assert!(empty.is_empty());
     }
 
     #[test]

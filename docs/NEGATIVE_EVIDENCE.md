@@ -12916,3 +12916,26 @@ are all (a) already-won, (b) BLAS-oversubscription phantoms, or (c) memory-bound
 HiGHS walls. The productive fresh-gap pattern was "fsci has a fast SINGLE primitive but MISSES scipy's slow
 BATCH/MATRIX wrapper" (cut_tree_multi, spearmanr_matrix) — that specific pattern now appears exhausted across the
 swept modules.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — fit_many (batched distribution MLE fitting) — 308-840x FASTER than the scipy.stats.weibull_min.fit loop
+
+New vmap family (distribution fitting). `scipy.stats.<dist>.fit(data)` loops in Python; for distributions WITHOUT
+a closed-form MLE (`weibull_min`, `beta`, …) it runs a Nelder-Mead optimiser calling the Python likelihood
+repeatedly — SLOW (`weibull_min.fit` = 843ms for 300 datasets, 2.8ms/fit). Added generic `fit_many<D>(datasets)`:
+fans `D::fit` (an inlined Rust solver — Weibull is a Newton MLE on the shape equation) whole-dataset across cores.
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1), Weibull(shape~1.5-2.5, 150-200 pts/dataset):
+
+| N datasets | fsci serial → many | scipy weibull_min.fit loop | vs scipy |
+| --- | --- | --- | --- |
+| 300 | 5.61 → 2.73ms | 843ms | 308x |
+| 1000 | 18.07 → 3.35ms | 2811ms | 840x |
+
+Byte-identical to the fsci serial loop (0 c/scale/loc mismatches for Weibull AND closed-form Normal, both paths);
+self-speedup 2.1-5.4x (per-fit ~18µs, heavy enough to parallelise; win grows with N). fsci-stats lib 2005/2005
+green (+ `fit_many_byte_identical_to_serial_loop`). HONEST: fit ACCURACY vs scipy is PER-DISTRIBUTION — both
+approximate the same MLE, and fsci's differs by the optimiser-tolerance gap (Weibull c/scale agree to ~1e-5:
+fsci c=1.774277 vs scipy 1.774289; fsci's Newton is arguably tighter than scipy's Nelder-Mead). Even fsci SERIAL
+beats the scipy loop 152x (Newton vs Nelder-Mead + no Python). Generic over all `ContinuousDistribution + Send`;
+the big scipy-beating gain is for numerically-fit distributions (weibull/beta/gengamma); closed-form ones
+(norm/gamma-floc) are fast in scipy already so the ratio is smaller.
