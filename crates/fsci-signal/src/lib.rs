@@ -17205,6 +17205,122 @@ pub fn resample_poly_axis_2d(
     }
 }
 
+/// FFT-based resampling of each line of a 2-D matrix to `num` samples, parallel
+/// across the independent lines — the batched form of [`resample`].
+/// `scipy.signal.resample(x, num, axis)` loops the per-line FFT single-threaded;
+/// this fans the lines across threads (forcing each line's internal FFT pass
+/// serial so the two parallelism levels don't over-subscribe), so every output
+/// line equals [`resample`] of the corresponding input — identical to the serial
+/// map.
+pub fn resample_axis_2d(
+    x: &[Vec<f64>],
+    num: usize,
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, SignalError> {
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cols = x[0].len();
+    if x.iter().any(|row| row.len() != cols) {
+        return Err(SignalError::InvalidInputShape {
+            detail: "x must be a rectangular 2-D matrix".to_string(),
+        });
+    }
+    // Per-line cost is an FFT (~len·log len); use a modest per-element weight so
+    // only batches whose total work amortises thread spawn fan out.
+    let weight = 8;
+    match axis {
+        -1 | 1 => {
+            let nthreads = lfilter_axis_thread_count(x.len(), cols.max(num), weight);
+            if nthreads <= 1 {
+                return x.iter().map(|row| resample(row, num)).collect();
+            }
+            let chunk = x.len().div_ceil(nthreads);
+            let chunk_results: Vec<Result<Vec<Vec<f64>>, SignalError>> =
+                std::thread::scope(|scope| {
+                    x.chunks(chunk)
+                        .map(|rows| {
+                            scope.spawn(move || {
+                                rows.iter()
+                                    .map(|row| with_serial_par_index_fill(|| resample(row, num)))
+                                    .collect::<Result<Vec<_>, _>>()
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|h| h.join().expect("resample row chunk panicked"))
+                        .collect()
+                });
+            let mut y = Vec::with_capacity(x.len());
+            for chunk_result in chunk_results {
+                y.extend(chunk_result?);
+            }
+            Ok(y)
+        }
+        0 => {
+            let nrows = x.len();
+            let nthreads = lfilter_axis_thread_count(cols, nrows.max(num), weight);
+            let columns: Vec<(usize, Vec<Vec<f64>>)> = if nthreads <= 1 {
+                let mut block = Vec::with_capacity(cols);
+                for col in 0..cols {
+                    let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+                    block.push(resample(&column, num)?);
+                }
+                vec![(0, block)]
+            } else {
+                let chunk = cols.div_ceil(nthreads);
+                let blocks: Vec<Result<(usize, Vec<Vec<f64>>), SignalError>> =
+                    std::thread::scope(|scope| {
+                        (0..cols)
+                            .step_by(chunk)
+                            .map(|col0| {
+                                scope.spawn(move || {
+                                    let col1 = (col0 + chunk).min(cols);
+                                    let mut block = Vec::with_capacity(col1 - col0);
+                                    for col in col0..col1 {
+                                        let column: Vec<f64> =
+                                            x.iter().map(|row| row[col]).collect();
+                                        block.push(with_serial_par_index_fill(|| {
+                                            resample(&column, num)
+                                        })?);
+                                    }
+                                    Ok((col0, block))
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .map(|h| h.join().expect("resample col chunk panicked"))
+                            .collect()
+                    });
+                let mut cols_out = Vec::with_capacity(blocks.len());
+                for b in blocks {
+                    cols_out.push(b?);
+                }
+                cols_out
+            };
+            let out_len = columns
+                .iter()
+                .flat_map(|(_, b)| b.first())
+                .map(|c| c.len())
+                .next()
+                .unwrap_or(0);
+            let mut y = vec![vec![0.0; cols]; out_len];
+            for (col0, block) in columns {
+                for (offset, resampled) in block.into_iter().enumerate() {
+                    let col = col0 + offset;
+                    for (row_idx, value) in resampled.into_iter().enumerate() {
+                        y[row_idx][col] = value;
+                    }
+                }
+            }
+            Ok(y)
+        }
+        other => Err(SignalError::InvalidArgument(format!(
+            "axis must be 0, 1, or -1 for 2-D resampling, got {other}"
+        ))),
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ResamplePolyPadMode {
     Constant(f64),
@@ -28274,6 +28390,45 @@ mod tests {
     fn hilbert_empty_input_rejected() {
         let err = hilbert(&[]).expect_err("empty");
         assert!(err.is_argument_error());
+    }
+
+    #[test]
+    fn resample_axis_2d_matches_serial_loop_bit_for_bit() {
+        // resample_axis_2d must be bit-identical to the serial per-line resample
+        // (parallel-across-lines is an order-preserving map).
+        let mut s = 0x1234_5678_9abc_def1u64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let nsig = 40usize;
+        let l = 128usize;
+        let num = 96usize;
+        let x: Vec<Vec<f64>> = (0..nsig).map(|_| (0..l).map(|_| rng()).collect()).collect();
+        // axis = -1: each row resampled to `num`.
+        let many = resample_axis_2d(&x, num, -1).expect("resample_axis_2d");
+        assert_eq!(many.len(), nsig);
+        for (row, got) in x.iter().zip(&many) {
+            let serial = resample(row, num).expect("resample");
+            assert_eq!(got.len(), num);
+            for (&g, &sref) in got.iter().zip(&serial) {
+                assert_eq!(g.to_bits(), sref.to_bits(), "resample_axis_2d mismatch");
+            }
+        }
+        // axis = 0: each column resampled to `num` -> output num rows x nsig cols.
+        let by_col = resample_axis_2d(&x, num, 0).expect("resample_axis_2d axis0");
+        assert_eq!(by_col.len(), num);
+        for col in 0..l.min(x[0].len()) {
+            let column: Vec<f64> = x.iter().map(|r| r[col]).collect();
+            let serial = resample(&column, num).expect("resample col");
+            for (row_idx, &sref) in serial.iter().enumerate() {
+                assert_eq!(by_col[row_idx][col].to_bits(), sref.to_bits());
+            }
+        }
+        // Empty batch -> empty result.
+        assert!(resample_axis_2d(&[], num, -1).expect("empty").is_empty());
     }
 
     #[test]

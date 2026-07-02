@@ -12660,3 +12660,27 @@ across sizes. LEVER: scipy FFT-based per-signal transforms with an axis loop (hi
 resample/decimate/detrend over many signals) are single-threaded C → a parallel `_many`/batched form wins when
 fsci's per-signal kernel is competitive; verify the per-signal FFT isn't mid-radix-walled first (power-of-2 L is
 safe — fsci's radix-2² is competitive).
+
+## 2026-07-02 — BlackThrush (cc): KEEP — resample_axis_2d (batched FFT resampling) — 2.27x FASTER than scipy for pow-2, ~parity for 5-smooth (byte-identical, fills the missing batch form)
+
+`resample` was the only member of the fsci resample family WITHOUT a 2-D/axis batch form (decimate/detrend/
+resample_poly all have `_axis_2d`). scipy.signal.resample(x, num, axis) loops the per-line FFT single-threaded;
+added `resample_axis_2d` (parallel across lines via thread::scope, mirroring resample_poly_axis_2d — forces each
+line's internal FFT pass serial so the two parallelism levels don't over-subscribe). Correctness: fsci resample
+matches scipy EXACTLY (16→8 all 12 digits).
+
+Measured (same box; scipy pinned OPENBLAS/OMP/MKL=1):
+
+| batch | fsci serial → axis2d (ms) | scipy resample(2D) | axis2d vs scipy | self |
+| --- | --- | --- | --- | --- |
+| nsig=1000 L=1024 num=512  | 10.7 → 5.14 | 11.69ms | 2.27x FASTER | 2.08x |
+| nsig=500  L=2000 num=1000 | 10.1 → 4.22 |  4.35ms | ~parity (1.03x) | 2.39x |
+
+Byte-identical to the fsci serial loop (0 mismatches, both axes tested). fsci-signal lib 667/667 green (+
+`resample_axis_2d_matches_serial_loop_bit_for_bit`). HONEST: clean 2.27x win for POWER-OF-2 lengths; ~parity for
+5-smooth (L=2000/num=1000) where fsci's per-signal resample is ~2x slower than scipy per-line, so 2x parallelism
+only recovers parity. The self-speedup ceilings at ~2x (like hilbert_many) because each `resample` allocates its
+own FFT plan (per-call plan-alloc is the serial bottleneck, not thread count — the helper already fans to 64
+threads). A batched resample that builds the length-L forward + length-num inverse plans ONCE and reuses them
+across all lines would lift both cases to a clear win — deferred (needs a plan-reuse resample API). Value now:
+byte-identical API gap-fill + a real pow-2 win.
