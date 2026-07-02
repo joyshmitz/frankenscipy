@@ -4365,17 +4365,20 @@ pub fn randomized_eigh(
         .map(|_| (0..l).map(|_| next_gauss()).collect())
         .collect();
 
-    let mut y = matmul(a, &omega)?;
+    // Range finder Y = A (A²)^{n_iter} Ω: the dominant products are A · (n×l), all
+    // with n rows, so route them through the bit-identical row-parallel `par_matmul`.
+    let mut y = par_matmul(a, &omega)?;
     for _ in 0..n_iter {
-        let ay = matmul(a, &y)?;
-        y = matmul(a, &ay)?;
+        let ay = par_matmul(a, &y)?;
+        y = par_matmul(a, &ay)?;
     }
     let q = thin_orthonormalized_columns(&y, l);
     let q_cols = q.first().map_or(0, Vec::len);
 
-    let aq = matmul(a, &q)?;
+    let aq = par_matmul(a, &q)?;
     let qt = transpose_rows(&q);
-    let mut t = matmul(&qt, &aq)?;
+    // qt·aq is only l×l (tiny) — `par_matmul` serial-falls-back below its row gate.
+    let mut t = par_matmul(&qt, &aq)?;
     for i in 0..q_cols {
         for j in 0..i {
             let sym = 0.5 * (t[i][j] + t[j][i]);
@@ -4459,7 +4462,7 @@ pub fn randomized_pinv(
         }
     }
     let v = transpose_rows(&svd.vt); // n×kk
-    let pseudo_inverse = matmul(&v, &mmat)?;
+    let pseudo_inverse = par_matmul(&v, &mmat)?;
 
     Ok(PinvResult {
         pseudo_inverse,

@@ -12477,3 +12477,31 @@ LEVER: fsci `matmul` is register-blocked but SINGLE-THREADED — any top-level (
 route through a row-parallel wrapper for a byte-identical Nx. par_matmul is currently private to randomized_svd;
 candidates to extend (carefully, avoiding nesting under `_many`): expm/logm single-matrix (large n), other
 range-finder / sketch routines. GEMM parallelism is memory-bandwidth-bound so real speedup ~5-11x not 64x.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — extend par_matmul to randomized_eigh + randomized_pinv (byte-identical) — randomized_eigh flips 5.5-6.8x SLOWER than scipy eigsh to 1.3-2.0x FASTER
+
+Extends the par_matmul lever (0d5ed53e) to the rest of the randomized-linalg family. `randomized_eigh` (randomized
+symmetric top-k eigendecomposition, Y = A(A²)^{n_iter}Ω range finder) was 5.5-6.8x SLOWER than
+scipy.sparse.linalg.eigsh — same root cause, the n×n·n×l products ran through the single-threaded `matmul`. Routed
+its 4 big `A·(n×l)` products through the bit-identical row-parallel `par_matmul` (the tiny `Qᵀ(AQ)` l×l product
+stays serial below the row gate). Also routed `randomized_pinv`'s final `V·(Σ⁻¹Uᵀ)` product (n rows; its comment
+already said "the parallel matmul" but it used serial `matmul`).
+
+Measured (same box; scipy eigsh pinned OPENBLAS/OMP/MKL=1):
+
+| n (k) | randomized_eigh was → now | scipy eigsh | now vs eigsh |
+| --- | --- | --- | --- |
+| 2000 (20) | 543 → 60.1ms | 79.8ms | 1.33x FASTER |
+| 3000 (30) | 1137 → 120ms | 207ms | 1.72x FASTER |
+| 4000 (30) | 2028 → 184ms | 370ms | 2.02x FASTER |
+
+Byte-identical self-speedup 9.0-11.0x (outputs UNCHANGED — all 4 randomized_* correctness tests pass:
+randomized_svd/eigh/pinv match full svd/eigh/pinv on low rank, rcond estimate). Win GROWS with size (1.33x@2000 →
+2.02x@4000), i.e. wins where randomized eigendecomposition is actually used. fsci-linalg lib 495/495 green.
+HONEST: randomized_eigh is approximate (n_iter-tunable) vs eigsh's Krylov accuracy — the standard tradeoff.
+
+The randomized-linalg family (randomized_svd/eigh/pinv) now all fan their range-finder GEMMs across cores via the
+single work-gated `par_matmul`. LEVER STATUS: par_matmul now serves 3 callers; the remaining single-threaded-GEMM
+targets are the nalgebra `DMatrix`-based matrix functions (expm/logm/sqrtm 2-2.8x slower than scipy) — those use
+nalgebra's blocked GEMM (column-major), where a column-split parallel wrapper risks breaking blocked-accumulation
+bit-identity and would nest under expm_many, so DEFERRED (needs a bit-identity proof + gating vs the batch path).
