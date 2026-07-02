@@ -7306,6 +7306,36 @@ pub fn solve_many(
     par_batch_index_map(mats.len(), |i| solve(&mats[i], &rhs[i], options))
 }
 
+/// Vectorized least-squares over a batch of `(A, b)` pairs; see [`det_many`].
+/// `mats[k]` is solved against `rhs[k]`; each entry equals [`lstsq`] of that pair.
+/// SVD-based per item, so the batch fan-out wins comfortably (and NumPy has no
+/// batched `lstsq`, so a caller loops it single-threaded).
+pub fn lstsq_many(
+    mats: &[Vec<Vec<f64>>],
+    rhs: &[Vec<f64>],
+    options: LstsqOptions,
+) -> Result<Vec<LstsqResult>, LinalgError> {
+    if mats.len() != rhs.len() {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!(
+                "lstsq_many: got {} matrices but {} right-hand sides",
+                mats.len(),
+                rhs.len()
+            ),
+        });
+    }
+    par_batch_index_map(mats.len(), |i| lstsq(&mats[i], &rhs[i], options))
+}
+
+/// Vectorized Moore-Penrose pseudo-inverse over a batch; see [`det_many`]. Each
+/// entry equals [`pinv`] of the corresponding input.
+pub fn pinv_many(
+    mats: &[Vec<Vec<f64>>],
+    options: PinvOptions,
+) -> Result<Vec<PinvResult>, LinalgError> {
+    par_batch_index_map(mats.len(), |i| pinv(&mats[i], options))
+}
+
 /// Scaling and squaring method with truncated Taylor series.
 ///
 /// Algorithm: scale A by 2^(-s) so ||A/2^s|| is small, compute exp via
@@ -32082,8 +32112,27 @@ mod proptest_tests {
             }
         }
 
+        let lstsq_par = lstsq_many(&mats, &rhs, LstsqOptions::default()).unwrap();
+        for ((m, b), r) in mats.iter().zip(&rhs).zip(&lstsq_par) {
+            let serial = lstsq(m, b, LstsqOptions::default()).unwrap();
+            for (x, y) in serial.x.iter().zip(&r.x) {
+                assert_eq!(x.to_bits(), y.to_bits(), "lstsq_many mismatch");
+            }
+        }
+
+        let pinv_par = pinv_many(&mats, PinvOptions::default()).unwrap();
+        for (m, r) in mats.iter().zip(&pinv_par) {
+            let serial = pinv(m, PinvOptions::default()).unwrap();
+            let serial_flat = serial.pseudo_inverse.iter().flatten();
+            let par_flat = r.pseudo_inverse.iter().flatten();
+            for (x, y) in serial_flat.zip(par_flat) {
+                assert_eq!(x.to_bits(), y.to_bits(), "pinv_many mismatch");
+            }
+        }
+
         // Mismatched batch lengths -> error, not a panic.
         assert!(solve_many(&mats, &rhs[..nb - 1], SolveOptions::default()).is_err());
+        assert!(lstsq_many(&mats, &rhs[..nb - 1], LstsqOptions::default()).is_err());
 
         // Empty batch -> empty result.
         assert!(det_many(&[], RuntimeMode::Strict, true).unwrap().is_empty());

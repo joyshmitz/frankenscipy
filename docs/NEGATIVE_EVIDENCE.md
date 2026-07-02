@@ -12330,3 +12330,29 @@ N inputs → `_many` parallel across the batch wins even when fsci's per-matrix 
 no batch-parallelism. The dense-linalg-batch sub-vein (det/inv/solve/expm/logm/sqrtm/cosm/sinm) now mirrors the
 callback-solver vmap set. Tiny-matrix (n<=16) batches are the boundary where numpy's C batch loop wins — deeper
 below that would need a flat-buffer batched LU, not the Vec<Vec> per-matrix path.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — batched lstsq_many/pinv_many (vmap lever, SVD-heavy) — 8.8-15.4x vs numpy looped lstsq, 11.1-11.6x vs numpy BATCHED pinv
+
+Follow-on to det_many/inv_many/solve_many (0146d007). Added `lstsq_many` ((A,b)-paired, Vec<LstsqResult>) and
+`pinv_many` (Vec<PinvResult>) via the same `par_batch_index_map`. These are SVD-based per item, so the batch
+fan-out wins WITHOUT the tiny-matrix crossover that dense det/inv/solve hit at n=16 — the per-item work is heavy
+enough that fsci's Vec<Vec> + thread coordination overhead is negligible.
+
+Measured (same box, pinned OPENBLAS/OMP/MKL=1). fsci `_many` absolute (best-of-5, ms) + speedups:
+
+| batch | fsci many (lstsq/pinv ms) | lstsq vs scipy-loop / numpy-loop | pinv vs scipy-loop / numpy-batched | self (many/serial) |
+| --- | --- | --- | --- | --- |
+| nb=500 48x24 | 4.05 / 4.84 | 12.2x / 10.0x | 15.5x / 11.5x | lstsq 8.2x pinv 7.7x |
+| nb=200 96x48 | 6.12 / 6.90 | 10.0x /  8.8x | 12.1x / 11.6x | lstsq 13.4x pinv 12.7x |
+| nb=300 64x64 | 7.51 / 13.56 | 17.0x / 15.4x | 11.1x / 11.1x | lstsq 10.9x pinv 12.9x |
+
+NumPy has NO batched `lstsq` (it rejects >2-D), so the numpy baseline is a Python loop over np.linalg.lstsq —
+fsci beats it 8.8-15.4x. `np.linalg.pinv` IS batched (stacked), and fsci still beats numpy's batched-1thr pinv
+11.1-11.6x (all cores vs numpy's serial C batch; SVD is expensive enough that the crossover never appears).
+Byte-identical to the serial fsci loop (0 mismatches across the sweep). Conformance fsci-linalg lib 495/495 green
+(extended the batch bit-identity test to lstsq_many/pinv_many).
+
+Dense-linalg-batch vmap sub-vein now: det/inv/solve/lstsq/pinv + expm/logm/sqrtm/cosm/sinm. SVD/eig-decomp-heavy
+ops (lstsq/pinv, and by extension a future svd_many/eigh_many/qr_many) are the STRONGEST members — no tiny-matrix
+floor. Remaining single-matrix linalg APIs a caller could loop: svd/eigh/qr/cho_solve/lu_solve (cho_solve/lu_solve
+take pre-factored inputs, niche; svd/eigh/qr are the next clean high-value _many candidates).
