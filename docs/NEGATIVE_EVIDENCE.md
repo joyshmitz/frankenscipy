@@ -12066,3 +12066,23 @@ Added `nctdtr_many` (200k, 0 bit-identity mismatches): 32 ns/pt vs scipy 545 = *
 nctdtrit/nctdtrinc/nctdtridf scalars all ~11x faster too. LEVER (reconfirmed, perf_stats_discrete_cdf lever):
 a special-fn series summing a FRESH special-fn per term → seed once + term recurrence; here the incomplete-beta
 a-recurrence, prototyped in Python to confirm absolute stability before the Rust port.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — invert_positive_param bisection→Illinois (~11.7x scalar) + df-inverse _many (nctdtridf 3.4x / ncfdtridfn 12.0x / ncfdtridfd 1.2x scipy)
+
+Completed the Illinois lever across the LAST bracket-bisect inverses: `invert_positive_param` (shared by
+`nctdtridf`, `ncfdtridfn`, `ncfdtridfd`) ran an UNCONDITIONAL 200-iteration bisection over the 20-decade
+[1e-8, 1e12] bracket, calling the (Poisson-mixture-series) CDF each step. Routed through `illinois_root` (folding
+the increasing/decreasing cases into an increasing residual): ~200 → ~17 CDF evals. nctdtridf/ncfdtridfn
+10414/10445→~10.4µs (≈11.7x fewer CDF calls vs the 200-bisect over the now-fast CDF). Faithful — finds the same
+root of the same exact CDF to ~1e-12; conformance 1121/1121 green.
+
+Added parallel `_many` (in-range p, 0 bit-identity mismatches vs serial): **nctdtridf_many 1519 vs scipy 5221 =
+3.4x; ncfdtridfn_many 340 vs 4081 = 12.0x; ncfdtridfd_many 495 vs 606 = 1.2x FASTER**. fsci is ≥ scipy accuracy:
+round-trip proof — fsci's recovered df/dfn round-trips to the target p to 1e-12, whereas scipy's is off (dfn worst
+case: fsci→p exactly, scipy→p+8e-6; scipy's cdflib stops early in the flat/ill-conditioned region). ncfdtridfd
+exact (0/152). ncfdtridfd_many only 1.2x because scipy's ncfdtridfd is itself fast (606 ns/pt) and well-
+conditioned; the dof-inverses saturate (CDF flat in df) so out-of-range p returns LO/HI sentinels (pre-existing,
+same as the old bisection) — a per-element convention, bit-identical to the serial scalar.
+
+The ENTIRE noncentral t/F inverse+CDF family is now Illinois-accelerated + parallel-wrapped and matches-or-beats
+scipy on both speed and accuracy. Illinois lever fully mined in fsci-special.

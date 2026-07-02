@@ -861,15 +861,17 @@ fn invert_positive_param(target: f64, g: impl Fn(f64) -> f64) -> f64 {
     if target >= gmax {
         return if increasing { HI } else { LO };
     }
-    for _ in 0..200 {
-        let mid = 0.5 * (lo + hi);
-        if (g(mid) < target) == increasing {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    0.5 * (lo + hi)
+    // Superlinear root-find (Illinois) instead of a fixed 200-step bisection over
+    // the 20-decade [1e-8, 1e12] bracket — ~10x fewer of the expensive CDF `g`
+    // evaluations. Fold the increasing/decreasing cases into an increasing
+    // residual `f` with f(lo) < 0 < f(hi).
+    let (flo, fhi) = if increasing {
+        (glo - target, ghi - target)
+    } else {
+        (target - glo, target - ghi)
+    };
+    let f = |x: f64| if increasing { g(x) - target } else { target - g(x) };
+    illinois_root(f, lo, hi, flo, fhi)
 }
 
 /// Inverse of [`ncfdtr`] in the denominator degrees of freedom `dfd`.
@@ -1191,6 +1193,33 @@ pub fn ncfdtrinc_many(dfn: f64, dfd: f64, p: &[f64], f: f64) -> Vec<f64> {
 pub fn nctdtrinc_many(df: f64, p: &[f64], t: f64) -> Vec<f64> {
     par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(nctdtrinc(df, p[i], t)))
         .expect("nctdtrinc is infallible")
+}
+
+/// Vectorized inverse noncentral-F CDF w.r.t. denominator dof,
+/// `ncfdtridfd(dfn, p, nc, f)`, over many `p` for fixed `(dfn, nc, f)`. Each
+/// solve is an [`invert_positive_param`] (Illinois) over the single-threaded
+/// SciPy ufunc; the parallel fan wins. See [`stdtrit_many`].
+#[must_use]
+pub fn ncfdtridfd_many(dfn: f64, p: &[f64], nc: f64, f: f64) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(ncfdtridfd(dfn, p[i], nc, f)))
+        .expect("ncfdtridfd is infallible")
+}
+
+/// Vectorized inverse noncentral-F CDF w.r.t. numerator dof,
+/// `ncfdtridfn(p, dfd, nc, f)`, over many `p` for fixed `(dfd, nc, f)`; see
+/// [`ncfdtridfd_many`].
+#[must_use]
+pub fn ncfdtridfn_many(p: &[f64], dfd: f64, nc: f64, f: f64) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(ncfdtridfn(p[i], dfd, nc, f)))
+        .expect("ncfdtridfn is infallible")
+}
+
+/// Vectorized inverse noncentral-t CDF w.r.t. dof, `nctdtridf(p, nc, t)`, over
+/// many `p` for fixed `(nc, t)`; see [`ncfdtridfd_many`].
+#[must_use]
+pub fn nctdtridf_many(p: &[f64], nc: f64, t: f64) -> Vec<f64> {
+    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(nctdtridf(p[i], nc, t)))
+        .expect("nctdtridf is infallible")
 }
 
 /// Inverse Student's t distribution CDF with respect to degrees of freedom.
