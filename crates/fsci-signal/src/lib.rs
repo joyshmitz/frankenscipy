@@ -924,6 +924,35 @@ fn fft_conv_is_faster(na: usize, nb: usize) -> bool {
     direct_ops > 20 * fft_ops
 }
 
+/// Once the FFT path is chosen, decide between overlap-add and one full-length
+/// transform. OA pays `nblocks × fft_len·log(fft_len)` over pow2 blocks; the
+/// full transform pays one `L·log(L)` over `L ≈ na+nb-1`. When one input is much
+/// shorter (long signal, small kernel) OA is dramatically cheaper — and it also
+/// uses pow2 blocks, dodging the slower non-pow2 full-length transform. Mirrors
+/// [`oaconvolve`]'s own block search so the estimate matches what it will run.
+fn oa_conv_cheaper_than_full(na: usize, nb: usize) -> bool {
+    let short = na.min(nb);
+    let long = na.max(nb);
+    let full_len = na + nb - 1;
+    let l_full = (full_len.next_power_of_two() as f64).max(2.0);
+    let cost_full = l_full * l_full.log2();
+
+    let min_fft = (2 * short).next_power_of_two().max(short + 1).next_power_of_two();
+    let max_fft = full_len.next_power_of_two();
+    let mut cost_oa = f64::INFINITY;
+    let mut fl = min_fft;
+    while fl <= max_fft {
+        let blk = fl - short + 1;
+        let nblocks = long.div_ceil(blk) as f64;
+        let c = nblocks * (fl as f64) * (fl as f64).log2();
+        if c < cost_oa {
+            cost_oa = c;
+        }
+        fl <<= 1;
+    }
+    cost_oa < cost_full
+}
+
 /// Convolution method chosen by [`choose_conv_method`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConvMethod {
@@ -1012,6 +1041,13 @@ pub fn convolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>, Si
     // early — FFT's constant means the direct loop is faster, AND byte-identical,
     // until na·nb dominates the FFT work).
     if fft_conv_is_faster(na, nb) {
+        // Among FFT methods, prefer overlap-add when it is cheaper (long signal,
+        // small kernel) — this dodges fsci's slower non-pow2 full-length transform
+        // and matches scipy's method='auto' spirit. Convolution is method-
+        // independent up to ~1e-10 FFT roundoff, already within tolerance.
+        if oa_conv_cheaper_than_full(na, nb) {
+            return oaconvolve(a, b, mode);
+        }
         return fftconvolve(a, b, mode);
     }
 

@@ -12086,3 +12086,25 @@ same as the old bisection) — a per-element convention, bit-identical to the se
 
 The ENTIRE noncentral t/F inverse+CDF family is now Illinois-accelerated + parallel-wrapped and matches-or-beats
 scipy on both speed and accuracy. Illinois lever fully mined in fsci-special.
+
+## 2026-07-02 — BlackThrush (cc): KEEP — convolve/correlate method-selection adds overlap-add path (correlate 200k/512 flips 5.5x LOSS → 1.8x scipy WIN)
+
+PIVOT out of fsci-special (its illinois/recurrence veins are mined). Measured fsci-signal convolution vs scipy:
+fsci `oaconvolve` already BEATS scipy (200k/512 2.96 vs 5.38ms=1.8x; 1M/2048 18.1 vs 31.1=1.7x), but `convolve`
+(and thus `correlate`, which delegates to it) only chose between DIRECT and one FULL-LENGTH FFT — never OA. The
+full-length transform hits fsci's slow non-pow2 FFT wall, so `correlate(200k,512)` was 45 vs scipy 8.22ms =
+**5.5x SLOWER**, `correlate(1M,2048)` 69.5 vs 48.97 = 1.4x slower, `convolve(200k,512)` 43.5 vs scipy-auto 7.70.
+
+FIX: in `convolve`'s FFT branch, added `oa_conv_cheaper_than_full(na,nb)` (mirrors oaconvolve's own pow2 block
+search vs the full-length `L·log L`); route to `oaconvolve` when cheaper — scipy `method='auto'` spirit, and it
+dodges the non-pow2 full transform by using pow2 OA blocks. Result is method-independent up to ~1e-10 FFT
+roundoff (byte-identical to the direct path: max|abs| 0.00 vs oaconvolve). Same box:
+- convolve(200k,512) 43→3.45ms; vs scipy-auto 7.70 = **2.2x faster**
+- correlate(200k,512) 45→4.62ms; vs scipy 8.22 = **1.8x faster** (was 5.5x LOSS)
+- correlate(1M,2048) 69.5→32.8ms; vs scipy 48.97 = **1.5x faster** (was 1.4x LOSS)
+- convolve(1M,2048) 42.9 vs scipy-auto 48.16 = 1.1x faster
+Similar sizes (100k/100k) correctly stay full-FFT; small kernel (500k/64) correctly stays direct (unchanged).
+Conformance fsci-signal 665/665 green. LEVER: when a mature op has a fast sub-method (oaconvolve) that the
+top-level dispatcher never selects, add it to the cost-based method picker — the win is routing, not new math.
+FFT-kernel wall (fsci non-pow2 ~4x slower than pocketfft: fftconvolve 200k/512 still 43 vs scipy 10.85) stays
+the deferred multi-cycle SoA-SIMD project — OA routing sidesteps it for convolve/correlate.
