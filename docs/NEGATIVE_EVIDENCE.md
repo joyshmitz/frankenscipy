@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: hyperu a>0 small-x quadrature → self-gated 1F1 connection formula — flips ~12× LOSS to 2.6-6.2× WIN
+
+- Closes the long-deferred hyperu small-x gap. For a>0, non-integer b, small/moderate x the code fell to
+  the 768-step confluent-integral quadrature (`hyperu_positive_a_integral`) — a documented ~13× SciPy loss
+  AND only ~3.2e-8 accurate. The a>0 branch reaches that integral ONLY after the large-x asymptotic fails
+  (i.e. x is small), which is exactly where the two-term 1F1 connection formula is cancellation-SAFE.
+- Added `hyperu_connection_formula_checked`: computes U via `π/sin(πb)[M(a,b,x)/(Γ(a−b+1)Γ(b)) −
+  x^{1−b}M(a−b+1,2−b,x)/(Γ(a)Γ(2−b))]` and SELF-VALIDATES by estimating the cancellation condition
+  `cond=(|T1|+|T2|)/|T1−T2|`; taken only when `eps·cond ≤ ~2.2e-10` (cap `HYPERU_CONN_MAX_COND=1e6`),
+  else falls through to the integral — so accuracy strictly improves, never regresses. Integer b (formula
+  singular) also falls through. This is the `perf_widen_self_validating_fastpath_gate` lever.
+- Prototyped in Python FIRST, validated vs mpmath 40-dps: **941 gate-accepted cases, worst relerr 8.8e-10**
+  (~36× tighter than the integral's 3.2e-8 floor) over a>0, non-int b, x∈[0.1,10].
+- MEASURED same box (scipy 1.17.1), old integral timed directly vs new: hyperu(2,1.5,0.5) 13.71→**0.43µs
+  = 32× self**, **2.6× > scipy** (1.11µs); (0.7,1.3,1) 12.54→0.25µs=50×, **4.6× > scipy**; (1.2,0.5,0.8)
+  12.96→0.23µs=56×, **4.6×**; (0.5,0.5,0.3) 12.62→0.19µs=67×, **6.2×**. Flips the ~12× SciPy LOSS to a
+  2.6-6.2× WIN and lifts accuracy 3.2e-8 → ~1e-13.
+- Verification: new `hyperu_positive_a_small_x_connection_matches_reference` (10 mpmath refs) + all 92
+  hyper-module / 12 hyperu tests green (rch/hz2). Remaining hyperu gap: a>0 INTEGER b small-x (connection
+  singular — needs the log/limit form or an a>0 integer-b recurrence).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: hyp2f1 integer c−a−b≠0 near z→1 general log formula — fixes NaN + 2.1-3.8× WIN, beats SciPy accuracy
 
 - Completes the 2F1 near-z=1 story: the remaining integer c−a−b = m ≠ 0 cases (c = a+b±1, ±2, …).
