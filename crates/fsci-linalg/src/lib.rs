@@ -7505,22 +7505,61 @@ fn expm_pade_scaling_squaring(a: &DMatrix<f64>) -> DMatrix<f64> {
         return identity;
     }
 
-    // Scale until ||A/2^s||_1 < 0.5 to ensure Taylor convergence is fast
-    let s = if norm1 <= 0.5 {
+    // Scaling & squaring with the degree-13 Padé approximant (Higham 2005,
+    // "The Scaling and Squaring Method for the Matrix Exponential Revisited",
+    // Alg. 2.3 — the method SciPy's expm uses). Scale so ||A/2^s||_1 ≤ θ₁₃,
+    // evaluate the [13/13] Padé in 6 matmuls + 1 linear solve, then square s
+    // times. This replaces the former 20-term Taylor series (~19 matmuls at a
+    // ||·|| < 0.5 threshold, so also more squarings): same ~1e-16 accuracy for a
+    // ~3× reduction in matrix products, which dominate expm's cost (and cascade
+    // into cosm/sinm/sqrtm, which are built on this kernel).
+    const THETA13: f64 = 5.371_920_351_148_152;
+    let s = if norm1 <= THETA13 {
         0u32
     } else {
-        ((norm1 * 2.0).log2().ceil()) as u32
+        (norm1 / THETA13).log2().ceil().max(0.0) as u32
     };
-    let scaled = a / (2.0_f64.powi(s as i32));
+    let scaled = a / 2.0_f64.powi(s as i32);
 
-    // Taylor series: exp(A) = I + A + A²/2! + A³/3! + ... + A^k/k!
-    // For ||A|| <= 0.5, 20 terms gives ~10^-16 accuracy
-    let result = taylor_exp(&scaled, &identity, 20);
+    // [13/13] Padé numerator/denominator coefficients b₀..b₁₃.
+    const B: [f64; 14] = [
+        64_764_752_532_480_000.0,
+        32_382_376_266_240_000.0,
+        7_771_770_303_897_600.0,
+        1_187_353_796_428_800.0,
+        129_060_195_264_000.0,
+        10_559_470_521_600.0,
+        670_442_572_800.0,
+        33_522_128_640.0,
+        1_323_241_920.0,
+        40_840_800.0,
+        960_960.0,
+        16_380.0,
+        182.0,
+        1.0,
+    ];
+    let a2 = par_dmatmul(&scaled, &scaled);
+    let a4 = par_dmatmul(&a2, &a2);
+    let a6 = par_dmatmul(&a2, &a4);
+    // U = A·(A6·(b13·A6 + b11·A4 + b9·A2) + b7·A6 + b5·A4 + b3·A2 + b1·I)
+    let u_inner = &a6 * B[13] + &a4 * B[11] + &a2 * B[9];
+    let u_poly =
+        par_dmatmul(&a6, &u_inner) + &a6 * B[7] + &a4 * B[5] + &a2 * B[3] + &identity * B[1];
+    let u = par_dmatmul(&scaled, &u_poly);
+    // V = A6·(b12·A6 + b10·A4 + b8·A2) + b6·A6 + b4·A4 + b2·A2 + b0·I
+    let v_inner = &a6 * B[12] + &a4 * B[10] + &a2 * B[8];
+    let v = par_dmatmul(&a6, &v_inner) + &a6 * B[6] + &a4 * B[4] + &a2 * B[2] + &identity * B[0];
+    // Solve (V − U)·X = (V + U); X = r₁₃(A) is the Padé exponential of the scaled A.
+    let num = &v + &u;
+    let den = &v - &u;
+    let mut exp_a = den
+        .lu()
+        .solve(&num)
+        .unwrap_or_else(|| taylor_exp(&scaled, &identity, 20));
 
     // Squaring phase: exp(A) = exp(A/2^s)^(2^s). Each n×n·n×n product fans across
     // cores via the bit-identical `par_dmatmul` (large matrices only; small ones
     // and batched per-item calls stay serial via the work gate).
-    let mut exp_a = result;
     for _ in 0..s {
         exp_a = par_dmatmul(&exp_a, &exp_a);
     }

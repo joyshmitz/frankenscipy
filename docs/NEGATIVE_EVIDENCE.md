@@ -6,6 +6,26 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: expm 20-term Taylor → [13/13] Padé — expm 1.46-1.74× self (flips 1.96× loss → 1.13× parity), lifts cosm/sinm 1.43-1.68×
+
+- FRESH VEIN: benched fsci-linalg hand-rolled matrix functions vs scipy.linalg (n=50/100, OMP=1). Found real gaps:
+  **cosm/sinm 4.6-5.8× slower, expm 2.0-2.65×, sqrtm 1.95-2.28×** (logm already WINS 1.4-4.9×, signm ~parity).
+- ROOT CAUSE: `expm_pade_scaling_squaring` was misnamed — it ran a **20-term TAYLOR series** (~19 matmuls, scaled to
+  ||A||₁<0.5 so also extra squarings), NOT Padé. cosm/sinm build on it via the 2n×2n real block embedding
+  `expm([[0,−A],[A,0]])`, and sqrtm/others too — so expm is the root kernel.
+- FIX: replaced Taylor with the actual **degree-13 Padé** (Higham 2005 Alg 2.3, the method SciPy uses): scale to
+  ||A/2^s||₁ ≤ θ₁₃=5.37, evaluate [13/13] in **6 matmuls + 1 LU solve** (`den.lu().solve(num)`), square s times. ~3×
+  fewer matrix products (the dominant cost), fewer squarings, same ~1e-16 accuracy. Falls back to Taylor if the Padé
+  denominator is singular (never hit in practice).
+- MEASURED (self, same box): **expm n=50 204→117µs=1.74×, n=100 1406→965µs=1.46×**; cosm n=100 9849→5851µs=1.68×,
+  sinm 1.65×; sqrtm 1.10-1.16× (mostly Schur, small expm share). Vs scipy: expm n=50 **flips 1.96× loss → 1.13×
+  near-parity** (n=100 2.65×→1.82×), cosm 5.83×→3.46×. Full fsci-linalg suite **496/0** (expm scipy-match tests
+  validate ~1e-13). Bit-close (Padé vs Taylor differ ~1e-15, within tolerance). Own file: lib.rs.
+- REMAINING (deferred): expm n=100 still 1.82× (par_dmatmul per-product ~1.5× LAPACK dgemm — kernel-quality, harder);
+  cosm/sinm still 3.4× (the 2n×2n embedding does 8× per-matmul work — a complex n×n expm(iA) would halve it but needs
+  a complex expm kernel); Higham's adaptive m∈{3,5,7,9,13} would cut small-norm cost further. LEVER: grep hand-rolled
+  matrix-fn kernels for `taylor`/naive series where a Padé/Schur method is standard.
+
 ## 2026-07-03 - BlackThrush (cc) - DIAGNOSED: rfft is FINE (no bug); DCT-II 1.8-2.0× slower = 3-separate-passes vs pocketfft's fused; extract micro-opt (1.07×) shipped, real fix needs fused DCT (LEAD)
 
 - Resolved the DCT/rfft lead below with a CLEAN one-binary ratio bench (after `cargo clean` cleared recurring E0514
