@@ -709,61 +709,6 @@ fn fit_standard_weibull_shape_mle(
     }
 }
 
-/// Illinois modified false-position root of an INCREASING function `f` on the
-/// bracket `[lo, hi]` with `flo = f(lo) <= 0 <= fhi = f(hi)`. Converges
-/// superlinearly in ~10-15 `f` evaluations vs the ~40-100 of plain bisection —
-/// the win for the incomplete-gamma/beta CDFs that back the ppf/isf fallbacks.
-fn illinois_root_stats(
-    f: impl Fn(f64) -> f64,
-    mut lo: f64,
-    mut hi: f64,
-    mut flo: f64,
-    mut fhi: f64,
-) -> f64 {
-    let mut side = 0i32;
-    // Seed the previous iterate as NaN (not the midpoint) so a root sitting on a
-    // bracket endpoint can't trigger a spurious first-iteration convergence.
-    let mut mid = f64::NAN;
-    for _ in 0..100 {
-        let denom = fhi - flo;
-        let candidate = if denom.is_finite() && denom != 0.0 {
-            (lo * fhi - hi * flo) / denom
-        } else {
-            0.5 * (lo + hi)
-        };
-        let next = if candidate > lo && candidate < hi {
-            candidate
-        } else {
-            0.5 * (lo + hi)
-        };
-        let tol = 4.0 * f64::EPSILON * next.abs().max(1.0);
-        if (next - mid).abs() <= tol || (hi - lo).abs() <= tol {
-            return next;
-        }
-        mid = next;
-        let fmid = f(mid);
-        if fmid == 0.0 {
-            return mid;
-        }
-        if fmid > 0.0 {
-            hi = mid;
-            fhi = fmid;
-            if side == 1 {
-                flo *= 0.5;
-            }
-            side = 1;
-        } else {
-            lo = mid;
-            flo = fmid;
-            if side == -1 {
-                fhi *= 0.5;
-            }
-            side = -1;
-        }
-    }
-    mid
-}
-
 /// Generic inverse CDF via bisection search.
 fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
     // Initial bracket: start around mean ± 10*std
@@ -794,15 +739,7 @@ fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
         hi += step;
     }
 
-    // Illinois false-position: cdf is increasing with cdf(lo) <= q <= cdf(hi), so
-    // f(x) = cdf(x) - q is increasing with f(lo) <= 0 <= f(hi). ~3-5x fewer cdf
-    // evals than the old bisection. Fall back to bisection if the bracket didn't
-    // form (extreme tail where the expansion hit its doubling cap).
-    let flo = cdf(lo) - q;
-    let fhi = cdf(hi) - q;
-    if flo.is_finite() && fhi.is_finite() && flo <= 0.0 && fhi >= 0.0 {
-        return illinois_root_stats(|x| cdf(x) - q, lo, hi, flo, fhi);
-    }
+    // Bisection
     for _ in 0..100 {
         let mid = 0.5 * (lo + hi);
         if (hi - lo).abs() < 1e-12 * mid.abs().max(1.0) {
@@ -860,14 +797,6 @@ fn isf_bisection(sf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
         step *= 2.0;
     }
 
-    // Illinois false-position: sf is decreasing with sf(lo) >= q >= sf(hi), so
-    // g(x) = q - sf(x) is increasing with g(lo) <= 0 <= g(hi). Fall back to
-    // bisection if the bracket didn't form.
-    let flo = q - sf(lo);
-    let fhi = q - sf(hi);
-    if flo.is_finite() && fhi.is_finite() && flo <= 0.0 && fhi >= 0.0 {
-        return illinois_root_stats(|x| q - sf(x), lo, hi, flo, fhi);
-    }
     for _ in 0..200 {
         let mid = 0.5 * (lo + hi);
         if (hi - lo).abs() < 1e-12 * mid.abs().max(1.0) {
@@ -49977,28 +49906,6 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
-
-    #[test]
-    fn ppf_isf_bisection_illinois_matches_scipy_reference_points() {
-        // Distributions whose ppf/isf route through the generic bisection (now
-        // Illinois false-position). References from scipy.stats (1.17.1); asserted
-        // to 5e-7 — the CDF-inversion accuracy floor set by the incomplete-gamma/
-        // beta CDF noise (~1e-8), identical for the old bisection.
-        assert!((ChiSquared::new(5.0).ppf(0.7) - 6.064430032).abs() <= 5e-7 * 6.1);
-        assert!((FDistribution::new(3.0, 10.0).ppf(0.6) - 1.083415047).abs() <= 5e-7 * 1.1);
-        assert!((GammaDist::new(2.5, 1.0).ppf(0.8) - 3.644638099).abs() <= 5e-7 * 3.7);
-        assert!((InverseGamma::new(3.0).ppf(0.5) - 0.3739631449).abs() <= 5e-7 * 1.0);
-        assert!((Maxwell::new(1.0).ppf(0.9) - 2.500277689).abs() <= 5e-7 * 2.6);
-        // Round-trip cdf(ppf(q)) == q across the range for a few distributions.
-        for &q in &[0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99] {
-            let d = ChiSquared::new(7.0);
-            let x = d.ppf(q);
-            assert!((d.cdf(x) - q).abs() <= 1e-7, "chi2 ppf round-trip q={q}");
-            let g = GammaDist::new(1.7, 2.0);
-            let xg = g.ppf(q);
-            assert!((g.cdf(xg) - q).abs() <= 1e-7, "gamma ppf round-trip q={q}");
-        }
-    }
 
     #[test]
     fn somersd_distinct_fast_path_matches_kendall_and_brute() {

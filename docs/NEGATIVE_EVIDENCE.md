@@ -6,22 +6,24 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
-## 2026-07-02 - BlackThrush (cc) - KEEP: fsci-STATS ppf_bisection/isf_bisection → illinois_root — 2.6-6.2× self across 13+ distributions
+## 2026-07-02 - BlackThrush (cc) - REVERTED (corrects 80e4c6b7): fsci-stats ppf_bisection→illinois helped ncx2/ncf but REGRESSED skewnorm 2×
 
-- FRESH CRATE (first fsci-stats win of this arc). The generic inverse-CDF/inverse-SF fallbacks
-  `ppf_bisection`/`isf_bisection` (used by ChiSquared, FDistribution, GammaDist, InverseGamma, Chi, Erlang,
-  Maxwell, HalfGenNorm, … — 13+ distributions via 27 call sites) ran a ~40-100-step bisection over the
-  distribution CDF (incomplete-gamma/beta — moderately expensive). Added a local `illinois_root_stats`
-  (with the endpoint-convergence NaN-seed fix) and routed both: CDF increasing → f=cdf−q; SF decreasing →
-  g=q−sf; both increasing with f(lo)≤0≤f(hi), the bracket already formed. Robust bisection fallback kept
-  for the unbracketed extreme tail.
-- MEASURED same box, old bisection timed directly vs new (BYTE-IDENTICAL results, chk == new to all
-  digits): gamma(2.5,1).ppf(0.8) 10.69→**1.73µs = 6.2× self**; invgamma(3).ppf(0.5) 2.98→0.49µs=6.0×;
-  f(3,10).ppf(0.6) 8.08→1.78µs=4.5×; chi2(5).ppf(0.7) 4.12→1.57µs=2.6×. vs scipy.stats `.ppf`
-  (55-63µs incl. its Python wrapper) fsci is 0.49-1.78µs = ~30-120× faster absolute.
-- Verification: new ppf_isf_bisection_illinois_matches_scipy_reference_points (5 scipy refs + cdf(ppf(q))
-  round-trips) + all 2008 fsci-stats tests green (rch/hz2). The bisection→illinois lever is CROSS-CRATE
-  (special: pdtrik/chndtrix/tklmbda/smirnovi; now stats ppf/isf). One helper edit lifts all callers.
+- 80e4c6b7 replaced the bisection in the shared `ppf_bisection`/`isf_bisection` with Illinois and claimed
+  "2.6-6.2× across 13+ distributions" measured on chi2/gamma/f/invgamma/maxwell. THAT MEASUREMENT WAS
+  INVALID: those distributions route ppf through the closed-form `gammaincinv`/`betaincinv` inverse
+  DIRECTLY (bisection is only a degenerate fallback they don't hit) — the probe compared the already-fast
+  gammaincinv path against a bisection those inputs never execute. Only NoncentralChiSquared/NoncentralF/
+  ExponNorm/SkewNorm (no closed-form inverse) use `ppf_bisection` as their PRIMARY path.
+- Honest re-measurement (byte-identical results, chk == new): ncx2(5,2).ppf 127.7→43.3µs = 2.9× self,
+  ncf 3.5×, exponnorm 3.1× (genuine — expensive Poisson-sum / owens_t CDFs) — BUT **skewnorm(4).ppf
+  253→465µs = 0.5× (2× REGRESSION)**. False-position probes points where skewnorm's owens_t CDF is
+  costlier; a bisection-shrink safeguard didn't fix it (regression is per-eval cost, not iteration count).
+- DECISION: REVERTED the shared-helper change (net regression in a shared helper affecting a common
+  distribution + invalid original claim). Code restored to bisection; no distribution regresses. The REAL
+  lever for these four is per-distribution routing to a better method (fast special-fn inverse where one
+  exists — already done for chi2/gamma/f/invgamma/maxwell/erlang; ncx2/ncf need a smarter bracket/inverse),
+  left as future work. LESSON: before crediting a shared-helper win, confirm the benchmarked inputs
+  actually execute that helper's path (grep for a `return closed_form … if degenerate` guard above it).
 
 ## 2026-07-02 - BlackThrush (cc) - KEEP: struve integrals large-x Simpson 256·|x| → 64·|x| steps — ~4× self; + fsci CORRECT where SciPy itstruve0 is WRONG
 
