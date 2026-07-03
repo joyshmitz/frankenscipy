@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: ellip_normal/ellip_harm_2 hoist the s-invariant Lamé solve out of the quadrature — 168× / ~104× self (byte-identical)
+
+- Benching the un-measured harmonic functions found **ellip_normal = 91 MILLISECONDS per call** (ellip_harm_2
+  = 797µs, ellip_harm = 12µs) — the biggest slow member of the session. ellip_normal is a DOUBLE integral and
+  ellip_harm_2 a single integral whose integrands call `ellip_harm(h2,k2,n,p, ·)` at every quad node; each
+  `ellip_harm` re-ran the FULL Lamé solve (lame_matrix build + `lame_eigenvalues` + `tridiagonal_eigenvector_nonsym`)
+  — which is INVARIANT in the integration variable (depends only on h2,k2,n,p), so ~6400 redundant eigen-solves.
+- Refactored `ellip_harm` into `lame_solution` (the s-independent coeffs+exponents+sign, expensive) and
+  `lame_eval` (the cheap per-`s` poly+prefactor). ellip_normal/ellip_harm_2 now compute `lame_solution` ONCE
+  and call `lame_eval` per node. Same "hoist the loop-invariant solve" lever as solve_toeplitz_many / NIG-moments.
+- MEASURED same box: **ellip_normal 91.1ms → 0.54ms = 168× self** (reldiff **0.0e0 — BYTE-IDENTICAL**);
+  ellip_harm_2 797µs → 7.7µs = ~104× (byte-identical by construction — same coeffs, hoisted). Full fsci-special
+  suite green (rch/hz2); the ellip_normal_matches_scipy / ellip_harm_2 scipy-ref tests validate. Own file:
+  orthopoly.rs + this ledger. LEVER: a quadrature whose integrand re-solves an argument-invariant eigen/linear
+  system per node → split solve-once + eval-per-node.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: NormInvGauss.cdf uniform-Simpson → adaptive Gauss-Kronrod (fsci_integrate::quad) — 16.5× cdf, flips 3.6× loss → 5× WIN
 
 - A stats-distribution bench found NormInvGauss (NIG) cdf = **940µs**, ppf = **11.4ms** — catastrophic (3.6×
