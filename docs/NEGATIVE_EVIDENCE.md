@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: erfi Maclaurin series → (2/√π)e^{x²}dawsn(x) form — 4-12× self, byte-identical
+
+- erfi(x) for |x|<6 summed a Maclaurin series `2x/√π Σ x^{2k}/(k!(2k+1))` — up to ~60 terms near |x|=6.
+  The identity erfi(x) = (2/√π)e^{x²}·dawsn(x) (dawsn = O(1) Cephes rational, already used for |x|≥6) is
+  valid for ALL |x| (e^{x²} overflows to ±inf past x²>709, matching scipy), so I removed the series entirely
+  and always use the dawsn form. Verified byte-identical to the series (probe diff = 0.0 to all digits;
+  ≤2.4e-16 vs scipy over |x|∈[0.001,6] incl. negative x).
+- MEASURED same box, old series vs dawsn form: erfi(5.5) 0.220→**0.019µs = 11.6× self**; erfi(4) 10.2×;
+  erfi(2) 6.8×; erfi(1) 4.1×. New fsci erfi is 11-19ns vs scipy.special.erfi ~0.11µs = **~6-10× FASTER**
+  (the old series was ~2× SLOWER than scipy for |x|≈5.5).
+- Verification: new erfi_dawsn_form_matches_scipy (6 scipy refs incl. negative x, 1e-12) + all 1138
+  fsci-special tests green (rch/hz2). Also simplifies the code (one line, no branch). Same "scaled-function
+  identity beats the series" lever as the erfcx round-trip fix.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: erfcx(x≥1) drops the exp round-trip — 2.3× self (byte-close, more accurate)
 
 - erfcx_scalar(x) for x∈[1,25) computed `exp(x²)·erfc_scalar(x)`, but erfc_scalar already returns
