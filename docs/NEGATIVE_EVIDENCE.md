@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: VonMises var/kurtosis share the Miller Bessel helper — O(κ²)→O(κ) + fixes 256-cap truncation, beats SciPy accuracy
+
+- Extracted the Miller I_k/I_0 recurrence from base_cdf into a shared `von_mises_bessel_i0_ratios` helper and
+  routed VonMises.var and .kurtosis through it. Both formerly summed a Bessel-Fourier series with a FRESH
+  `modified_bessel_i(k,κ)` per term ⇒ O(κ²), AND capped at a FIXED 256 terms — which TRUNCATES for κ ≳ 180
+  (the series needs k up to ~κ), so the old var/kurtosis were WRONG for large κ. Now O(κ), no truncation.
+- Byte-close to the old fresh-Bessel value for κ ≤ 180 (Python-verified miller==fresh ≤1e-10 ⇒ no
+  regression); more complete beyond. Same O(κ²)→O(κ) transform as the cdf win (dd4fd016, measured 8-89×);
+  var/kurtosis are cold paths so not separately benchmarked.
+- ACCURACY: fsci var/kurtosis match mpmath 30-digit GROUND TRUTH and are MORE accurate than SciPy — at
+  κ=100 scipy.var errs 9.7e-8 (true 0.01005055, scipy 0.01005045), scipy.kurtosis errs 3.9e-5; fsci matches
+  truth to ~1e-13 (var) / ~1e-8 (kurtosis, μ4/var²−3 cancellation floor).
+- Verification: vonmises test now asserts var/kurtosis vs mpmath truth (5 κ incl. 300, beyond the old cap)
+  + all 2011 fsci-stats tests green (rch/hz2). Consolidates the Miller lever; no fresh per-term Bessel left
+  in VonMises.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: VonMises.cdf O(κ²)→O(κ) via Miller Bessel recurrence — 8-89× self, ~30-90× WIN vs SciPy
 
 - VonMises has no closed-form cdf: F(z) = (z+π)/2π + (1/π) Σ_k (I_k(κ)/I_0(κ))/k sin(kz). The base_cdf summed

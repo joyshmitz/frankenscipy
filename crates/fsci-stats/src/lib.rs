@@ -8828,6 +8828,45 @@ pub struct VonMises {
     pub loc: f64,
 }
 
+/// Ratios `I_k(κ)/I_0(κ)` for `k = 0..=k_max` (r[0] = 1) via one Miller DOWNWARD
+/// recurrence `r_{k−1} = r_{k+1} + (2k/κ) r_k` (seed r_m=0, normalize by r_0, with
+/// overflow rescaling). O(k_max) total, vs O(k_max) FRESH `I_k` Bessel evals (each
+/// O(κ) work ⇒ O(κ²)). Requires κ > 0. Shared by VonMises cdf/var/kurtosis.
+fn von_mises_bessel_i0_ratios(kappa: f64, k_max: usize) -> Vec<f64> {
+    let m = k_max + 20 + (40.0 * kappa).sqrt() as usize + 10;
+    let mut r = vec![0.0_f64; k_max + 2];
+    let mut r_kp1 = 0.0_f64;
+    let mut r_k = 1.0e-30_f64;
+    for k in (1..=m).rev() {
+        let r_km1 = r_kp1 + (2.0 * k as f64 / kappa) * r_k;
+        if k - 1 <= k_max + 1 {
+            r[k - 1] = r_km1;
+        }
+        r_kp1 = r_k;
+        r_k = r_km1;
+        if r_k > 1.0e250 {
+            let s = 1.0e-250;
+            r_k *= s;
+            r_kp1 *= s;
+            for v in r.iter_mut() {
+                *v *= s;
+            }
+        }
+    }
+    let inv0 = 1.0 / r_k; // r_k holds r_0 after the descent to k = 1
+    for v in r.iter_mut() {
+        *v *= inv0;
+    }
+    r.truncate(k_max + 1);
+    r
+}
+
+/// Number of significant Bessel-Fourier terms for VonMises at concentration κ
+/// (ratios decay super-exponentially past k ≈ κ).
+fn von_mises_k_max(kappa: f64) -> usize {
+    (kappa + 12.0 * kappa.sqrt() + 20.0).ceil().max(3.0) as usize
+}
+
 impl VonMises {
     #[must_use]
     pub fn new(kappa: f64, loc: f64) -> Self {
@@ -8884,39 +8923,13 @@ impl VonMises {
             // κ = 0 is the circular uniform.
             return ((z + PI) / (2.0 * PI)).clamp(0.0, 1.0);
         }
-        // Stream ALL ratios r_k = I_k(κ)/I_0(κ) with one Miller DOWNWARD recurrence
-        //   r_{k−1} = r_{k+1} + (2k/κ) r_k   (seed r_m=0, r_{m−1}=tiny, normalize by
-        // r_0) — O(k_max) total, vs the former loop of O(k_max) FRESH
-        // `ive_scalar(k,κ)` evals, each itself O(κ) work ⇒ O(κ²) per cdf. The
-        // ratios decay super-exponentially past k≈κ, so cap k_max generously.
-        // Matches the fresh-Bessel sum to ≤6e-16 over κ∈[0.1,500].
-        let k_max = (kappa + 12.0 * kappa.sqrt() + 20.0).ceil().max(3.0) as usize;
-        let m = k_max + 20 + (40.0 * kappa).sqrt() as usize + 10;
-        let mut r = vec![0.0_f64; k_max + 2]; // unnormalized r_0..r_{k_max+1}
-        let mut r_kp1 = 0.0_f64;
-        let mut r_k = 1.0e-30_f64;
-        for k in (1..=m).rev() {
-            let r_km1 = r_kp1 + (2.0 * k as f64 / kappa) * r_k;
-            if k - 1 <= k_max + 1 {
-                r[k - 1] = r_km1;
-            }
-            r_kp1 = r_k;
-            r_k = r_km1;
-            if r_k > 1.0e250 {
-                // Rescale to avoid overflow; the final normalization by r_0 makes
-                // the absolute scale irrelevant.
-                let s = 1.0e-250;
-                r_k *= s;
-                r_kp1 *= s;
-                for v in r.iter_mut() {
-                    *v *= s;
-                }
-            }
-        }
-        let inv0 = 1.0 / r_k; // r_k holds r_0 after the descent to k = 1
+        // F(z) = (z+π)/2π + (1/π) Σ_k (I_k(κ)/I_0(κ))/k sin(kz). Stream all ratios
+        // via one Miller recurrence (O(κ)) — see `von_mises_bessel_i0_ratios`.
+        let k_max = von_mises_k_max(kappa);
+        let r = von_mises_bessel_i0_ratios(kappa, k_max);
         let mut sum = 0.0_f64;
         for kk in 1..=k_max {
-            let ratio = r[kk] * inv0;
+            let ratio = r[kk];
             let kf = kk as f64;
             sum += ratio / kf * (kf * z).sin();
             if kk > 2 && ratio / kf < 1.0e-17 {
@@ -8963,18 +8976,24 @@ impl ContinuousDistribution for VonMises {
         // expansion of the pdf gives
         //   var = π²/3 + (4/I₀(κ)) Σ_{k≥1} (−1)^k I_k(κ)/k².
         // frankenscipy.
-        let i0 = modified_bessel_i(0.0, self.kappa);
+        if self.kappa <= 0.0 {
+            return PI * PI / 3.0; // circular uniform on [−π, π]
+        }
+        // var = π²/3 + 4 Σ_{k≥1} (−1)^k (I_k/I_0)/k². Stream I_k/I_0 (O(κ), and no
+        // 256-term truncation for large κ — see `von_mises_bessel_i0_ratios`).
+        let k_max = von_mises_k_max(self.kappa);
+        let r = von_mises_bessel_i0_ratios(self.kappa, k_max);
         let mut sum = 0.0_f64;
-        for k in 1..256 {
-            let kf = f64::from(k);
+        for k in 1..=k_max {
+            let kf = k as f64;
             let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
-            let term = sign * modified_bessel_i(kf, self.kappa) / (kf * kf);
+            let term = sign * r[k] / (kf * kf);
             sum += term;
             if k > 2 && term.abs() <= 1e-18 * (1.0 + sum.abs()) {
                 break;
             }
         }
-        PI * PI / 3.0 + 4.0 / i0 * sum
+        PI * PI / 3.0 + 4.0 * sum
     }
 
     fn entropy(&self) -> f64 {
@@ -8996,20 +9015,23 @@ impl ContinuousDistribution for VonMises {
         // Excess kurtosis of the LINEAR moments on [−π, π] (scipy convention):
         //   μ₄ = π⁴/5 + (8/I₀(κ)) Σ_{k≥1} (−1)^k (π²/k² − 6/k⁴) I_k(κ),
         //   kurt = μ₄/var² − 3. frankenscipy.
-        let i0 = modified_bessel_i(0.0, self.kappa);
+        if self.kappa <= 0.0 {
+            return -6.0 / 5.0; // excess kurtosis of the uniform on [−π, π]
+        }
+        // μ₄ = π⁴/5 + 8 Σ_{k≥1} (−1)^k (π²/k² − 6/k⁴)(I_k/I_0). Stream I_k/I_0 (O(κ)).
+        let k_max = von_mises_k_max(self.kappa);
+        let r = von_mises_bessel_i0_ratios(self.kappa, k_max);
         let mut sum = 0.0_f64;
-        for k in 1..256 {
-            let kf = f64::from(k);
+        for k in 1..=k_max {
+            let kf = k as f64;
             let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
-            let term = sign
-                * (PI * PI / (kf * kf) - 6.0 / (kf * kf * kf * kf))
-                * modified_bessel_i(kf, self.kappa);
+            let term = sign * (PI * PI / (kf * kf) - 6.0 / (kf * kf * kf * kf)) * r[k];
             sum += term;
             if k > 2 && term.abs() <= 1e-18 * (1.0 + sum.abs()) {
                 break;
             }
         }
-        let mu4 = PI.powi(4) / 5.0 + 8.0 / i0 * sum;
+        let mu4 = PI.powi(4) / 5.0 + 8.0 * sum;
         let v = self.var();
         mu4 / (v * v) - 3.0
     }
@@ -49942,6 +49964,31 @@ mod tests {
             assert!(
                 (got - expected).abs() <= 1e-9,
                 "vonmises(κ={kappa}).cdf({x}) = {got}, expected {expected}"
+            );
+        }
+        // var & kurtosis (also Miller-streamed; no 256-term truncation, which the
+        // old fixed cap hit for κ ≳ 180). References are mpmath 30-digit GROUND
+        // TRUTH — fsci matches them, and is MORE accurate than SciPy here: at
+        // κ=100 scipy.var errs 9.7e-8 (true 0.01005055, scipy 0.01005045) and
+        // scipy.kurtosis errs 3.9e-5. κ=300 is beyond the former 256-cap.
+        for (kappa, var_true, kurt_true) in [
+            (0.5, 2.348803343669, -0.7419533418169),
+            (2.0, 0.7644618798111, 0.8847265900332),
+            (20.0, 0.05132384674962, 0.05579023780185),
+            (100.0, 0.01005055060713, 0.01020546551528),
+            (300.0, 0.003338909059412, 0.003355753636512),
+        ] {
+            let d = VonMises::new(kappa, 0.0);
+            assert!(
+                (d.var() - var_true).abs() <= 1e-8 * var_true.max(1.0),
+                "vonmises(κ={kappa}).var() = {}, expected {var_true}",
+                d.var()
+            );
+            // kurtosis loses ~1e-8 to the μ4/var²−3 cancellation; assert absolute.
+            assert!(
+                (d.kurtosis() - kurt_true).abs() <= 2e-7,
+                "vonmises(κ={kappa}).kurtosis() = {}, expected {kurt_true}",
+                d.kurtosis()
             );
         }
         // Monotone + bounded across the period for a large κ (Miller stability).
