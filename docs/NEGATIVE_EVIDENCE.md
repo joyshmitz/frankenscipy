@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: btdtria/btdtrib invert_monotone_positive pure-bisection → illinois_root — 3.81× self
+
+- `invert_monotone_positive` (the shape-parameter inverse used ONLY by btdtria/btdtrib) still ran up to 180
+  steps of PLAIN BISECTION over btdtr — a helper the earlier `invert_monotone → illinois_root` pass
+  (428ddda3, chndtridf 16×) had MISSED. Reduced to a monotone-increasing root g(x)=0 (g=cdf−target when
+  increasing, target−cdf when decreasing; both give g(lo)<0<g(hi) from the existing doubling bracket) and
+  handed to the in-file `illinois_root` (superlinear false-position, ~10-15 evals vs ~40).
+- MEASURED same box over a 160-case (a-root & b-root × x × p) grid: **10858→2847ns = 3.81× self**. The
+  Illinois root converges to ~4·eps, TIGHTER than the former 1e-12 bracket, so it is the more-accurate side:
+  max diff vs the old bisection 4.9e-11 abs / 8.0e-12 rel — comfortably inside the btdtria/btdtrib
+  scipy-reference tests (tol 2e-12), which still pass. All 1139 fsci-special tests green (rch/hz2).
+- SAFE here (unlike the reverted shared ppf illinois change, 80e4c6b7, which regressed skewnorm because
+  owens_t's cdf cost varies by probe point): btdtr's continued fraction costs the same at every probe, so
+  fewer evaluations is a clean win with no probe-location cost skew. Tracks cdf(lo) via the doubling loop
+  (one extra btdtr only when the loop never runs). Own files: beta.rs + this ledger.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: spherical_jn (x<n) Miller recurrence → √(π/2x)·jv(n+½,x) identity — 4-5× self, widens ~26×→~110× SciPy lead
 
 - A broad scalar-special timing sweep flagged scipy.special.spherical_jn(10,5)=28µs / spherical_yn=26µs as

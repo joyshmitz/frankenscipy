@@ -2424,9 +2424,15 @@ fn invert_monotone_positive(cdf: impl Fn(f64) -> f64, target: f64, increasing: b
         return f64::NAN;
     }
 
+    // cdf(lo). It is only known once the doubling loop runs (then it equals the
+    // last in-bracket hi_value, which was already checked finite). NaN is the
+    // "not yet computed" sentinel.
+    let mut lo_value = f64::NAN;
+
     if increasing {
         while hi_value < target {
             lo = hi;
+            lo_value = hi_value;
             hi *= 2.0;
             if !hi.is_finite() {
                 return f64::INFINITY;
@@ -2439,6 +2445,7 @@ fn invert_monotone_positive(cdf: impl Fn(f64) -> f64, target: f64, increasing: b
     } else {
         while hi_value > target {
             lo = hi;
+            lo_value = hi_value;
             hi *= 2.0;
             if !hi.is_finite() {
                 return f64::INFINITY;
@@ -2450,29 +2457,32 @@ fn invert_monotone_positive(cdf: impl Fn(f64) -> f64, target: f64, increasing: b
         }
     }
 
-    for _ in 0..180 {
-        let mid = 0.5 * (lo + hi);
-        let value = cdf(mid);
-        if !value.is_finite() {
+    // The doubling loop never ran, so cdf(lo = MIN_POSITIVE) is still unknown.
+    if lo_value.is_nan() {
+        lo_value = cdf(lo);
+        if !lo_value.is_finite() {
             return f64::NAN;
-        }
-        if increasing {
-            if value < target {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        } else if value > target {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-        if (hi - lo).abs() <= 1.0e-12 * hi.abs().max(1.0) {
-            break;
         }
     }
 
-    0.5 * (lo + hi)
+    // Reduce to a monotone-INCREASING root problem g(x) = 0 with g(lo) < 0 < g(hi),
+    // then solve with the superlinear Illinois method (~10-15 evals) instead of
+    // ~40 plain-bisection steps. `cdf` here is btdtr's continued fraction, whose
+    // cost does not vary with the probe point, so fewer evaluations is a clean
+    // speed win — and the root is returned to ~4·eps (tighter than the former
+    // 1e-12 bracket). Mirrors invert_monotone -> illinois_root (chndtridf).
+    let (glo, ghi) = if increasing {
+        (lo_value - target, hi_value - target)
+    } else {
+        (target - lo_value, target - hi_value)
+    };
+    illinois_root(
+        |x| if increasing { cdf(x) - target } else { target - cdf(x) },
+        lo,
+        hi,
+        glo,
+        ghi,
+    )
 }
 
 fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
