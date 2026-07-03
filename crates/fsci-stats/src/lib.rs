@@ -5904,6 +5904,60 @@ impl NormInvGauss {
     }
 }
 
+/// Illinois modified false-position root of an INCREASING `f` on `[lo, hi]` with
+/// `flo = f(lo) <= 0 <= fhi = f(hi)`. Converges superlinearly (~12-15 evals) vs
+/// bisection's ~50 — a large win when each `f` eval is expensive (e.g. inverting
+/// the NormInvGauss cdf, which is a per-call adaptive quadrature). `mid` is seeded
+/// NaN so a root on a bracket endpoint can't trigger a spurious first-iter return.
+fn illinois_root_increasing(
+    f: impl Fn(f64) -> f64,
+    mut lo: f64,
+    mut hi: f64,
+    mut flo: f64,
+    mut fhi: f64,
+) -> f64 {
+    let mut side = 0i32;
+    let mut mid = f64::NAN;
+    for _ in 0..80 {
+        let denom = fhi - flo;
+        let interp = if denom.is_finite() && denom != 0.0 {
+            (lo * fhi - hi * flo) / denom
+        } else {
+            f64::NAN
+        };
+        let next = if interp > lo && interp < hi {
+            interp
+        } else {
+            0.5 * (lo + hi)
+        };
+        let tol = 4.0 * f64::EPSILON * next.abs().max(1.0);
+        if (next - mid).abs() <= tol || (hi - lo).abs() <= tol {
+            return next;
+        }
+        mid = next;
+        let fmid = f(mid);
+        if fmid == 0.0 {
+            return mid;
+        }
+        if fmid > 0.0 {
+            hi = mid;
+            fhi = fmid;
+            if side == 1 {
+                flo *= 0.5;
+            }
+            side = 1;
+        } else {
+            lo = mid;
+            flo = fmid;
+            if side == -1 {
+                fhi *= 0.5;
+            }
+            side = -1;
+        }
+    }
+    mid
+}
+
 impl ContinuousDistribution for NormInvGauss {
     fn pdf(&self, x: f64) -> f64 {
         if !x.is_finite() {
@@ -5978,6 +6032,16 @@ impl ContinuousDistribution for NormInvGauss {
         let sigma = self.var().sqrt();
         let mut lo = mu - 10.0 * sigma;
         let mut hi = mu + 10.0 * sigma;
+        // Illinois false-position over the (expensive per-call, adaptive-quadrature)
+        // cdf — ~12-15 cdf evals vs the former fixed 60-step bisection. The cdf is
+        // increasing, so f(x)=cdf(x)−q is increasing with f(lo)≤0≤f(hi) once the
+        // bracket straddles q; if not (extreme tail), fall back to bisection on the
+        // same bracket (identical endpoint-clamping behaviour as before).
+        let flo = self.cdf(lo) - q;
+        let fhi = self.cdf(hi) - q;
+        if flo.is_finite() && fhi.is_finite() && flo <= 0.0 && fhi >= 0.0 {
+            return illinois_root_increasing(|x| self.cdf(x) - q, lo, hi, flo, fhi);
+        }
         for _ in 0..60 {
             let mid = 0.5 * (lo + hi);
             if self.cdf(mid) < q {
@@ -49945,6 +50009,29 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn norminvgauss_ppf_illinois_matches_scipy() {
+        // NIG ppf now inverts via Illinois over the (expensive) cdf. References
+        // from scipy.stats.norminvgauss (1.17.1); asserted to 1e-7 (cdf-inversion
+        // floor) + cdf(ppf(q)) round-trip.
+        let cases = [
+            (2.0, 0.5, 0.3, -0.1134193905),
+            (2.0, 0.5, 0.7, 0.5570757179),
+            (1.0, -0.3, 0.5, -0.2167731909),
+            (3.0, 1.0, 0.9, 1.147730468),
+            (2.0, 0.5, 0.05, -0.8520887294),
+        ];
+        for (a, b, q, expected) in cases {
+            let d = NormInvGauss::new(a, b);
+            let x = d.ppf(q);
+            assert!(
+                (x - expected).abs() <= 1e-7 * expected.abs().max(1.0),
+                "nig({a},{b}).ppf({q}) = {x}, expected {expected}"
+            );
+            assert!((d.cdf(x) - q).abs() <= 1e-7, "nig ppf round-trip a={a} b={b} q={q}");
+        }
+    }
 
     #[test]
     fn vonmises_cdf_miller_recurrence_matches_scipy() {

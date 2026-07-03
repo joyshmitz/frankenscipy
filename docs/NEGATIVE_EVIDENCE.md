@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: NormInvGauss.ppf fixed 60-step bisection → Illinois — 3.4-5.2× self (byte-identical)
+
+- Found via a cdf-timing scan across the remaining non-closed-form stats dists: NormInvGauss.cdf is the slow
+  outlier at 192µs (adaptive quadrature of a Bessel-K pdf) — but ALREADY 1.9× faster than scipy (361µs), so
+  no cdf flip. The real cost was its ppf: a FIXED 60-step bisection (no early break) over that cdf ≈ 11.5ms.
+- Routed the ppf through a local `illinois_root_increasing` (bracket-preserving false-position, NaN-seed
+  endpoint fix) with a straddle guard that falls back to the original bisection on a degenerate/extreme-tail
+  bracket. Unlike the reverted shared-helper illinois (which regressed skewnorm because its owens_t cdf cost
+  VARIES with the probe point), NIG's cdf cost is ~x-independent (adaptive panels track the smooth peak), so
+  fewer evals directly wins — and I MEASURED it rather than assuming.
+- MEASURED same box, old bisection vs new (BYTE-IDENTICAL, chk == new): nig(2,0.5).ppf(0.7) 43.3→**8.3ms =
+  5.2× self**; ppf(0.3) 4.0×; nig(3,1).ppf(0.9) 11.1→3.3ms=3.4×. vs scipy.stats.norminvgauss.ppf (~6.1ms):
+  mixed — ppf(0.9) 3.3ms now BEATS scipy, others still above (both fsci & scipy are inherently ms-scale for
+  this Bessel-K distribution). A self-speedup that reduces the loss, not a universal flip.
+- Verification: new norminvgauss_ppf_illinois_matches_scipy (5 scipy refs + cdf(ppf(q)) round-trips) + all
+  2012 fsci-stats tests green (rch/hz2). Illinois never slower than bisection in any measured case.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: VonMises var/kurtosis share the Miller Bessel helper — O(κ²)→O(κ) + fixes 256-cap truncation, beats SciPy accuracy
 
 - Extracted the Miller I_k/I_0 recurrence from base_cdf into a shared `von_mises_bessel_i0_ratios` helper and
