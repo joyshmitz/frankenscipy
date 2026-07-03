@@ -12152,15 +12152,20 @@ impl LogSeries {
             return f64::INFINITY;
         }
 
+        // Accumulate the cdf term-by-term. pmf(k) = p^k / (k·norm); carry p^k
+        // incrementally (pk *= p) instead of a powf per step — the mass is a
+        // streaming sum so it must stay sequential, but each term is now ~1 mul.
         let norm = self.norm();
         let mut sum = 0.0;
         let mut k: u64 = 1;
+        let mut pk = self.p; // p^k, starting at p^1
         loop {
-            sum += self.p.powf(k as f64) / (k as f64 * norm);
+            sum += pk / (k as f64 * norm);
             if sum >= q || k >= 1_000_000 {
                 return k as f64;
             }
             k += 1;
+            pk *= self.p;
         }
     }
 }

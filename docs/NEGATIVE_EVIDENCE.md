@@ -6,6 +6,18 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: LogSeries.ppf p^k powf-per-iteration → incremental multiply — 12.80× self (byte-identical)
+
+- LogSeries.ppf accumulates the cdf term-by-term (pmf(k)=p^k/(k·norm)) in a streaming loop but recomputed
+  `self.p.powf(k as f64)` from scratch EVERY iteration (~30ns powf/step). The mass must stay a sequential
+  sum, but p^k carries trivially: `pk *= p`. Now ~1 mul/step.
+- MEASURED same box (p∈{.3,.65,.92}, q∈{.1..0.995}): **66 → 5ns = 12.80× self**, max diff **0.0e0 —
+  BYTE-IDENTICAL** (repeated-multiply vs powf differ by ~k·eps in the partial sum, but the ppf returns the
+  integer k where the sum first crosses q, which is unchanged). Full fsci-stats suite 2015 passed / 0 failed.
+- The streaming-series lever (term *= factor, no per-term powf/gammaln). Grep of stats for `.powf(k`-in-loop
+  found this as the only remaining per-iteration case (other powf sites are single-eval pmf/pdf formulas).
+  Own files: fsci-stats/src/lib.rs + this ledger.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: 4 more fsci-stats per-dist ppf bisections → illinois_root_increasing — 3.4–6.7× self
 
 - Completes the illinois vein across fsci-stats: enumerated every remaining per-distribution ppf that still
