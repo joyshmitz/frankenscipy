@@ -14351,3 +14351,19 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   is ~1.2-1.3× on the build for large mu, ~1.13× for 15→12. Results are identical for practical q. Not worth
   the (flaky, ~10-min) stats compile for a common-but-modest win. DEFERRED. Distinct from mathieu/spheroidal
   where the WHOLE dim shrank (accuracy identical down to margin 6) — here the mode region is irreducible.
+
+## 2026-07-03 - BlackThrush (cc) - DEFER (prototype): Mathieu eigenvalue Sturm-bisection → CF-Newton hybrid
+
+- mathieu_cem/sem are ~2.4× slower than scipy (scipy's cva2 uses a lighter continued-fraction characteristic
+  value vs fsci's symmetric-tridiagonal Sturm bisection ~55 evals). Prototyped (scratchpad/mathieu_cf.py) a
+  hybrid: a few Sturm-bisection steps to isolate the k-th eigenvalue into its pole-free neighborhood, then
+  safeguarded Newton on G(a)=d₀(a) (the downward continued-fraction pivot sweep, with G'(a) via the coupled
+  recurrence), falling back to bisection if a Newton step leaves the Sturm bracket.
+- MEASURED (Python, vs scipy.mathieu_a over m≤12, q≤100): eval count 59.4 → **24.7 = 2.4× fewer**, BUT
+  accuracy worst_rel **2.59e-12** vs the pure bisection's **6.31e-16** (G loses precision near the interlacing
+  submatrix-eigenvalue poles). DECISION: DEFER. fsci's mathieu_a already BEATS scipy on speed (margin win,
+  ea1e5ac9) AND accuracy (6e-16 vs scipy ~1e-13); regressing that lead ~4000× for a 2.4× eval cut is a bad
+  trade. And cem/sem only use the eigenvalue as an inverse-iteration SHIFT (self-correcting), so a full CF
+  rewrite isn't the right lever there either. Left as-is. (A cleaner future option for cem/sem alone: a LOOSE
+  eigenvalue shift — fewer bisection steps — since inverse iteration corrects it; ~1.5-2× without touching
+  mathieu_a/b accuracy. Also deferred — moderate gain, doesn't fully flip the 2.4×.)
