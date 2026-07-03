@@ -1155,7 +1155,7 @@ fn odd_power_tail_factorization(mut n: usize) -> Option<(Vec<usize>, usize)> {
             break;
         }
         let p = smallest_prime_factor(odd_part);
-        if p != 3 && p != 5 {
+        if p != 3 && p != 5 && p != 7 {
             return None;
         }
         factors.push(p);
@@ -1250,8 +1250,88 @@ fn mixed_radix_combine_stage(
             out3[r] = (a2.0 - b2.1, a2.1 + b2.0);
             out4[r] = (a1.0 - b1.1, a1.1 + b1.0);
         }
+    } else if p == 7 {
+        // Radix-7 combine: three conjugate pairs (1,6)(2,5)(3,4). Cosine sums
+        // give the six a-terms, sine differences the b-terms, mirroring the
+        // radix-5 structure. cₖ = cos(2πk/7), sₖ = sin(2πk/7) for k=1,2,3;
+        // outᵤ = aᵤ ∓ i·bᵤ with its conjugate partner out_{7−u} = aᵤ ± i·bᵤ.
+        const C1: f64 = 0.623_489_801_858_733_5;
+        const C2: f64 = -0.222_520_933_956_314_4;
+        const C3: f64 = -0.900_968_867_902_419_1;
+        const S1: f64 = 0.781_831_482_468_029_8;
+        const S2: f64 = 0.974_927_912_181_823_6;
+        const S3: f64 = 0.433_883_739_117_558_1;
+        let (s1, s2, s3) = if inverse { (-S1, -S2, -S3) } else { (S1, S2, S3) };
+        let (out0, tail) = out.split_at_mut(m);
+        let (out1, tail) = tail.split_at_mut(m);
+        let (out2, tail) = tail.split_at_mut(m);
+        let (out3, tail) = tail.split_at_mut(m);
+        let (out4, tail) = tail.split_at_mut(m);
+        let (out5, out6) = tail.split_at_mut(m);
+        for r in 0..m {
+            let t0 = out0[r];
+            let (x1r, x1i) = out1[r];
+            let (w1r, w1i) = twn[r];
+            let t1 = (x1r * w1r - x1i * w1i, x1r * w1i + x1i * w1r);
+            let (x2r, x2i) = out2[r];
+            let (w2r, w2i) = twn[2 * r];
+            let t2 = (x2r * w2r - x2i * w2i, x2r * w2i + x2i * w2r);
+            let (x3r, x3i) = out3[r];
+            let (w3r, w3i) = twn[3 * r];
+            let t3 = (x3r * w3r - x3i * w3i, x3r * w3i + x3i * w3r);
+            let (x4r, x4i) = out4[r];
+            let (w4r, w4i) = twn[4 * r];
+            let t4 = (x4r * w4r - x4i * w4i, x4r * w4i + x4i * w4r);
+            let (x5r, x5i) = out5[r];
+            let (w5r, w5i) = twn[5 * r];
+            let t5 = (x5r * w5r - x5i * w5i, x5r * w5i + x5i * w5r);
+            let (x6r, x6i) = out6[r];
+            let (w6r, w6i) = twn[6 * r];
+            let t6 = (x6r * w6r - x6i * w6i, x6r * w6i + x6i * w6r);
+            // conjugate-pair sums (p) and differences (m)
+            let p1 = (t1.0 + t6.0, t1.1 + t6.1);
+            let m1 = (t1.0 - t6.0, t1.1 - t6.1);
+            let p2 = (t2.0 + t5.0, t2.1 + t5.1);
+            let m2 = (t2.0 - t5.0, t2.1 - t5.1);
+            let p3 = (t3.0 + t4.0, t3.1 + t4.1);
+            let m3 = (t3.0 - t4.0, t3.1 - t4.1);
+            let a1 = (
+                t0.0 + C1 * p1.0 + C2 * p2.0 + C3 * p3.0,
+                t0.1 + C1 * p1.1 + C2 * p2.1 + C3 * p3.1,
+            );
+            let a2 = (
+                t0.0 + C2 * p1.0 + C3 * p2.0 + C1 * p3.0,
+                t0.1 + C2 * p1.1 + C3 * p2.1 + C1 * p3.1,
+            );
+            let a3 = (
+                t0.0 + C3 * p1.0 + C1 * p2.0 + C2 * p3.0,
+                t0.1 + C3 * p1.1 + C1 * p2.1 + C2 * p3.1,
+            );
+            let b1 = (
+                s1 * m1.0 + s2 * m2.0 + s3 * m3.0,
+                s1 * m1.1 + s2 * m2.1 + s3 * m3.1,
+            );
+            let b2 = (
+                s2 * m1.0 - s3 * m2.0 - s1 * m3.0,
+                s2 * m1.1 - s3 * m2.1 - s1 * m3.1,
+            );
+            let b3 = (
+                s3 * m1.0 - s1 * m2.0 + s2 * m3.0,
+                s3 * m1.1 - s1 * m2.1 + s2 * m3.1,
+            );
+            out0[r] = (
+                t0.0 + p1.0 + p2.0 + p3.0,
+                t0.1 + p1.1 + p2.1 + p3.1,
+            );
+            out1[r] = (a1.0 + b1.1, a1.1 - b1.0);
+            out2[r] = (a2.0 + b2.1, a2.1 - b2.0);
+            out3[r] = (a3.0 + b3.1, a3.1 - b3.0);
+            out4[r] = (a3.0 - b3.1, a3.1 + b3.0);
+            out5[r] = (a2.0 - b2.1, a2.1 + b2.0);
+            out6[r] = (a1.0 - b1.1, a1.1 + b1.0);
+        }
     } else {
-        unreachable!("iterative odd-tail FFT supports only radix 3/5 stages")
+        unreachable!("iterative odd-tail FFT supports only radix 3/5/7 stages")
     }
 }
 

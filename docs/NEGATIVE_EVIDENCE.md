@@ -6,6 +6,24 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: radix-7 iterative FFT butterfly — factor-7 sizes 2.9-4.3× self, n=2100 FLIPS 2.27× loss → 1.22× WIN vs numpy
+
+- Acting on the measured lead below: fsci's fast `{3,5}·2^k` iterative FFT path (`mixed_radix_iterative_odd_power_tail`)
+  excluded ANY factor >5, so factor-7 sizes fell to the slow recursive `mixed_radix_fft` (strided odd-prime combines).
+- Added a **radix-7 butterfly** to `mixed_radix_combine_stage` (three conjugate pairs (1,6)(2,5)(3,4); cosine sums →
+  6 a-terms, sine diffs → b-terms, `outᵤ = aᵤ ∓ i·bᵤ` — same conjugate-symmetry structure as the existing radix-5
+  Winograd combine, cₖ=cos(2πk/7)/sₖ=sin(2πk/7)) and allowed 7 in `odd_power_tail_factorization`. The iterative
+  driver is generic over `plan.factors`, so those two changes were the whole port. ~82 lines, transforms.rs only.
+- CORRECTNESS: validated vs a naive O(n²) DFT (ground truth) across n=14/28/56/98/63/175/392/2100 — max error
+  2.4e-15 to 1.4e-12 (normal fp accumulation). Full fsci-fft suite 182/0.
+- PERF (isolated same box, iterative vs the old recursive path each size took): n=1050 3.5×, n=2100 2.4×, n=4200 2.8×,
+  n=1029(3·7³) 3.7×, n=3675(3·5²·7²) 2.9×, n=7350(2·3·5²·7²) 4.3× — the iterative path wins for EVERY factor-7 size
+  (no regression on the rare odd-heavy 7²/7³ shapes). **Vs numpy**: single-factor-7 sizes now BEAT numpy — n=2100
+  17967ns vs numpy 21895 (**flips the headline 2.27× LOSS → 1.22× WIN**), n=1050 1.07×, n=4200 1.13× faster;
+  multi-7 pure-odd (n=3675/7350) still 1.2-1.56× behind numpy (a separate odd-heavy strided-gather cache issue) but
+  3-4× better than before. LEVER: a generic iterative mixed-radix driver only needs a new per-radix butterfly +
+  factorization gate to add a prime radix — mirror the nearest existing conjugate-pair combine.
+
 ## 2026-07-03 - BlackThrush (cc) - MEASURED LEAD (upgrades recalled deep-target): fsci-fft vs numpy size-class map — factor-7 sizes 2.27× slower, larger pow2/composite 1.3× (pocketfft kernel wall)
 
 - Benched fsci `fft` vs `numpy.fft.fft` isolated same box (20-warm, 800-2000 reps) across size classes. Result map
