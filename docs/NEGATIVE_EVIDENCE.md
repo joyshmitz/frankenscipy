@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: wright_bessel series streaming log_term (drop per-term gammaln) — 1.1-1.4× self, byte-equivalent
+
+- log_wright_bessel_series (Σ x^k/(k!·Γ(a·k+b)), up to 16 384 terms for a<0.1) recomputed gammaln(k+1)
+  AND rgamma(a·k+b) each term. Streamed the whole log_term across k:
+  `log_term(k) = log_term(k−1) + ln(x) − ln(k) + (log_rgamma_k − log_rgamma_{k−1})` — one rgamma/term
+  (reusing the previous) + a cheap `ln`, dropping the per-term gammaln. log_term stays moderate in
+  magnitude so there is NO accumulation drift (chose this over streaming ln(k!), which grows to ~1e5 and
+  would need Kahan); fresh gammaln fallback at k=0 and in the non-finite Γ-overflow tail.
+- MEASURED same box, old per-term-gammaln series timed directly vs new (byte-equivalent, chk matches to
+  all printed digits): wright_bessel(0.3,2,8) 2.04→**1.44µs = 1.4× self**; (0.05,1.5,1) 1.11→0.85µs=1.3×;
+  (0.5,1,2) 2.73→2.11µs=1.3×; (0.1,0.5,3) 1.1×. vs SciPy (1.17.1) fsci is faster in the small-a many-term
+  regime (~2-3× on 0.1/0.3-a cases) though still behind on some low-term cases. Modest but zero-risk
+  (strict work reduction, output identical).
+- Verification: new wright_bessel_small_a_series_matches_scipy_reference_values (7 scipy refs, 1e-12) +
+  all 1134 fsci-special tests green (rch/hz2). Same streaming-series lever as smirnov (9e3f1437).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: smirnov Birnbaum-Tingey series streaming binomial (per-term gammaln → ln recurrence) — 1.3-2.2× self, lifts smirnovi
 
 - The smirnov (one-sided KS CDF) exact series recomputed two `gammaln` per term for log C(n,v). Streamed it

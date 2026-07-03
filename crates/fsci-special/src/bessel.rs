@@ -2600,12 +2600,28 @@ fn log_wright_bessel_series(a: f64, b: f64, x: f64) -> Result<f64, SpecialError>
         16_384usize
     };
 
+    // Stream log_term across k to drop the per-term gammaln(k+1). Since
+    //   log_term(k)   = k·ln(x) − ln(k!) − lnΓ(a·k+b)
+    //   log_term(k−1) = (k−1)·ln(x) − ln((k−1)!) − lnΓ(a·(k−1)+b),
+    // the increment is ln(x) − ln(k) + (log_rgamma_k − log_rgamma_{k−1}) — one
+    // `rgamma` per term (reusing the previous) plus a cheap `ln`, versus the old
+    // rgamma + gammaln (~1.8× the gamma-class work). log_term stays moderate in
+    // magnitude, so no accumulation drift; a fresh gammaln is used at k=0 and
+    // whenever the chain isn't finite (the negligible Γ-overflow tail).
+    let mut log_term_prev = f64::NEG_INFINITY;
+    let mut log_rgamma_prev = f64::NEG_INFINITY;
+
     for k in 0..max_terms {
         let kf = k as f64;
         let akb = a.mul_add(kf, b);
         let log_rgamma = rgamma_log_nonnegative(akb)?;
-        let log_term =
-            kf * ln_x - crate::gamma::gammaln_scalar(kf + 1.0, RuntimeMode::Strict)? + log_rgamma;
+        let log_term = if k > 0 && log_term_prev.is_finite() && log_rgamma_prev.is_finite() {
+            log_term_prev + ln_x - kf.ln() + (log_rgamma - log_rgamma_prev)
+        } else {
+            kf * ln_x - crate::gamma::gammaln_scalar(kf + 1.0, RuntimeMode::Strict)? + log_rgamma
+        };
+        log_term_prev = log_term;
+        log_rgamma_prev = log_rgamma;
 
         if !log_term.is_finite() {
             prev_log = log_term;
@@ -7165,6 +7181,35 @@ mod tests {
             assert!(
                 (actual - expected).abs() <= rel_tol * scale,
                 "wright_bessel({a}, {b}, {x}) mismatch: actual={actual}, expected={expected}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wright_bessel_small_a_series_matches_scipy_reference_values() -> Result<(), String> {
+        // Small/moderate a exercises the many-term series (where log_term is now
+        // streamed instead of recomputing gammaln(k+1) each term). References from
+        // scipy.special.wright_bessel (1.17.1); asserted to 1e-12 relative.
+        let cases = [
+            (0.5, 1.0, 2.0, 6.6906279405071434),
+            (0.1, 0.5, 3.0, 16.898117554956105),
+            (1.0, 1.0, 5.0, 17.05777785336906),
+            (0.05, 1.5, 1.0, 3.054807083429945),
+            (2.0, 0.5, 4.0, 4.2987940689384816),
+            (0.3, 2.0, 8.0, 454.78294776070891),
+            (0.5, 0.5, 0.5, 1.2281663095913553),
+        ];
+        for (a, b, x, expected) in cases {
+            let actual = real_value(tensor_result(wright_bessel(
+                &scalar(a),
+                &scalar(b),
+                &scalar(x),
+                RuntimeMode::Strict,
+            ))?)?;
+            assert!(
+                (actual - expected).abs() <= 1e-12 * expected.abs().max(1.0),
+                "wright_bessel({a}, {b}, {x}) = {actual}, expected {expected}"
             );
         }
         Ok(())
