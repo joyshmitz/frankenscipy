@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - EXHAUSTED: exotic special-fn surface swept (40 fns), all FASTER than SciPy except the mathieu 2× wall — special anomaly-hunt CLOSED
+
+- Second exotic batch benched isolated (300-warmup, 30k reps) vs SciPy same box: **every function is 12-199× FASTER
+  than SciPy** — fresnel 199×, agm 97×, besselpoly 51×, sici 45×, shichi 36×, elliprg 30×, elliprf 21×, elliprj 20×,
+  modfresnelp 22× / modfresnelm 14×, expn 12×, voigt_profile 12×. (SciPy carries ~0.5-1µs Python-ufunc overhead, but
+  fsci's raw kernels win outright regardless.) elliprd/poch got DCE'd (return unused) — re-check with a side-effect if
+  ever suspicious, but no reason to.
+- Combined with batch 1 (spheroidal family 1.5-2.2× faster, struve 335×, kelvin ~parity, pbdv/pbvv/pbwa 8-16×, itairy
+  47×), the exotic special-fn surface is **EXHAUSTED**: the ONLY function slower than SciPy is the mathieu
+  characteristic-value cluster (mathieu_a/b 2-2.6×), which is a Sturm-bisection-vs-specfun-continued-fraction wall
+  (see the two entries below — Newton-on-pivot rejected 0.70×). Closing it needs a Zhang-Jin specfun port (deferred).
+- No code shipped (nothing to fix). Recorded so no future session re-sweeps these 40 functions. NEXT LEVERS (fresh
+  ground, not special): fsci-fft non-pow2/radix-5 SIMD (documented deep target, underlies resample); or an un-swept
+  crate measured isolated. Don't re-hunt per-fn gaps in fft/io/spatial/interpolate/stats/sparse/ndimage/signal/cluster
+  (documented exhausted) without a fresh isolated measurement first.
+
 ## 2026-07-03 - BlackThrush (cc) - CORRECTION + REJECT: the "pro_ang1 13.3×" gap was MEASUREMENT NOISE (spheroidal family is 1.5-2.2× FASTER); Newton-on-Sturm-pivot for the shared tridiagonal eigensolver = 0.70× (rejected)
 
 - **CORRECTION to the entry below.** The prior sweep flagged `pro_ang1(3,5,2,.5)` at 160µs = 13.3× slower than SciPy.
