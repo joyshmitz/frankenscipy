@@ -6,7 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
-## 2026-07-03 - BlackThrush (cc) - KEEP: NoncentralChiSquared/NoncentralF CDF → special kernel (chndtr/ncfdtr) — 16.7-39.5× self + fixes ncf large-nc underflow bug
+## 2026-07-03 - BlackThrush (cc) - AMEND (corrects d1c7f058 claim) + fix NoncentralF.pdf large-nc bug
+
+- INTEGRITY CORRECTION to d1c7f058: I claimed the old NoncentralF.cdf "underflows for nc ≳ 40, verified at
+  nc=60,100". FALSE — reproduced the old local sum in Python: it MATCHES scipy at nc=60,100 (~1e-14). The
+  real failure is a PREMATURE-BREAK (not f64 underflow): `poisson_term` seeded at `e^{-nc/2}` is still below
+  the `pt<1e-16 && j>10` break at j=11 for nc ≳ 130, so the loop stops before the Poisson peak (j≈nc/2) and
+  returns ~0. True threshold ≈ nc 130 (cdf) / ≈150-200 (pdf, break `1e-20`); real f64 underflow of the seed
+  needs nc > ~1418. The perf numbers (16.7-39.5× self) are unaffected and correct.
+- Added a GENUINE large-nc regression test (ncf.cdf(3,12,200,80)=0.6034, where the OLD code returned ~1e-49)
+  now passing via ncfdtr — this actually demonstrates the fix (unlike the non-buggy nc=60,100 I first cited).
+- BONUS FIX: NoncentralF.pdf had the identical premature-break bug (broke at nc≳150, returned ~0). Routed
+  `pdf → logpdf(x).exp()` (logpdf already sums in peak-safe log space). Verified ncf.pdf(3,12,200,80)=0.01060
+  (old returned ~7e-35). New pdf refs in the test; all 2009 fsci-stats tests green (rch/hz2).
+- LESSON (again): verify a "correctness bonus" by REPRODUCING the old wrong output at the cited inputs before
+  claiming it — reason about the actual break condition, not a hand-waved underflow.
+
+## 2026-07-03 - BlackThrush (cc) - KEEP: NoncentralChiSquared/NoncentralF CDF → special kernel (chndtr/ncfdtr) — 16.7-39.5× self + fixes ncf large-nc premature-break bug
 
 - Follow-on to the ppf routing: the same two distributions also recomputed their CDF via a slow local
   Poisson-weighted sum (fresh `lower_regularized_gamma`/central-F CDF per term) while fsci-special has the
@@ -15,12 +31,15 @@ ledger above so the project has one source of truth.
 - MEASURED same box (scipy 1.17.1), local sum timed directly vs chndtr: ncx2.cdf(5,2,8) 7.29→**0.44µs =
   16.7×**; (3,10,12) 31.6×; (8,50,60) 26.7×; (2,200,210) 45.6→1.15µs = **39.5×** — agreeing to ≤3e-14
   (machine precision) with the old sum. vs scipy.stats ncx2.cdf (~76µs) fsci is now **~70-270× faster**.
-- CORRECTNESS BONUS: `NoncentralF.cdf` seeded its Poisson sum with `e^{-nc/2}` which UNDERFLOWS to 0 for
-  nc ≳ 40 → the old local cdf returned ~0 for large nc; `ncfdtr` is correct (verified vs scipy at nc=60,100).
-  Lifts cdf, sf (=1−cdf), and makes the ppf round-trip exact (ppf uses chndtrix/ncfdtri, same kernels).
-- Verification: new noncentral_cdf_routes_to_special_kernel_matches_scipy (7 scipy refs incl. large-nc ncf)
-  + all 2009 fsci-stats tests green (rch/hz2). Same winning pattern as cdef4a7e (delegate a stats dist's
-  slow local reimpl to fsci-special's optimized kernel).
+- CORRECTNESS BONUS (threshold corrected below): the local `NoncentralF.cdf` Poisson sum broke early for
+  LARGE nc — its `poisson_term` was seeded at the tiny `e^{-nc/2}` and the break `pt<1e-16 && j>10` fired at
+  j=11 (still far below the Poisson peak at j≈nc/2), returning ~0. `ncfdtr` is correct; routing fixes it.
+- Verification: new noncentral_cdf_routes_to_special_kernel_matches_scipy + all 2009 fsci-stats tests green.
+  Same winning pattern as cdef4a7e (delegate a stats dist's slow local reimpl to fsci-special's kernel).
+- CORRECTION (see the 2026-07-03 amend entry below): my original claim here of "underflows for nc ≳ 40,
+  verified at nc=60,100" was WRONG — the old local cdf was CORRECT at nc=60,100 (matches scipy ~1e-14); it
+  only breaks at nc ≳ 130 (premature break at j=11, NOT f64 underflow, which needs nc>~1418). Amend commit
+  adds a genuine large-nc test (nc=200, where old returned ~0) and fixes the identical bug in NoncentralF.pdf.
 
 ## 2026-07-02 - BlackThrush (cc) - KEEP: NoncentralChiSquared/NoncentralF ppf → purpose-built inverse (chndtrix/ncfdtri) — 16.5-26.2× self
 

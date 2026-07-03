@@ -3480,34 +3480,13 @@ impl ContinuousDistribution for NoncentralF {
             return FDistribution::new(self.dfn, self.dfd).pdf(x);
         }
 
-        // Use series representation
-        let d1 = self.dfn;
-        let d2 = self.dfd;
-        let lam = self.nc;
-        let half_lam = lam / 2.0;
-
-        let mut sum = 0.0;
-        let mut poisson_term = (-half_lam).exp();
-
-        for j in 0..150 {
-            let d1_j = d1 + 2.0 * j as f64;
-            // F = (X1/d1)/(X2/d2); the Poisson-mixture component k has
-            // X1 ~ χ²(d1+2k) but the F numerator divisor stays d1, so the
-            // component is c_k·G with G ~ F(d1+2k, d2) and c_k = (d1+2k)/d1,
-            // giving pdf_k(x) = (1/c_k)·F_pdf(x/c_k). The old code dropped this
-            // rescaling (used F_pdf(x)), giving a valid but wrong-shaped
-            // density. frankenscipy-t9cj2
-            let ck = d1_j / d1;
-            let f_pdf = FDistribution::new(d1_j, d2).pdf(x / ck);
-            sum += poisson_term * f_pdf / ck;
-
-            poisson_term *= half_lam / (j + 1) as f64;
-            if poisson_term < 1e-20 && j > 10 {
-                break;
-            }
-        }
-
-        sum
+        // pdf = exp(logpdf). The former direct series seeded the Poisson mixture
+        // with `e^{-nc/2}`, which stays below the `1e-20 && j>10` break threshold
+        // through the first terms for nc ≳ 150 (the seed is tiny long before the
+        // Poisson peak at j≈nc/2), so the loop broke at j=11 — before the peak —
+        // and returned ~0. `logpdf` sums the same mixture in log space (peak-safe,
+        // logsumexp), so exponentiating it is correct for all nc.
+        self.logpdf(x).exp()
     }
 
     fn logpdf(&self, x: f64) -> f64 {
@@ -49902,12 +49881,26 @@ mod tests {
             (5.0, 8.0, 2.0, 1.5, 0.552984092893),
             (4.0, 6.0, 60.0, 10.0, 0.178797074991),
             (3.0, 12.0, 100.0, 20.0, 0.0904228850242),
+            // Large nc: the former local Poisson sum broke at j=11 (before the
+            // peak at j≈nc/2) and returned ~0; ncfdtr is correct here.
+            (3.0, 12.0, 200.0, 80.0, 0.603418888017),
         ];
         for (d1, d2, nc, x, expected) in ncf_cases {
             let got = NoncentralF::new(d1, d2, nc).cdf(x);
             assert!(
                 (got - expected).abs() <= 1e-9,
                 "ncf({d1},{d2},{nc}).cdf({x}) = {got}, expected {expected}"
+            );
+        }
+        // NoncentralF.pdf now delegates to logpdf.exp() — correct at large nc too.
+        for (d1, d2, nc, x, expected) in [
+            (5.0, 8.0, 150.0, 60.0, 0.006391340646),
+            (3.0, 12.0, 200.0, 80.0, 0.010603880857),
+        ] {
+            let got = NoncentralF::new(d1, d2, nc).pdf(x);
+            assert!(
+                (got - expected).abs() <= 1e-9,
+                "ncf({d1},{d2},{nc}).pdf({x}) = {got}, expected {expected}"
             );
         }
     }
