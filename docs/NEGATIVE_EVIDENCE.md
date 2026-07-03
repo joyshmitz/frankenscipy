@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: radix-13 iterative FFT butterfly — factor-13 sizes 3.0-5.1× self, flips 2.56-4.04× losses → parity/WIN vs numpy
+
+- Third application of the recipe (radix-7, radix-11 below). Factor-13 sizes were 2.56-4.04× slower than numpy
+  (n=910=2·5·7·13 was 4.04×) — 13 fell off the `{3,5,7,11}·2^k` iterative path to the recursive path.
+- Added a **radix-13 butterfly** to `mixed_radix_combine_stage` (six conjugate pairs (1,12)…(6,7); cosine-sum a-terms
+  with the (k·u mod 13) permutation, sine-diff b-terms) + allowed 13 in `odd_power_tail_factorization`. ~107 lines.
+- CORRECTNESS vs naive DFT (n=13/26/52/169/39/65/91/143/910/1040/1053): max error **2.5e-15 to 6.8e-13**. Suite 182/0.
+- PERF vs numpy (was → now): n=910 4.04× slower → **1.26× FASTER** (5.1× self), n=1040 2.56× → **1.44× faster**,
+  n=2340 3.35× → 1.2× faster, n=1170 3.0× → 1.03× faster, n=2080 3.0× → parity, n=1053/4160 → ~parity (1.06×).
+  5 of 7 now beat numpy. Self speedups 3.0-5.1×. Note scipy.fft.next_fast_len only targets 11-smooth, so factor-13
+  is beyond scipy's own fast-size machinery — but real signal lengths hit it and numpy/pocketfft handle it via generic
+  Rader, which fsci now beats. NEXT radices give diminishing returns (17+ rarer); the odd-heavy multi-prime
+  strided-gather cache thrash (tail≤64 pure-odd shapes still behind numpy) is the more general remaining fft lever.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: radix-11 iterative FFT butterfly — factor-11 sizes 3.2-6.6× self, flips 2.65-6.32× losses → parity/WIN vs numpy
 
 - Same recipe as the radix-7 win below (measure → confirm gap → one butterfly + factorization gate). Factor-11 sizes
