@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: coshm/sinhm share the A² Padé powers between expm(A) & expm(−A) — ~1.4× self, flips n=50 to 1.23-1.25× WIN vs scipy (BIT-IDENTICAL)
+
+- Third matrix-fn win. coshm/sinhm each called `expm_pade_scaling_squaring` TWICE (on A and −A) = ~12 matmuls. But
+  the [13/13] Padé even part Pₑ(A²) and odd factor Pₒ(A²) are IDENTICAL for A and −A (depend only on A²); only
+  W=A·Pₒ flips sign, so expm(A)=(Pₑ−W)⁻¹(Pₑ+W) and expm(−A)=(Pₑ+W)⁻¹(Pₑ−W) share all 6 matrix products.
+- Added `expm_pm(A) → (expm(A), expm(−A))`: 6 shared matmuls + 2 LU solves (vs 12 matmuls). SAME accuracy as two
+  independent expm — both are true Padé approximants (NOT E and E⁻¹, so no ill-conditioning). Routed coshm/sinhm to it.
+- CORRECTNESS: vs the old two-expm reference, cosh/sinh error **0.00e0 — BIT-IDENTICAL** (arithmetic is literally the
+  same, just no redundant products); suite **496/0**. Taylor fallback per solve if a denominator is singular.
+- MEASURED: coshm/sinhm n=50 167µs (~1.4× self vs 2×Padé-expm) → **1.23-1.25× FASTER than scipy** (scipy 206µs);
+  n=100 1454µs = 1.44× vs scipy (improved from ~1.9×; residual = par_dmatmul-vs-BLAS kernel at larger n). Own file: lib.rs.
+- LEVER: a matrix fn that calls expm on ±A (or A and a sign-variant) → the even/A²-dependent Padé factors are shared;
+  compute powers once, do N cheap solves. scipy recomputes both expm from scratch, so sharing is a free win over it.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: cosm/sinm 2n×2n embedding → complex n×n Padé (block-scalar B²) — 2.56-3.52× self, FLIPS 4.59× loss → 1.09× WIN vs scipy
 
 - Follow-on to the expm Padé win below. cosm/sinm were still 3.2-3.5× slower via `cosm_sinm_blocks`, which took the

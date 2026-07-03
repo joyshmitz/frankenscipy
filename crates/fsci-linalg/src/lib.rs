@@ -7567,6 +7567,71 @@ fn expm_pade_scaling_squaring(a: &DMatrix<f64>) -> DMatrix<f64> {
     exp_a
 }
 
+/// Compute `(expm(A), expm(−A))` together for `coshm`/`sinhm`. The [13/13] Padé
+/// even part V=Pₑ(A²) and the odd factor Pₒ(A²) are IDENTICAL for A and −A (they
+/// depend only on A²); the numerator/denominator swap because W=A·Pₒ flips sign,
+/// giving expm(A)=(Pₑ−W)⁻¹(Pₑ+W) and expm(−A)=(Pₑ+W)⁻¹(Pₑ−W). So the six matrix
+/// products (A²,A⁴,A⁶, the two poly folds, W) are shared and only a second LU
+/// solve is added — ~6 matmuls + 2 solves vs two independent expm (~12 matmuls),
+/// with the SAME accuracy (both are true Padé approximants, not E and E⁻¹).
+fn expm_pm(a: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
+    let n = a.nrows();
+    let identity = DMatrix::<f64>::identity(n, n);
+    let norm1 = matrix_one_norm(a);
+    if norm1 == 0.0 {
+        return (identity.clone(), identity);
+    }
+    const THETA13: f64 = 5.371_920_351_148_152;
+    const B: [f64; 14] = [
+        64_764_752_532_480_000.0,
+        32_382_376_266_240_000.0,
+        7_771_770_303_897_600.0,
+        1_187_353_796_428_800.0,
+        129_060_195_264_000.0,
+        10_559_470_521_600.0,
+        670_442_572_800.0,
+        33_522_128_640.0,
+        1_323_241_920.0,
+        40_840_800.0,
+        960_960.0,
+        16_380.0,
+        182.0,
+        1.0,
+    ];
+    let s = if norm1 <= THETA13 {
+        0u32
+    } else {
+        (norm1 / THETA13).log2().ceil().max(0.0) as u32
+    };
+    let a_s = a / 2.0_f64.powi(s as i32);
+    let a2 = par_dmatmul(&a_s, &a_s);
+    let a4 = par_dmatmul(&a2, &a2);
+    let a6 = par_dmatmul(&a2, &a4);
+    let u_inner = &a6 * B[13] + &a4 * B[11] + &a2 * B[9];
+    let p_o =
+        par_dmatmul(&a6, &u_inner) + &a6 * B[7] + &a4 * B[5] + &a2 * B[3] + &identity * B[1];
+    let w = par_dmatmul(&a_s, &p_o);
+    let v_inner = &a6 * B[12] + &a4 * B[10] + &a2 * B[8];
+    let p_e = par_dmatmul(&a6, &v_inner) + &a6 * B[6] + &a4 * B[4] + &a2 * B[2] + &identity * B[0];
+    let num = &p_e + &w; // Pₑ + W
+    let den = &p_e - &w; // Pₑ − W
+    let mut e = den
+        .clone()
+        .lu()
+        .solve(&num)
+        .unwrap_or_else(|| taylor_exp(&a_s, &identity, 20));
+    let mut e_neg = num
+        .clone()
+        .lu()
+        .solve(&den)
+        .unwrap_or_else(|| taylor_exp(&(-&a_s), &identity, 20));
+    for _ in 0..s {
+        e = par_dmatmul(&e, &e);
+        e_neg = par_dmatmul(&e_neg, &e_neg);
+    }
+    (e, e_neg)
+}
+
 /// Taylor series approximation of exp(A) = I + A + A²/2! + ... + A^k/k!
 fn taylor_exp(a: &DMatrix<f64>, identity: &DMatrix<f64>, terms: usize) -> DMatrix<f64> {
     let mut result = identity.clone();
@@ -8225,8 +8290,7 @@ pub fn sinhm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
     if m.nrows() == 0 {
         return Ok(Vec::new());
     }
-    let ep = expm_pade_scaling_squaring(&m);
-    let en = expm_pade_scaling_squaring(&(-&m));
+    let (ep, en) = expm_pm(&m);
     let result = (ep - en) * 0.5;
     Ok(rows_from_dmatrix(&result))
 }
@@ -8239,8 +8303,7 @@ pub fn coshm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
     if m.nrows() == 0 {
         return Ok(Vec::new());
     }
-    let ep = expm_pade_scaling_squaring(&m);
-    let en = expm_pade_scaling_squaring(&(-&m));
+    let (ep, en) = expm_pm(&m);
     let result = (ep + en) * 0.5;
     Ok(rows_from_dmatrix(&result))
 }
