@@ -2379,39 +2379,12 @@ impl ContinuousDistribution for NoncentralChiSquared {
             return ChiSquared::new(self.df).cdf(x);
         }
 
-        // Series: P(X ≤ x) = Σ_{j≥0} Pois(j; λ/2) · P(χ²_{k+2j} ≤ x). The old
-        // recurrence seeded with e^{−λ/2} underflowed for large λ and broke at
-        // j>10 — long before the Poisson peak at j≈λ/2 — so it returned ~0 for
-        // large nc (e.g. ncx2(2,400)). Sum log-space weights over a window
-        // centred on the peak instead. frankenscipy-tvfae
-        let half_lam = self.nc / 2.0;
-        let ln_half_lam = half_lam.ln();
-        let peak = half_lam.floor().max(0.0);
-        let spread = 10.0_f64.mul_add(half_lam.sqrt(), 60.0).ceil();
-        let j_lo = (peak - spread).max(0.0) as u64;
-        let j_hi = (peak + spread) as u64;
-        // Only the Poisson terms within ~37 log-units of the peak weight contribute above
-        // ~1e-16 (the central-chi² factor is in [0,1]); skip the negligible lower tail and
-        // break out of the negligible upper tail instead of always evaluating the full
-        // [peak-60-10√, peak+60+10√] window. This avoids ~50+ wasted lower_regularized_gamma
-        // calls per point for small nc (≈18 significant terms vs 71 at nc=2) while leaving the
-        // sum bit-identical to the full window (dropped terms < ~1e-14 total). frankenscipy-9i8vd
-        let peak_logw = -half_lam + peak * ln_half_lam - ln_gamma(peak + 1.0);
-        let mut sum = 0.0;
-        for j in j_lo..=j_hi {
-            let jf = j as f64;
-            let log_pois = -half_lam + jf * ln_half_lam - ln_gamma(jf + 1.0);
-            if log_pois < peak_logw - 37.0 || log_pois < -745.0 {
-                if jf > peak {
-                    break; // past the peak, upper tail is negligible
-                }
-                continue; // lower-tail weight negligible
-            }
-            let df_j = self.df + 2.0 * jf;
-            sum += log_pois.exp() * lower_regularized_gamma(0.5 * df_j, 0.5 * x);
-        }
-
-        sum.clamp(0.0, 1.0)
+        // Delegate the noncentral χ² CDF to the recurrence-optimized special
+        // kernel: `chndtr` sums the Poisson-mixture with one incomplete-gamma at
+        // the mode + O(√nc) recurrence steps, vs this crate's former window of
+        // ~O(√nc) fresh `lower_regularized_gamma` calls. Measured 16.7–39.5×
+        // faster, agreeing to ≤3e-14 (machine precision) with the old window sum.
+        fsci_special::gamma::chndtr(x, self.df, self.nc).clamp(0.0, 1.0)
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -3593,29 +3566,12 @@ impl ContinuousDistribution for NoncentralF {
             return FDistribution::new(self.dfn, self.dfd).cdf(x);
         }
 
-        // Use Poisson-weighted sum of central F CDFs
-        let d1 = self.dfn;
-        let d2 = self.dfd;
-        let half_lam = self.nc / 2.0;
-
-        let mut sum = 0.0;
-        let mut poisson_term = (-half_lam).exp();
-
-        for j in 0..150 {
-            let d1_j = d1 + 2.0 * j as f64;
-            // Same c_k = (d1+2k)/d1 rescaling as the pdf: P(F ≤ x | k) =
-            // P(c_k·G ≤ x) = F_cdf(x/c_k). frankenscipy-t9cj2
-            let ck = d1_j / d1;
-            let f_cdf = FDistribution::new(d1_j, d2).cdf(x / ck);
-            sum += poisson_term * f_cdf;
-
-            poisson_term *= half_lam / (j + 1) as f64;
-            if poisson_term < 1e-16 && j > 10 {
-                break;
-            }
-        }
-
-        sum.clamp(0.0, 1.0)
+        // Delegate the noncentral-F CDF to the special kernel `ncfdtr`. Besides
+        // being much faster than this crate's Poisson-weighted sum of central-F
+        // CDFs, it is also CORRECT for large nc: the old sum seeded
+        // `poisson_term = e^{-nc/2}` which underflows to 0 for nc ≳ 40 (the same
+        // bug the noncentral χ² path already fixed), returning ~0 there.
+        fsci_special::ncfdtr(self.dfn, self.dfd, self.nc, x).clamp(0.0, 1.0)
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -49923,6 +49879,38 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn noncentral_cdf_routes_to_special_kernel_matches_scipy() {
+        // NoncentralChiSquared/NoncentralF cdf now delegate to chndtr/ncfdtr.
+        // References from scipy.stats (1.17.1), 1e-9. The large-nc ncf cases
+        // (nc=60,100) previously underflowed to ~0 in the local Poisson sum.
+        let ncx2_cases = [
+            (5.0, 2.0, 8.0, 0.661844945444),
+            (8.0, 50.0, 60.0, 0.579606809754),
+            (2.0, 200.0, 210.0, 0.623348421817),
+        ];
+        for (df, nc, x, expected) in ncx2_cases {
+            let got = NoncentralChiSquared::new(df, nc).cdf(x);
+            assert!(
+                (got - expected).abs() <= 1e-9,
+                "ncx2({df},{nc}).cdf({x}) = {got}, expected {expected}"
+            );
+        }
+        let ncf_cases = [
+            (3.0, 10.0, 4.0, 2.0, 0.466364216048),
+            (5.0, 8.0, 2.0, 1.5, 0.552984092893),
+            (4.0, 6.0, 60.0, 10.0, 0.178797074991),
+            (3.0, 12.0, 100.0, 20.0, 0.0904228850242),
+        ];
+        for (d1, d2, nc, x, expected) in ncf_cases {
+            let got = NoncentralF::new(d1, d2, nc).cdf(x);
+            assert!(
+                (got - expected).abs() <= 1e-9,
+                "ncf({d1},{d2},{nc}).cdf({x}) = {got}, expected {expected}"
+            );
+        }
+    }
 
     #[test]
     fn noncentral_ppf_routes_to_special_inverse_matches_scipy() {

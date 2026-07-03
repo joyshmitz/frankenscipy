@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: NoncentralChiSquared/NoncentralF CDF → special kernel (chndtr/ncfdtr) — 16.7-39.5× self + fixes ncf large-nc underflow bug
+
+- Follow-on to the ppf routing: the same two distributions also recomputed their CDF via a slow local
+  Poisson-weighted sum (fresh `lower_regularized_gamma`/central-F CDF per term) while fsci-special has the
+  recurrence-optimized `chndtr`/`ncfdtr` kernels. Routed `NoncentralChiSquared.cdf → fsci_special::gamma::
+  chndtr` and `NoncentralF.cdf → fsci_special::ncfdtr` (edge guards x≤0→0, nan, nc==0→central kept).
+- MEASURED same box (scipy 1.17.1), local sum timed directly vs chndtr: ncx2.cdf(5,2,8) 7.29→**0.44µs =
+  16.7×**; (3,10,12) 31.6×; (8,50,60) 26.7×; (2,200,210) 45.6→1.15µs = **39.5×** — agreeing to ≤3e-14
+  (machine precision) with the old sum. vs scipy.stats ncx2.cdf (~76µs) fsci is now **~70-270× faster**.
+- CORRECTNESS BONUS: `NoncentralF.cdf` seeded its Poisson sum with `e^{-nc/2}` which UNDERFLOWS to 0 for
+  nc ≳ 40 → the old local cdf returned ~0 for large nc; `ncfdtr` is correct (verified vs scipy at nc=60,100).
+  Lifts cdf, sf (=1−cdf), and makes the ppf round-trip exact (ppf uses chndtrix/ncfdtri, same kernels).
+- Verification: new noncentral_cdf_routes_to_special_kernel_matches_scipy (7 scipy refs incl. large-nc ncf)
+  + all 2009 fsci-stats tests green (rch/hz2). Same winning pattern as cdef4a7e (delegate a stats dist's
+  slow local reimpl to fsci-special's optimized kernel).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: NoncentralChiSquared/NoncentralF ppf → purpose-built inverse (chndtrix/ncfdtri) — 16.5-26.2× self
 
 - The RIGHT version of the reverted 80e4c6b7: instead of a generic root-finder swap, route the ppf of the
