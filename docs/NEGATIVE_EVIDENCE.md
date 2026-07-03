@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: spherical_jn (x<n) Miller recurrence → √(π/2x)·jv(n+½,x) identity — 4-5× self, widens ~26×→~110× SciPy lead
+
+- A broad scalar-special timing sweep flagged scipy.special.spherical_jn(10,5)=28µs / spherical_yn=26µs as
+  huge outliers. fsci already CRUSHES both (0.09-1.06µs = ~26-300× faster — scipy is slow here). But the
+  probe found an internal win: for x<n (forward recurrence cancels → the former Miller DOWNWARD recurrence,
+  ~2n+30 steps), the half-integer identity j_n(x)=√(π/2x)·J_{n+½}(x) via `jv_scalar` is stable AND ~4× cheaper.
+- MEASURED same box, Miller vs jv-route: j_10(5) 1.06→**0.22µs = 4.8×**; j_30(20) 1.04→0.25µs=4.2×; j_5(3)
+  1.5×. Byte-identical incl. the x≪n tail (j_9(0.1)=1.5e-18, j_50(10)=2.2e-31; ≤5e-17 rel vs scipy=0.0).
+  Gated to x>0 (identity needs √x); x<0 keeps Miller (rare, unchanged). x≥n keeps the fast forward recurrence.
+- Widens fsci's lead vs scipy in the x<n regime from ~26× to ~110×. Verification: new
+  spherical_jn_jv_route_matches_scipy_small_x (6 scipy refs incl. 1e-31 tail) + all 1139 fsci-special tests
+  green (rch/hz2), incl. the pre-existing small-x-large-n & threshold-continuity tests. spherical_yn already
+  uses the stable upward forward recurrence — no change (its scipy 26µs is scipy overhead, fsci wins).
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: erfi Maclaurin series → (2/√π)e^{x²}dawsn(x) form — 4-12× self, byte-identical
 
 - erfi(x) for |x|<6 summed a Maclaurin series `2x/√π Σ x^{2k}/(k!(2k+1))` — up to ~60 terms near |x|=6.
