@@ -6,7 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
-## 2026-07-03 - BlackThrush (cc) - DEFER (measured lead): exotic special-fn anomaly sweep — pro_ang1 13.3× slower than SciPy is the biggest open gap; mathieu 2.1-2.3× cluster
+## 2026-07-03 - BlackThrush (cc) - CORRECTION + REJECT: the "pro_ang1 13.3×" gap was MEASUREMENT NOISE (spheroidal family is 1.5-2.2× FASTER); Newton-on-Sturm-pivot for the shared tridiagonal eigensolver = 0.70× (rejected)
+
+- **CORRECTION to the entry below.** The prior sweep flagged `pro_ang1(3,5,2,.5)` at 160µs = 13.3× slower than SciPy.
+  That number was a MEASUREMENT ARTIFACT (2000-iter sequential bench caught a scheduler/thermal hiccup). Localizing it,
+  the three sub-steps (`spheroidal_cv` 4.6µs + `spheroidal_coefficients` 2.7µs + `spheroidal_ang1_eval` 0.3µs) sum to
+  ~7.6µs, and a clean isolated re-measure (300-iter warmup, 30k reps) gives **pro_ang1 = 7-8µs = 1.5× FASTER than
+  SciPy's 12µs**. The WHOLE spheroidal family beats SciPy: obl_rad2 2.06×, pro_cv/obl_cv 2.1-2.2×, pro_ang1/obl_ang1/
+  pro_rad2 1.5-1.6× FASTER. NO spheroidal gap exists. (Stale-scorecard rule, Nth time: re-measure isolated same-box
+  before chasing a sweep "loss".)
+- **Real remaining gap = the mathieu characteristic-value cluster** (clean re-measure): mathieu_b 4751ns vs SciPy 1848
+  = 2.57× slower, mathieu_a 4321 vs 2217 = 1.95×, mathieu_sem 1.66×, mathieu_cem 1.39×. Decomposed mathieu_a: the
+  matrix build is 24ns; **the `tridiagonal_kth_eigenvalue` Sturm bisection is 96% (4451ns), running 60 iterations**
+  (linear convergence, Gershgorin bracket ~1764 wide → log2(1764/1e-14)≈58 iters). This solver is SHARED by
+  mathieu_a/b + pro_cv/obl_cv/spheroidal_cv.
+- **REJECT (0.70×): Newton on the last Sturm pivot dₙ₋₁(x)=0**, steered by the count-bracket with bisection fallback.
+  Controlled interleaved A/B (same binary, back-to-back, cancels drift): old bisection 4467ns / **60 iters** vs Newton
+  hybrid 6407ns / **58 iters**, val absdiff 0.0. Newton barely cut iterations because dₙ₋₁(x) is a rational function
+  with n−1 poles interlacing its n zeros — over the wide bracket the Newton step lands outside almost every time and
+  falls back to bisection, so it pays the extra derivative recurrence for ~no iteration savings. Full suite stayed
+  1139/0 (accuracy fine), but it's a clear perf LOSS → reverted, orthopoly.rs pristine.
+- Closing the mathieu 2× would need SciPy's specfun algorithm (Zhang-Jin continued-fraction + secant on a smooth
+  well-scaled function, not pole-riddled bisection) — a bigger port, DEFERRED. No code shipped this pass.
+
+## 2026-07-03 - BlackThrush (cc) - SUPERSEDED (see correction above): exotic special-fn anomaly sweep — pro_ang1 "13.3×" was noise; mathieu 2× cluster real
 
 - Broad ns/call sweep of 26 un-benched exotic functions (struve/kelvin/pbdv/mathieu/spheroidal) vs SciPy same box,
   OPENBLAS_NUM_THREADS=1. Most already CRUSH SciPy (struve 335×, itairy 47×, pbvv 16×, ker/kei 4×) — not targets.
