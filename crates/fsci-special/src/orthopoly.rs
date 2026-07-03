@@ -1366,14 +1366,22 @@ fn spheroidal_ang1(m: u32, n: u32, c: f64, x: f64, prolate: bool, cv: f64) -> (f
 /// compute the coefficients ONCE and reuse them across all `x` — the expensive
 /// characteristic-value + eigenvector solve is invariant in `x`.
 fn spheroidal_ang1_eval(m: u32, x: f64, d: &[f64], parity: u32) -> (f64, f64) {
+    // The harmonics are P_{m+parity+2k}^m(x). Calling `assoc_legendre_no_cs`
+    // (→ `lpmv`) per coefficient re-ran an O(l) Legendre recurrence each time
+    // (O(dim²)); `lpmns_arr` yields the whole P_l^m / P_l^{m'} ladders in one
+    // O(max_l) pass. It returns the CS-phase form (= `lpmv`), so the no-CS values
+    // this series wants are `(−1)^m · pm[l]` — factor the constant sign out.
+    let max_l = m + parity + 2 * (d.len() as u32 - 1);
+    let (pm, pd) = lpmns_arr(i64::from(m), i64::from(max_l), x);
     let mut value = 0.0_f64;
     let mut derivative = 0.0_f64;
     for (k, &dk) in d.iter().enumerate() {
-        let l = m + parity + 2 * k as u32;
-        value += dk * assoc_legendre_no_cs(m, l, x);
-        derivative += dk * assoc_legendre_no_cs_deriv(m, l, x);
+        let l = (m + parity + 2 * k as u32) as usize;
+        value += dk * pm[l];
+        derivative += dk * pd[l];
     }
-    (value, derivative)
+    let sgn = if m % 2 == 0 { 1.0 } else { -1.0 };
+    (sgn * value, sgn * derivative)
 }
 
 /// Vectorised spheroidal angular function of the first kind over many `x` at a

@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: spheroidal_ang1_eval per-term assoc-Legendre → one lpmns_arr pass — 46.1× self, BYTE-IDENTICAL
+
+- Sibling of the spheroidal_rad1 win. spheroidal_ang1_eval (behind obl_ang1/pro_ang1 + spheroidal_ang1_many)
+  summed `Σ_k d_k P_{m+r_k}^m(x)` by calling `assoc_legendre_no_cs(m,l,x)` (→ `lpmv`, O(l)) per coefficient —
+  and the derivative term added ~2 more `lpmv` calls each — so ~3·O(l) per term = O(dim²) over the ~dim
+  harmonics. Replaced with ONE `lpmns_arr(m, max_l, x)` pass (already in-crate; the specfun LPMNS
+  fixed-order Legendre ladder, returns P_l^m AND P_l^{m'} for all l in O(max_l)).
+- Convention: lpmns_arr returns the CS-phase form (= `lpmv`), so the no-CS values this series needs are
+  `(−1)^m·pm[l]` (and `(−1)^m·pd[l]`) — factored the constant sign out. Because lpmns_arr runs the SAME
+  recurrence as lpmv, it is EXACT: **max_rel = 0.00 (byte-identical)** across a (−0.9..0.99) x grid.
+- MEASURED same box (7 pro/obl cases × 9 x): **46285 → 1004ns = 46.1× self** (dominated by the eliminated
+  per-term Legendre re-runs). Widens obl_ang1's existing 2.3× SciPy win and lifts pro_ang1 +
+  spheroidal_ang1_many. assoc_legendre_no_cs/_deriv kept (still used for the x=0 normalization). Full
+  fsci-special suite green (rch/hz2). Own file: orthopoly.rs + this ledger. Completes the spheroidal
+  radial+angular "fresh special-fn per term → recurrence ladder" sweep (rad1 3.77×, ang1 46.1×).
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: spheroidal_rad1 per-term spherical-Bessel → one Miller downward pass — 3.77× self, flips obl_rad1 loss to win
 
 - The broad fsci-vs-SciPy bench flagged obl_rad1 as the ONE spheroidal near-loss (50µs = 1.05× SLOWER than
