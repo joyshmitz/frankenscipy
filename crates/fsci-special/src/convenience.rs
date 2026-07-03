@@ -3684,18 +3684,17 @@ fn kelvin_zeros_of(f: impl Fn(f64) -> f64, nt: u32) -> Vec<f64> {
         let xn = x + h;
         let fn_ = f(xn);
         if fx * fn_ < 0.0 {
-            // Bisect the sign-change bracket [x, xn].
-            let (mut a, mut b) = (x, xn);
-            let fa_pos = fx > 0.0;
-            for _ in 0..80 {
-                let m = 0.5 * (a + b);
-                if (f(m) > 0.0) == fa_pos {
-                    a = m;
-                } else {
-                    b = m;
-                }
-            }
-            out.push(0.5 * (a + b));
+            // Refine the sign-change bracket [x, xn] with the superlinear Illinois
+            // false-position method (~10-15 evals) instead of 80 bisection steps.
+            // illinois_root wants an INCREASING g with g(lo) < 0 < g(hi); orient by
+            // the sign at the low end (f rises through the zero when fx < 0, else
+            // negate). Same guaranteed convergence as bisection, far fewer f-evals.
+            let root = if fx < 0.0 {
+                crate::beta::illinois_root(&f, x, xn, fx, fn_)
+            } else {
+                crate::beta::illinois_root(|t| -f(t), x, xn, -fx, -fn_)
+            };
+            out.push(root);
         }
         x = xn;
         fx = fn_;

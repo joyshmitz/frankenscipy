@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: kelvin_zeros_of 80-step bisection → illinois_root — 3.02× self (lifts all 8 Kelvin zeros)
+
+- The misc bench flagged kelvin_zeros(10) = **3.67ms = 27× SLOWER** than SciPy (136µs). All 8 `*_zeros`
+  (ber/bei/ker/kei + primed) delegate to `kelvin_zeros_of`, which coarse-scanned (h=0.25) for sign-change
+  brackets then refined each with an **80-iteration pure bisection**. Swapped the bisection for the
+  crate's `illinois_root` (superlinear false-position, ~10-15 evals) with sign-orientation (f rises through
+  the zero when f(lo)<0, else negate) — the bisection→illinois lever, now in a 4th special site.
+- MEASURED same box: kelvin_zeros(10) **3.544 → 1.175ms = 3.02× self**, max diff 2.60e-11 vs old bisection
+  with exact zero-count parity (illinois converges to ~4·eps, tighter than the 80-step bracket → more
+  accurate). Full fsci-special suite green (rch/hz2). Own file: convenience.rs + this ledger.
+- RESIDUAL: the h=0.25 coarse SCAN (≈320 f-evals over [0.01, 5·nt+30]) is now the bottleneck (vs ~120 illinois
+  evals) — still ~8.6× slower than SciPy, which uses asymptotic zero estimates as starting points. Follow-up
+  = coarsen h (zeros spaced ~4.44, so h could be ~1.0) or seed from the McMahon-style asymptotic; deferred as
+  it needs per-function validation that no zero is skipped. Same pattern in fresnel_zeros (10× slower) + the
+  Airy zeros (parity) — bench-flagged for the same treatment.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: clausen 100000-term direct sum → Bernoulli/log expansion — 30506× self + accuracy fix (2.8e-9 → 6e-15)
 
 - A misc-family bench found clausen(1.2) = **983µs** — a scalar call taking ~1 MILLISECOND. It summed
