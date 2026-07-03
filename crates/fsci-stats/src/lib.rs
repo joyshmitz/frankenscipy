@@ -1815,7 +1815,19 @@ impl ContinuousDistribution for NoncentralT {
     }
 
     fn sf(&self, x: f64) -> f64 {
-        self.nct_sf_integrate(x)
+        if x.is_nan() || self.nc.is_nan() || self.df.is_nan() {
+            return f64::NAN;
+        }
+        if x.is_infinite() {
+            return if x > 0.0 { 0.0 } else { 1.0 };
+        }
+        if self.nc.abs() < 1e-10 {
+            return StudentT::new(self.df).sf(x);
+        }
+        // sf(t; ν, δ) = 1 − F(t) = F(−t; ν, −δ) (noncentral-t reflection), so
+        // evaluate the tail DIRECTLY via `nctdtr` with reflected args — fast and
+        // cancellation-free (no 1 − cdf), matching the former local tail integrate.
+        fsci_special::nctdtr(self.df, -self.nc, -x).clamp(0.0, 1.0)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -49884,18 +49896,27 @@ mod tests {
         // NoncentralT cdf/ppf now delegate to nctdtr/nctdtrit. References from
         // scipy.stats.nct (1.17.1), 1e-9; ppf round-trips confirm the fast path.
         let cases = [
-            (5.0, 2.0, 3.0, 0.731109843508, 2.85281874),
-            (10.0, -1.5, -0.5, 0.842844772015, -0.9879203989),
-            (3.0, 4.0, 5.0, 0.586262542102, 5.913638328),
-            (20.0, 0.5, 1.0, 0.684953979825, 1.044466948),
+            (5.0, 2.0, 3.0, 0.731109843508, 2.85281874, 0.268890156492),
+            (10.0, -1.5, -0.5, 0.842844772015, -0.9879203989, 0.157155227985),
+            (3.0, 4.0, 5.0, 0.586262542102, 5.913638328, 0.413737457898),
+            (20.0, 0.5, 1.0, 0.684953979825, 1.044466948, 0.315046020175),
+            (6.0, 1.5, 8.0, 0.99765891690, 0.0, 0.00234108309917),
         ];
-        for (df, nc, t, cdf_ref, ppf07) in cases {
+        for (df, nc, t, cdf_ref, ppf07, sf_ref) in cases {
             let d = NoncentralT::new(df, nc);
             let got = d.cdf(t);
             assert!(
                 (got - cdf_ref).abs() <= 1e-9,
                 "nct({df},{nc}).cdf({t}) = {got}, expected {cdf_ref}"
             );
+            let sf = d.sf(t);
+            assert!(
+                (sf - sf_ref).abs() <= 1e-9,
+                "nct({df},{nc}).sf({t}) = {sf}, expected {sf_ref}"
+            );
+            if ppf07 == 0.0 {
+                continue; // sf-only row (large t, ppf(0.7) uninformative)
+            }
             let p = d.ppf(0.7);
             assert!(
                 (p - ppf07).abs() <= 1e-6 * ppf07.abs().max(1.0),

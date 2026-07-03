@@ -19,6 +19,10 @@ ledger above so the project has one source of truth.
 - Verification: new noncentral_t_cdf_ppf_route_to_special_kernel_matches_scipy (4 scipy cdf+ppf refs incl.
   negative-nc reflection + round-trips) + all 2010 fsci-stats tests green (rch/hz2). Pure perf win via
   delegation — no correctness-bonus claim (the local Lenth series was already correct).
+- FOLLOW-ON (this commit): also routed NoncentralT.sf → `nctdtr(df, −nc, −t)` via the exact reflection
+  identity sf(t;ν,δ)=F(−t;ν,−δ) (verified diff=0 in scipy) — replaces the local `nct_sf_integrate` series
+  with the same fast kernel (~0.7µs), cancellation-free in the far tail (matched scipy at t=8, sf=0.00234).
+  sf refs added to the test; 2010 tests green. nct cdf/sf/ppf now ALL delegate to fsci-special.
 
 ## 2026-07-03 - BlackThrush (cc) - AMEND (corrects d1c7f058 claim) + fix NoncentralF.pdf large-nc bug
 
