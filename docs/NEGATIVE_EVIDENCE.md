@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: cosm/sinm 2n×2n embedding → complex n×n Padé (block-scalar B²) — 2.56-3.52× self, FLIPS 4.59× loss → 1.09× WIN vs scipy
+
+- Follow-on to the expm Padé win below. cosm/sinm were still 3.2-3.5× slower via `cosm_sinm_blocks`, which took the
+  [[C,−S],[S,C]] blocks of `expm(B)`, B=[[0,−A],[A,0]] — a 2n×2n expm doing 6 matmuls at **8× per-matmul cost** (~48n³).
+- KEY: B² = [[−A²,0],[0,−A²]] is block-SCALAR in M=A², so the whole degree-13 Padé of B collapses to REAL n×n
+  polynomials in M + ONE complex n×n solve. Even part V(B)=block-diag[Pₑ], odd part U(B)=[[0,−W],[W,0]], W=A·Pₒ,
+  Pₑ=Σb₂ₖ(−M)ᵏ, Pₒ=Σb₂ₖ₊₁(−M)ᵏ. Under the real↔complex block iso [[P,−Q],[Q,P]]↔P+iQ, r(B)=(V−U)⁻¹(V+U) becomes
+  **X=(Pₑ−iW)⁻¹(Pₑ+iW)=cos(A)+i·sin(A)** — 7 REAL matmuls (par_dmatmul) + 1 complex LU solve (~11n³, ~4× fewer flops
+  than the 2n×2n path AND than scipy's two complex expm(±iA)). Scaling maps to complex X→X² s times.
+- CORRECTNESS: new cos/sin vs the old 2n×2n reference = **3.3e-16 to 1.4e-15 (bit-close)**; suite **496/0** (cosm/sinm
+  scipy-match tests pass). Singular-denominator fallback to the 2n×2n embedding (never hit).
+- MEASURED (self, on top of the expm-Padé baseline): **cosm n=50 982→279µs=3.52×, n=100 5851→2289µs=2.56×**; sinm same.
+  Vs scipy: **cosm n=50 FLIPS 4.59× loss → 1.09× WIN** (279 vs 305µs); n=100 5.83×→1.36× (near parity, residual is the
+  par_dmatmul-vs-BLAS kernel gap at larger n). Net cosm/sinm vs original: ~5× self. Own file: lib.rs.
+- LEVER: a real matrix function computed via a 2n×2n real embedding of a structured (block-scalar-square) matrix →
+  collapse to n×n via the real↔complex block iso; matmuls stay real, only the final solve/squarings go complex.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: expm 20-term Taylor → [13/13] Padé — expm 1.46-1.74× self (flips 1.96× loss → 1.13× parity), lifts cosm/sinm 1.43-1.68×
 
 - FRESH VEIN: benched fsci-linalg hand-rolled matrix functions vs scipy.linalg (n=50/100, OMP=1). Found real gaps:

@@ -8104,24 +8104,79 @@ fn validated_square_dmatrix(
 /// Schur form then carries 2×2 diagonal blocks that a scalar `func(t[i,i])`
 /// cannot represent, so the old `funm(_, f64::cos)` path was silently wrong
 /// there (correct only for real spectra).
-fn cosm_sinm_blocks(m: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
-    let n = m.nrows();
-    let mut b = DMatrix::<f64>::zeros(2 * n, 2 * n);
-    for i in 0..n {
-        for j in 0..n {
-            b[(i, n + j)] = -m[(i, j)];
-            b[(n + i, j)] = m[(i, j)];
+fn cosm_sinm_blocks(a: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
+    // cos(A) and sin(A) are the [[C,−S],[S,C]] blocks of expm(B), B=[[0,−A],[A,0]].
+    // But B² = [[−A²,0],[0,−A²]] is block-scalar in M = A², so the whole degree-13
+    // Padé of B collapses to REAL n×n polynomials in M plus a single COMPLEX n×n
+    // solve — ~4× fewer flops than the 2n×2n `expm(B)` (which does 8×-cost matmuls)
+    // and than SciPy's two complex expm(±iA). Even part V(B)=block-diag[Pₑ], odd part
+    // U(B)=[[0,−W],[W,0]] with W=A·Pₒ, where Pₑ=Σ b₂ₖ(−M)ᵏ, Pₒ=Σ b₂ₖ₊₁(−M)ᵏ. Under
+    // the real↔complex block iso [[P,−Q],[Q,P]]↔P+iQ, r(B)=(V−U)⁻¹(V+U) becomes
+    // X=(Pₑ−iW)⁻¹(Pₑ+iW)=cos(A)+i·sin(A). Scaling/squaring maps to complex X→X².
+    let n = a.nrows();
+    let identity = DMatrix::<f64>::identity(n, n);
+    const THETA13: f64 = 5.371_920_351_148_152;
+    const B: [f64; 14] = [
+        64_764_752_532_480_000.0,
+        32_382_376_266_240_000.0,
+        7_771_770_303_897_600.0,
+        1_187_353_796_428_800.0,
+        129_060_195_264_000.0,
+        10_559_470_521_600.0,
+        670_442_572_800.0,
+        33_522_128_640.0,
+        1_323_241_920.0,
+        40_840_800.0,
+        960_960.0,
+        16_380.0,
+        182.0,
+        1.0,
+    ];
+    let eta = matrix_one_norm(a);
+    let s = if eta <= THETA13 {
+        0u32
+    } else {
+        (eta / THETA13).log2().ceil().max(0.0) as u32
+    };
+    let a_s = a / 2.0_f64.powi(s as i32);
+    // Powers of M = A_s². (−M)ᵏ = (−1)ᵏ Mᵏ, so signs alternate in the polynomials.
+    let m1 = par_dmatmul(&a_s, &a_s);
+    let m2 = par_dmatmul(&m1, &m1);
+    let m3 = par_dmatmul(&m1, &m2);
+    let m4 = par_dmatmul(&m2, &m2);
+    let m5 = par_dmatmul(&m2, &m3);
+    let m6 = par_dmatmul(&m3, &m3);
+    let p_e = &identity * B[0] - &m1 * B[2] + &m2 * B[4] - &m3 * B[6] + &m4 * B[8]
+        - &m5 * B[10]
+        + &m6 * B[12];
+    let p_o = &identity * B[1] - &m1 * B[3] + &m2 * B[5] - &m3 * B[7] + &m4 * B[9]
+        - &m5 * B[11]
+        + &m6 * B[13];
+    let w = par_dmatmul(&a_s, &p_o);
+    let den =
+        DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| Complex::new(p_e[(i, j)], -w[(i, j)]));
+    let num = DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| Complex::new(p_e[(i, j)], w[(i, j)]));
+    let Some(mut x) = den.lu().solve(&num) else {
+        // Singular Padé denominator (never seen in practice): fall back to the
+        // reference 2n×2n embedding via the real expm kernel.
+        let mut b_mat = DMatrix::<f64>::zeros(2 * n, 2 * n);
+        for i in 0..n {
+            for j in 0..n {
+                b_mat[(i, n + j)] = -a[(i, j)];
+                b_mat[(n + i, j)] = a[(i, j)];
+            }
         }
+        let e = expm_pade_scaling_squaring(&b_mat);
+        let cos = e.view((0, 0), (n, n)).into_owned();
+        let sin = e.view((n, 0), (n, n)).into_owned();
+        return (cos, sin);
+    };
+    // X = cos(A_s)+i·sin(A_s); square s times to reach cos(A)+i·sin(A).
+    for _ in 0..s {
+        x = &x * &x;
     }
-    let e = expm_pade_scaling_squaring(&b);
-    let mut cos = DMatrix::<f64>::zeros(n, n);
-    let mut sin = DMatrix::<f64>::zeros(n, n);
-    for i in 0..n {
-        for j in 0..n {
-            cos[(i, j)] = e[(i, j)];
-            sin[(i, j)] = e[(n + i, j)];
-        }
-    }
+    let cos = DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].re);
+    let sin = DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].im);
     (cos, sin)
 }
 
