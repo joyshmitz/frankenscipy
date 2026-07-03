@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: mathieu_mod per-term Bessel-product → precomputed J/Y ladders — 15.5× self, flips 14× SciPy loss to parity
+
+- A fresh bench of the un-measured Legendre/Mathieu families found mathieu_modcem1 = 71µs = **14× SLOWER**
+  than SciPy (5µs), mathieu_cem/sem 2.4-2.6× slower. mathieu_mod (behind modcem1/modsem1/modcem2/modsem2)
+  sums `Σ_i (−1)^i A_i · J_a(u1)·Z_b(u2)` with orders a,b stepping to ~dim; `bessel_product` called
+  `bessel_j_and_deriv`/`bessel_y_and_deriv` (each 3 `jv_scalar`/`yv_scalar` calls, O(order)) PER TERM =
+  O(dim²). Same "fresh special-fn per series term → recurrence ladder" lever as the spheroidal rad1/ang1.
+- Added `jn_arr` (cylindrical J: one Miller DOWNWARD pass, normalized by `J_0+2ΣJ_{2k}=1` accumulated inline)
+  and `yn_arr` (Y: stable UPWARD recurrence from Y_0/Y_1 seeds), both with derivatives; prototyped vs
+  scipy.jv/yv to ~2e-14. mathieu_mod now precomputes J_·(u1) and Z_·(u2) once and indexes. Removed the dead
+  bessel_product/bessel_j_and_deriv/bessel_y_and_deriv cluster + now-unused jv_scalar import.
+- MEASURED same box (6 cases incl. 2nd-kind): **82351 → 5313ns = 15.5× self**, max diff 5.04e-14 vs the
+  per-term reference. Flips mathieu_modcem1 from 14× SLOWER to ~parity (5.3 vs 5µs); lifts all 4 modified
+  Mathieu fns. Full fsci-special suite green (rch/hz2). Own file: orthopoly.rs + this ledger. (mathieu_cem/sem
+  2.4× slowness is separate — the mathieu_fourier eigenvector cost, not per-term Bessel; not addressed here.)
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: spheroidal_ang1_eval per-term assoc-Legendre → one lpmns_arr pass — 46.1× self, BYTE-IDENTICAL
 
 - Sibling of the spheroidal_rad1 win. spheroidal_ang1_eval (behind obl_ang1/pro_ang1 + spheroidal_ang1_many)
