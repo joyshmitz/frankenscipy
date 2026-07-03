@@ -6,6 +6,24 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - REJECT (marginal) + LEAD (measured): fftconvolve 7/11/13-smooth padding is 1.5% avg (skip); DCT-II/rfft are 1.4-3.9× slower than SciPy (next lever)
+
+- **REJECT — fsci-signal fftconvolve padding follow-on.** After radix-7/11/13 made those sizes fast, revisited whether
+  `next_regular_fft_len` (even-5-smooth) should widen to {2,3,5,7,11,13}. Quantified the padded-length reduction over
+  3000 random full_len∈[300,6000]: **mean L13/L5 = 0.985, median 0.99, NEVER >10% smaller** (78% of the time strictly
+  smaller but only by ~1.5%). With radix-7/11/13's higher per-point cost that nets to ≈0. Not worth touching the tuned
+  padding + large-n cost model. Also `next_fast_len`/`is_fast_len` are scipy-contract-locked to 11-smooth
+  (transforms.rs:6672 asserts next_fast_len(13)==14) — so this couldn't propagate anyway.
+- **LEAD (measured) — DCT-II and rfft are the real fsci-fft gap.** Benched vs scipy.fft same box: **dct 1.4-3.9× SLOWER**
+  (n=1024 1.62×, n=2048 2.33×, n=4096 3.89×, n=8192 3.78×) and **rfft up to ~4× slower** (n=8192 fsci 140µs vs scipy
+  34µs — but that number was under heavy box load from overlapping cargo/py jobs, UNVERIFIED). Both `dct` (Makhoul:
+  N-pt real FFT + O(N) extract) and `rfft` route through `real_fft_specialized` (pack-two-reals → N/2 complex FFT +
+  O(N) unpack, transforms.rs:1652). The DCT gap GROWS with size (1.6×→3.8×) faster than the underlying complex FFT gap
+  (only 1.13-1.32× at pow2 ≥4096) — so `real_fft_specialized`/the DCT extract carry extra overhead beyond the FFT.
+  RESUME: measure fft/rfft/dct ratio IN ONE BINARY (load-independent) — if rfft/fft ≈ 0.6 the half-size path is fine
+  and the gap is pocketfft real-FFT kernel quality (hard); if rfft/fft ≈ 1.5 there's a routing/alloc bug in
+  real_fft_specialized (big win). The interrupted `zzz_ratios` probe was doing exactly this. No code shipped this pass.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: radix-13 iterative FFT butterfly — factor-13 sizes 3.0-5.1× self, flips 2.56-4.04× losses → parity/WIN vs numpy
 
 - Third application of the recipe (radix-7, radix-11 below). Factor-13 sizes were 2.56-4.04× slower than numpy
