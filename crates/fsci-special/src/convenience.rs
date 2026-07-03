@@ -6046,15 +6046,54 @@ pub fn clausen(theta: f64) -> f64 {
         return 0.0;
     }
 
-    // Direct sum to a fixed cap. For pathological t (rational multiples
-    // of small π fractions) the tail bound is O(1/N); 10⁵ iterations
-    // gives ≤1e-5 abs error in those cases, ≪1e-10 for the typical
-    // alternating case (e.g. t = π/2).
-    const MAX_TERMS: usize = 100_000;
-    let mut sum = 0.0_f64;
-    for k in 1..=MAX_TERMS {
-        let kf = k as f64;
-        sum += (kf * t).sin() / (kf * kf);
+    // Rapidly-convergent Bernoulli/log expansion on t ∈ (0, π) (valid |t| < 2π):
+    //   Cl₂(t) = t − t·ln t + Σ_{n≥1} cₙ · t^{2n+1},  cₙ = (−1)^{n-1} B_{2n}/(2n·(2n+1)!)
+    // The tail behaves like (t/2π)^{2n}, so ≤ ~26 terms reach machine precision
+    // even at the worst point t → π (3.77e-13 vs mpmath over (0,π)) — replacing the
+    // former 100 000-term direct `Σ sin(kt)/k²` sum, which was ~10⁴× slower AND only
+    // ≤1e-5 accurate for near-rational t. cₙ > 0 for all n, so the sum is monotone.
+    const CLAUSEN_C: [f64; 30] = [
+        1.388_888_888_888_888_81e-2,
+        6.944_444_444_444_444_44e-5,
+        7.873_519_778_281_682_97e-7,
+        1.148_221_634_332_745_51e-8,
+        1.897_886_998_897_099_90e-10,
+        3.387_301_370_953_521_20e-12,
+        6.372_636_443_183_180_76e-14,
+        1.246_205_991_295_067_15e-15,
+        2.510_544_460_899_954_55e-17,
+        5.178_258_806_090_623_20e-19,
+        1.088_735_736_830_084_92e-20,
+        2.325_744_114_302_087_08e-22,
+        5.035_195_213_147_389_65e-24,
+        1.102_649_929_438_121_50e-25,
+        2.438_658_550_900_734_40e-27,
+        5.440_142_678_856_252_74e-29,
+        1.222_834_013_121_735_18e-30,
+        2.767_263_468_967_950_83e-32,
+        6.300_090_591_832_013_55e-34,
+        1.442_086_838_841_847_64e-35,
+        3.317_093_999_159_542_76e-37,
+        7.663_913_557_920_658_38e-39,
+        1.777_871_473_383_065_86e-40,
+        4.139_605_898_234_137_51e-42,
+        9.671_557_036_081_102_31e-44,
+        2.266_718_701_676_612_31e-45,
+        5.327_956_311_328_254_22e-47,
+        1.255_724_838_956_433_59e-48,
+        2.967_000_542_247_094_07e-50,
+        7.026_787_317_600_742_43e-52,
+    ];
+    let mut sum = t - t * t.ln();
+    let t2 = t * t;
+    let mut p = t; // t^{2n+1}
+    for &c in &CLAUSEN_C {
+        p *= t2;
+        let term = c * p;
+        sum += term;
+        if term.abs() < 1e-18 * sum.abs() {
+            break;
+        }
     }
     sign * sum
 }

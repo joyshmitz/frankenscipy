@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: clausen 100000-term direct sum → Bernoulli/log expansion — 30506× self + accuracy fix (2.8e-9 → 6e-15)
+
+- A misc-family bench found clausen(1.2) = **983µs** — a scalar call taking ~1 MILLISECOND. It summed
+  `Σ_{k=1}^{100000} sin(kt)/k²` DIRECTLY (fixed 100k-term cap) — slow AND, as its own comment admitted, only
+  ≤1e-5 accurate for near-rational t (the 1/k² tail converges glacially).
+- Replaced with the rapidly-convergent Bernoulli/log expansion on the reduced t∈(0,π):
+  `Cl₂(t) = t − t·ln t + Σ_{n≥1} cₙ t^{2n+1}`, `cₙ = (−1)^{n-1} B_{2n}/(2n·(2n+1)!)` (30-coeff const array,
+  all cₙ>0 so the sum is monotone → clean early-break). The tail ~ (t/2π)^{2n}, so ≤~26 terms reach machine
+  precision even at the worst point t→π. Prototyped vs mpmath.clsin to **3.77e-13** over (0,π); reduction of
+  negative / >2π args verified to ~1e-15.
+- MEASURED same box: **978191 → 32ns = 30506× self**, and MORE ACCURATE: new 6.0e-15 vs old 2.8e-9 rel error
+  (vs mpmath). Full fsci-special suite green (rch/hz2). Own file: convenience.rs + this ledger. LEVER: a
+  slowly-convergent `Σ 1/k^s`-type direct sum with a huge fixed term cap → the function's known
+  fast-converging (Bernoulli/asymptotic/CF) expansion. LESSON (again): bench the UN-measured public fns — a
+  ~1ms scalar hid in plain sight.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: mathieu_mod per-term Bessel-product → precomputed J/Y ladders — 15.5× self, flips 14× SciPy loss to parity
 
 - A fresh bench of the un-measured Legendre/Mathieu families found mathieu_modcem1 = 71µs = **14× SLOWER**
