@@ -2542,23 +2542,24 @@ fn gammainc_shape_inv(x: f64, p: f64) -> f64 {
         }
     }
 
-    for _ in 0..180 {
-        let mid = 0.5 * (lo + hi);
-        let value = gammainc_scalar(mid, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
-        if !value.is_finite() {
-            return f64::NAN;
-        }
-        if value > p {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-        if (hi - lo).abs() <= 1.0e-12 * hi.abs().max(1.0) {
-            break;
-        }
+    // P(shape, x) is monotone DECREASING in shape, so f(t) = p − P(t, x) is
+    // increasing with f(lo) < 0 < f(hi). Illinois false-position converges in
+    // ~3-4× fewer gammainc evaluations than the old 180-cap bisection. At lo = 0
+    // the shape-0 limit P(0, x) = 1 (x > 0) gives f(lo) = p − 1 without an extra
+    // (and potentially NaN) gammainc call.
+    let f = |t: f64| p - gammainc_scalar(t, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let flo = if lo == 0.0 { p - 1.0 } else { f(lo) };
+    let fhi = f(hi);
+    if fhi == 0.0 {
+        return hi;
     }
-
-    0.5 * (lo + hi)
+    if flo == 0.0 {
+        return lo;
+    }
+    if !flo.is_finite() || !fhi.is_finite() {
+        return f64::NAN;
+    }
+    crate::beta::illinois_root(f, lo, hi, flo, fhi)
 }
 
 const FACTORIALS: [f64; 21] = [
@@ -4366,6 +4367,7 @@ mod tests {
         }
     }
 
+    #[test]
     #[test]
     fn pdtrik_reference_values() {
         let cases = [

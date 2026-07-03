@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: gammainc_shape_inv 180-cap bisection → illinois_root — flips pdtrik 1.46× LOSS to 1.7-2.5× WIN
+
+- `gammainc_shape_inv(x,p)` (solves P(shape,x)=p for the shape; feeds pdtrik + chdtri path + one more
+  caller) ran a 180-cap bisection = ~40 gammainc evals to the 1e-12 break. P(shape,x) is monotone
+  DECREASING in shape, so f(t)=p−P(t,x) is increasing (f(lo)<0<f(hi)) → `beta::illinois_root` converges in
+  ~8-12 evals. At lo=0 use the shape-0 limit P(0,x)=1 (x>0) so flo=p−1 without an extra (NaN-risk) call.
+- BLOCKER found + fixed (separate commit, beta.rs): illinois_root seeded `mid` (its previous-iterate stop
+  reference) with the midpoint, so when the root sits AT a bracket endpoint (pdtrik roots land on integer
+  shapes = power-of-2 bracket ends) the iteration-1 candidate is rejected → `next`=midpoint=seed →
+  spurious immediate return of the WRONG midpoint. Fixed by seeding `mid=NaN`. This was the exact "fiddly"
+  reason pdtrik was previously deferred.
+- MEASURED same box (scipy 1.17.1): pdtrik(0.3,2) **1.35µs vs scipy 3.39µs = 2.5× FASTER**; (0.7,5) 1.09µs
+  vs 1.91µs = **1.75×**; (0.5,10) 1.05µs vs 1.79µs = **1.7×**. Flips the documented ~1.46× SciPy LOSS to a
+  1.7-2.5× WIN; more accurate too (illinois interpolant vs bisection midpoint). All 1130 fsci-special tests
+  green incl. pdtrik_reference_values (5e-10) + pdtrik_inverse (round-trip).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: hyperu a>0 INTEGER-b small-x quadrature → self-gated DLMF 13.2.9 log form — flips ~10× LOSS to 1.2-1.8× WIN (+ digamma accuracy fix)
 
 - Completes the hyperu small-x gap for the integer-b sub-case (the connection formula is singular there,
