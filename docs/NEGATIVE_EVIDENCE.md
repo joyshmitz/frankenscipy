@@ -6,6 +6,21 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: chndtrix 100-step bisection → illinois_root — 4.7-8.4× self, flips ~5× LOSS to parity-1.7× WIN
+
+- chndtrix (noncentral-χ² CDF inverse in x) ran a FIXED 100-step bisection (no early break) over `chndtr`
+  — the one chndtr-inverse that never got the Illinois treatment its siblings chndtridf/chndtrinc already
+  have (via `invert_monotone`). chndtr is increasing in x with chndtr(0,·)=0, so f(x)=chndtr(x,df,nc)−p is
+  increasing with f(0)=−p<0<f(hi) → `beta::illinois_root` in ~12 evals. Reuses the doubling loop's final
+  chndtr(hi) as fhi; f(0)=−p needs no chndtr call.
+- MEASURED same box (scipy 1.17.1), old bisection timed directly vs new: chndtrix(0.5,10,1) 18.2→**2.17µs
+  = 8.4× self**, **1.7× > scipy** (3.71µs); (0.1,8,6) 22.3→2.97µs=7.5×, **1.45×**; (0.3,5,2) 17.2→3.14µs=
+  5.5×, **1.2×**; (0.7,3,4) 22.5→3.45µs=6.6×, ~1.4×; (0.9,2.5,3) 31.1→4.35µs=7.1×, ~parity. Flips the
+  ~4-6× SciPy LOSS to parity-1.7× WIN (chndtr's incomplete-gamma recurrence means it is NO LONGER
+  kernel-walled) + more accurate (illinois interpolant vs bisection midpoint).
+- Verification: chndtrix_inverts_chndtr_matching_scipy + all 1131 fsci-special tests green (rch/hz2).
+  The whole chndtr inverse family (chndtrix/chndtridf/chndtrinc) now shares the Illinois root-finder.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: gammainc_shape_inv 180-cap bisection → illinois_root — flips pdtrik 1.46× LOSS to 1.7-2.5× WIN
 
 - `gammainc_shape_inv(x,p)` (solves P(shape,x)=p for the shape; feeds pdtrik + chdtri path + one more

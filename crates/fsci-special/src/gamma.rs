@@ -2383,22 +2383,26 @@ pub fn chndtrix(p: f64, df: f64, nc: f64) -> f64 {
         return f64::INFINITY;
     }
     let mut hi = 1.0_f64;
-    while chndtr(hi, df, nc) < p {
+    let mut fhi = chndtr(hi, df, nc);
+    while fhi < p {
         hi *= 2.0;
         if hi > 1e300 {
             return f64::INFINITY;
         }
+        fhi = chndtr(hi, df, nc);
     }
-    let mut lo = 0.0_f64;
-    for _ in 0..100 {
-        let mid = 0.5 * (lo + hi);
-        if chndtr(mid, df, nc) < p {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
+    // chndtr(·, df, nc) is increasing in x with chndtr(0, ·) = 0, so
+    // f(x) = chndtr(x, df, nc) − p is increasing with f(0) = −p < 0 < f(hi).
+    // Illinois false-position converges in ~12 chndtr evals vs the old fixed
+    // 100-step bisection — each eval is a full Poisson-weighted mixture, so this
+    // ~8× cuts chndtrix's dominant cost. (Its siblings chndtridf/chndtrinc
+    // already route through the Illinois `invert_monotone`.) The final doubling
+    // eval is reused as `fhi`; f(0) = −p needs no chndtr call.
+    let fhi_resid = fhi - p;
+    if fhi_resid == 0.0 {
+        return hi;
     }
-    0.5 * (lo + hi)
+    crate::beta::illinois_root(|m| chndtr(m, df, nc) - p, 0.0, hi, -p, fhi_resid)
 }
 
 /// Bisect for `v ∈ [a, b]` with `f(v) = target`, where `f` is monotone on
