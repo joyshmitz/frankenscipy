@@ -6312,21 +6312,14 @@ pub fn smirnovi(n: i32, p: f64) -> f64 {
     // n=5: d0≈0.99 where d/dd smirnov ≈ −5e-8, so the step was ≈20, clamping to
     // the 1e-15 floor and returning ~0 instead of 0.937). Bisection is
     // unconditionally convergent here. frankenscipy-e6i43
-    let mut lo = 0.0_f64; // smirnov(lo) = 1 ≥ p
-    let mut hi = 1.0_f64; // smirnov(hi) = 0 ≤ p
-    for _ in 0..100 {
-        let mid = 0.5 * (lo + hi);
-        if mid == lo || mid == hi {
-            break;
-        }
-        if smirnov(n, mid) > p {
-            // survival still above target → need a larger d.
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    0.5 * (lo + hi)
+    // smirnov(n, ·) is strictly decreasing from 1 (d=0) to 0 (d=1), and each
+    // evaluation is an O(n) Birnbaum-Tingey series (gammaln-heavy). Solve the
+    // INCREASING residual g(d) = p − smirnov(n, d) with Illinois false-position
+    // (~13 smirnov evals) instead of the ~53-step bisection this ran — a ~4×
+    // cut in the dominant cost. The bracket [0, 1] needs no kernel calls at the
+    // ends: smirnov(n, 0) = 1 and smirnov(n, 1) = 0, so g(0) = p − 1 < 0 and
+    // g(1) = p > 0. Bracket-preserving, so no Newton-style tail overshoot.
+    crate::beta::illinois_root(|d| p - smirnov(n, d), 0.0, 1.0, p - 1.0, p)
 }
 
 // --- Cephes degree-trig support (sindg.c / tandg.c) ---
@@ -9984,6 +9977,35 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn smirnovi_matches_scipy_reference_points() {
+        // smirnovi(n, p) inverts smirnov(n, ·); now via Illinois (was ~53-step
+        // bisection). References from scipy.special.smirnovi (1.17.1), 1e-10.
+        let cases = [
+            (10, 0.3, 0.23044687172686085),
+            (50, 0.1, 0.14839812573875719),
+            (100, 0.05, 0.12066568772965514),
+            (20, 0.5, 0.12404490303120737),
+            (200, 0.2, 0.062610868788876894),
+            (5, 0.9, 0.074906194963475184),
+            (1, 0.5, 0.5),
+        ];
+        for (n, p, expected) in cases {
+            let got = smirnovi(n, p);
+            assert!(
+                (got - expected).abs() <= 1e-10 * expected.abs().max(1.0),
+                "smirnovi({n}, {p}) = {got}, expected {expected}"
+            );
+            // Round-trip: smirnov(n, smirnovi(n, p)) == p.
+            let back = smirnov(n, got);
+            assert!(
+                (back - p).abs() <= 1e-9 * p.max(1e-12),
+                "smirnovi round-trip: smirnov({n}, {got}) = {back} != {p}"
+            );
+        }
+    }
+
 
     /// Cl₂ accuracy after the truncation+stop fix (frankenscipy-cho22).
     ///

@@ -6,6 +6,21 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: smirnovi ~53-step bisection → illinois_root — 2.2-4.5× self, 2.9-3.8× WIN vs SciPy
+
+- smirnovi (inverse one-sided KS / Smirnov distribution) inverted smirnov(n,·) — an O(n) Birnbaum-Tingey
+  series (gammaln-heavy) — with a ~53-step bisection = ~53 expensive kernel evals. smirnov is strictly
+  decreasing, so the INCREASING residual g(d)=p−smirnov(n,d) has g(0)=p−1<0, g(1)=p>0 (smirnov(0)=1,
+  smirnov(1)=0 need no kernel call) → `beta::illinois_root` in ~13 evals, bracket-preserving (no Newton
+  tail overshoot — the exact bug that forced the earlier revert to bisection).
+- MEASURED same box (scipy 1.17.1), old bisection timed directly vs new: smirnovi(20,0.5) 55.9→**12.4µs
+  = 4.5× self**, **3.8× > scipy** (47.8µs); (50,0.1) 125.8→33.8µs=3.7×, **3.6×**; (200,0.2) 455→140µs=
+  3.3×, **3.5×** vs scipy 486µs; (100,0.05) 3.2×, **3.1×**; (10,0.3) 2.2×, **2.9×**. scipy's own smirnovi
+  is slow (33-945µs, O(n) kernel × many evals) — fsci was ~parity, now 2.9-3.8× FASTER.
+- Verification: new smirnovi_matches_scipy_reference_points (7 scipy refs, 1e-10 + smirnov round-trip) +
+  all 1133 fsci-special tests green (rch/hz2). Absolute cost still O(n) (smirnov kernel recomputes gammaln
+  fresh each call — a separate, larger lever left for later).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: tklmbda CDF ~40-step bisection → illinois_root — 1.4-5.0× self, 1.5-5.0× WIN vs SciPy
 
 - tklmbda (Tukey-lambda CDF) inverts its closed-form quantile ppf(p)=(p^λ−(1−p)^λ)/λ = x on EVERY call and
