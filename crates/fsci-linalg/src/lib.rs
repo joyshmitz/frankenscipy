@@ -7105,20 +7105,99 @@ pub fn expm_frechet(
         });
     }
 
-    // Assemble M = [[A, E], [0, A]] (2n × 2n).
-    let mut m = vec![vec![0.0; 2 * n]; 2 * n];
-    for i in 0..n {
-        for j in 0..n {
-            m[i][j] = a[i][j];
-            m[i][n + j] = e[i][j];
-            m[n + i][n + j] = a[i][j];
-        }
-    }
+    let _ = options;
+    let a_m = dmatrix_from_rows(a)?;
+    let e_m = dmatrix_from_rows(e)?;
+    let (expm_a, frechet) = expm_frechet_blocks(&a_m, &e_m);
+    Ok((rows_from_dmatrix(&expm_a), rows_from_dmatrix(&frechet)))
+}
 
-    let em = expm(&m, options)?;
-    let expm_a: Vec<Vec<f64>> = (0..n).map(|i| em[i][0..n].to_vec()).collect();
-    let frechet: Vec<Vec<f64>> = (0..n).map(|i| em[i][n..2 * n].to_vec()).collect();
-    Ok((expm_a, frechet))
+/// expm(A) and its Fréchet derivative L(A,E) via the [13/13] Padé of the
+/// block-triangular M=[[A,E],[0,A]], but computed on n×n blocks instead of the
+/// full 2n×2n matrix. Since f(M)=[[f(A),Df],[0,f(A)]], every matrix in the Padé
+/// is block-triangular with EQUAL diagonal blocks — represent it as (D,F) with
+/// block product (D₁,F₁)·(D₂,F₂)=(D₁D₂, D₁F₂+F₁D₂). The D-track reproduces
+/// `expm_pade_scaling_squaring` exactly; the F-track carries the derivative. ~19
+/// n×n matmuls + 1 factor + 2 solves vs 6 matmuls at 8× cost on the 2n×2n matrix
+/// (~2.5× fewer flops). Same algorithm/accuracy as expm(M), no complex arithmetic.
+fn expm_frechet_blocks(a: &DMatrix<f64>, e: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
+    let n = a.nrows();
+    let identity = DMatrix::<f64>::identity(n, n);
+    const THETA13: f64 = 5.371_920_351_148_152;
+    const B: [f64; 14] = [
+        64_764_752_532_480_000.0,
+        32_382_376_266_240_000.0,
+        7_771_770_303_897_600.0,
+        1_187_353_796_428_800.0,
+        129_060_195_264_000.0,
+        10_559_470_521_600.0,
+        670_442_572_800.0,
+        33_522_128_640.0,
+        1_323_241_920.0,
+        40_840_800.0,
+        960_960.0,
+        16_380.0,
+        182.0,
+        1.0,
+    ];
+    // ‖M‖₁ = maxⱼ(‖A[:,j]‖₁ + ‖E[:,j]‖₁) (the E-columns sit above the A-columns).
+    let mut norm_m = 0.0_f64;
+    for j in 0..n {
+        let ca: f64 = (0..n).map(|i| a[(i, j)].abs()).sum();
+        let ce: f64 = (0..n).map(|i| e[(i, j)].abs()).sum();
+        norm_m = norm_m.max(ca).max(ca + ce);
+    }
+    let s = if norm_m <= THETA13 {
+        0u32
+    } else {
+        (norm_m / THETA13).log2().ceil().max(0.0) as u32
+    };
+    let scale = 2.0_f64.powi(s as i32);
+    let ad = a / scale;
+    let af = e / scale;
+    // (D,F) block product.
+    let bmul = |d1: &DMatrix<f64>, f1: &DMatrix<f64>, d2: &DMatrix<f64>, f2: &DMatrix<f64>| {
+        (
+            par_dmatmul(d1, d2),
+            par_dmatmul(d1, f2) + par_dmatmul(f1, d2),
+        )
+    };
+    let (a2d, a2f) = bmul(&ad, &af, &ad, &af);
+    let (a4d, a4f) = bmul(&a2d, &a2f, &a2d, &a2f);
+    let (a6d, a6f) = bmul(&a2d, &a2f, &a4d, &a4f);
+    let ui_d = &a6d * B[13] + &a4d * B[11] + &a2d * B[9];
+    let ui_f = &a6f * B[13] + &a4f * B[11] + &a2f * B[9];
+    let (a6ui_d, a6ui_f) = bmul(&a6d, &a6f, &ui_d, &ui_f);
+    let po_d = a6ui_d + &a6d * B[7] + &a4d * B[5] + &a2d * B[3] + &identity * B[1];
+    let po_f = a6ui_f + &a6f * B[7] + &a4f * B[5] + &a2f * B[3];
+    let (w_d, w_f) = bmul(&ad, &af, &po_d, &po_f);
+    let vi_d = &a6d * B[12] + &a4d * B[10] + &a2d * B[8];
+    let vi_f = &a6f * B[12] + &a4f * B[10] + &a2f * B[8];
+    let (a6vi_d, a6vi_f) = bmul(&a6d, &a6f, &vi_d, &vi_f);
+    let pe_d = a6vi_d + &a6d * B[6] + &a4d * B[4] + &a2d * B[2] + &identity * B[0];
+    let pe_f = a6vi_f + &a6f * B[6] + &a4f * B[4] + &a2f * B[2];
+    // num = V+U, den = V−U (block D/F parts).
+    let num_d = &pe_d + &w_d;
+    let num_f = &pe_f + &w_f;
+    let den_d = &pe_d - &w_d;
+    let den_f = &pe_f - &w_f;
+    // X = den⁻¹·num: X_D = den_D⁻¹ num_D = expm(A_s); X_F = den_D⁻¹(num_F − den_F X_D).
+    let lu = den_d.clone().lu();
+    let mut xd = lu
+        .solve(&num_d)
+        .unwrap_or_else(|| taylor_exp(&ad, &identity, 20));
+    let denf_xd = par_dmatmul(&den_f, &xd);
+    let mut xf = lu
+        .solve(&(&num_f - &denf_xd))
+        .unwrap_or_else(|| DMatrix::<f64>::zeros(n, n));
+    // Square s times: (D,F) → (D², DF+FD).
+    for _ in 0..s {
+        let nd = par_dmatmul(&xd, &xd);
+        let nf = par_dmatmul(&xd, &xf) + par_dmatmul(&xf, &xd);
+        xd = nd;
+        xf = nf;
+    }
+    (xd, xf)
 }
 
 /// Relative condition number of the matrix exponential in the Frobenius norm.

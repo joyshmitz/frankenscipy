@@ -6,6 +6,21 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: expm_frechet 2n×2n → block-triangular n×n Padé — 2.40-3.22× self, FLIPS 1.78× loss → 1.36-1.81× WIN vs scipy
+
+- Fourth matrix-fn win. expm_frechet took the top row of `expm([[A,E],[0,A]])` (2n×2n), a Padé doing 6 matmuls at 8×
+  per-matmul cost. M is block-TRIANGULAR, so f(M)=[[f(A),Df],[0,f(A)]] with EQUAL diagonal blocks — represent every
+  Padé matrix as (D,F) with block product (D₁,F₁)·(D₂,F₂)=(D₁D₂, D₁F₂+F₁D₂). The D-track reproduces expm(A) exactly;
+  the F-track carries the Fréchet derivative. `expm_frechet_blocks`: ~19 n×n matmuls + 1 LU factor + 2 solves vs 6
+  matmuls at 8× cost (~2.5× fewer flops), no complex arithmetic. Block-triangular solve: X_D=den_D⁻¹num_D (=expm),
+  X_F=den_D⁻¹(num_F−den_F·X_D); squaring maps to (D,F)→(D²,DF+FD).
+- CORRECTNESS vs the old 2n×2n reference: expm block **0.00e0 (bit-identical)**, Fréchet 1.3e-15..3.1e-15; suite **496/0**.
+- MEASURED: **n=50 1045→325µs=3.22× self, n=100 6608→2752µs=2.40×**. Vs scipy: **n=50 flips 1.78× loss → 1.81× WIN**
+  (325 vs 588µs), **n=100 1.76× → 1.36× WIN** (2752 vs 3748µs). Lifts expm_cond (uses expm_frechet). Own file: lib.rs.
+- LEVER (generalizes cosm's): a matrix fn via the top block of expm/f of a block-TRIANGULAR embedding [[A,E],[0,A]]
+  (Fréchet) or block-scalar [[0,±A],[A,0]] (cos/sin/cosh/sinh) → collapse the 2n×2n Padé to n×n block-pair arithmetic
+  (D,F) or (real,complex); matmuls stay n×n, ~2.5-4× fewer flops than the embedding AND than scipy's per-fn method.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: coshm/sinhm share the A² Padé powers between expm(A) & expm(−A) — ~1.4× self, flips n=50 to 1.23-1.25× WIN vs scipy (BIT-IDENTICAL)
 
 - Third matrix-fn win. coshm/sinhm each called `expm_pade_scaling_squaring` TWICE (on A and −A) = ~12 matmuls. But
