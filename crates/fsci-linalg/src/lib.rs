@@ -4873,14 +4873,14 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
             let nthreads = matmul_thread_count(m2, nb, m2);
             let (_, trailing) = lower.split_at_mut(kb);
             if nthreads <= 1 {
-                cholesky_syrk_rows(trailing, 0, l21_ref, l21t_ref, nb, kb, m2);
+                cholesky_syrk_rows(trailing, 0, l21_ref, l21t_ref, nb, kb);
             } else {
                 let chunk = m2.div_ceil(nthreads);
                 std::thread::scope(|scope| {
                     for (t, rows) in trailing.chunks_mut(chunk).enumerate() {
                         let row_offset = t * chunk;
                         scope.spawn(move || {
-                            cholesky_syrk_rows(rows, row_offset, l21_ref, l21t_ref, nb, kb, m2)
+                            cholesky_syrk_rows(rows, row_offset, l21_ref, l21t_ref, nb, kb)
                         });
                     }
                 });
@@ -17344,20 +17344,29 @@ fn wide_pinv_left_inverse_max_error_rows(
     Some(max_error)
 }
 
-/// Transpose-pack the panel: `l21t[p*m2 + j] = l21[j*nb + p]` (`nb × m2`, row-major in `p`).
-/// This lets the SYRK trailing update stream 8 OUTPUT columns per SIMD load and broadcast the
-/// lhs scalar `l21[i][p]` — a 4-accumulator micro-kernel that FITS the register file (the
-/// dot-product formulation's 16 wide accumulators spilled and ran 0.70×). Packed once per
-/// panel and amortised over the O(m2²·nb) update. Contiguous writes to `l21t`, strided reads.
+/// BLIS-style panel-pack of the panel into 8-column micro-panels:
+/// `packed[panel*nb*8 + p*8 + w] = l21[(panel*8 + w)*nb + p]` (zero-padded past `m2`).
+/// The SYRK micro-kernel streams 8 OUTPUT columns per SIMD load and broadcasts the lhs scalar
+/// `l21[i][p]`, so with this layout the kernel's inner `p`-loop reads a CONTIGUOUS `nb*8` block
+/// (8 KiB, L1-resident) — sequential cache lines instead of the `m2`-strided transpose, which
+/// touched a fresh line per `p`. A 4-accumulator kernel that FITS the register file (the
+/// dot-product 4×4 formulation's 16 wide accumulators spilled and ran 0.70×). Packed once per
+/// panel, amortised over the O(m2²·nb) update.
 fn pack_l21_transpose(l21: &[f64], m2: usize, nb: usize) -> Vec<f64> {
-    let mut t = vec![0.0f64; nb * m2];
-    for p in 0..nb {
-        let dst = &mut t[p * m2..p * m2 + m2];
-        for (j, d) in dst.iter_mut().enumerate() {
-            *d = l21[j * nb + p];
+    let npanels = m2.div_ceil(8);
+    let mut packed = vec![0.0f64; npanels * nb * 8];
+    for panel in 0..npanels {
+        let jbase = panel * 8;
+        let out = &mut packed[panel * nb * 8..(panel + 1) * nb * 8];
+        for p in 0..nb {
+            let dst = &mut out[p * 8..p * 8 + 8];
+            for (w, d) in dst.iter_mut().enumerate() {
+                let j = jbase + w;
+                *d = if j < m2 { l21[j * nb + p] } else { 0.0 };
+            }
         }
     }
-    t
+    packed
 }
 
 /// `row[col..col+8] -= c` (8-wide).
@@ -17405,7 +17414,6 @@ fn cholesky_syrk_rows(
     l21t: &[f64],
     nb: usize,
     kb: usize,
-    m2: usize,
 ) {
     let m = rows.len();
     let mut base = 0;
@@ -17417,14 +17425,17 @@ fn cholesky_syrk_rows(
         let a2 = &l21[(ii + 2) * nb..(ii + 2) * nb + nb];
         let a3 = &l21[(ii + 3) * nb..(ii + 3) * nb + nb];
         // Full 4×8 tiles strictly below the diagonal: `j + 8 <= ii` keeps every column < ii.
+        // `j` is 8-aligned so it maps to micro-panel `j/8`, whose `nb*8` block is contiguous.
         let mut j = 0;
         while j + 8 <= ii {
+            let pbase = (j / 8) * nb * 8;
+            let panel = &l21t[pbase..pbase + nb * 8];
             let mut c0 = Simd::<f64, 8>::splat(0.0);
             let mut c1 = Simd::<f64, 8>::splat(0.0);
             let mut c2 = Simd::<f64, 8>::splat(0.0);
             let mut c3 = Simd::<f64, 8>::splat(0.0);
             for p in 0..nb {
-                let bvec = Simd::<f64, 8>::from_slice(&l21t[p * m2 + j..p * m2 + j + 8]);
+                let bvec = Simd::<f64, 8>::from_slice(&panel[p * 8..p * 8 + 8]);
                 c0 += Simd::splat(a0[p]) * bvec;
                 c1 += Simd::splat(a1[p]) * bvec;
                 c2 += Simd::splat(a2[p]) * bvec;
@@ -18018,14 +18029,14 @@ fn cholesky_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
             let nthreads = matmul_thread_count(m2, nb, m2);
             let (_, lower) = a.split_at_mut(kb);
             if nthreads <= 1 {
-                cholesky_syrk_rows(lower, 0, l21_ref, l21t_ref, nb, kb, m2);
+                cholesky_syrk_rows(lower, 0, l21_ref, l21t_ref, nb, kb);
             } else {
                 let chunk = m2.div_ceil(nthreads);
                 std::thread::scope(|scope| {
                     for (t, rows) in lower.chunks_mut(chunk).enumerate() {
                         let r0 = t * chunk;
                         scope.spawn(move || {
-                            cholesky_syrk_rows(rows, r0, l21_ref, l21t_ref, nb, kb, m2)
+                            cholesky_syrk_rows(rows, r0, l21_ref, l21t_ref, nb, kb)
                         });
                     }
                 });
