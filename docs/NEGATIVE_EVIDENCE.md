@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - WALLS MAPPED (don't re-chase): matrix-fn collapse vein COMPLETE; remaining linalg/integrate/signal gaps are library/kernel walls
+
+- After the 4-commit matrix-function collapse vein (expm Padé, cosm/sinm, coshm/sinhm, expm_frechet — all below), mapped
+  the remaining candidates so they aren't re-hunted:
+  - **sqrtm / logm / fractional_matrix_power / funm / signm**: Schur-Parlett; bounded by nalgebra's Schur decomposition
+    (`matrix.schur()`) vs LAPACK dgees — a kernel-quality WALL (like the documented dense-LAPACK gaps). logm/signm
+    already WIN (scipy's are Python-Schur-slow); sqrtm ~2× is the Schur wall.
+  - **solve_sylvester / solve_lyapunov / solve_*_lyapunov**: ALREADY OPTIMAL — Bartels-Stewart (Schur + column-sweep
+    back-substitution), matches scipy/LAPACK O(n·m²). Comment at the fn confirms it deliberately avoids the Kronecker
+    O((mn)³). Don't touch.
+  - **solve_continuous/discrete_are** (Riccati): 2n×2n Hamiltonian Schur/eig — nalgebra-Schur WALL.
+  - **expm_cond**: builds the n²×n² Kronecker form then `svdvals(K)` = O(n⁶) SVD, which DOMINATES (n=50 K is 2500×2500).
+    Bounded by nalgebra SVD vs LAPACK — WALL. (Hoisting the A-invariant Padé out of its n² expm_frechet calls is only
+    ~1.5× and not the bottleneck; the SVD is.)
+  - **fsci-integrate**: gauss_legendre nodes = CACHED Newton O(n²) (same as scipy roots_legendre); quad/fixed_quad/
+    romberg/tanhsinh are callback-bound (compiled fsci beats scipy's Python callback). Well-optimized, no clean gap.
+  - **fsci-signal filter design** (butter/cheby/ellip/bessel/iirfilter/firwin): small compiled computations at typical
+    orders → beat scipy's Python overhead (WINS). Gaps only in the C-backed ops (lfilter/sosfilt = documented mem-BW
+    wall; FFT ops = pocketfft, mostly done).
+- CONCLUSION: the readily-accessible clean ALGORITHMIC gaps (fsci using a worse algorithm than a scipy C routine) in
+  special/fft/linalg/integrate/signal are now largely mined out. Remaining losses are library/kernel WALLS: LAPACK
+  dgemm (par_dmatmul, the n=100 matrix-fn residuals), nalgebra Schur/SVD (sqrtm/logm/are/expm_cond), pocketfft (fft/dct
+  pow2 kernel), Qhull, C-chamfer. NEXT DEDICATED HUNT (needs a fresh build + API discovery, not a quick per-crate
+  bench): fsci-optimize solver internals (root/minimize step logic), fsci-spatial distance/query kernels, or a genuine
+  attack on a wall (SIMD pow2 FFT kernel; a par_dmatmul that matches dgemm at n≈100 via better microkernel/blocking).
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: expm_frechet 2n×2n → block-triangular n×n Padé — 2.40-3.22× self, FLIPS 1.78× loss → 1.36-1.81× WIN vs scipy
 
 - Fourth matrix-fn win. expm_frechet took the top row of `expm([[A,E],[0,A]])` (2n×2n), a Padé doing 6 matmuls at 8×
