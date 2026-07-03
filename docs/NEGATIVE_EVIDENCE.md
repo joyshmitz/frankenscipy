@@ -6,6 +6,24 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: fsci-stats StudentizedRange.ppf & GeneralizedExponential.ppf bisection → illinois_root_increasing — 2.43× / 3.46× self
+
+- Two per-distribution ppf inverses in fsci-stats still ran fixed-count PLAIN BISECTION while the crate
+  already had `illinois_root_increasing` (used by NormInvGauss.ppf). Reduced each to a monotone-increasing
+  root g(x)=0 with g(lo)<0≤g(hi) from the existing doubling bracket and handed to that helper.
+- **StudentizedRange.ppf** (100-step bisection over an EXPENSIVE double adaptive-Simpson cdf): **802.6 →
+  330.9ms = 2.43× self** over a (k∈{3,5}, df=10, p∈{.5,.9,.95,.99}) grid. The cdf is *adaptive* quadrature,
+  so per-probe cost varies (the exact hazard behind the reverted skewnorm change) — yet illinois's ~12 vs ~40
+  evals still wins clearly. Root converges to ~4·eps (tighter than the old 1e-10 bracket), so it is the
+  more-accurate side: max diff 1.98e-10 vs old bisection, far inside the studentized-range scipy-ref tests.
+- **GeneralizedExponential.ppf** (fixed 60-step bisection over the cheap constant-cost sf): **2269 → 656ns =
+  3.46× self**, max diff 5.00e-16 vs old (effectively byte-identical). Kept the sf form g=(1−q)−sf(x) for
+  q→1 tail accuracy.
+- Both new≡old to within their tolerances, so the existing scipy-reference ppf tests still hold; full
+  fsci-stats suite green (rch/hz2). Own files: fsci-stats/src/lib.rs + this ledger. Same lever as the
+  special-crate btdtria/btdtrib and chndtridf illinois passes; gotcha (probe-dependent cdf cost) checked and
+  cleared for both.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: btdtria/btdtrib invert_monotone_positive pure-bisection → illinois_root — 3.81× self
 
 - `invert_monotone_positive` (the shape-parameter inverse used ONLY by btdtria/btdtrib) still ran up to 180

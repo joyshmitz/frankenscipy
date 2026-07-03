@@ -2964,20 +2964,18 @@ impl ContinuousDistribution for GeneralizedExponential {
             return f64::INFINITY;
         }
         let target = 1.0 - q;
-        let mut lo = 0.0_f64;
+        let lo = 0.0_f64;
         let mut hi = 100.0_f64;
-        while self.sf(hi) > target && hi < 1e10 {
+        let mut fhi = target - self.sf(hi);
+        while fhi < 0.0 && hi < 1e10 {
             hi *= 2.0;
+            fhi = target - self.sf(hi);
         }
-        for _ in 0..60 {
-            let mid = 0.5 * (lo + hi);
-            if self.sf(mid) > target {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        0.5 * (lo + hi)
+        // sf is monotone DECREASING, so g(x) = (1−q) − sf(x) is increasing with
+        // g(0) = −q < 0 ≤ fhi (sf(0) = 1). Keeping the sf form (not cdf−q) stays
+        // tail-accurate for q→1. Illinois converges in ~12 evals vs the former
+        // fixed 60 bisection steps of this repeated exp kernel.
+        illinois_root_increasing(|x| target - self.sf(x), lo, hi, -q, fhi)
     }
 
     fn mean(&self) -> f64 {
@@ -4240,23 +4238,18 @@ impl StudentizedRange {
         if p >= 1.0 {
             return f64::INFINITY;
         }
-        let mut lo = 0.0_f64;
+        let lo = 0.0_f64;
         let mut hi = 1.0_f64;
-        while self.cdf(hi) < p && hi < 1e6 {
+        let mut fhi = self.cdf(hi) - p;
+        while fhi < 0.0 && hi < 1e6 {
             hi *= 2.0;
+            fhi = self.cdf(hi) - p;
         }
-        for _ in 0..100 {
-            let mid = 0.5 * (lo + hi);
-            if self.cdf(mid) < p {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-            if hi - lo < 1e-10 * (1.0 + hi) {
-                break;
-            }
-        }
-        0.5 * (lo + hi)
+        // cdf(0) = 0 (guarded above), so f(lo) = -p < 0 ≤ fhi and the
+        // studentized-range cdf is monotone increasing in q. Illinois converges
+        // superlinearly (~12 evals) vs the former ~40 bisection steps — each eval
+        // is an expensive adaptive-Simpson double integral, so fewer wins.
+        illinois_root_increasing(|x| self.cdf(x) - p, lo, hi, -p, fhi)
     }
 }
 
