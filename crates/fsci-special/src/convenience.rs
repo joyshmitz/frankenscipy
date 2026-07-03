@@ -1483,9 +1483,9 @@ fn modstruve_asymptotic(v: f64, x: f64) -> f64 {
 /// as integrating to the positive endpoint.
 pub fn itstruve0(x: f64) -> f64 {
     // For |x| ≤ 16 integrate the Struve H_0 series term-by-term (closed form,
-    // ~1e-11 vs scipy) instead of running a 256·|x|-step Simpson quadrature that
-    // re-evaluates struve() at every node. Beyond 16 the alternating series loses
-    // digits to cancellation, so fall back to the (accuracy-preserving) quadrature.
+    // ~1e-11 vs scipy) instead of running a Simpson quadrature that re-evaluates
+    // struve() at every node. Beyond 16 the alternating series loses digits to
+    // cancellation, so fall back to the (accuracy-preserving) quadrature.
     if x.abs() <= STRUVE_INT_SERIES_MAX {
         struve0_integral_series(x, -1.0)
     } else {
@@ -2048,8 +2048,15 @@ where
         return 0.0;
     }
 
-    let raw_steps = (256.0 * upper.max(1.0)).ceil() as usize;
-    let steps = raw_steps.clamp(256, 32_768);
+    // The Struve integrands oscillate with period ~2π (or, for L₀, rise smoothly),
+    // so the old 256·|x| Simpson density was ~1600 points per oscillation — wildly
+    // over-resolved. 64·|x| is ~400/oscillation: worst quadrature error vs
+    // high-precision (mpmath) ground truth is 7.4e-11 for itstruve0 and 3.3e-10 for
+    // itmodstruve0 over x∈[16,127], while cutting the per-node struve()/modstruve()
+    // evaluations ~4×. (This path is already correct where SciPy's own itstruve0
+    // is inaccurate at large x — e.g. itstruve0(50)=3.2445, SciPy returns 6.30.)
+    let raw_steps = (64.0 * upper.max(1.0)).ceil() as usize;
+    let steps = raw_steps.clamp(64, 32_768);
     let steps = steps + (steps % 2);
     let h = upper / steps as f64;
 
@@ -13757,6 +13764,30 @@ mod tests {
             let tol = 2.0e-7 * expected.abs().max(1.0);
             assert!(
                 (actual - expected).abs() <= tol,
+                "{label} = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn struve_integral_large_x_matches_high_precision_truth() {
+        // |x| > 16 uses the Simpson quadrature (now 64·|x| steps, ~4× cheaper).
+        // References are high-precision (mpmath 20-digit) ground truth — NOTE
+        // SciPy's own itstruve0 is inaccurate here (itstruve0(50): truth 3.2445,
+        // SciPy 6.30), so these lock in fsci's correctness, not SciPy parity.
+        let cases: [(fn(f64) -> f64, f64, f64, &str); 7] = [
+            (itstruve0, 20.0, 2.548451692293957, "itstruve0(20)"),
+            (itstruve0, 50.0, 3.244522325991607, "itstruve0(50)"),
+            (itstruve0, 100.0, 3.720914252854685, "itstruve0(100)"),
+            (it2struve0, 20.0, 0.04030795889403845, "it2struve0(20)"),
+            (it2struve0, 50.0, 0.01378660549880537, "it2struve0(50)"),
+            (itmodstruve0, 20.0, 44758596.19878038, "itmodstruve0(20)"),
+            (itmodstruve0, 50.0, 2.962965929947215e20, "itmodstruve0(50)"),
+        ];
+        for &(func, x, expected, label) in &cases {
+            let actual = func(x);
+            assert!(
+                (actual - expected).abs() <= 1.0e-8 * expected.abs().max(1.0),
                 "{label} = {actual}, expected {expected}"
             );
         }

@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: struve integrals large-x Simpson 256·|x| → 64·|x| steps — ~4× self; + fsci CORRECT where SciPy itstruve0 is WRONG
+
+- itstruve0/it2struve0/itmodstruve0 for |x|>16 integrate struve()/modstruve() by fixed Simpson. The
+  integrands oscillate with period ~2π (or, for L₀, rise smoothly), so 256·|x| steps was ~1600 points per
+  oscillation — wildly over-resolved. Cut to 64·|x| (~400/oscillation): worst quadrature error vs mpmath
+  20-digit truth is 7.4e-11 (itstruve0) / 3.3e-10 (itmodstruve0) over x∈[16,127], ~4× fewer per-node
+  struve() evals (itstruve0(30) old ~720µs → new 181µs; (50)→333µs; (100)→666µs).
+- CORRECTNESS FINDING (mpmath-verified): **SciPy's own itstruve0 is inaccurate at large x** — itstruve0(50)
+  true = 3.24452 (fsci matches), SciPy returns 6.30; itstruve0(100) true 3.72091, SciPy 8.55. fsci's
+  quadrature is CORRECT there (matches ∫₀ˣ H₀ to <1e-8); it is slower than SciPy's fast-but-wrong
+  closed-form asymptotic in absolute µs, but right. New struve_integral_large_x_matches_high_precision_truth
+  (7 mpmath refs) locks this in.
+- SCOPE/HONEST: this is a self-speedup on a correct-but-slow niche path, NOT a SciPy-speed flip (fsci stays
+  slower in absolute µs because SciPy uses an O(1) asymptotic). A correct large-x asymptotic for the Struve
+  integrals would be the real flip (deferred — the derivation is involved). All 1135 fsci-special tests green.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: wright_bessel series streaming log_term (drop per-term gammaln) — 1.1-1.4× self, byte-equivalent
 
 - log_wright_bessel_series (Σ x^k/(k!·Γ(a·k+b)), up to 16 384 terms for a<0.1) recomputed gammaln(k+1)
