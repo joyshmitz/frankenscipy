@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: fsci-STATS ppf_bisection/isf_bisection → illinois_root — 2.6-6.2× self across 13+ distributions
+
+- FRESH CRATE (first fsci-stats win of this arc). The generic inverse-CDF/inverse-SF fallbacks
+  `ppf_bisection`/`isf_bisection` (used by ChiSquared, FDistribution, GammaDist, InverseGamma, Chi, Erlang,
+  Maxwell, HalfGenNorm, … — 13+ distributions via 27 call sites) ran a ~40-100-step bisection over the
+  distribution CDF (incomplete-gamma/beta — moderately expensive). Added a local `illinois_root_stats`
+  (with the endpoint-convergence NaN-seed fix) and routed both: CDF increasing → f=cdf−q; SF decreasing →
+  g=q−sf; both increasing with f(lo)≤0≤f(hi), the bracket already formed. Robust bisection fallback kept
+  for the unbracketed extreme tail.
+- MEASURED same box, old bisection timed directly vs new (BYTE-IDENTICAL results, chk == new to all
+  digits): gamma(2.5,1).ppf(0.8) 10.69→**1.73µs = 6.2× self**; invgamma(3).ppf(0.5) 2.98→0.49µs=6.0×;
+  f(3,10).ppf(0.6) 8.08→1.78µs=4.5×; chi2(5).ppf(0.7) 4.12→1.57µs=2.6×. vs scipy.stats `.ppf`
+  (55-63µs incl. its Python wrapper) fsci is 0.49-1.78µs = ~30-120× faster absolute.
+- Verification: new ppf_isf_bisection_illinois_matches_scipy_reference_points (5 scipy refs + cdf(ppf(q))
+  round-trips) + all 2008 fsci-stats tests green (rch/hz2). The bisection→illinois lever is CROSS-CRATE
+  (special: pdtrik/chndtrix/tklmbda/smirnovi; now stats ppf/isf). One helper edit lifts all callers.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: struve integrals large-x Simpson 256·|x| → 64·|x| steps — ~4× self; + fsci CORRECT where SciPy itstruve0 is WRONG
 
 - itstruve0/it2struve0/itmodstruve0 for |x|>16 integrate struve()/modstruve() by fixed Simpson. The
