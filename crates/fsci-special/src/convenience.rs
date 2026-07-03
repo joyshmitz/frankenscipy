@@ -6259,24 +6259,26 @@ pub fn smirnov(n: i32, d: f64) -> f64 {
     let nf = n as f64;
 
     if n < 1000 {
-        // Exact Birnbaum-Tingey series. Compute terms in log-space to
-        // avoid overflow of C(n, v) for n up to ~1000.
+        // Exact Birnbaum-Tingey series. Compute terms in log-space to avoid
+        // overflow of C(n, v). Stream log C(n, v) by the ratio recurrence
+        //   log C(n, v+1) = log C(n, v) + ln(n − v) − ln(v + 1),
+        // so each term costs two `ln` instead of two `gammaln` (~5-10× cheaper
+        // per term); the dominant cost of this O(n) series. frankenscipy.
         let m = ((nf * (1.0 - d)).floor() as i64).max(0);
-        let lgam_np1 = crate::gammaln_scalar(nf + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN);
         let mut sum = 0.0_f64;
+        let mut log_binom = 0.0_f64; // log C(n, 0) = 0
         for v in 0..=m {
             let vf = v as f64;
             let evn = d + vf / nf;
-            if evn >= 1.0 {
-                // (1 − d − v/n) ≤ 0; no real contribution.
-                continue;
+            if evn < 1.0 {
+                // (1 − d − v/n) > 0; otherwise no real contribution.
+                let omevn = 1.0 - evn;
+                let log_term = log_binom + (vf - 1.0) * evn.ln() + (nf - vf) * omevn.ln();
+                sum += log_term.exp();
             }
-            let omevn = 1.0 - evn;
-            let log_binom = lgam_np1
-                - crate::gammaln_scalar(vf + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
-                - crate::gammaln_scalar(nf - vf + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN);
-            let log_term = log_binom + (vf - 1.0) * evn.ln() + (nf - vf) * omevn.ln();
-            sum += log_term.exp();
+            if v < m {
+                log_binom += (nf - vf).ln() - (vf + 1.0).ln();
+            }
         }
         return (sum * d).clamp(0.0, 1.0);
     }

@@ -6,6 +6,18 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: smirnov Birnbaum-Tingey series streaming binomial (per-term gammaln → ln recurrence) — 1.3-2.2× self, lifts smirnovi
+
+- The smirnov (one-sided KS CDF) exact series recomputed two `gammaln` per term for log C(n,v). Streamed it
+  by the ratio recurrence `log C(n,v+1) = log C(n,v) + ln(n−v) − ln(v+1)` → two cheap `ln` per term
+  instead (gammaln is ~5-10× costlier). Numerically equivalent (byte-verified chk in probe; matches to the
+  printed 12 digits; ~1e-13 log drift, well inside the 1e-9 test).
+- MEASURED same box, old gammaln series timed directly vs new: smirnov(50,0.1) 6.28→**2.82µs = 2.2×
+  self**; (20,0.3) 0.74→0.34µs=2.2×; (200,0.1) 7.58→4.35µs=1.7×; (500,0.05) 18.1→11.4µs=1.6×; (100,0.05)
+  1.3×. Also COMPOUNDS onto my earlier smirnovi illinois win (it calls smirnov ~13×).
+- vs SciPy (1.17.1, same box): scipy.special.smirnov is 32-565µs (its exact path is slow); fsci new is
+  0.34-11.4µs = **~11-27× FASTER** — already ahead, now further. All 1133 fsci-special tests green (rch/hz2).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: smirnovi ~53-step bisection → illinois_root — 2.2-4.5× self, 2.9-3.8× WIN vs SciPy
 
 - smirnovi (inverse one-sided KS / Smirnov distribution) inverted smirnov(n,·) — an O(n) Birnbaum-Tingey
