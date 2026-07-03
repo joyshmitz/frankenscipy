@@ -6,6 +6,21 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - MEASURED LEAD (upgrades recalled deep-target): fsci-fft vs numpy size-class map — factor-7 sizes 2.27× slower, larger pow2/composite 1.3× (pocketfft kernel wall)
+
+- Benched fsci `fft` vs `numpy.fft.fft` isolated same box (20-warm, 800-2000 reps) across size classes. Result map
+  (fsci / numpy, >1 = fsci slower):
+  - **WINS**: n=1024 pow2 0.94×, n=1000 5-smooth 0.78×, n=1500 5-smooth 0.76×, n=2048 pow2 0.87×, n=1013 prime 0.90×,
+    n=2099 prime ~parity. So small pow2, 5-smooth, and primes (Rader/Bluestein) all match or beat numpy.
+  - **LOSSES**: **n=2100 (2²·3·5²·7) = 2.27× SLOWER** (48.1µs vs 21.2µs) — the factor 7 excludes it from the fast
+    `{3,5}·2^k` iterative path (`mixed_radix_iterative_odd_power_tail`), dropping it to the general recursive
+    `mixed_radix_fft` with strided odd-prime combines. n=4000/4096/7776/8192 = 1.13-1.36× slower.
+- Root causes (read the code, not a quick fix): (1) **no radix-7 (or 7-smooth) iterative kernel** — any factor >5 falls
+  off the fast path; (2) **pow2 ≥4096 is single-threaded** (par gate is n<2²⁰) and just loses to pocketfft's better
+  cache-blocking/SIMD by ~1.2-1.3× — a kernel-quality wall. Bluestein does NOT rescue n=2100 (pads to ~4320 5-smooth
+  ≈50µs + chirp/2-FFT overhead > 48µs). Closing these = the documented multi-day FFT deep target (add a 7-smooth
+  iterative butterfly; tighten the pow2 kernel toward pocketfft). No quick gate/routing win exists. Nothing shipped.
+
 ## 2026-07-03 - BlackThrush (cc) - EXHAUSTED: exotic special-fn surface swept (40 fns), all FASTER than SciPy except the mathieu 2× wall — special anomaly-hunt CLOSED
 
 - Second exotic batch benched isolated (300-warmup, 30k reps) vs SciPy same box: **every function is 12-199× FASTER
