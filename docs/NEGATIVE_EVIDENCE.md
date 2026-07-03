@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: spheroidal_rad1 per-term spherical-Bessel → one Miller downward pass — 3.77× self, flips obl_rad1 loss to win
+
+- The broad fsci-vs-SciPy bench flagged obl_rad1 as the ONE spheroidal near-loss (50µs = 1.05× SLOWER than
+  SciPy, while pro_rad1 1.2× and obl_ang1 2.3× already won). spheroidal_rad1's series
+  `R = Σ_k φ_k w_k d_k j_{m+r_k}(cx)` called `sph_jn(l, cx)` (→ spherical_jn_scalar) FRESH for every
+  coefficient — each an O(l) Bessel recurrence, so O(dim²) over the ~dim harmonics (l = m, m+2, … up to
+  m+2·dim). The "fresh special-fn per series term → use the recurrence" lever (cf. Skellam/chndtr).
+- Added `sphj_arr(nmax, x)`: ONE Miller DOWNWARD recurrence `j_{l-1}=(2l+1)/x·j_l−j_{l+1}` (the stable
+  direction for l>x; upward blows up), seeded above nmax, normalized by exact `j_0=sin x/x`, yielding the
+  whole j_l AND j_l' ladders in O(nmax). Validated in a Python prototype vs scipy.spherical_jn to 8.8e-14
+  (x∈[0.3,80], l≤80, incl. 1e-63 tail). spheroidal_rad1 now indexes the arrays.
+- MEASURED same box (8 pro/obl cases): **115.4 → 30.6µs = 3.77× self**, max diff 1.24e-12 vs the per-term
+  reference (well inside the spheroidal ~1e-8 accuracy). Flips obl_rad1 from 1.05× SLOWER to ~2.7× FASTER vs
+  SciPy; lifts obl_rad1/pro_rad1 + their `_cv` variants. Removed the now-dead sph_jn/sph_jn_deriv +
+  unused import. Full fsci-special suite green (rch/hz2). Own file: orthopoly.rs + this ledger.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: spheroidal_cv/coefficients over-conservative +50 mode margin → +16 — pro_cv/obl_cv ~2.85× self
 
 - Generalization of the mathieu margin win to the spheroidal wave functions. `spheroidal_cv` (behind
