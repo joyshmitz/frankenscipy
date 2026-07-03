@@ -17426,6 +17426,7 @@ fn cholesky_syrk_rows(
         let a3 = &l21[(ii + 3) * nb..(ii + 3) * nb + nb];
         // Full 4×8 tiles strictly below the diagonal: `j + 8 <= ii` keeps every column < ii.
         // `j` is 8-aligned so it maps to micro-panel `j/8`, whose `nb*8` block is contiguous.
+        // (MR=4 measured faster than MR=6 here — 6 accumulators + broadcasts pressured AVX2.)
         let mut j = 0;
         while j + 8 <= ii {
             let pbase = (j / 8) * nb * 8;

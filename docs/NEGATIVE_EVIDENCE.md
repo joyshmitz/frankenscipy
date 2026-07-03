@@ -14400,3 +14400,22 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   rewrite isn't the right lever there either. Left as-is. (A cleaner future option for cem/sem alone: a LOOSE
   eigenvalue shift — fewer bisection steps — since inverse iteration corrects it; ~1.5-2× without touching
   mathieu_a/b accuracy. Also deferred — moderate gain, doesn't fully flip the 2.4×.)
+
+## 2026-07-03 - BlackThrush (cc) - dense cholesky SYRK GEMM campaign (WALL PARTIALLY BROKEN — 1.32x, ongoing)
+
+- The dense cholesky is the biggest measured gap vs LAPACK (~3-8x). Its dominant cost is the trailing SYRK
+  A22 -= L21·L21ᵀ. Prior sessions declared it a 0-gain wall. It is NOT — broken in two shipped commits:
+  - 5d4d40f5: dot-product kernel → cache-PACKED broadcast micro-kernel (transpose l21, 4-row×8-col tile,
+    4 f64x8 accumulators, broadcast lhs scalar). The register-FITTING GEMM shape — the naive register-tiled
+    4×4 DOT kernel first tried made it WORSE (0.70x): 16 wide f64x8 accumulators spill AVX2's 16 ymm. 1.19x.
+  - b076e66f: BLIS-style 8-column panel-pack (packed[panel*nb*8 + p*8 + w]) so the inner p-loop reads a
+    CONTIGUOUS nb*8 = 8KiB L1-resident block instead of the m2-strided transpose → 1.32x. max diff 3.6e-15
+    (reassociation; Cholesky factor unique, validated to 1e-10, 496/0 linalg suite).
+- MEASURED NEGATIVES (don't re-try): (a) register-tiled 4×4 DOT kernel 0.70x (accumulator spill). (b) MR=6
+  micro-kernel 1.26x < MR=4's 1.32x — 6 accumulators + broadcasts pressure AVX2 and cut ILP; MR=4 is the
+  sweet spot on this (non-AVX-512) target. Kernel is memory-bandwidth-bound at ~8 GFLOP/s.
+- NEXT LEVERS (untried): jc/ic cache-blocking (keep a panel-block resident across row-blocks — the real
+  GEMM 3-loop blocking, triangular-boundary complexity); apply the same packed broadcast kernel to the
+  general dense matmul / TRSM / LU if they use dot-based kernels. LESSON: "0-gain wall" was FALSE — the
+  radical primitive (cache-packed register-fitting GEMM kernel) beats the dot-product formulation; prior
+  naive attempts failed on register spill, not because the wall is real.
