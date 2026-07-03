@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: wofz (Faddeeva) |z|∈[0.5,4] → Weideman rational — flips 2-4× SciPy LOSS to parity-1.2× WIN
+
+- A wofz timing probe by region found the |z|∈[1,4] band was the slow spot: the erf-Maclaurin series path
+  ran 0.49-0.91µs vs scipy's Faddeeva ~0.22µs (2-4× LOSS), while the CF (4-8) and asymptotic (≥8) already
+  beat scipy. Replaced |z|∈[0.5,4) with Weideman's (1994) rational approximation: one Horner pass over 32
+  precomputed coeffs + a Möbius map (uniformly accurate on the UHP, no near-real-axis pole). Kept the
+  erf-series for |z|<0.5 (converges in ~2-3 terms there — Weideman's fixed 32 terms would REGRESS it, caught
+  by the region probe) and the CF/asymptotic for |z|≥4.
+- MEASURED same box (scipy 1.17.1): wofz(2+3i) |z|=3.6 0.91→**0.177µs = 5.1× self, 1.2× > scipy**;
+  wofz(0.5+0.5i) |z|=0.7 0.49→0.275µs=1.8×, ~parity scipy; |z|<0.5 and |z|≥4 unchanged (no regression).
+- Accuracy: Weideman N=32 worst rel err 2.3e-13 over |z|<4 (scipy's own wofz is ~1e-13); the pre-existing
+  complex-wofz tests use 5e-8. New wofz_weideman_region_matches_scipy (7 scipy refs incl. near-real-axis
+  im=0.001) asserted to 1e-11 + all 1136 fsci-special tests green (rch/hz2). Lifts voigt_profile too.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: LogSeries.cdf streams p^i (drops per-term powf) — 5.7-14.5× self (byte-identical)
 
 - LogSeries.cdf summed Σ_{i=1}^k p^i/(i·norm) with a FRESH `p.powf(i)` per term ⇒ O(k) powf calls. Streamed
