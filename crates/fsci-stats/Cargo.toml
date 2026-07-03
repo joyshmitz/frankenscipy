@@ -8,6 +8,7 @@ license.workspace = true
 fsci-runtime = { workspace = true }
 fsci-special = { workspace = true }
 fsci-opt = { workspace = true }
+fsci-integrate = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]

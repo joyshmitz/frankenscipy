@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: NormInvGauss.cdf uniform-Simpson → adaptive Gauss-Kronrod (fsci_integrate::quad) — 16.5× cdf, flips 3.6× loss → 5× WIN
+
+- A stats-distribution bench found NormInvGauss (NIG) cdf = **940µs**, ppf = **11.4ms** — catastrophic (3.6×
+  and 2× SLOWER than scipy). Root cause: NIG.cdf integrated its smooth UNIMODAL Bessel-K pdf with
+  `simpson_integrate_adaptive`, which UNIFORMLY doubles the grid (NOT true-adaptive) — so resolving the peak
+  over the wide [mean−20σ, x] window took ~8000 pdf(=Bessel-K) evals, most wasted in the flat tail.
+- Swapped both integrals to `fsci_integrate::quad` (QUADPACK-style adaptive Gauss-Kronrod, already used by
+  fsci-special; added the workspace dep to fsci-stats) at epsrel=1e-10 — it concentrates nodes at the peak.
+- MEASURED same box: cdf **898 → 54µs = 16.5× self** (now ~5× FASTER than scipy's 263µs, was 3.6× slower);
+  ppf **11.4ms → 773µs = ~15×** (now ~7.4× FASTER than scipy's 5.7ms, was 2× slower — ppf = illinois × cdf,
+  so the cdf fix lifts it). Accuracy UNCHANGED: cdf 4.9e-10 vs scipy (identical old/new), ppf 7.5e-14. Full
+  fsci-stats suite green (rch/hz2). Own files: fsci-stats/{Cargo.toml, lib.rs} + this ledger.
+- LEVER: a distribution cdf/sf that integrates a peaked pdf with UNIFORM-grid Simpson over a wide window →
+  true-adaptive Gauss-Kronrod (`fsci_integrate::quad`) concentrates nodes at the peak = 10-30× fewer evals at
+  the same tol. fsci-stats has 57 `simpson_integrate_adaptive` sites — audit the ones over peaked/wide-window
+  integrands (other continuous-dist cdfs w/ special-fn pdfs) for the same swap.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: kelvin_zeros_of 80-step bisection → illinois_root — 3.02× self (lifts all 8 Kelvin zeros)
 
 - The misc bench flagged kelvin_zeros(10) = **3.67ms = 27× SLOWER** than SciPy (136µs). All 8 `*_zeros`
