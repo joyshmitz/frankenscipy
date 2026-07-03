@@ -4828,36 +4828,33 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
     while k < n {
         let kb = (k + NB).min(n);
         for j in k..kb {
-            let mut d = lower[j][j];
-            for p in k..j {
-                d -= lower[j][p] * lower[j][p];
-            }
+            // Diagonal: d = A[j][j] − Σ_{p<j} L[j][p]². The inner reductions here and in
+            // the two TRSM loops below were scalar over `p`; each is a `simd_dot` of two
+            // row slices `L[·][k..j]` (byte-close reassociation — the Cholesky factor is
+            // unique, validated to 1e-10). Immutable slice borrows end before each write.
+            let d = lower[j][j] - simd_dot(&lower[j][k..j], &lower[j][k..j]);
             if d <= 0.0 || !d.is_finite() {
                 return None;
             }
             let ljj = d.sqrt();
             lower[j][j] = ljj;
             for i in (j + 1)..kb {
-                let mut s = lower[i][j];
-                for p in k..j {
-                    s -= lower[i][p] * lower[j][p];
-                }
-                lower[i][j] = s / ljj;
-                if !lower[i][j].is_finite() {
+                let dot = simd_dot(&lower[i][k..j], &lower[j][k..j]);
+                let val = (lower[i][j] - dot) / ljj;
+                if !val.is_finite() {
                     return None;
                 }
+                lower[i][j] = val;
             }
         }
         for i in kb..n {
             for j in k..kb {
-                let mut s = lower[i][j];
-                for p in k..j {
-                    s -= lower[i][p] * lower[j][p];
-                }
-                lower[i][j] = s / lower[j][j];
-                if !lower[i][j].is_finite() {
+                let dot = simd_dot(&lower[i][k..j], &lower[j][k..j]);
+                let val = (lower[i][j] - dot) / lower[j][j];
+                if !val.is_finite() {
                     return None;
                 }
+                lower[i][j] = val;
             }
         }
         if kb < n {
@@ -17983,32 +17980,26 @@ fn cholesky_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     while k < n {
         let kb = (k + NB).min(n);
         // (1) Unblocked Cholesky on the diagonal block (rows/cols k..kb).
+        // The inner reductions here and in the panel-solve loop below were scalar
+        // over `p`; each is a `simd_dot` of two row slices `a[·][k..j]` (byte-close
+        // reassociation — the Cholesky factor is unique, validated to 1e-10).
         for j in k..kb {
-            let mut d = a[j][j];
-            for p in k..j {
-                d -= a[j][p] * a[j][p];
-            }
+            let d = a[j][j] - simd_dot(&a[j][k..j], &a[j][k..j]);
             if d <= 0.0 || d.is_nan() {
                 return None; // not positive definite (or NaN) -> fall back
             }
             let ljj = d.sqrt();
             a[j][j] = ljj;
             for i in (j + 1)..kb {
-                let mut s = a[i][j];
-                for p in k..j {
-                    s -= a[i][p] * a[j][p];
-                }
-                a[i][j] = s / ljj;
+                let dot = simd_dot(&a[i][k..j], &a[j][k..j]);
+                a[i][j] = (a[i][j] - dot) / ljj;
             }
         }
         // (2) Panel solve: A21 = A21 · L11^-T for rows kb..n, cols k..kb.
         for i in kb..n {
             for j in k..kb {
-                let mut s = a[i][j];
-                for p in k..j {
-                    s -= a[i][p] * a[j][p];
-                }
-                a[i][j] = s / a[j][j];
+                let dot = simd_dot(&a[i][k..j], &a[j][k..j]);
+                a[i][j] = (a[i][j] - dot) / a[j][j];
             }
         }
         // (3) Trailing update A22 -= L21 · L21ᵀ as a symmetric rank-nb update (SYRK).

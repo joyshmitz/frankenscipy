@@ -6,6 +6,21 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: blocked Cholesky panel+TRSM scalar dot → simd_dot — 1.38× on the FULL factorization (byte-close 2.8e-14)
+
+- After the SYRK trailing update was already GEMM-packed (785eaf6f, 1.32× on that block), the remaining scalar
+  cost in `cholesky_lower_blocked` was the panel factorization + two TRSM loops: three `for p in k..j { s -= L[i][p]*L[j][p] }`
+  dot-product reductions over row slices, run scalar. These are the diagonal self-dot, the intra-block TRSM, and
+  the trailing panel-solve `A21 = A21·L11^-T` (the last being ~25-40% of a whole block-step at NB=128).
+- Replaced all three with `simd_dot(&L[i][k..j], &L[j][k..j])` (the crate's existing 8-wide f64 SIMD dot).
+  Applied to BOTH callers: `cholesky_lower_blocked` (public factor path) and `cholesky_solve_blocked`.
+- MEASURED same box (rch/hz2), n=1200 SPD, scalar-panel vs simd-panel (BOTH on the new packed SYRK):
+  **63.6ms → 46.2ms = 1.38× self**, max_absdiff **2.8e-14** (byte-close — the Cholesky factor is unique, so the
+  reassociation is bounded; validated 1e-10 by golden tests). Full fsci-linalg suite **496 passed / 0 failed**.
+- Own file: crates/fsci-linalg/src/lib.rs + this ledger. LEVER: once a blocked factorization's trailing GEMM is
+  packed, its remaining scalar-dot TRSM/panel loops are the next 1.3-1.4×; route them through the SIMD dot. The
+  dot formulation is right HERE (short k..j slices, no reuse) whereas the SYRK block needed register-packing.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: ellip_normal/ellip_harm_2 hoist the s-invariant Lamé solve out of the quadrature — 168× / ~104× self (byte-identical)
 
 - Benching the un-measured harmonic functions found **ellip_normal = 91 MILLISECONDS per call** (ellip_harm_2
