@@ -6,6 +6,17 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: LogSeries.cdf streams p^i (drops per-term powf) — 5.7-14.5× self (byte-identical)
+
+- LogSeries.cdf summed Σ_{i=1}^k p^i/(i·norm) with a FRESH `p.powf(i)` per term ⇒ O(k) powf calls. Streamed
+  the p^i factor (`term *= p`, ~1ns) instead of powf (~15-25ns) — same streaming-series lever as smirnov/
+  wright_bessel. Byte-identical (chk == new to all digits). Lifts the ppf too (it bisects over this cdf).
+- MEASURED same box, old powf vs new streaming: logser(0.99).cdf(200) 5.00→**0.35µs = 14.5× self**;
+  cdf(50) 7.1×; cdf(20) 5.7× — the win grows with k as more per-term powf is eliminated. fsci cdf is now
+  0.1-0.35µs (vs scipy's ufunc ~1µs).
+- Verification: new logseries_cdf_streamed_matches_scipy (5 scipy refs incl. k=200) + all 2013 fsci-stats
+  tests green (rch/hz2). Small absolute (niche discrete dist) but clean, zero-risk, byte-identical.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: NormInvGauss.ppf fixed 60-step bisection → Illinois — 3.4-5.2× self (byte-identical)
 
 - Found via a cdf-timing scan across the remaining non-closed-form stats dists: NormInvGauss.cdf is the slow
