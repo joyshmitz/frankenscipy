@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - CHECKED (well-optimized, don't re-chase): fsci-spatial pdist — wins at scale 2.7-3.5×, narrow dim-2/3 serial soft-C-wall only
+
+- Benched pdist across 10 metrics + dims {2,3,4,8} × N {800,1500,4000} vs scipy.spatial.distance.pdist same box.
+  fsci pdist is THOROUGHLY optimized already: flat contiguous row-major buffer (not Vec<Vec> pointer-chase — the
+  `_ =>` generic arm flattens), parallel across pairs (`pdist_thread_count`, gate work≥2²⁰), dedicated SIMD dim-4
+  kernels, per-point precompute for cosine/correlation. **At N=4000 (parallel active) fsci CRUSHES scipy 2.7-3.5× on
+  ALL dims/metrics.** Also WINS jaccard 4.0×, canberra 1.6×, braycurtis 1.4×, and euclidean/dim-8 everywhere.
+- ONLY loss = a NARROW soft wall: dim=2/3, serial-N (~1500), sqeuclidean/cityblock ~1.3-1.6× (too few elements for
+  SIMD; scipy's C reduction loop is marginally tighter). Even there fsci wins EUCLIDEAN (the common case — scipy pays
+  the sqrt in C too) and wins everything at scale. Adding dim-2/dim-3 SIMD kernels would fix it but the regime is
+  narrow (small dim × medium N × 2 no-sqrt metrics) and unimportant — the large-N case already wins big. NOT a lever.
+- 2nd consecutive turn where a fresh per-crate bench found already-optimized code / soft walls (see spatial pdist here,
+  integrate/signal/matrix-fn-walls below). The codebase is MATURE: readily-accessible clean algorithmic gaps are
+  mined out. Highest-value remaining work is a DEEP dedicated kernel project (SIMD pow2 FFT kernel to beat pocketfft;
+  a par_dmatmul microkernel matching LAPACK dgemm at n≈100; general small-dim SIMD distance kernels) — each warrants a
+  full cycle, not a tail-of-turn attempt.
+
 ## 2026-07-03 - BlackThrush (cc) - WALLS MAPPED (don't re-chase): matrix-fn collapse vein COMPLETE; remaining linalg/integrate/signal gaps are library/kernel walls
 
 - After the 4-commit matrix-function collapse vein (expm Padé, cosm/sinm, coshm/sinhm, expm_frechet — all below), mapped
