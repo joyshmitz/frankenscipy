@@ -1155,7 +1155,7 @@ fn odd_power_tail_factorization(mut n: usize) -> Option<(Vec<usize>, usize)> {
             break;
         }
         let p = smallest_prime_factor(odd_part);
-        if p != 3 && p != 5 && p != 7 {
+        if p != 3 && p != 5 && p != 7 && p != 11 {
             return None;
         }
         factors.push(p);
@@ -1330,8 +1330,105 @@ fn mixed_radix_combine_stage(
             out5[r] = (a2.0 - b2.1, a2.1 + b2.0);
             out6[r] = (a1.0 - b1.1, a1.1 + b1.0);
         }
+    } else if p == 11 {
+        // Radix-11 combine: five conjugate pairs (1,10)(2,9)(3,8)(4,7)(5,6). Same
+        // conjugate-symmetry structure as radix-5/7 — cosine sums build the five
+        // a-terms, sine differences the b-terms, with the (k·u mod 11) cosine/sine
+        // permutation per output. cₖ=cos(2πk/11), sₖ=sin(2πk/11) for k=1..5;
+        // outᵤ = aᵤ ∓ i·bᵤ, out_{11−u} = aᵤ ± i·bᵤ.
+        const C1: f64 = 0.841_253_532_831_181_2;
+        const C2: f64 = 0.415_415_013_001_886_4;
+        const C3: f64 = -0.142_314_838_273_285_1;
+        const C4: f64 = -0.654_860_733_945_285_1;
+        const C5: f64 = -0.959_492_973_614_497_4;
+        const S1: f64 = 0.540_640_817_455_597_6;
+        const S2: f64 = 0.909_631_995_354_518_4;
+        const S3: f64 = 0.989_821_441_880_932_7;
+        const S4: f64 = 0.755_749_574_354_258_3;
+        const S5: f64 = 0.281_732_556_841_429_7;
+        let (s1, s2, s3, s4, s5) = if inverse {
+            (-S1, -S2, -S3, -S4, -S5)
+        } else {
+            (S1, S2, S3, S4, S5)
+        };
+        let (out0, tail) = out.split_at_mut(m);
+        let (out1, tail) = tail.split_at_mut(m);
+        let (out2, tail) = tail.split_at_mut(m);
+        let (out3, tail) = tail.split_at_mut(m);
+        let (out4, tail) = tail.split_at_mut(m);
+        let (out5, tail) = tail.split_at_mut(m);
+        let (out6, tail) = tail.split_at_mut(m);
+        let (out7, tail) = tail.split_at_mut(m);
+        let (out8, tail) = tail.split_at_mut(m);
+        let (out9, out10) = tail.split_at_mut(m);
+        for r in 0..m {
+            let t0 = out0[r];
+            let tw = |blk: &[Complex64], j: usize| -> (f64, f64) {
+                let (xr, xi) = blk[r];
+                let (wr, wi) = twn[j * r];
+                (xr * wr - xi * wi, xr * wi + xi * wr)
+            };
+            let t1 = tw(out1, 1);
+            let t2 = tw(out2, 2);
+            let t3 = tw(out3, 3);
+            let t4 = tw(out4, 4);
+            let t5 = tw(out5, 5);
+            let t6 = tw(out6, 6);
+            let t7 = tw(out7, 7);
+            let t8 = tw(out8, 8);
+            let t9 = tw(out9, 9);
+            let t10 = tw(out10, 10);
+            let p1 = (t1.0 + t10.0, t1.1 + t10.1);
+            let q1 = (t1.0 - t10.0, t1.1 - t10.1);
+            let p2 = (t2.0 + t9.0, t2.1 + t9.1);
+            let q2 = (t2.0 - t9.0, t2.1 - t9.1);
+            let p3 = (t3.0 + t8.0, t3.1 + t8.1);
+            let q3 = (t3.0 - t8.0, t3.1 - t8.1);
+            let p4 = (t4.0 + t7.0, t4.1 + t7.1);
+            let q4 = (t4.0 - t7.0, t4.1 - t7.1);
+            let p5 = (t5.0 + t6.0, t5.1 + t6.1);
+            let q5 = (t5.0 - t6.0, t5.1 - t6.1);
+            // a_u = t0 + Σ cos(2π·k·u/11)·p_k ; permutation from (k·u mod 11).
+            let acc = |ca: f64, cb: f64, cc: f64, cd: f64, ce: f64| -> (f64, f64) {
+                (
+                    t0.0 + ca * p1.0 + cb * p2.0 + cc * p3.0 + cd * p4.0 + ce * p5.0,
+                    t0.1 + ca * p1.1 + cb * p2.1 + cc * p3.1 + cd * p4.1 + ce * p5.1,
+                )
+            };
+            let a1 = acc(C1, C2, C3, C4, C5);
+            let a2 = acc(C2, C4, C5, C3, C1);
+            let a3 = acc(C3, C5, C2, C1, C4);
+            let a4 = acc(C4, C3, C1, C5, C2);
+            let a5 = acc(C5, C1, C4, C2, C3);
+            // b_u = Σ sin(2π·k·u/11)·q_k (sign from the mod-11 reflection).
+            let bcc = |sa: f64, sb: f64, sc: f64, sd: f64, se: f64| -> (f64, f64) {
+                (
+                    sa * q1.0 + sb * q2.0 + sc * q3.0 + sd * q4.0 + se * q5.0,
+                    sa * q1.1 + sb * q2.1 + sc * q3.1 + sd * q4.1 + se * q5.1,
+                )
+            };
+            let b1 = bcc(s1, s2, s3, s4, s5);
+            let b2 = bcc(s2, s4, -s5, -s3, -s1);
+            let b3 = bcc(s3, -s5, -s2, s1, s4);
+            let b4 = bcc(s4, -s3, s1, s5, -s2);
+            let b5 = bcc(s5, -s1, s4, -s2, s3);
+            out0[r] = (
+                t0.0 + p1.0 + p2.0 + p3.0 + p4.0 + p5.0,
+                t0.1 + p1.1 + p2.1 + p3.1 + p4.1 + p5.1,
+            );
+            out1[r] = (a1.0 + b1.1, a1.1 - b1.0);
+            out10[r] = (a1.0 - b1.1, a1.1 + b1.0);
+            out2[r] = (a2.0 + b2.1, a2.1 - b2.0);
+            out9[r] = (a2.0 - b2.1, a2.1 + b2.0);
+            out3[r] = (a3.0 + b3.1, a3.1 - b3.0);
+            out8[r] = (a3.0 - b3.1, a3.1 + b3.0);
+            out4[r] = (a4.0 + b4.1, a4.1 - b4.0);
+            out7[r] = (a4.0 - b4.1, a4.1 + b4.0);
+            out5[r] = (a5.0 + b5.1, a5.1 - b5.0);
+            out6[r] = (a5.0 - b5.1, a5.1 + b5.0);
+        }
     } else {
-        unreachable!("iterative odd-tail FFT supports only radix 3/5/7 stages")
+        unreachable!("iterative odd-tail FFT supports only radix 3/5/7/11 stages")
     }
 }
 

@@ -6,6 +6,21 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: radix-11 iterative FFT butterfly — factor-11 sizes 3.2-6.6× self, flips 2.65-6.32× losses → parity/WIN vs numpy
+
+- Same recipe as the radix-7 win below (measure → confirm gap → one butterfly + factorization gate). Factor-11 sizes
+  were the WORST measured fft gap: **2.65-6.32× SLOWER than numpy** (n=1078=2·7²·11 was 6.32×) because 11 fell off the
+  `{3,5,7}·2^k` iterative fast path to the recursive O(11²)-combine path.
+- Added a **radix-11 butterfly** to `mixed_radix_combine_stage` (five conjugate pairs (1,10)(2,9)(3,8)(4,7)(5,6);
+  a-terms = cosine sums with the (k·u mod 11) permutation, b-terms = sine diffs with the mod-11 reflection signs;
+  `outᵤ = aᵤ ∓ i·bᵤ`) + allowed 11 in `odd_power_tail_factorization`. ~99 lines, transforms.rs only.
+- CORRECTNESS vs naive DFT: n=11/22/44/121/33/55/77/990/1100/1078 → max error **9.9e-16 to 6.9e-13**. Suite 182/0.
+- PERF vs numpy (was → now): n=1078 6.32× slower → **1.05× FASTER** (69982→10588ns = **6.6× self**), n=990 3.36×→1.02×
+  faster, n=1100 2.65×→1.07× faster, n=3300 3.68×→1.02× faster, n=4400 3.06×→1.04× faster, n=2200 3.52×→parity,
+  n=1386 4.62×→1.18× slower (3.9× self, near parity). **5 of 7 factor-11 sizes now BEAT numpy.** Self speedups
+  3.2-6.6×. LEVER CONFIRMED (2nd time): generic iterative mixed-radix driver + one conjugate-pair butterfly per prime
+  radix. NEXT: radix-13 (5-smooth... 6 pairs), then the odd-heavy multi-prime strided-gather cache thrash.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: radix-7 iterative FFT butterfly — factor-7 sizes 2.9-4.3× self, n=2100 FLIPS 2.27× loss → 1.22× WIN vs numpy
 
 - Acting on the measured lead below: fsci's fast `{3,5}·2^k` iterative FFT path (`mixed_radix_iterative_odd_power_tail`)
