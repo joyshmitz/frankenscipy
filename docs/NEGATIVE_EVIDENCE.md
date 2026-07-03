@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: VonMises.cdf O(κ²)→O(κ) via Miller Bessel recurrence — 8-89× self, ~30-90× WIN vs SciPy
+
+- VonMises has no closed-form cdf: F(z) = (z+π)/2π + (1/π) Σ_k (I_k(κ)/I_0(κ))/k sin(kz). The base_cdf summed
+  ~κ terms, each a FRESH `ive_scalar(k,κ)` Bessel eval (itself O(κ) work) ⇒ O(κ²) per cdf. Replaced with ONE
+  Miller DOWNWARD recurrence `r_{k−1}=r_{k+1}+(2k/κ)r_k` (seed r_m=0, normalize by r_0) that streams ALL
+  ratios I_k/I_0 in O(κ), with overflow rescaling. Byte-identical to the fresh-Bessel sum (chk == new to all
+  digits; Python-validated ≤6e-16 over κ∈[0.1,500]).
+- MEASURED same box, old fresh-ive vs new Miller: κ=200 214.4→**2.42µs = 88.6× self**; κ=50 47.7→1.07µs=
+  44.4×; κ=100 26.5×; κ=20 25.7×; κ=2 8.2×. vs scipy.stats.vonmises.cdf (93-214µs, same O(κ²) series) fsci
+  is now 0.75-3.67µs = **~30-90× FASTER**.
+- Verification: new vonmises_cdf_miller_recurrence_matches_scipy (4 scipy refs + a 41-point monotone/bounds
+  sweep at κ=100 for Miller stability) + all 2011 fsci-stats tests green (rch/hz2). Prototyped the algorithm
+  in Python FIRST; a constructor arg-order slip in my *test* (VonMises::new is (κ,loc)) was caught by the
+  test failure before commit — the impl was always correct. LEVER: series over FRESH per-term Bessel
+  I_k(x)/I_0(x) → one Miller downward recurrence (O(n) not O(n²)); grep `ive_scalar(k` / `bessel_i(k` in loops.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: NoncentralT cdf/ppf → special kernel (nctdtr/nctdtrit) — 9-40× (cdf) / 38-102× (ppf) self
 
 - Same delegate lever: NoncentralT.cdf ran a local Lenth-series reimplementation and ppf bracket-bisected
