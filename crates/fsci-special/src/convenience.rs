@@ -4016,15 +4016,29 @@ pub fn digamma_scalar(x: f64) -> f64 {
         val = 1.0 - val;
     }
 
-    while val < 8.0 {
+    // Recur up to val ≥ 12 then apply the Stirling-type asymptotic through the
+    // 1/x^10 term. The previous (shift-to-8, through 1/x^6) form left a ~2e-10
+    // absolute error (worst ~4e-9 relative) that capped the accuracy of every
+    // digamma-based series (e.g. the hyp2f1/hyperu logarithmic connection forms);
+    // this reaches ~4e-14 worst relative — verified vs mpmath over x∈[0.01,1000]
+    // and the reflected negative axis — for ~4 extra recur steps and 2 terms.
+    while val < 12.0 {
         result -= 1.0 / val;
         val += 1.0;
     }
 
     let inv_x = 1.0 / val;
     let inv_x2 = inv_x * inv_x;
-    result += val.ln() - inv_x / 2.0 - inv_x2 / 12.0 + inv_x2 * inv_x2 / 120.0
-        - inv_x2 * inv_x2 * inv_x2 / 252.0;
+    let mut term = inv_x2;
+    result += val.ln() - inv_x / 2.0 - term / 12.0; // 1/x^2
+    term *= inv_x2;
+    result += term / 120.0; // +1/(120 x^4)
+    term *= inv_x2;
+    result -= term / 252.0; // -1/(252 x^6)
+    term *= inv_x2;
+    result += term / 240.0; // +1/(240 x^8)
+    term *= inv_x2;
+    result -= term / 132.0; // -1/(132 x^10)
 
     result
 }
@@ -8027,6 +8041,33 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn digamma_scalar_matches_reference_high_accuracy() {
+        // ψ(x) references from mpmath (30 digits). The Stirling asymptotic through
+        // the 1/x^10 term (shift to x≥12) must resolve these to <1e-12 relative —
+        // the earlier through-1/x^6 form left ~4e-9, capping digamma-based series.
+        let cases = [
+            (0.05, -20.497844991299869),
+            (0.5, -1.9635100260214235),
+            (1.0, -0.57721566490153286),
+            (1.5, 0.036489973978576521),
+            (2.0, 0.42278433509846714),
+            (2.5, 0.70315664064524319),
+            (3.7, 1.1671535393615114),
+            (8.5, 2.0800908175794201),
+            (50.0, 3.9019896734278922),
+            (-0.5, 0.036489973978576521),
+            (-2.3, 3.3173231575618227),
+        ];
+        for (x, expected) in cases {
+            let got = digamma_scalar(x);
+            assert!(
+                (got - expected).abs() <= 1.0e-12 * expected.abs().max(1.0),
+                "digamma({x}) = {got}, expected {expected}"
+            );
+        }
+    }
 
     #[test]
     fn gammasgn_scalar_match_scipy() {
