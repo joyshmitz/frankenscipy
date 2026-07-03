@@ -725,7 +725,15 @@ pub(crate) fn illinois_root<F: Fn(f64) -> f64>(
     mut fhi: f64,
 ) -> f64 {
     let mut side = 0i32;
-    let mut mid = 0.5 * (lo + hi);
+    // `mid` holds the PREVIOUS iterate for the stop test; there is none yet, so
+    // seed it as NaN rather than the midpoint. Otherwise, when the root sits at
+    // (or within rounding of) an endpoint, the false-position candidate is
+    // rejected on iteration 1, `next` falls back to 0.5*(lo+hi) which equals the
+    // seed, and `(next - mid) == 0` fires a SPURIOUS immediate return of the
+    // midpoint (observed on gammainc_shape_inv/pdtrik where roots land on the
+    // power-of-2 bracket endpoint). NaN makes the first delta non-converged; the
+    // `(hi - lo) <= tol` clause still catches a genuinely tiny initial bracket.
+    let mut mid = f64::NAN;
     for _ in 0..100 {
         // False-position estimate; fall back to the midpoint if the secant is
         // degenerate (equal / non-finite endpoint values) or lands outside the
