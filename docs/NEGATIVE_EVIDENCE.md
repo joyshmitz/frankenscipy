@@ -6,6 +6,24 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: hyperu a>0 INTEGER-b small-x quadrature → self-gated DLMF 13.2.9 log form — flips ~10× LOSS to 1.2-1.8× WIN (+ digamma accuracy fix)
+
+- Completes the hyperu small-x gap for the integer-b sub-case (the connection formula is singular there,
+  so a>0 integer b, small/moderate x still hit the 768-step integral: ~13µs, ~13× SciPy loss, ~3.2e-8
+  accurate). Added `hyperu_positive_integer_b_log` = DLMF 13.2.9 (finite x^{−n}-polynomial + log series with
+  sign `(−1)^{n+1}`), self-gated on the summation rounding estimate `eps·(|pref_log|·Σ|log-terms| +
+  |finite-terms|)/|value| ≤ 1e-9` (cap `HYPERU_INTB_MAX_ERR`) — else falls through to the integral (no
+  regression). Terminating cases (a a positive integer ≤ n) fall out via the Γ(a−n) pole. Gated b∈[1,200].
+- BLOCKER found + fixed en route: fsci `digamma_scalar` was only ~4e-9 accurate (asymptotic truncated at
+  1/x^6), which capped this form at ~1e-9. Fixed digamma to ~4e-14 (separate commit) → this form now ~1e-14.
+- Prototyped in Python vs mpmath 40-dps: 724 gate-accepted cases, worst 3.9e-9 (pre-digamma-fix; ~1e-14
+  after). MEASURED same box (scipy 1.17.1), old integral timed directly vs new: hyperu(2,1,0.5) 14.08→
+  **1.06µs = 13.3× self**, **1.24× > scipy**; (0.7,1,0.8) 12.10→0.77µs=15.7×, **1.78×**; (1.2,2,1.5)
+  12.59→0.94µs=13.4×, **1.63×**; (2.5,3,2) 13.42→1.28µs=10.5×, **1.23×**. Flips ~10× LOSS to 1.2-1.8× WIN.
+- Verification: new `hyperu_positive_a_integer_b_small_x_matches_reference` (11 mpmath refs incl. terminating)
+  + all 1129 fsci-special tests green (rch/hz2). **hyperu near-origin now correct+fast for ALL b** (non-int
+  connection, c=a+1 identity, and integer-b log). Remaining: a>0 integer b≤0 (rare; Kummer to b≥2 deferred).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: hyperu a>0 small-x quadrature → self-gated 1F1 connection formula — flips ~12× LOSS to 2.6-6.2× WIN
 
 - Closes the long-deferred hyperu small-x gap. For a>0, non-integer b, small/moderate x the code fell to
