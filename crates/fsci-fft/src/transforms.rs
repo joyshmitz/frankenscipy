@@ -2638,16 +2638,24 @@ pub fn dct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
     // Extract DCT coefficients: X[k] = 2·Re(V[k] · exp(-iπk/(2N))).
     let mut result = Vec::with_capacity(n);
     let dct_tw = get_or_compute_dct2_twiddles(n);
-    let extract = |k: usize, vk: Complex64| 2.0 * complex_mul(vk, dct_tw[k]).0;
+    // Only the REAL part of V[k]·e^{-iπk/2N} is needed: 2·(vₖ.re·tw.re − vₖ.im·tw.im).
+    // Computing it directly skips the wasted imaginary half of a full complex_mul.
+    let extract = |k: usize, vk: Complex64| {
+        let tw = dct_tw[k];
+        2.0 * (vk.0 * tw.0 - vk.1 * tw.1)
+    };
     if n.is_multiple_of(2) {
         let half = real_fft_specialized(&v, backend); // V[0..=N/2]
-        for k in 0..n {
-            let vk = if k <= n / 2 {
-                half[k]
-            } else {
-                complex_conj(half[n - k])
-            };
-            result.push(extract(k, vk));
+        // Split the k ≤ N/2 (Vₖ = half[k]) and k > N/2 (Vₖ = conj(half[N−k]))
+        // ranges into two branch-free loops. The conjugate's real part folds the
+        // sign into a `+`: 2·(half[N−k].re·tw.re + half[N−k].im·tw.im). Bit-identical.
+        for k in 0..=n / 2 {
+            result.push(extract(k, half[k]));
+        }
+        for k in (n / 2 + 1)..n {
+            let (vr, vi) = half[n - k];
+            let tw = dct_tw[k];
+            result.push(2.0 * (vr * tw.0 + vi * tw.1));
         }
     } else {
         let complex_v: Vec<Complex64> = v.iter().map(|&x| (x, 0.0)).collect();

@@ -6,7 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
-## 2026-07-03 - BlackThrush (cc) - REJECT (marginal) + LEAD (measured): fftconvolve 7/11/13-smooth padding is 1.5% avg (skip); DCT-II/rfft are 1.4-3.9× slower than SciPy (next lever)
+## 2026-07-03 - BlackThrush (cc) - DIAGNOSED: rfft is FINE (no bug); DCT-II 1.8-2.0× slower = 3-separate-passes vs pocketfft's fused; extract micro-opt (1.07×) shipped, real fix needs fused DCT (LEAD)
+
+- Resolved the DCT/rfft lead below with a CLEAN one-binary ratio bench (after `cargo clean` cleared recurring E0514
+  toolchain churn on the shared target). Load-independent internal ratios (fft/rfft/dct in one binary):
+  - **rfft/fft = 0.65-0.83 → rfft is NOT buggy.** The pack-two-reals half-size path (`real_fft_specialized`) works; the
+    earlier "rfft 4× slower than fft" was PURE box contention (overlapping cargo/py jobs), now debunked. rfft vs scipy
+    is 1.43-1.63× (kernel-quality wall, same as the pow2 FFT — hard).
+  - **dct/fft = 0.93-1.24; dct/rfft = 1.38-1.48 vs scipy's 1.19.** So fsci's DCT carries ~1.45× overhead over its own
+    rfft vs scipy's 1.19×. DCT-II vs scipy: **n=2048 1.77×, n=4096 1.82×, n=8192 2.03× slower** (clean, tmin, quiet box).
+- **Root cause (not a micro-cost):** fsci DCT-II (Makhoul) does THREE separate O(n) passes — build permuted `v`, real
+  FFT of `v`, then a twiddle `extract` — while pocketfft FUSES the recombination into the transform. The ~20µs
+  extract+permute overhead at n=8192 is inherent to the separate-pass structure, not the per-element op cost.
+- **Shipped (small, bit-identical):** made the `extract` loop real-only (2·(vₖ.re·tw.re − vₖ.im·tw.im), skipping the
+  wasted imaginary half of complex_mul) + split the k≤N/2 / k>N/2 branch into two loops (conj sign folded to `+`).
+  Isolated same-binary A/B: **1.06-1.07× on the extract loop** (~1.4% of DCT) — the compiler already DCE'd the unused
+  imag and predicted the branch, so the win is small but real; cleaner intent. Suite 182/0.
+- **LEAD (bigger, deferred):** closing the DCT 2× needs FUSING the v-permutation + extract into the real-FFT recombine
+  (one pass, pocketfft-style), or a direct DCT recurrence — a real algorithm change, not a micro-opt. Same applies to
+  idct/dst. rfft's own 1.6× is a pocketfft real-kernel wall (deprioritize).
+
+## 2026-07-03 - BlackThrush (cc) - REJECT (marginal) + LEAD (measured): fftconvolve 7/11/13-smooth padding is 1.5% avg (skip); DCT-II/rfft are 1.4-3.9× slower than SciPy (superseded by the diagnosis above)
 
 - **REJECT — fsci-signal fftconvolve padding follow-on.** After radix-7/11/13 made those sizes fast, revisited whether
   `next_regular_fft_len` (even-5-smooth) should widen to {2,3,5,7,11,13}. Quantified the padded-length reduction over
