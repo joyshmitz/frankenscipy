@@ -6,6 +6,25 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: NoncentralChiSquared/NoncentralF ppf → purpose-built inverse (chndtrix/ncfdtri) — 16.5-26.2× self
+
+- The RIGHT version of the reverted 80e4c6b7: instead of a generic root-finder swap, route the ppf of the
+  two heaviest primary-bisection distributions to their PURPOSE-BUILT fsci-special inverses.
+  NoncentralChiSquared.ppf bisected this crate's slow local Poisson-sum cdf (~40 evals); now
+  `fsci_special::chndtrix(q, df, nc)` (Illinois over the recurrence-optimized `chndtr` kernel).
+  NoncentralF.ppf → `fsci_special::ncfdtri(dfn, dfd, nc, q)`. Each is GUARDED by a round-trip check
+  `|self.cdf(x) − q| < 1e-6` that falls back to the exact bisection on any parametrization drift — no
+  regression, no correctness risk.
+- MEASURED same box (scipy 1.17.1), old bisection timed directly vs new (BYTE-IDENTICAL, chk == new):
+  ncx2(5,2).ppf(0.7) 134.8→**6.5µs = 20.7× self**; ncx2(3,10).ppf(0.5) 232→14.0µs=16.5×;
+  ncf(3,10,4).ppf(0.6) 289→13.7µs=21.1×; ncf(2,20,6).ppf(0.8) 387→14.8µs=26.2×. vs scipy.stats `.ppf`
+  (ncx2 ~164µs, ncf ~106µs) fsci is now 6.5-14.8µs = **~10-25× faster**.
+- Verification: new noncentral_ppf_routes_to_special_inverse_matches_scipy (9 scipy refs + cdf(ppf(q))
+  round-trips confirming the fast path FIRES) + all 2008 fsci-stats tests green (rch/hz2). This is the
+  clean "route to the fast special-fn inverse" lever (unlike the shared-helper illinois swap that
+  regressed skewnorm). Remaining primary-bisection dists (ExponNorm/SkewNorm/Pearson3/GenNorm) lack a
+  purpose-built inverse — left on bisection.
+
 ## 2026-07-02 - BlackThrush (cc) - REVERTED (corrects 80e4c6b7): fsci-stats ppf_bisection→illinois helped ncx2/ncf but REGRESSED skewnorm 2×
 
 - 80e4c6b7 replaced the bisection in the shared `ppf_bisection`/`isf_bisection` with Illinois and claimed

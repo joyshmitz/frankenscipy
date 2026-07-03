@@ -2429,6 +2429,15 @@ impl ContinuousDistribution for NoncentralChiSquared {
             return f64::INFINITY;
         }
 
+        // Invert the noncentral χ² CDF directly with the purpose-built `chndtrix`
+        // (recurrence-optimized `chndtr` kernel + Illinois — much cheaper than
+        // bisecting this crate's local Poisson-sum cdf ~40×). Guard with a
+        // round-trip check against the local cdf so any parametrization drift
+        // falls back to the exact bisection (no regression, no correctness risk).
+        let x = fsci_special::chndtrix(q, self.df, self.nc);
+        if x.is_finite() && x > 0.0 && (self.cdf(x) - q).abs() < 1e-6 {
+            return x;
+        }
         ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std())
     }
 
@@ -3624,6 +3633,14 @@ impl ContinuousDistribution for NoncentralF {
             return f64::INFINITY;
         }
 
+        // Invert the noncentral-F CDF directly with the purpose-built `ncfdtri`
+        // (Illinois over `ncfdtr`) instead of bisecting this crate's local
+        // Poisson-sum-of-central-F cdf. Round-trip guard falls back to the exact
+        // bisection on any drift (no regression, no correctness risk).
+        let x = fsci_special::ncfdtri(self.dfn, self.dfd, self.nc, q);
+        if x.is_finite() && x > 0.0 && (self.cdf(x) - q).abs() < 1e-6 {
+            return x;
+        }
         ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std())
     }
 
@@ -49906,6 +49923,44 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn noncentral_ppf_routes_to_special_inverse_matches_scipy() {
+        // NoncentralChiSquared/NoncentralF now invert via chndtrix/ncfdtri (with a
+        // round-trip fallback to bisection). References from scipy.stats (1.17.1),
+        // 1e-6; the round-trip cdf(ppf(q))==q confirms the fast path fires.
+        let ncx2_cases = [
+            (5.0, 2.0, 0.3, 4.317805328),
+            (5.0, 2.0, 0.7, 8.511761142),
+            (3.0, 10.0, 0.5, 12.03208469),
+            (8.0, 1.0, 0.9, 14.99824398),
+            (2.0, 0.5, 0.6, 2.31807977),
+        ];
+        for (df, nc, q, expected) in ncx2_cases {
+            let d = NoncentralChiSquared::new(df, nc);
+            let x = d.ppf(q);
+            assert!(
+                (x - expected).abs() <= 1e-6 * expected.abs().max(1.0),
+                "ncx2({df},{nc}).ppf({q}) = {x}, expected {expected}"
+            );
+            assert!((d.cdf(x) - q).abs() <= 1e-6, "ncx2 round-trip q={q}");
+        }
+        let ncf_cases = [
+            (3.0, 10.0, 4.0, 0.6, 2.666409843),
+            (5.0, 8.0, 2.0, 0.4, 1.089761174),
+            (2.0, 20.0, 6.0, 0.8, 6.64138151),
+            (4.0, 6.0, 1.0, 0.3, 0.7106937913),
+        ];
+        for (d1, d2, nc, q, expected) in ncf_cases {
+            let d = NoncentralF::new(d1, d2, nc);
+            let x = d.ppf(q);
+            assert!(
+                (x - expected).abs() <= 1e-6 * expected.abs().max(1.0),
+                "ncf({d1},{d2},{nc}).ppf({q}) = {x}, expected {expected}"
+            );
+            assert!((d.cdf(x) - q).abs() <= 1e-6, "ncf round-trip q={q}");
+        }
+    }
 
     #[test]
     fn somersd_distinct_fast_path_matches_kendall_and_brute() {
