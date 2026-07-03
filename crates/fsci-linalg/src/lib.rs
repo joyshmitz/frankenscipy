@@ -4868,16 +4868,20 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
                 l21[ii * nb..ii * nb + nb].copy_from_slice(&row[k..kb]);
             }
             let l21_ref = &l21;
+            let l21t = pack_l21_transpose(&l21, m2, nb);
+            let l21t_ref = &l21t;
             let nthreads = matmul_thread_count(m2, nb, m2);
             let (_, trailing) = lower.split_at_mut(kb);
             if nthreads <= 1 {
-                cholesky_syrk_rows(trailing, 0, l21_ref, nb, kb);
+                cholesky_syrk_rows(trailing, 0, l21_ref, l21t_ref, nb, kb, m2);
             } else {
                 let chunk = m2.div_ceil(nthreads);
                 std::thread::scope(|scope| {
                     for (t, rows) in trailing.chunks_mut(chunk).enumerate() {
                         let row_offset = t * chunk;
-                        scope.spawn(move || cholesky_syrk_rows(rows, row_offset, l21_ref, nb, kb));
+                        scope.spawn(move || {
+                            cholesky_syrk_rows(rows, row_offset, l21_ref, l21t_ref, nb, kb, m2)
+                        });
                     }
                 });
             }
@@ -17340,28 +17344,107 @@ fn wide_pinv_left_inverse_max_error_rows(
     Some(max_error)
 }
 
-fn cholesky_syrk_rows(rows: &mut [Vec<f64>], row_offset: usize, l21: &[f64], nb: usize, kb: usize) {
-    for (local_i, row) in rows.iter_mut().enumerate() {
-        let ii = row_offset + local_i;
-        let lhs = &l21[ii * nb..ii * nb + nb];
-        let mut jj = 0;
-        while jj + 4 <= ii + 1 {
-            let rhs0 = &l21[jj * nb..jj * nb + nb];
-            let rhs1 = &l21[(jj + 1) * nb..(jj + 1) * nb + nb];
-            let rhs2 = &l21[(jj + 2) * nb..(jj + 2) * nb + nb];
-            let rhs3 = &l21[(jj + 3) * nb..(jj + 3) * nb + nb];
-            let dots = simd_dot4(lhs, rhs0, rhs1, rhs2, rhs3);
-            row[kb + jj] -= dots[0];
-            row[kb + jj + 1] -= dots[1];
-            row[kb + jj + 2] -= dots[2];
-            row[kb + jj + 3] -= dots[3];
-            jj += 4;
+/// Transpose-pack the panel: `l21t[p*m2 + j] = l21[j*nb + p]` (`nb × m2`, row-major in `p`).
+/// This lets the SYRK trailing update stream 8 OUTPUT columns per SIMD load and broadcast the
+/// lhs scalar `l21[i][p]` — a 4-accumulator micro-kernel that FITS the register file (the
+/// dot-product formulation's 16 wide accumulators spilled and ran 0.70×). Packed once per
+/// panel and amortised over the O(m2²·nb) update. Contiguous writes to `l21t`, strided reads.
+fn pack_l21_transpose(l21: &[f64], m2: usize, nb: usize) -> Vec<f64> {
+    let mut t = vec![0.0f64; nb * m2];
+    for p in 0..nb {
+        let dst = &mut t[p * m2..p * m2 + m2];
+        for (j, d) in dst.iter_mut().enumerate() {
+            *d = l21[j * nb + p];
         }
-        while jj <= ii {
-            let rhs = &l21[jj * nb..jj * nb + nb];
-            row[kb + jj] -= simd_dot(lhs, rhs);
-            jj += 1;
+    }
+    t
+}
+
+/// `row[col..col+8] -= c` (8-wide).
+#[inline]
+fn syrk_sub8(row: &mut [f64], col: usize, c: Simd<f64, 8>) {
+    let cur = Simd::<f64, 8>::from_slice(&row[col..col + 8]);
+    (cur - c).copy_to_slice(&mut row[col..col + 8]);
+}
+
+/// Per-row triangular update `row[kb+j] -= Σ_p l21[ii][p]·l21[j][p]` for `j = 0..=ii`,
+/// starting from column `j_start` (the register-tiled path handles `0..j_start`).
+#[inline]
+fn cholesky_syrk_row_tail(row: &mut [f64], ii: usize, j_start: usize, l21: &[f64], nb: usize, kb: usize) {
+    let lhs = &l21[ii * nb..ii * nb + nb];
+    let mut j = j_start;
+    while j + 4 <= ii + 1 {
+        let dots = simd_dot4(
+            lhs,
+            &l21[j * nb..j * nb + nb],
+            &l21[(j + 1) * nb..(j + 1) * nb + nb],
+            &l21[(j + 2) * nb..(j + 2) * nb + nb],
+            &l21[(j + 3) * nb..(j + 3) * nb + nb],
+        );
+        row[kb + j] -= dots[0];
+        row[kb + j + 1] -= dots[1];
+        row[kb + j + 2] -= dots[2];
+        row[kb + j + 3] -= dots[3];
+        j += 4;
+    }
+    while j <= ii {
+        row[kb + j] -= simd_dot(lhs, &l21[j * nb..j * nb + nb]);
+        j += 1;
+    }
+}
+
+/// Trailing SYRK update `trailing[i][kb+j] -= Σ_p l21[i][p]·l21[j][p]` for the lower triangle,
+/// using the packed `l21t` (see [`pack_l21_transpose`]) with a 4-row × 8-col broadcast
+/// micro-kernel. NOT bit-identical to the dot-product kernel (the contraction sums lane-wise
+/// over `p` rather than 8-wide-then-reduce), but the Cholesky factor is unique and the golden
+/// tests validate to 1e-10; the diagonal-block / tail columns still use the exact dot path.
+fn cholesky_syrk_rows(
+    rows: &mut [Vec<f64>],
+    row_offset: usize,
+    l21: &[f64],
+    l21t: &[f64],
+    nb: usize,
+    kb: usize,
+    m2: usize,
+) {
+    let m = rows.len();
+    let mut base = 0;
+    while base + 4 <= m {
+        let ii = row_offset + base;
+        // lhs rows are contiguous in p (row-major l21); broadcast their scalars.
+        let a0 = &l21[ii * nb..ii * nb + nb];
+        let a1 = &l21[(ii + 1) * nb..(ii + 1) * nb + nb];
+        let a2 = &l21[(ii + 2) * nb..(ii + 2) * nb + nb];
+        let a3 = &l21[(ii + 3) * nb..(ii + 3) * nb + nb];
+        // Full 4×8 tiles strictly below the diagonal: `j + 8 <= ii` keeps every column < ii.
+        let mut j = 0;
+        while j + 8 <= ii {
+            let mut c0 = Simd::<f64, 8>::splat(0.0);
+            let mut c1 = Simd::<f64, 8>::splat(0.0);
+            let mut c2 = Simd::<f64, 8>::splat(0.0);
+            let mut c3 = Simd::<f64, 8>::splat(0.0);
+            for p in 0..nb {
+                let bvec = Simd::<f64, 8>::from_slice(&l21t[p * m2 + j..p * m2 + j + 8]);
+                c0 += Simd::splat(a0[p]) * bvec;
+                c1 += Simd::splat(a1[p]) * bvec;
+                c2 += Simd::splat(a2[p]) * bvec;
+                c3 += Simd::splat(a3[p]) * bvec;
+            }
+            let col = kb + j;
+            syrk_sub8(&mut rows[base], col, c0);
+            syrk_sub8(&mut rows[base + 1], col, c1);
+            syrk_sub8(&mut rows[base + 2], col, c2);
+            syrk_sub8(&mut rows[base + 3], col, c3);
+            j += 8;
         }
+        // Diagonal block + tail: exact per-row dot remainder from column `j`.
+        for mrow in 0..4 {
+            cholesky_syrk_row_tail(&mut rows[base + mrow], ii + mrow, j, l21, nb, kb);
+        }
+        base += 4;
+    }
+    for local_i in base..m {
+        cholesky_syrk_row_tail(&mut rows[local_i], row_offset + local_i, 0, l21, nb, kb);
     }
 }
 
@@ -17930,16 +18013,20 @@ fn cholesky_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
                 l21[ii * nb..ii * nb + nb].copy_from_slice(&row[k..kb]);
             }
             let l21_ref = &l21;
+            let l21t = pack_l21_transpose(&l21, m2, nb);
+            let l21t_ref = &l21t;
             let nthreads = matmul_thread_count(m2, nb, m2);
             let (_, lower) = a.split_at_mut(kb);
             if nthreads <= 1 {
-                cholesky_syrk_rows(lower, 0, l21_ref, nb, kb);
+                cholesky_syrk_rows(lower, 0, l21_ref, l21t_ref, nb, kb, m2);
             } else {
                 let chunk = m2.div_ceil(nthreads);
                 std::thread::scope(|scope| {
                     for (t, rows) in lower.chunks_mut(chunk).enumerate() {
                         let r0 = t * chunk;
-                        scope.spawn(move || cholesky_syrk_rows(rows, r0, l21_ref, nb, kb));
+                        scope.spawn(move || {
+                            cholesky_syrk_rows(rows, r0, l21_ref, l21t_ref, nb, kb, m2)
+                        });
                     }
                 });
             }
