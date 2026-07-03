@@ -18495,22 +18495,13 @@ impl ContinuousDistribution for CosineDistribution {
         if q == 1.0 {
             return PI;
         }
+        // g(x) = π + x + sin(x) − 2πq is increasing (g' = 1 + cos x ≥ 0) on
+        // [−π, π] with g(−π) < 0 < g(π); Illinois converges superlinearly and
+        // its bracket-preserving midpoint fallback stays robust where g' → 0 at
+        // the endpoints (so it is never worse than the former 60-step bisection).
         let target = 2.0 * PI * q;
-        let mut lo = -PI;
-        let mut hi = PI;
-        for _ in 0..60 {
-            let mid = 0.5 * (lo + hi);
-            let g_mid = PI + mid + mid.sin() - target;
-            if g_mid > 0.0 {
-                hi = mid;
-            } else {
-                lo = mid;
-            }
-            if hi - lo < 1e-14 {
-                break;
-            }
-        }
-        0.5 * (lo + hi)
+        let g = |x: f64| PI + x + x.sin() - target;
+        illinois_root_increasing(g, -PI, PI, g(-PI), g(PI))
     }
 
     fn mean(&self) -> f64 {
@@ -21436,21 +21427,15 @@ impl ContinuousDistribution for KsTwoBign {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        // Bisect on the strictly-monotone cdf.
-        let mut a = 0.0_f64;
+        // Illinois over the strictly-monotone cdf: g(x)=cdf(x)−q, g(0)=−q<0.
+        let a = 0.0_f64;
         let mut b = 10.0_f64;
-        while self.cdf(b) < q && b.is_finite() {
+        let mut fb = self.cdf(b) - q;
+        while fb < 0.0 && b.is_finite() {
             b *= 2.0;
+            fb = self.cdf(b) - q;
         }
-        for _ in 0..80 {
-            let mid = 0.5 * (a + b);
-            if self.cdf(mid) < q {
-                a = mid;
-            } else {
-                b = mid;
-            }
-        }
-        0.5 * (a + b)
+        illinois_root_increasing(|x| self.cdf(x) - q, a, b, -q, fb)
     }
 
     fn mean(&self) -> f64 {
@@ -21639,23 +21624,16 @@ impl ContinuousDistribution for RecipInvGauss {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        // Bisect on the strictly-monotone cdf. Bracket via mode-ish
-        // estimate; expand if cdf disagrees.
-        let mut a = 0.0_f64;
+        // Illinois over the strictly-monotone cdf: g(x)=cdf(x)−q, g(0)=−q<0.
+        // Bracket via mode-ish estimate; expand until cdf(b) ≥ q.
+        let a = 0.0_f64;
         let mut b = (10.0 * self.mu).max(10.0);
-        // Expand b until cdf(b) > q.
-        while self.cdf(b) < q && b.is_finite() {
+        let mut fb = self.cdf(b) - q;
+        while fb < 0.0 && b.is_finite() {
             b *= 2.0;
+            fb = self.cdf(b) - q;
         }
-        for _ in 0..80 {
-            let mid = 0.5 * (a + b);
-            if self.cdf(mid) < q {
-                a = mid;
-            } else {
-                b = mid;
-            }
-        }
-        0.5 * (a + b)
+        illinois_root_increasing(|x| self.cdf(x) - q, a, b, -q, fb)
     }
 
     fn mean(&self) -> f64 {
@@ -22102,20 +22080,12 @@ impl ContinuousDistribution for IrwinHall {
         if q == 1.0 {
             return self.n as f64;
         }
-        // No closed-form inverse — bisect on the strictly-monotone
-        // cdf over the full support [0, n]. Earlier 4σ bracket missed
-        // tail q-values where the true x is outside the σ-band.
-        let mut a = 0.0_f64;
-        let mut b = self.n as f64;
-        for _ in 0..80 {
-            let mid = 0.5 * (a + b);
-            if self.cdf(mid) < q {
-                a = mid;
-            } else {
-                b = mid;
-            }
-        }
-        0.5 * (a + b)
+        // No closed-form inverse — Illinois over the strictly-monotone cdf on
+        // the full support [0, n]: g(x)=cdf(x)−q, g(0)=−q<0<g(n)=1−q. Earlier 4σ
+        // bracket missed tail q-values where the true x is outside the σ-band.
+        let a = 0.0_f64;
+        let b = self.n as f64;
+        illinois_root_increasing(|x| self.cdf(x) - q, a, b, -q, self.cdf(b) - q)
     }
 
     fn mean(&self) -> f64 {

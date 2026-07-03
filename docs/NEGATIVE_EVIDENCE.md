@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: 4 more fsci-stats per-dist ppf bisections → illinois_root_increasing — 3.4–6.7× self
+
+- Completes the illinois vein across fsci-stats: enumerated every remaining per-distribution ppf that still
+  ran fixed-count plain bisection over a CONSTANT-cost cdf (the `try_fit` MLE loops and the shared
+  ppf_bisection/isf_bisection helpers are deliberately left — the shared one is the reverted-skewnorm path).
+  Each reduced to a monotone-increasing root g(x)=cdf(x)−q (g(lo)=−q<0≤g(hi) from the doubling bracket).
+- MEASURED same box (grid q∈{.01,.1,.25,.5,.75,.9,.99}), old bisection vs new illinois, all byte-close
+  (illinois converges to ~4·eps, the more-accurate side):
+  - **RecipInvGauss.ppf** 5751→859ns = **6.69×** (cdf = two normal-cdfs), max diff 3.1e-15
+  - **KsTwoBign.ppf** 7938→1362ns = **5.83×** (Kolmogorov series cdf), max diff 2.2e-16
+  - **IrwinHall.ppf** 6467→1260ns = **5.13×** (n+1-term poly cdf, n=8), max diff 1.4e-14
+  - **CosineDistribution.ppf** 1933→562ns = **3.44×** (g=π+x+sin x−2πq); the flat g′→0 at the ±π endpoints
+    did NOT hurt illinois (bracket-preserving midpoint fallback stays robust), max diff 2.8e-15
+- All constant-cost cdfs → no probe-location cost skew (the srange caveat), clean wins. new≡old within
+  tolerance so existing scipy-reference ppf tests still hold; full fsci-stats suite green (rch/hz2).
+  Own files: fsci-stats/src/lib.rs + this ledger.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: fsci-stats StudentizedRange.ppf & GeneralizedExponential.ppf bisection → illinois_root_increasing — 2.43× / 3.46× self
 
 - Two per-distribution ppf inverses in fsci-stats still ran fixed-count PLAIN BISECTION while the crate
