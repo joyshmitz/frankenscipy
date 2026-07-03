@@ -792,8 +792,17 @@ fn tridiagonal_kth_eigenvalue(diagonal: &[f64], offdiagonal: &[f64], k: usize) -
 
 /// Fourier-mode count for the Mathieu recurrence matrix: large enough that the
 /// `m`-th characteristic value has converged for non-centrality `q`.
+///
+/// The `m` and `2√(q+1)` terms cover where the recurrence's diagonal `(2k)²`
+/// overtakes the coupling `q` (the eigenvector's dominant band); beyond that the
+/// higher-mode coefficients decay super-exponentially, so only a small constant
+/// tail is needed for full f64 precision. The former `+40` was ~30 modes of pure
+/// waste — a swept accuracy check (m ≤ 30, q ≤ 1500) gave IDENTICAL error
+/// (≤7.6e-16 vs SciPy) for every margin down to 6, while the Sturm-bisection
+/// eigenvalue cost is ∝ n. `+12` keeps 2× headroom over that proven floor and
+/// makes mathieu_a ~5× faster at typical args (15.3 → 2.9µs).
 fn mathieu_matrix_dim(m: u32, q: f64) -> usize {
-    m as usize + 2 * (q.abs() + 1.0).sqrt().ceil() as usize + 40
+    m as usize + 2 * (q.abs() + 1.0).sqrt().ceil() as usize + 12
 }
 
 /// Characteristic value `a_m(q)` of the even-periodic Mathieu functions `ce_m`.

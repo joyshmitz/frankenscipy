@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: mathieu_matrix_dim over-conservative +40 mode margin → +12 — mathieu_a ~5× self, flips SciPy parity → win
+
+- ANOMALY-SPOTTING win (same pattern as kv/eigvals_banded): a broad fsci-vs-SciPy bench of scipy's slowest
+  scalar special fns found mathieu_a = **13.5µs**, 200–4000× slower than its own siblings (struve 66ns,
+  kelvin 3.6µs, obl_cv 3ns — all crushing SciPy 10–390×) and only at PARITY with SciPy (14.2µs). The method
+  is right (⌊m/2⌋-th eigenvalue of the symmetric tridiagonal Fourier recurrence via Sturm-count bisection);
+  the cost was the matrix dimension `n = m + 2√(q+1) + 40`, whose Sturm-bisection cost is ∝ n.
+- The `m` + `2√(q+1)` terms already cover where the diagonal `(2k)²` overtakes the coupling `q`; beyond that
+  the mode coefficients decay super-exponentially, so only a small constant tail is needed. SWEPT accuracy vs
+  SciPy (m ≤ 30, q ≤ 1500, incl. q=0.1..1500): **IDENTICAL error ≤7.6e-16 for every margin from 40 down to
+  6** — the `+40` was ~30 modes of pure waste. Set `+12` (2× headroom over the proven floor of 6).
+- MEASURED same box: mathieu_a (m=3,q=5) **15.3 → 2.9µs = 5.2× self** (flips 14.2µs SciPy parity to ~5×
+  FASTER); large-arg (m=20,q=700) 30.7 → 21.1µs = 1.45× (margin is a smaller fraction of n there). Lifts the
+  whole Mathieu family — `mathieu_matrix_dim` also feeds mathieu_b and `mathieu_fourier` (cem/sem
+  coefficients). Full fsci-special suite green (rch/hz2). Own file: orthopoly.rs + this ledger.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: fsci-interpolate cubic_roots_on_interval 80-step bisection → Illinois false-position — 1.84× self
 
 - `cubic_roots_on_interval` (the per-piece root refiner behind PPoly/spline `.roots()`/`.solve()`) split each
