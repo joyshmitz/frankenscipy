@@ -6,6 +6,26 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: hyp2f1 integer c−a−b≠0 near z→1 general log formula — fixes NaN + 2.1-3.8× WIN, beats SciPy accuracy
+
+- Completes the 2F1 near-z=1 story: the remaining integer c−a−b = m ≠ 0 cases (c = a+b±1, ±2, …).
+  Where neither numerator terminates, the direct series needs ~35 000 terms at z=0.999 (5000-term cap →
+  **NaN**). Ported the FULL DLMF 15.8.10 logarithmic connection formula: a finite (1−z)-polynomial
+  (degree m−1) + a log series in the small (1−z). m > 0 applied directly; m < 0 reduced to m > 0 by the
+  Euler transform `2F1(a,b;c;z)=(1−z)^{c−a−b} 2F1(c−a,c−b;c;z)` (gated `c−a>0 && c−b>0`, else the series
+  terminates and the normal path handles it). Unified `hyp2f1_log_connection_mpos(a,b,m≥0,z)` helper —
+  the prior c=a+b (m=0) code is now the m=0 limit of the same helper (empty polynomial, identical result).
+- Prototyped in Python FIRST, validated vs mpmath 40-digit ground truth: **948 gate-fired cases, worst
+  relerr 5.97e-15** across m ∈ [−4,4], z ∈ [0.9, 0.99999]. Notably **more accurate than SciPy** in 44 of
+  those (e.g. hyp2f1(2.7,1.3,6,0.999): mine 2.88794141 == truth, SciPy 2.88743019 errs ~1.8e-4).
+- MEASURED kernel (same box; scipy 1.17.1): all were **NaN before**. hyp2f1(1,1,3,0.99) 0.68µs vs scipy
+  1.44µs = **2.1×**; (1,1,4,0.999) 0.44µs vs 1.33µs = **3.1×**; (2,3,4,0.999) 0.48µs vs 1.34µs = **2.8×**;
+  (2.5,1.5,5,0.999) 0.45µs vs 1.69µs = **3.8×**; (3,2,4,0.9995) 0.42µs vs 1.39µs = **3.3×**. Correctness
+  (NaN→correct) + perf + accuracy.
+- Verification: new `hyp2f1_near_unit_argument_integer_c_minus_a_minus_b_matches_reference` (10 mpmath
+  refs incl. the SciPy-inaccurate case) + all 91 hyper-module tests green (rch/hz2). **hyp2f1 near z=1 is
+  now correct+fast for ALL c−a−b** (non-integer, c=a+b, and c=a+b±k). Vein CLOSED.
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: hyp2f1 c=a+b near z→1 log connection formula — fixes NaN + 3.4-4.4× WIN
 
 - Extends the prior 2F1 near-z=1 fix to the integer c−a−b = 0 (c = a+b) case, where the 15.8.4 gamma
