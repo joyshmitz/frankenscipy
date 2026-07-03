@@ -14244,3 +14244,19 @@ kron's output row `r` maps to `(a[r/rb], b[r%rb])`; invhilbert's O(n³) binomial
 cores (35x self-speedup → 49.5x vs scipy). triu parallelized alongside tril for consistency. Byte-identical by
 construction; 143+ constructor conformance tests pass. fsci-linalg 496/496 green. Structured-constructor loss-hunt
 now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tril/triu/invhilbert all parallel).
+
+## 2026-07-03 - BlackThrush (cc) - REJECT (prototype-killed, no compile): poisson_means_test O(n²) double-sum → prefix-sum
+
+- poisson_means_test (scipy Poisson E-test) enumerates an O(range²) double sum over (x1,x2) including pairs
+  whose pivot statistic satisfies the alternative. Hoped to reduce to O(range·log range) via prefix-sums of
+  pmf2 + a monotone boundary per x1 row (like the discrete-cdf special-fn lever).
+- PROTOTYPED IN PYTHON FIRST (scratchpad/poisson_proto2.py) before any Rust/stats compile: the pivot
+  `(λ_x1−λ_x2−diff)/√(λ_x1/n1+λ_x2/n2)` is NOT monotone in x2 — in the negative-numerator regime
+  d/dx2[num/denom] flips sign (num'·denom − num·denom' is indeterminate), verified non-monotone over 2000
+  random params. So the qualifying x2 set is NOT a union of few contiguous intervals → prefix-sum gives a
+  WRONG pvalue (max |brute−fast| 9.3e-7, not byte-close). scipy uses the same O(n²) enumeration, so no
+  algorithmic gap. DO NOT re-attempt the prefix-sum reduction. (Prototyping saved a wasted 10-min compile.)
+- The only real remaining win is streaming the lgamma-per-term (poisson_quantile_bounds + pmf1/pmf2 both do
+  `ln_gamma(k+1)` per term) into a STABLE log-space incremental `log_pmf += log_mu − ln(k+1)` (NOT the
+  reverted linear `pmf *= mu/k` which drifted, jd4o2) — but it's only ~13% of poisson_means_test's cost
+  (double-sum dominates) on an obscure function. DEFERRED as low-ROI.
