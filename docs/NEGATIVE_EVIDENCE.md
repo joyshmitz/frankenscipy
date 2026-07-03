@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: fsci-interpolate cubic_roots_on_interval 80-step bisection → Illinois false-position — 1.84× self
+
+- `cubic_roots_on_interval` (the per-piece root refiner behind PPoly/spline `.roots()`/`.solve()`) split each
+  cubic at its critical points (so every segment is monotone) then ran a FIXED 80-step bisection over the
+  cubic on each sign-change segment. Replaced with a new in-file `illinois_segment_root` (Illinois modified
+  false-position, either-orientation, bracket-preserving so convergence is guaranteed like bisection) — ~12-15
+  evals instead of 80.
+- MEASURED same box over 400 pseudo-random cubics: **187 → 101ns = 1.84× self**. Modest because the cubic
+  eval is only ~5 flops (fixed break-point computation caps the ceiling), but a clean win with no accuracy
+  cost: max diff **1.78e-15** vs the old bisection across 179 roots with EXACT root-count parity (no
+  missed/spurious roots) — Illinois converges to ~4·eps, tighter than the old 80-step bracket, so it is the
+  more-accurate side. Full fsci-interpolate suite green (rch/hz2). Own files: fsci-interpolate/src/lib.rs +
+  this ledger. Extends the bisection→Illinois lever to a THIRD crate (special/stats already done).
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: LogSeries.ppf p^k powf-per-iteration → incremental multiply — 12.80× self (byte-identical)
 
 - LogSeries.ppf accumulates the cdf term-by-term (pmf(k)=p^k/(k·norm)) in a streaming loop but recomputed

@@ -7594,6 +7594,61 @@ pub fn sproot(tck: &(Vec<f64>, Vec<f64>, usize)) -> Result<Vec<f64>, InterpError
 /// segment contains at most one root, located by a sign change (with a
 /// tolerance check at the segment's left breakpoint for roots that land on
 /// a knot or a tangency).
+/// Root of a monotone segment `[lo, hi]` where `flo = p(lo)` and `fhi = p(hi)`
+/// have OPPOSITE signs, via the Illinois modified false-position method. Keeps
+/// the sign-change bracket every step (so convergence is guaranteed like
+/// bisection) but converges superlinearly — ~12-15 evaluations instead of the
+/// former fixed 80 bisection steps. Works for either orientation of `p`.
+fn illinois_segment_root(
+    p: impl Fn(f64) -> f64,
+    mut lo: f64,
+    mut hi: f64,
+    mut flo: f64,
+    mut fhi: f64,
+) -> f64 {
+    let mut side = 0i32;
+    let mut mid = f64::NAN;
+    for _ in 0..60 {
+        let denom = fhi - flo;
+        let interp = if denom.is_finite() && denom != 0.0 {
+            (lo * fhi - hi * flo) / denom
+        } else {
+            f64::NAN
+        };
+        let next = if interp > lo && interp < hi {
+            interp
+        } else {
+            0.5 * (lo + hi)
+        };
+        let tol = 4.0 * f64::EPSILON * next.abs().max(1.0);
+        if (next - mid).abs() <= tol || (hi - lo).abs() <= tol {
+            return next;
+        }
+        mid = next;
+        let fmid = p(mid);
+        if fmid == 0.0 {
+            return mid;
+        }
+        // `fmid` on the same side as `fhi` → tighten the high end, else the low.
+        if (fmid < 0.0) == (fhi < 0.0) {
+            hi = mid;
+            fhi = fmid;
+            if side == 1 {
+                flo *= 0.5; // Illinois down-weight of the stale low endpoint
+            }
+            side = 1;
+        } else {
+            lo = mid;
+            flo = fmid;
+            if side == -1 {
+                fhi *= 0.5;
+            }
+            side = -1;
+        }
+    }
+    mid
+}
+
 fn cubic_roots_on_interval(c0: f64, c1: f64, c2: f64, c3: f64, h: f64) -> Vec<f64> {
     let p = |u: f64| ((c3 * u + c2) * u + c1) * u + c0;
     let scale = c0.abs() + c1.abs() * h + c2.abs() * h * h + c3.abs() * h * h * h;
@@ -7633,17 +7688,9 @@ fn cubic_roots_on_interval(c0: f64, c1: f64, c2: f64, c3: f64, h: f64) -> Vec<f6
             // critical point that a sign-change test would miss).
             roots.push(lo);
         } else if (plo < 0.0) != (phi < 0.0) {
-            // One sign change on a monotonic segment: bisect for the root.
-            let (mut a, mut b) = (lo, hi);
-            for _ in 0..80 {
-                let mid = 0.5 * (a + b);
-                if (p(mid) < 0.0) == (plo < 0.0) {
-                    a = mid;
-                } else {
-                    b = mid;
-                }
-            }
-            roots.push(0.5 * (a + b));
+            // One sign change on a monotonic segment: refine with Illinois
+            // false-position (~12-15 evals) instead of 80 fixed bisection steps.
+            roots.push(illinois_segment_root(&p, lo, hi, plo, phi));
         }
     }
     roots.retain(|&u| (0.0..h).contains(&u));
