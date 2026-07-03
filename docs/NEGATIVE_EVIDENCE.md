@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - DEFER (measured lead): exotic special-fn anomaly sweep — pro_ang1 13.3× slower than SciPy is the biggest open gap; mathieu 2.1-2.3× cluster
+
+- Broad ns/call sweep of 26 un-benched exotic functions (struve/kelvin/pbdv/mathieu/spheroidal) vs SciPy same box,
+  OPENBLAS_NUM_THREADS=1. Most already CRUSH SciPy (struve 335×, itairy 47×, pbvv 16×, ker/kei 4×) — not targets.
+- **OPEN GAPS (fsci slower), ranked by ratio:**
+  - **`pro_ang1(3,5,2,.5)` = 160µs vs SciPy 12µs = 13.3× SLOWER** ← biggest. Sister `obl_ang1` (identical args) is
+    only 19µs = 1.63×, so this is an INTRA-FAMILY anomaly (~8× more work in the prolate branch than oblate) — a bug,
+    not an algorithmic wall. Both route through `spheroidal_ang1`→`spheroidal_coefficients` (orthopoly.rs:1357);
+    `dim` is identical (21) for both signs and the eigenvector solve is a fixed 4 iters, so the 8× is localized in
+    ONE sub-step (cv / coefficients / eval) that the prolate `cc=+c²` sign hits differently — NOT yet isolated
+    (localization probe was interrupted). NEXT: time the three sub-steps prolate-vs-oblate to find the 8× step.
+  - mathieu cluster: mathieu_a 2.1×, mathieu_b 2.3×, mathieu_sem 2.24×, mathieu_modcem1 1.84× slower (secondary).
+  - obl_ang1 1.63×, pro_rad2 1.25×, mathieu_cem 1.21×, kelvin 1.26× (kelvin recomputes ber+bei+ker+kei = 3525ns vs
+    7ns for ber alone — likely re-derives parts it could share).
+- No code change shipped this pass (the cholesky panel+TRSM win c321bdd2 was the landed result). Recorded so the
+  pro_ang1 13.3× lead isn't lost — it's the highest-ratio single-function gap currently known in fsci-special.
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: blocked Cholesky panel+TRSM scalar dot → simd_dot — 1.38× on the FULL factorization (byte-close 2.8e-14)
 
 - After the SYRK trailing update was already GEMM-packed (785eaf6f, 1.32× on that block), the remaining scalar
