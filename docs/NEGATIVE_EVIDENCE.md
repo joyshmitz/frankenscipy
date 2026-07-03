@@ -14260,3 +14260,14 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   `ln_gamma(k+1)` per term) into a STABLE log-space incremental `log_pmf += log_mu − ln(k+1)` (NOT the
   reverted linear `pmf *= mu/k` which drifted, jd4o2) — but it's only ~13% of poisson_means_test's cost
   (double-sum dominates) on an obscure function. DEFERRED as low-ROI.
+
+## 2026-07-03 - BlackThrush (cc) - DEFER (prototype): Poisson ppf/cdf pmf-window shrink — only ~1.2×, tail-bound
+
+- Poisson ppf_many/cdf build a pmf/cdf array of size `mu + z·√mu + c` (sites use z=12..15). z=15 (lib.rs:9258)
+  looked over-provisioned vs the ~6σ rule of thumb. PROTOTYPED (scratchpad, scipy poisson.sf): the required z
+  for cdf ≥ 1−1e-16 is ~8.4 at large mu but rises to ~19 at mu=0.5 (the additive const covers small mu). So
+  z=8 FAILS at mu≥1000; a safe tighter formula is ~9√mu+20, and the sibling sites' 12√mu+12 is already safe.
+- The array is dominated by the `mu` mode region (needed regardless), so shrinking only the tail (15σ→9σ)
+  is ~1.2-1.3× on the build for large mu, ~1.13× for 15→12. Results are identical for practical q. Not worth
+  the (flaky, ~10-min) stats compile for a common-but-modest win. DEFERRED. Distinct from mathieu/spheroidal
+  where the WHOLE dim shrank (accuracy identical down to margin 6) — here the mode region is irreducible.
