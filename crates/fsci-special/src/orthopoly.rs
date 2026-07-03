@@ -1216,7 +1216,7 @@ fn spheroidal_cv(m: u32, n: u32, c: f64, prolate: bool) -> f64 {
     let cc = if prolate { c * c } else { -c * c };
     let mf = f64::from(m);
     let parity = (n - m) % 2;
-    let dim = (n - m) as usize / 2 + 2 * c.abs().ceil() as usize + 50;
+    let dim = (n - m) as usize / 2 + 2 * c.abs().ceil() as usize + 16;
     let r_of = |k: usize| (parity as usize + 2 * k) as f64;
     let a_coef = |r: f64| {
         (2.0 * mf + r + 2.0) * (2.0 * mf + r + 1.0)
@@ -1304,7 +1304,7 @@ fn spheroidal_coefficients(m: u32, n: u32, c: f64, prolate: bool, cv: f64) -> (V
     let cc = if prolate { c * c } else { -c * c };
     let mf = f64::from(m);
     let parity = (n - m) % 2;
-    let dim = (n - m) as usize / 2 + 2 * c.abs().ceil() as usize + 50;
+    let dim = (n - m) as usize / 2 + 2 * c.abs().ceil() as usize + 16;
     let r_of = |k: usize| (parity as usize + 2 * k) as f64;
     let a_coef = |r: f64| {
         (2.0 * mf + r + 2.0) * (2.0 * mf + r + 1.0)

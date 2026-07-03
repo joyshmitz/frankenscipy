@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: spheroidal_cv/coefficients over-conservative +50 mode margin → +16 — pro_cv/obl_cv ~2.85× self
+
+- Generalization of the mathieu margin win to the spheroidal wave functions. `spheroidal_cv` (behind
+  pro_cv/obl_cv) and `spheroidal_coefficients` both sized the DLMF 30.8 recurrence matrix as
+  `dim = (n−m)/2 + 2|c| + 50` and read the ⌊(n−m)/2⌋-th eigenvalue by Sturm-count bisection (cost ∝ dim).
+  NOTE: an earlier bench had "obl_cv = 3ns" — BOGUS (called with n<m, which early-returns NaN); the real
+  cost is 22–75µs.
+- The `(n−m)/2` + `2|c|` terms already reach the eigenvalue and cover the coupling band (diagonal ~4k²
+  overtakes the c² coupling near k~c/2); past that the d_r decay super-exponentially. SWEPT accuracy vs SciPy
+  (m,n,c up to 30/100, incl. c=0.5..100): **IDENTICAL error ≤4.3e-15 for every margin from 50 down to 4** —
+  the `+50` was ~40 modes of pure waste. Set `+16` (kept in sync across both matrices; extra headroom over
+  mathieu's +12 because the eigenVECTOR coefficients feed the untested-at-reduced-margin ang1/ang2/rad1/rad2).
+- MEASURED same box: pro/obl_cv (n=5,c=10) **22.1 → 7.7µs = 2.85× self**; larger c smaller (2|c| dominates:
+  n=20,c=60 1.29×, n=30,c=100 1.21×). Lifts pro_cv/obl_cv + the spheroidal angular/radial family. Full
+  fsci-special suite green (rch/hz2). Own file: orthopoly.rs + this ledger. Lever: over-provisioned
+  truncation/dim margin → accuracy-sweep-and-shrink (see also the mathieu entry below).
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: mathieu_matrix_dim over-conservative +40 mode margin → +12 — mathieu_a ~5× self, flips SciPy parity → win
 
 - ANOMALY-SPOTTING win (same pattern as kv/eigvals_banded): a broad fsci-vs-SciPy bench of scipy's slowest
