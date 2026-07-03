@@ -411,6 +411,19 @@ pub(crate) fn erfcx_cf_real(x: f64) -> f64 {
     erfc_cf_h(x) / PI.sqrt()
 }
 
+/// erfcx(x) = e^{x²}·erfc(x) for x ≥ 1 via the Cephes rational DIRECTLY. Since
+/// `erfc_scalar` computes erfc(x) = e^{−x²}·P(x)/Q(x), the scaled form is just
+/// P(x)/Q(x) — computing it here avoids the e^{x²}·e^{−x²} round-trip (two `exp`
+/// calls + their cancellation error) that `e^{x²}·erfc_scalar(x)` incurred.
+pub(crate) fn erfcx_cephes_real(x: f64) -> f64 {
+    let xa = x.abs(); // caller guarantees x ≥ 1
+    if xa < 8.0 {
+        cephes_polevl(xa, &CEPHES_ERFC_P) / cephes_p1evl(xa, &CEPHES_ERFC_Q)
+    } else {
+        cephes_polevl(xa, &CEPHES_ERFC_R) / cephes_p1evl(xa, &CEPHES_ERFC_S)
+    }
+}
+
 fn erfc_complex_scalar(z: Complex64) -> Complex64 {
     if z.re < 0.0 {
         return Complex64::from_real(2.0) - erfc_complex_scalar(-z);

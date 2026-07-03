@@ -6,6 +6,19 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: erfcx(x≥1) drops the exp round-trip — 2.3× self (byte-close, more accurate)
+
+- erfcx_scalar(x) for x∈[1,25) computed `exp(x²)·erfc_scalar(x)`, but erfc_scalar already returns
+  `exp(−x²)·P(x)/Q(x)` (Cephes rational) — so this was `exp(x²)·exp(−x²)·P/Q`, TWO exp calls that cancel to
+  1 (plus their rounding). Added `erfcx_cephes_real` returning the Cephes rational P/Q (x<8) or R/S (x≥8)
+  DIRECTLY; erfcx_scalar now calls it for x≥1 (kept exp·erfc for x<1 where erfc via 1−erf is accurate).
+- MEASURED same box, old exp-round-trip vs new (chk == new to all printed digits): erfcx(2) 0.0465→**0.020µs
+  = 2.3× self**; erfcx(1.5)/erfcx(5)/erfcx(12) all ~2.2-2.3×. New fsci erfcx is 7-20ns. More accurate too
+  (removes the exp(x²)·exp(−x²) cancellation error) — matches scipy to ≤1e-13 across the P/Q & R/S branches.
+- Verification: new erfcx_direct_cephes_matches_scipy (8 scipy refs incl. the x=8 P/Q↔R/S seam) + all 1137
+  fsci-special tests green (rch/hz2). Lifts erfcinv deep-tail + voigt_profile (both call erfcx). LEVER:
+  grep `exp(x²)·erfc`/`e^{x²}·erfc_scalar` (or any f = e^{g}·(kernel that already has e^{−g}) round-trip).
+
 ## 2026-07-03 - BlackThrush (cc) - KEEP: wofz (Faddeeva) |z|∈[0.5,4] → Weideman rational — flips 2-4× SciPy LOSS to parity-1.2× WIN
 
 - A wofz timing probe by region found the |z|∈[1,4] band was the slow spot: the erf-Maclaurin series path

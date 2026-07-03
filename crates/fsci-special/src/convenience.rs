@@ -4989,12 +4989,14 @@ fn erfcx_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, Sp
 }
 
 pub fn erfcx_scalar(x: f64) -> f64 {
-    if x < 0.0 {
-        // For negative x, exp(x²) * erfc(x) = exp(x²) * (2 - erfc(-x))
-        // This can overflow, but erfc(-x) is near 2 and exp(x²) grows
+    if x < 1.0 {
+        // Small / negative x: exp(x²)·erfc(x). For x<0, erfc(x)≈2 and exp(x²)
+        // grows; for 0≤x<1, exp(x²) is near 1 and erfc via 1−erf is accurate.
         (x * x).exp() * crate::erfc_scalar(x)
     } else if x < 25.0 {
-        (x * x).exp() * crate::erfc_scalar(x)
+        // x ≥ 1: the Cephes rational IS erfcx (erfc = e^{−x²}·P/Q), so take it
+        // directly — no exp(x²)·exp(−x²) round-trip (~2× faster, more accurate).
+        crate::error::erfcx_cephes_real(x)
     } else {
         // Asymptotic: erfcx(x) ≈ 1/(x√π) * (1 - 1/(2x²) + 3/(4x⁴) - ...)
         let inv_x = 1.0 / x;
@@ -8102,6 +8104,30 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erfcx_direct_cephes_matches_scipy() {
+        // x ≥ 1 now takes the Cephes rational directly (no exp round-trip).
+        // Covers both the P/Q (1≤x<8) and R/S (x≥8) branches, incl. the x=8 seam.
+        // References from scipy.special.erfcx (1.17.1); asserted to 1e-13 relative.
+        let cases = [
+            (1.0, 0.42758357615581),
+            (2.0, 0.25539567631051),
+            (3.5, 0.15529365560889),
+            (5.0, 0.11070463773307),
+            (7.99, 0.070071436717953),
+            (8.0, 0.069985166200881),
+            (15.0, 0.037529606388506),
+            (24.0, 0.023487546063683),
+        ];
+        for (x, expected) in cases {
+            let got = erfcx_scalar(x);
+            assert!(
+                (got - expected).abs() <= 1e-13 * expected.abs(),
+                "erfcx({x}) = {got}, expected {expected}"
+            );
+        }
+    }
 
     #[test]
     fn wofz_weideman_region_matches_scipy() {
