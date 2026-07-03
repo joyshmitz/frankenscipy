@@ -5851,19 +5851,12 @@ pub fn tklmbda(x: f64, lam: f64) -> f64 {
     if x >= f_hi {
         return 1.0;
     }
-    for _ in 0..100 {
-        let mid = 0.5 * (lo + hi);
-        let f_mid = ppf(mid);
-        if (f_mid - x).abs() < 1.0e-14 || (hi - lo) < 1.0e-15 {
-            return mid;
-        }
-        if f_mid < x {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    0.5 * (lo + hi)
+    // ppf(p) is increasing in p, so f(p) = ppf(p) − x is increasing with
+    // f(lo) < 0 < f(hi). Illinois false-position converges in ~10-15 ppf evals
+    // (each is two `powf`) vs the ~40-step bisection this CDF ran on every call,
+    // and lands on the machine-precision root rather than the 1e-14 residual
+    // break. The endpoint ppf values are already computed above.
+    crate::beta::illinois_root(|p| ppf(p) - x, lo, hi, f_lo - x, f_hi - x)
 }
 
 /// Compute `x.powf(y) - 1` with extra accuracy near `x^y == 1`.
@@ -13601,6 +13594,30 @@ mod tests {
         assert!(tklmbda(f64::NAN, 0.5).is_nan());
         assert!(tklmbda(0.5, f64::NAN).is_nan());
     }
+
+    #[test]
+    fn tklmbda_matches_scipy_reference_points() {
+        // λ ∉ {0, 1}: the CDF is found by inverting the quantile ppf(p) = x, now
+        // via Illinois (was a ~40-step bisection). References from
+        // scipy.special.tklmbda (1.17.1); asserted to 1e-12.
+        let cases = [
+            (0.5, 0.3, 0.65102782778284762),
+            (1.2, 0.7, 0.94921331362257177),
+            (-0.8, 0.5, 0.22870680067499194),
+            (0.3, -0.5, 0.55266461633960517),
+            (-1.5, 0.2, 0.13617300619727501),
+            (2.0, 0.4, 0.98355336099790946),
+            (-0.2, -1.0, 0.47506218943954792),
+        ];
+        for (x, lam, expected) in cases {
+            let got = tklmbda(x, lam);
+            assert!(
+                (got - expected).abs() <= 1e-12 * expected.abs().max(1.0),
+                "tklmbda({x}, {lam}) = {got}, expected {expected}"
+            );
+        }
+    }
+
 
     #[test]
     fn modstruve_at_zero_handles_v_minus_one() {

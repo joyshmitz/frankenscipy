@@ -6,6 +6,19 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-02 - BlackThrush (cc) - KEEP: tklmbda CDF ~40-step bisection → illinois_root — 1.4-5.0× self, 1.5-5.0× WIN vs SciPy
+
+- tklmbda (Tukey-lambda CDF) inverts its closed-form quantile ppf(p)=(p^λ−(1−p)^λ)/λ = x on EVERY call and
+  ran a ~40-step bisection (each eval two `powf`). ppf is increasing in p, the bracket [eps,1−eps] with its
+  endpoint ppf values is already computed, so f(p)=ppf(p)−x is increasing with f(lo)<0<f(hi) →
+  `beta::illinois_root` in ~10-15 evals + machine-precision root (vs the 1e-14 residual break).
+- MEASURED same box (scipy 1.17.1), old bisection timed directly vs new: tklmbda(-0.8,0.5) 1.74→**0.35µs
+  = 5.0× self**, **5.0× > scipy** (1.73µs); (1.2,0.7) 1.82→0.40µs=4.6×, **4.4×**; (-1.5,0.2) 4.0×, **4.1×**;
+  (0.5,0.3) 3.3×, **3.6×**; (0.3,−0.5) 1.65→1.17µs=1.4×, **1.5×** (λ<0 ppf steep near ends → slower
+  convergence, still a win). Was ~parity with SciPy, now 1.5-5.0× FASTER + more accurate.
+- Verification: new tklmbda_matches_scipy_reference_points (7 scipy refs, 1e-12) + all 1132 fsci-special
+  tests green (rch/hz2).
+
 ## 2026-07-02 - BlackThrush (cc) - KEEP: chndtrix 100-step bisection → illinois_root — 4.7-8.4× self, flips ~5× LOSS to parity-1.7× WIN
 
 - chndtrix (noncentral-χ² CDF inverse in x) ran a FIXED 100-step bisection (no early break) over `chndtr`
