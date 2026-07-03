@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-03 - BlackThrush (cc) - KEEP: NoncentralT cdf/ppf → special kernel (nctdtr/nctdtrit) — 9-40× (cdf) / 38-102× (ppf) self
+
+- Same delegate lever: NoncentralT.cdf ran a local Lenth-series reimplementation and ppf bracket-bisected
+  over it (each cdf ~27µs → a full ppf up to ~1250µs). fsci-special has the identical noncentral-t family.
+  Routed `cdf → fsci_special::nctdtr` (nan/±inf/nc≈0→StudentT guards kept) and `ppf → nctdtrit` (round-trip
+  guarded, falls back to the local bisection on drift). sf left on the local tail-accurate integrate.
+- MEASURED same box (scipy 1.17.1), local timed directly vs kernel (agree to ≤3.4e-15 cdf / ≤1.5e-13 ppf):
+  cdf: nct(5,2).cdf(3) 27.98→**0.71µs = 39.5×**; (3,4,5) 33.5×; (10,-1.5,-0.5) 10.1×; (20,0.5,1) 9.0×.
+  ppf: nct(3,4).ppf(0.7) 1248.9→**12.3µs = 101.8×**; (5,2) 72.6×; (10,-1.5) 65.7×; (20,0.5) 37.8×.
+  vs scipy.stats nct (cdf ~38µs, ppf ~55µs): fsci now cdf 0.6-1.3µs = ~30-60× faster, ppf 6-12µs = ~5-9×.
+- Verification: new noncentral_t_cdf_ppf_route_to_special_kernel_matches_scipy (4 scipy cdf+ppf refs incl.
+  negative-nc reflection + round-trips) + all 2010 fsci-stats tests green (rch/hz2). Pure perf win via
+  delegation — no correctness-bonus claim (the local Lenth series was already correct).
+
 ## 2026-07-03 - BlackThrush (cc) - AMEND (corrects d1c7f058 claim) + fix NoncentralF.pdf large-nc bug
 
 - INTEGRITY CORRECTION to d1c7f058: I claimed the old NoncentralF.cdf "underflows for nc ≳ 40, verified at
