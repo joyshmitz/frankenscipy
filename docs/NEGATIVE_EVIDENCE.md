@@ -15679,3 +15679,29 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - CONF: `cargo test -p fsci-special --lib itairy_pbdv_pbvv_pbwa_many_match_serial_bit_for_bit` GREEN (par == serial
   bit-for-bit across x∈[-3,12], incl. empty input); existing scalar reference-value goldens (itairy mpmath, pb* in
   hyper.rs) unaffected — the `_many` are pure wrappers over unchanged kernels.
+
+## 2026-07-04 - BlackThrush (cc) - CORRECTION: fair scipy-ARRAY-ufunc baseline for the it2/itairy/pb* _many gapfills
+
+- INTEGRITY FIX for the two prior entries (8b0de49e it2*, 8a5f19ba itairy/pb*): they benched SciPy via a PYTHON LOOP
+  `[fn(x) for x in xs]`, which adds ~1.5µs/call interpreter overhead. But `scipy.special.{it2i0k0,it2j0y0,itairy,
+  pbdv,pbvv,pbwa}` are C UFUNCS callable on the whole array — the baseline a real user hits is `scipy.special.X(xs)`,
+  ~9× faster than the loop. So the "9.85–41.9×" / "7.4–28.0×" headlines OVERSTATE the practical win. Re-measured fair
+  (fsci `_many` vs SciPy ARRAY ufunc, same n/x; + self = fsci parallel vs fsci serial map):
+  | fn | fsci _many | scipy ARRAY | fair vs-scipy | self (par/serial) |
+  | --- | ---: | ---: | ---: | ---: |
+  | it2i0k0 (n=50k) | 4.58 ms | 13.50 | **2.94× WIN** | 1.85× |
+  | it2j0y0 (n=50k) | 15.67 ms | 15.97 | **1.02× PARITY** | 1.81× |
+  | itairy (n=20k)  | 4.31 ms | 10.16 | **2.36× WIN** | 1.01× |
+  | pbdv (n=20k)    | 3.45 ms | 0.68 | **0.20× — 5× LOSS** | 1.20× |
+  | pbvv (n=20k)    | 3.67 ms | 96.54 | **26.3× WIN** | 3.24× |
+  | pbwa (n=20k)    | 3.76 ms | 19.35 | **5.15× WIN** | 1.71× |
+- HONEST VERDICT: 4 real wins vs SciPy's array ufunc (it2i0k0 2.94×, itairy 2.36×, pbvv 26.3×, pbwa 5.15×), it2j0y0
+  parity, and `pbdv` a **LOSS** — SciPy's pbdv ufunc is ~34 ns/call (very fast), fsci's scalar pbdv kernel is slower,
+  so a parallel fan can't beat it. CODE KEPT (not reverted): all six are byte-identical, self-parallel gains-or-parity
+  (1.01–3.24× vs serial fsci), so they are valid vectorized APIs for fsci users who have no SciPy — but the ledger now
+  records pbdv as negative-evidence-vs-scipy, not a win. The real residual is fsci's pbdv SCALAR kernel (a hyper.rs
+  kernel gap), which a `_many` wrapper cannot close.
+- LESSON (applies to ALL future scalar→`_many` gapfills): benchmark vs `scipy.special.X(ARRAY)` (the C ufunc), NOT a
+  Python loop. The loop baseline inflates ~9× and can turn a scipy-LOSS (pbdv) or PARITY (it2j0y0) into a fake win.
+  Only functions where SciPy's ufunc is genuinely slow per-element (pbvv 96 ms/50k, it2i0k0/itairy specfun) yield a
+  real win; where SciPy has a fast ufunc (pbdv, agm, hyp2f1 6 ms/50k) a parallel fan loses.
