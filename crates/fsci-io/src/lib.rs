@@ -1417,8 +1417,10 @@ fn parse_v5_matrix(payload: &[u8]) -> Result<MatArray, IoError> {
     }
     let ndim = dim_bytes.len() / 4;
     let dims: Vec<i64> = dim_bytes
-        .chunks_exact(4)
-        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as i64)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| i32::from_le_bytes(*b) as i64)
         .collect();
 
     // Sub-element 3: array name (miINT8), trimmed at the first NUL.
@@ -2856,6 +2858,12 @@ fn read_csv_serial(content: &str, delimiter: char, has_header: bool) -> CsvResul
 }
 
 /// Write data to CSV format.
+/// Runtime switch to force the serial `write_csv` formatter for same-binary A/B
+/// benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static WRITE_CSV_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn write_csv(
     header: Option<&[&str]>,
     data: &[Vec<f64>],
@@ -2881,6 +2889,9 @@ pub fn write_csv(
         out.push_str(&h.join(&delimiter.to_string()));
         out.push('\n');
     }
+    // Validate row shapes FIRST (returning the first error in row order, identical to
+    // the fused loop) so the subsequent formatting has no early-exit and can be split
+    // across threads. Pure O(rows) length checks — no f64 formatting.
     let mut expected_cols = None;
     for row in data {
         if let Some(cols) = expected_cols {
@@ -2901,6 +2912,13 @@ pub fn write_csv(
             }
             expected_cols = Some(row.len());
         }
+    }
+
+    // The f64 Display formatting dominates; each row is independent, so format contiguous
+    // row ranges into private Strings and join in row order (BIT-FOR-BIT the serial
+    // output). scipy/pandas CSV writers are single-threaded. Serial gate BEFORE the
+    // available_parallelism syscall (per-call syscall-tax lesson).
+    let fmt_row = |out: &mut String, row: &[f64]| {
         for (idx, value) in row.iter().enumerate() {
             if idx > 0 {
                 out.push(delimiter);
@@ -2908,6 +2926,51 @@ pub fn write_csv(
             let _ = write!(out, "{value}");
         }
         out.push('\n');
+    };
+    const CSV_PAR_GATE: usize = 1 << 16;
+    let total = data.len().saturating_mul(expected_cols.unwrap_or(0));
+    if total < CSV_PAR_GATE || WRITE_CSV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        for row in data {
+            fmt_row(&mut out, row);
+        }
+        return Ok(out);
+    }
+
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(total / 16384)
+        .min(data.len())
+        .max(1);
+    if nthreads <= 1 {
+        for row in data {
+            fmt_row(&mut out, row);
+        }
+        return Ok(out);
+    }
+    let chunk = data.len().div_ceil(nthreads);
+    let mut parts: Vec<String> = (0..nthreads).map(|_| String::new()).collect();
+    let fmt_row_ref = &fmt_row;
+    std::thread::scope(|scope| {
+        for (t, slot) in parts.iter_mut().enumerate() {
+            let r0 = t * chunk;
+            let r1 = ((t + 1) * chunk).min(data.len());
+            scope.spawn(move || {
+                if r0 >= r1 {
+                    return;
+                }
+                let mut local = String::with_capacity((r1 - r0) * expected_cols.unwrap_or(0) * 12);
+                for row in &data[r0..r1] {
+                    fmt_row_ref(&mut local, row);
+                }
+                *slot = local;
+            });
+        }
+    });
+    let parts_len: usize = parts.iter().map(String::len).sum();
+    out.reserve(parts_len);
+    for p in &parts {
+        out.push_str(p);
     }
     Ok(out)
 }
@@ -3484,31 +3547,29 @@ fn decode_netcdf_values(
         }
         NetcdfType::Short => {
             let mut values = Vec::with_capacity(count);
-            for chunk in payload[..expected_len].chunks_exact(2) {
-                values.push(i16::from_be_bytes([chunk[0], chunk[1]]));
+            for chunk in payload[..expected_len].as_chunks::<2>().0 {
+                values.push(i16::from_be_bytes(*chunk));
             }
             Ok(NetcdfValue::Short(values))
         }
         NetcdfType::Int => {
             let mut values = Vec::with_capacity(count);
-            for chunk in payload[..expected_len].chunks_exact(4) {
-                values.push(i32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            for chunk in payload[..expected_len].as_chunks::<4>().0 {
+                values.push(i32::from_be_bytes(*chunk));
             }
             Ok(NetcdfValue::Int(values))
         }
         NetcdfType::Float => {
             let mut values = Vec::with_capacity(count);
-            for chunk in payload[..expected_len].chunks_exact(4) {
-                values.push(f32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            for chunk in payload[..expected_len].as_chunks::<4>().0 {
+                values.push(f32::from_be_bytes(*chunk));
             }
             Ok(NetcdfValue::Float(values))
         }
         NetcdfType::Double => {
             let mut values = Vec::with_capacity(count);
-            for chunk in payload[..expected_len].chunks_exact(8) {
-                values.push(f64::from_be_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-                ]));
+            for chunk in payload[..expected_len].as_chunks::<8>().0 {
+                values.push(f64::from_be_bytes(*chunk));
             }
             Ok(NetcdfValue::Double(values))
         }
@@ -5903,6 +5964,37 @@ mod tests {
         let text = write_csv(None, &[vec![1.0, 2.0], vec![3.0, 4.0]], ',')
             .expect("rectangular CSV should serialize");
         assert_eq!(text, "1,2\n3,4\n");
+    }
+
+    #[test]
+    fn write_csv_parallel_is_byte_identical_to_serial_above_gate() {
+        use std::sync::atomic::Ordering;
+        // Above the rows·cols ≥ 2^16 fan-out gate the parallel per-row formatter must be
+        // BYTE-IDENTICAL to the serial loop (rows formatted independently, joined in order).
+        let (rows, cols) = (5000usize, 20usize); // 100000 > 65536 gate
+        let mut state = 0x2468u64;
+        let data: Vec<Vec<f64>> = (0..rows)
+            .map(|_| {
+                (0..cols)
+                    .map(|_| {
+                        state = state
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        (state >> 11) as f64 / (1u64 << 53) as f64 * 200.0 - 100.0
+                    })
+                    .collect()
+            })
+            .collect();
+        for delim in [',', ' ', ';'] {
+            WRITE_CSV_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = write_csv(None, &data, delim).expect("serial");
+            WRITE_CSV_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = write_csv(None, &data, delim).expect("parallel");
+            assert_eq!(
+                serial, parallel,
+                "delim {delim:?}: parallel write_csv must equal serial"
+            );
+        }
     }
 
     #[test]

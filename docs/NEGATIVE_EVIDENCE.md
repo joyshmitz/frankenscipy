@@ -16408,3 +16408,24 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - LEVER: a Rader-vs-Bluestein prime-FFT gate keyed on a smoothness threshold goes STALE as the base FFT gains radices
   — re-tune it to the current fast-kernel coverage. BROAD-SWEEP + relative-to-pow2 (load-invariant) spots such
   anomalies; confirm with same-binary A/B (box load varies run-to-run).
+
+## 2026-07-04 - BlackThrush (cc) - io formatters savetxt + write_csv -> parallel row-format (2.3-7.0x self, BYTE-IDENTICAL)
+
+- fsci-io formatter vein (the mmwrite lever: serial f64→text formatter + single-thread peer → parallel
+  format-into-private-Strings + ordered concat, byte-identical). Two serial siblings mmwrite hadn't covered.
+- `savetxt` (LANDED in c62b7f17 — a concurrent BlackThrush agent on the shared checkout swept my working-tree change
+  into their commit; this ledger entry records the measurement + the ratio, which that commit omitted): serial
+  per-row `write!("{}", data)` → parallel per-row-range into private Strings, gate rows·cols≥2^16.
+  SAME-BINARY A/B (atomic SAVETXT_FORCE_SERIAL, 3× interleaved), identical=true everywhere:
+  2000×20 1.0× (below gate); 10000×20 20.56→8.78ms **2.3×**; 50000×20 102.68→23.12ms **4.4×**;
+  200000×10 212.58→50.78ms **4.2×**. Test savetxt_parallel_is_byte_identical_to_serial_above_gate (3 delimiters).
+- `write_csv` (THIS commit): validate all row shapes FIRST (first-error-in-row-order preserved, pure O(rows) length
+  checks, no formatting) → then parallel per-row-range format + ordered concat. Gate rows·cols≥2^16, atomic
+  WRITE_CSV_FORCE_SERIAL. SAME-BINARY A/B, identical=true everywhere:
+  2000×20 1.0×; 10000×20 22.57→4.71ms **4.8×**; 50000×20 103.81→14.78ms **7.0×**; 200000×10 259.21→55.30ms **4.7×**.
+  Wins BIGGER than savetxt (more per-row overhead — delimiter char pushes + per-row length re-check folded out).
+  New test write_csv_parallel_is_byte_identical_to_serial_above_gate (3 delimiters) + 5 existing write_csv tests GREEN.
+- vs ORIG: numpy.savetxt / pandas/csv writers are single-threaded; self-ratio 2.3-7.0×.
+- COLLISION NOTE: the concurrent BlackThrush agent (shared checkout, git add -A) landed my savetxt code as c62b7f17
+  (swept my uncommitted lib.rs + probe); check `git ls-files probe_*.rs` before rm (probes get committed) and
+  `git log --oneline` for already-landed dupes before re-committing. write_csv committed by me before it was swept.
