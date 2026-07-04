@@ -8496,30 +8496,77 @@ fn cosm_sinm_blocks(a: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
         - &m5 * B[11]
         + &m6 * B[13];
     let w = par_dmatmul(&a_s, &p_o);
-    let den =
-        DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| Complex::new(p_e[(i, j)], -w[(i, j)]));
-    let num = DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| Complex::new(p_e[(i, j)], w[(i, j)]));
-    let Some(x) = den.lu().solve(&num) else {
-        // Singular Padé denominator (never seen in practice): fall back to the
-        // reference 2n×2n embedding via the real expm kernel.
-        let mut b_mat = DMatrix::<f64>::zeros(2 * n, 2 * n);
-        for i in 0..n {
-            for j in 0..n {
-                b_mat[(i, n + j)] = -a[(i, j)];
-                b_mat[(n + i, j)] = a[(i, j)];
+    // X = (Pₑ−iW)⁻¹(Pₑ+iW) = cos(A_s)+i·sin(A_s). Solve the n×n COMPLEX Padé system as
+    // an equivalent 2n×2n REAL block system so it runs through fsci's parallel blocked
+    // LU instead of nalgebra's generic (serial, unblocked) complex LU — the solve was
+    // ~68% of cosm's runtime. With X=Xr+iXi the complex `(Pₑ−iW)X = Pₑ+iW` splits into
+    //   [[Pₑ,  W],[−W, Pₑ]] · [Xr; Xi] = [Pₑ; W].
+    // The 2n×2n real block solve doubles the LU flop count but runs through the
+    // PARALLEL blocked LU; that only beats nalgebra's serial complex LU once the
+    // factorization is large enough to amortize the extra work — measured crossover is
+    // ~n=256 (n=128 loses 0.89×, n=256 wins 1.42×, n=512 wins 1.53×). Below the gate,
+    // stay on the complex solve. The atomic forces the complex path for same-binary A/B.
+    let use_complex_solve = n < 256
+        || COSM_NALGEBRA_COMPLEX_SOLVE.load(std::sync::atomic::Ordering::Relaxed);
+    let real_block: Option<(DMatrix<f64>, DMatrix<f64>)> =
+        if use_complex_solve {
+            let den = DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| {
+                Complex::new(p_e[(i, j)], -w[(i, j)])
+            });
+            let num = DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| {
+                Complex::new(p_e[(i, j)], w[(i, j)])
+            });
+            den.lu().solve(&num).map(|x| {
+                (
+                    DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].re),
+                    DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].im),
+                )
+            })
+        } else {
+            let mut m_block = vec![vec![0.0f64; 2 * n]; 2 * n];
+            let mut rhs = vec![0.0f64; (2 * n) * n];
+            for i in 0..n {
+                let (row_i, row_ni) = {
+                    let (top, bot) = m_block.split_at_mut(n);
+                    (&mut top[i], &mut bot[i])
+                };
+                for j in 0..n {
+                    row_i[j] = p_e[(i, j)];
+                    row_i[n + j] = w[(i, j)];
+                    row_ni[j] = -w[(i, j)];
+                    row_ni[n + j] = p_e[(i, j)];
+                    rhs[i * n + j] = p_e[(i, j)];
+                    rhs[(n + i) * n + j] = w[(i, j)];
+                }
             }
+            lu_solve_flat_matrix_rhs(&m_block, &rhs, n).map(|xf| {
+                (
+                    DMatrix::<f64>::from_fn(n, n, |i, j| xf[i * n + j]),
+                    DMatrix::<f64>::from_fn(n, n, |i, j| xf[(n + i) * n + j]),
+                )
+            })
+        };
+    let (mut cos, mut sin) = match real_block {
+        Some(cs) => cs,
+        None => {
+            // Singular Padé denominator (never seen in practice): fall back to the
+            // reference 2n×2n embedding via the real expm kernel.
+            let mut b_mat = DMatrix::<f64>::zeros(2 * n, 2 * n);
+            for i in 0..n {
+                for j in 0..n {
+                    b_mat[(i, n + j)] = -a[(i, j)];
+                    b_mat[(n + i, j)] = a[(i, j)];
+                }
+            }
+            let e = expm_pade_scaling_squaring(&b_mat);
+            let cos = e.view((0, 0), (n, n)).into_owned();
+            let sin = e.view((n, 0), (n, n)).into_owned();
+            return (cos, sin);
         }
-        let e = expm_pade_scaling_squaring(&b_mat);
-        let cos = e.view((0, 0), (n, n)).into_owned();
-        let sin = e.view((n, 0), (n, n)).into_owned();
-        return (cos, sin);
     };
-    // X = cos(A_s)+i·sin(A_s); square s times to reach cos(A)+i·sin(A). Do the complex
-    // squaring `(P+iQ)² = (P²−Q²) + i(PQ+QP)` via the fast parallel REAL `par_dmatmul`
-    // for each of the four products instead of nalgebra's generic (unblocked, serial)
-    // complex GEMM — this scaling/squaring loop was the cosm/sinm bottleneck.
-    let mut cos = DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].re);
-    let mut sin = DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].im);
+    // Square s times to reach cos(A)+i·sin(A). Do the complex squaring
+    // `(P+iQ)² = (P²−Q²) + i(PQ+QP)` via the fast parallel REAL `par_dmatmul` for each
+    // of the four products instead of nalgebra's generic complex GEMM.
     for _ in 0..s {
         let pp = par_dmatmul(&cos, &cos);
         let qq = par_dmatmul(&sin, &sin);
@@ -12565,6 +12612,12 @@ const LOW_RANK_PINV_BASIS_REL_TOL: f64 = 1e-8;
 const LOW_RANK_PINV_RECON_REL_TOL: f64 = 1e-8;
 const FULL_RANK_TALL_PINV_MIN_COLS: usize = 128;
 const FULL_RANK_TALL_PINV_RIGHT_INVERSE_REL_TOL: f64 = 1e-8;
+/// Runtime switch to force nalgebra's original generic COMPLEX LU solve inside the
+/// cosm/sinm Padé kernel (instead of the 2n×2n real block solve) for same-binary A/B
+/// benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static COSM_NALGEBRA_COMPLEX_SOLVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 /// Runtime switch to force nalgebra's original Cholesky matrix-RHS solve for
 /// same-binary A/B benchmarks. Defaults off. `#[doc(hidden)]` — internal.
 #[doc(hidden)]
@@ -18665,6 +18718,110 @@ fn inv_blocked(a_in: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
             xrow[c0..c0 + w].copy_from_slice(&b[bi..bi + w]);
         }
         c0 += w;
+    }
+    Some(x)
+}
+
+/// Forward/back substitution for a disjoint block of columns `c0..c1` of an
+/// already-permuted, row-major RHS `pb` (`factors.n × w`). Generalises
+/// `trsm_inv_columns` (which hardcodes permuted identity columns) to an arbitrary
+/// RHS; identical row-block SIMD AXPY so parallel column blocks are bit-identical.
+fn lu_solve_columns(
+    factors: &LuFactorsFlat,
+    pb: &[f64],
+    w: usize,
+    c0: usize,
+    c1: usize,
+) -> Option<Vec<f64>> {
+    let n = factors.n;
+    let bw = c1 - c0;
+    let mut sb = vec![0.0f64; n * bw];
+    for i in 0..n {
+        sb[i * bw..i * bw + bw].copy_from_slice(&pb[i * w + c0..i * w + c1]);
+    }
+    // Forward solve L·Z = B (unit lower).
+    for i in 0..n {
+        let i_base = i * n;
+        let bi = i * bw;
+        for p in 0..i {
+            block_axpy_sub(&mut sb, bi, p * bw, bw, factors.data[i_base + p]);
+        }
+    }
+    // Back solve U·X = Z.
+    for i in (0..n).rev() {
+        let i_base = i * n;
+        let bi = i * bw;
+        for p in (i + 1)..n {
+            block_axpy_sub(&mut sb, bi, p * bw, bw, factors.data[i_base + p]);
+        }
+        let d = factors.data[i_base + i];
+        if d == 0.0 {
+            return None;
+        }
+        let dv = Simd::<f64, 8>::splat(d);
+        let mut jc = 0;
+        while jc + 8 <= bw {
+            (Simd::<f64, 8>::from_slice(&sb[bi + jc..bi + jc + 8]) / dv)
+                .copy_to_slice(&mut sb[bi + jc..bi + jc + 8]);
+            jc += 8;
+        }
+        while jc < bw {
+            sb[bi + jc] /= d;
+            jc += 1;
+        }
+    }
+    Some(sb)
+}
+
+/// Solve `A X = B` for a general row-major RHS `b` (`n × w`) by factoring `A` once
+/// with the flat blocked LU and running the forward/back substitution over disjoint
+/// column blocks in parallel. Returns the row-major `n × w` solution, or `None` if
+/// `A` is singular / shapes mismatch. This is the multi-RHS analogue of the
+/// single-vector `lu_solve_flat` path; used to replace nalgebra's generic (serial,
+/// unblocked) LU on hot dense solves such as the complex Padé denominator in cosm.
+fn lu_solve_flat_matrix_rhs(a_in: &[Vec<f64>], b: &[f64], w: usize) -> Option<Vec<f64>> {
+    let n = a_in.len();
+    if w == 0 || b.len() != n * w {
+        return None;
+    }
+    let factors = lu_factor_blocked(a_in)?;
+    // Permute RHS rows by the LU row permutation: permuted row i = b[perm[i]].
+    let mut pb = vec![0.0f64; n * w];
+    for i in 0..n {
+        let src = factors.perm[i] * w;
+        pb[i * w..i * w + w].copy_from_slice(&b[src..src + w]);
+    }
+    let nthreads = matmul_thread_count(n, w, n);
+    let blocks: Vec<Option<Vec<f64>>> = if nthreads <= 1 {
+        vec![lu_solve_columns(&factors, &pb, w, 0, w)]
+    } else {
+        let chunk = w.div_ceil(nthreads);
+        let factors_ref = &factors;
+        let pb_ref = &pb;
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .filter_map(|t| {
+                    let c0 = t * chunk;
+                    if c0 >= w {
+                        return None;
+                    }
+                    let c1 = (c0 + chunk).min(w);
+                    Some(scope.spawn(move || lu_solve_columns(factors_ref, pb_ref, w, c0, c1)))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        })
+    };
+    // Reassemble the row-major solution from the column blocks (in column order).
+    let mut x = vec![0.0f64; n * w];
+    let mut c0 = 0;
+    for blk in blocks {
+        let sb = blk?;
+        let bw = sb.len() / n;
+        for i in 0..n {
+            x[i * w + c0..i * w + c0 + bw].copy_from_slice(&sb[i * bw..i * bw + bw]);
+        }
+        c0 += bw;
     }
     Some(x)
 }
@@ -33203,6 +33360,40 @@ mod proptest_tests {
             (result[1][1] - (-0.4161468365)).abs() < 1e-6,
             "cosm[1][1] = {}, expected -0.4161468365",
             result[1][1]
+        );
+    }
+
+    #[test]
+    fn cosm_block_solve_matches_complex_solve_at_gate_size() {
+        // At n >= 256 cosm solves the complex Padé denominator through the 2n×2n real
+        // block LU; verify it agrees with nalgebra's generic complex LU (the < 256 and
+        // A/B path) to full matrix-function tolerance. Non-trivial one-norm forces the
+        // scaling/squaring loop so both the solve AND the squaring are exercised.
+        use std::sync::atomic::Ordering;
+        let n = 256;
+        let mut seed = 0x1234_5678_9abc_def0u64;
+        let mut rng = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let a: Vec<Vec<f64>> = (0..n)
+            .map(|_| (0..n).map(|_| 0.3 * (rng() - 0.5)).collect())
+            .collect();
+        COSM_NALGEBRA_COMPLEX_SOLVE.store(true, Ordering::Relaxed);
+        let complex = cosm(&a, DecompOptions::default()).expect("cosm complex");
+        COSM_NALGEBRA_COMPLEX_SOLVE.store(false, Ordering::Relaxed);
+        let block = cosm(&a, DecompOptions::default()).expect("cosm block");
+        let mut maxdiff = 0.0f64;
+        for (rc, rb) in complex.iter().zip(block.iter()) {
+            for (x, y) in rc.iter().zip(rb.iter()) {
+                maxdiff = maxdiff.max((x - y).abs());
+            }
+        }
+        assert!(
+            maxdiff < 1e-10,
+            "block vs complex cosm disagree: maxdiff = {maxdiff:.3e}"
         );
     }
 

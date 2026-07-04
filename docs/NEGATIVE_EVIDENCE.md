@@ -16130,3 +16130,25 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   and route through fsci's parallel blocked LU (2x flops but 64-core parallel vs nalgebra serial) -> would flip cosm
   to a clean WIN. LEVER: grep nalgebra generic `.lu()`/`*` on COMPLEX DMatrix in hot matrix-fn paths -> replace with
   par_dmatmul real-product decomposition (complex GEMM = 3-4 real par_dmatmuls) / 2n real block solve.
+
+## 2026-07-04 - BlackThrush (cc) - cosm/sinm complex Padé solve: nalgebra generic complex LU -> 2n×2n REAL block via parallel blocked LU (1.42-1.53x at n>=256)
+
+- Follow-on to fe7bb4b0 (par_dmatmul squaring). ISOLATED probe showed the ONE complex solve `den.lu().solve(&num)`
+  (nalgebra generic, SERIAL, unblocked complex LU) was ~29.5ms at n=256 = ~68% of cosm's runtime — the dominant
+  residual after the squaring fix.
+- FIX: solve the n×n COMPLEX Padé system `(Pₑ−iW)X = Pₑ+iW` as the equivalent 2n×2n REAL block system
+  `[[Pₑ,W],[−W,Pₑ]]·[Xr;Xi]=[Pₑ;W]`, routed through fsci's PARALLEL blocked LU (`lu_factor_blocked`, whose trailing
+  `A22-=L21·U12` fans across cores) + a new general multi-RHS `lu_solve_flat_matrix_rhs` (parallel forward/back subst
+  over disjoint column blocks, mirrors `trsm_inv_columns`/`inv_blocked`). The 2n embedding doubles the LU flops but the
+  parallelism more than offsets it once n is large enough.
+- SAME-BINARY A/B (atomic `COSM_NALGEBRA_COMPLEX_SOLVE`, 3× interleaved, whole-cosm timing) — DEFINITIVE:
+  - n=128: nalgebra 4.95ms / block 5.59ms = **0.89× (block LOSES** — 2n overhead not yet amortized).
+  - n=256: nalgebra 34.07ms / block 24.07ms = **1.42× WIN** (maxdiff 1.24e-14 vs complex path).
+  - n=512: nalgebra 234.18ms / block 153.41ms = **1.53× WIN** (maxdiff 4.51e-14).
+  → GATED at **n >= 256** (every enabled case a measured win, zero regression below; small-n stays on complex solve).
+  vs PINNED scipy cosm (37.1ms @ n=256): block cosm 24.07ms = **1.54× FASTER** (was 2.4× SLOWER pre-fe7bb4b0).
+- New regression test `cosm_block_solve_matches_complex_solve_at_gate_size` (n=256, block vs forced-complex, maxdiff
+  <1e-10) GREEN; cosm/sinm proptests GREEN. sinm shares the kernel (same win).
+- GOTCHA logged: single-shot cosm timing (43.34 vs 41.47ms) read as ~0-gain and nearly triggered a wrong revert — only
+  the SAME-BINARY interleaved A/B exposed the true 1.42-1.53× (box drift dwarfs the delta otherwise). LEVER: general
+  `lu_solve_flat_matrix_rhs` now available for any hot dense multi-RHS solve currently on nalgebra `.lu().solve`.
