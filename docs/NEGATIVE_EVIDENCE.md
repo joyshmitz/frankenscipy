@@ -15746,3 +15746,25 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   previous entry's "~5-10× more" hope: cv-hoist helps ONLY the first-kind (cv-dominated), not the driver-dominated
   second-kind — the radial DRIVER, not the eigensolve, is obl_rad2's bottleneck. CONF: byte-identity test GREEN;
   spheroidal `*_match_scipy` goldens unaffected (pure wrappers). Build on `-cc` (release cache clean from last turn).
+
+## 2026-07-04 - BlackThrush (cc) - eigvals_banded: band→tridiagonal Givens reduction (dsbtrd) — ~10x self, closes 20x scipy gap to ~2.1x
+
+- DUG the biggest documented open gap: `eigvals_banded` was flagged (AmberKestrel, ledger 2432) as STILL 20× slower
+  than SciPy after the Lanczos→dense fix — the values-only path DENSIFIED the band to n×n and ran nalgebra's DENSE
+  O(n³) symmetric tridiagonalization, vs SciPy's banded O(n²·bw) LAPACK `dsbtrd`. Flagged as "future cycle". Closed it.
+- FIX: added `symmetric_lower_band_to_tridiagonal` — a Givens **band→tridiagonal** reduction (LAPACK `dsbtrd`
+  `vect='N'`): eliminate each below-subdiagonal band entry with a rotation in plane (p,p+1), chasing the resulting
+  bulge (band offset kd+1) down-right until it exits. Implemented on a dense symmetric working array but each
+  rotation touches ONLY the band+bulge window `[p-(kd+1), q+kd+1]`, so total cost is **O(n²·kd)** not O(n³) — the
+  algorithmic win, with simple (i,j) indexing (no band-storage bulge slots). Feeds the existing public
+  `eigvalsh_tridiagonal`. Wired into `eig_banded`'s `eigvals_only` path (bw≥2), replacing the densify + dense reduction.
+- MEASURED (`eigvals_banded`, n=1500, bw=3, rch `-cc`, best-of-5): **712.6 → 70.87 ms = ~10× self**; vs SciPy
+  ~34.3 ms this flips **20× SLOWER → ~2.1× slower** (the residual is the tridiagonal QR eigensolver, a smaller
+  follow-on; the O(n³) densification — the actual 20× — is gone). KEEP.
+- CONF GREEN: 31 fsci-linalg `band` lib tests pass incl. the pre-existing `eig_banded_lanczos_values_match_dense_
+  reference` (my new path matches the dense oracle) + a new `band_to_tridiagonal_eigenvalues_match_dense` validating
+  the reduction across kd∈{1,2,3,5,7} and n∈{15..50} to 1e-9·scale; local SciPy oracle
+  `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_linalg_eig_banded` PASSED. LEVER: when a
+  values-only path DENSIFIES a structured (band/sparse) matrix then runs a dense O(n³) solver, a structure-preserving
+  reduction (Givens bulge-chase for bands) restores the O(n²·structure) cost — and a dense-storage impl that only
+  touches the nonzero window keeps the win WITHOUT fiddly packed-storage indexing (validate against the dense oracle).

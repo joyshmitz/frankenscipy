@@ -6332,6 +6332,81 @@ fn symmetric_lower_band_lanczos_eigenvalues(
     Ok(eigenvalues)
 }
 
+/// Reduce a real symmetric matrix in LOWER banded storage to symmetric tridiagonal
+/// form `(diagonal, off-diagonal)` via Givens rotations (values-only band reduction,
+/// LAPACK `dsbtrd` `vect='N'`). Only band + transient-bulge entries are touched per
+/// rotation, so the cost is `O(n²·kd)` — vs the `O(n³)` of densify + dense
+/// tridiagonalization. `ab[l][j] = A[j+l][j]` for `l = 0..=kd`. Returns `d` (len n)
+/// and `e` (len n-1); feed to [`eigvalsh_tridiagonal`].
+fn symmetric_lower_band_to_tridiagonal(ab: &[Vec<f64>], n: usize) -> (Vec<f64>, Vec<f64>) {
+    let kd = ab.len() - 1;
+    // Dense symmetric working copy (band + bulge slots live inside it). O(n²) memory,
+    // but each rotation only reads/writes an O(kd)-wide window so total work is O(n²·kd).
+    let mut a = vec![0.0f64; n * n];
+    for j in 0..n {
+        a[j * n + j] = ab[0][j];
+        for l in 1..=kd {
+            let i = j + l;
+            if i < n {
+                let v = ab[l][j];
+                a[i * n + j] = v;
+                a[j * n + i] = v;
+            }
+        }
+    }
+
+    for r in 0..n.saturating_sub(2) {
+        let lmax = kd.min(n - 1 - r);
+        // Annihilate A[r+l][r] for l = kd..2 (leave l=1, the tridiagonal subdiagonal),
+        // chasing each resulting bulge (which sits at band offset kd+1) off the matrix.
+        for l in (2..=lmax).rev() {
+            let mut br = r + l;
+            let mut bc = r;
+            while br < n {
+                let p = br - 1;
+                let q = br;
+                let x = a[p * n + bc];
+                let y = a[q * n + bc];
+                if y == 0.0 {
+                    break;
+                }
+                let rr = x.hypot(y);
+                if rr == 0.0 {
+                    break;
+                }
+                let c = x / rr;
+                let s = y / rr;
+                // Similarity GᵀAG, G a rotation in plane (p, q). Touch only the band+
+                // bulge window of columns/rows (all potentially-nonzero entries of rows
+                // p,q lie in [p-(kd+1), q+(kd+1)]).
+                let lo = p.saturating_sub(kd + 1);
+                let hi = (q + kd + 2).min(n);
+                // Row rotation (rows p, q).
+                for jj in lo..hi {
+                    let ap = a[p * n + jj];
+                    let aq = a[q * n + jj];
+                    a[p * n + jj] = c * ap + s * aq;
+                    a[q * n + jj] = -s * ap + c * aq;
+                }
+                // Column rotation (cols p, q), using the row-rotated values.
+                for ii in lo..hi {
+                    let ap = a[ii * n + p];
+                    let aq = a[ii * n + q];
+                    a[ii * n + p] = c * ap + s * aq;
+                    a[ii * n + q] = -s * ap + c * aq;
+                }
+                // The rotation zeroed A[q][bc] and pushed a new bulge to (q+kd, p).
+                br += kd;
+                bc = p;
+            }
+        }
+    }
+
+    let d: Vec<f64> = (0..n).map(|i| a[i * n + i]).collect();
+    let e: Vec<f64> = (0..n.saturating_sub(1)).map(|i| a[(i + 1) * n + i]).collect();
+    (d, e)
+}
+
 /// Eigenvalues of a real symmetric banded matrix, in ascending order.
 ///
 /// Matches `scipy.linalg.eigvals_banded(a_band, lower)`: the eigenvalue-only
@@ -6455,30 +6530,15 @@ pub fn eig_banded(
     }
 
     if eigvals_only {
-        // Densify the band and take a VALUES-ONLY symmetric eigendecomposition
-        // (nalgebra tridiagonalize + implicit-QR). The prior Lanczos-for-all-n path
-        // was the wrong tool — Lanczos targets k≪n eigenpairs, so computing every
-        // eigenvalue drove full reorthogonalization: pathologically slow (measured
-        // ~3.5x SLOWER than the values+VECTORS dense path) and less accurate. This
-        // route reuses the same dense reduction the eigenvector path uses (they
-        // already agree to tolerance) minus the eigenvector accumulation, so it is
-        // strictly cheaper and matches the dense/SciPy reference. Ascending order
-        // (total_cmp) matches SciPy's eigvals_banded convention.
-        let mut matrix = DMatrix::<f64>::zeros(n, n);
-        for col in 0..n {
-            matrix[(col, col)] = ab[0][col];
-            for (offset, band_row) in ab.iter().enumerate().skip(1) {
-                let row = col + offset;
-                if row >= n {
-                    break;
-                }
-                let value = band_row[col];
-                matrix[(row, col)] = value;
-                matrix[(col, row)] = value;
-            }
-        }
-        let mut eigenvalues: Vec<f64> =
-            matrix.symmetric_eigenvalues().iter().copied().collect();
+        // Band-aware VALUES-ONLY path: reduce the band to symmetric tridiagonal form
+        // with Givens rotations (O(n²·kd), touching only band+bulge entries) and take
+        // its eigenvalues, instead of densifying to n×n and running a DENSE O(n³)
+        // tridiagonalization. For small bandwidth this is ~kd/n of the flops — closing
+        // the large gap vs SciPy's LAPACK dsbtrd. Validated bit-close to the dense path
+        // (`band_to_tridiagonal_eigenvalues_match_dense`). Ascending order (total_cmp)
+        // matches SciPy's eigvals_banded convention.
+        let (d, e) = symmetric_lower_band_to_tridiagonal(ab, n);
+        let mut eigenvalues = eigvalsh_tridiagonal(&d, &e, options)?;
         eigenvalues.sort_by(|left, right| left.total_cmp(right));
         emit_trace(LinalgTrace {
             operation: "eig_banded",
@@ -30991,6 +31051,50 @@ mod proptest_tests {
             eig_banded(&ab, true, true, DecompOptions::default()).expect("eigvals only");
         assert_eq!(eigenvalues.len(), 3);
         assert!(eigenvectors.is_none());
+    }
+
+    #[test]
+    fn band_to_tridiagonal_eigenvalues_match_dense() {
+        // The Givens band reduction + tridiagonal eigensolver must reproduce the dense
+        // symmetric eigenvalues for several bandwidths/sizes (the dense path is the oracle).
+        for &(n, kd) in &[(15usize, 3usize), (30, 5), (40, 2), (25, 1), (50, 7)] {
+            // Deterministic pseudo-random symmetric band in lower storage.
+            let mut ab = vec![vec![0.0f64; n]; kd + 1];
+            for j in 0..n {
+                for l in 0..=kd {
+                    if j + l < n {
+                        let h = ((j * 131 + l * 977 + 7) % 251) as f64 / 125.0 - 1.0;
+                        ab[l][j] = if l == 0 { h + (kd as f64) + 2.0 } else { h };
+                    }
+                }
+            }
+            // Dense oracle.
+            let mut dense = DMatrix::<f64>::zeros(n, n);
+            for j in 0..n {
+                dense[(j, j)] = ab[0][j];
+                for l in 1..=kd {
+                    if j + l < n {
+                        dense[(j + l, j)] = ab[l][j];
+                        dense[(j, j + l)] = ab[l][j];
+                    }
+                }
+            }
+            let mut expected: Vec<f64> = dense.symmetric_eigenvalues().iter().copied().collect();
+            expected.sort_by(|a, b| a.total_cmp(b));
+
+            let (d, e) = symmetric_lower_band_to_tridiagonal(&ab, n);
+            let mut got = eigvalsh_tridiagonal(&d, &e, DecompOptions::default()).expect("tridiag");
+            got.sort_by(|a, b| a.total_cmp(b));
+
+            assert_eq!(got.len(), expected.len());
+            let scale = expected.iter().fold(1.0f64, |m, v| m.max(v.abs()));
+            for (g, ex) in got.iter().zip(expected.iter()) {
+                assert!(
+                    (g - ex).abs() <= 1e-9 * scale,
+                    "n={n} kd={kd}: band eig {g} vs dense {ex}"
+                );
+            }
+        }
     }
 
     #[test]
