@@ -15399,3 +15399,18 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   **0.93x FASTER**. n=1024 stays serial (byte-identical, ~parity/noise). VERDICT: KEEP.
 - FOLLOW-ON: the f64 lu_factor_blocked trailing update (exact fallback path) is still serial — same lever applies
   (factor `lu_trailing_update_rows` f64 + thread::scope); do it next for the non-mixed-precision route.
+
+## 2026-07-04 - BlackThrush (cc) - LU trailing update parallelized in the f64 path too — inv ~2x self at n=2000, flips past scipy(1-thread) (follow-on to 332e430c)
+
+- Completed the follow-on: the EXACT-precision `lu_factor_blocked` (f64) trailing update `A22 -= L21·U12` was
+  still SERIAL (332e430c only did the f32 mixed-precision path). It backs `inv` (via inv_blocked), the fallback
+  `lu_solve_blocked`, and lstsq's normal-equations solve. Applied the identical lever: factored into
+  `lu_trailing_update_rows(tail, head, k, kb, n)` + thread::scope over disjoint trailing-row chunks (MR=4×NR=8,
+  monotonic-p) — BIT-IDENTICAL (acc 0.00250 every A/B round; 61 LU/inv tests + full fsci-linalg lib 496/0).
+- MEASURED via `inv` (bin perf_inv, interleaved A/B, loaded box so absolutes inflated but the SELF ratio is
+  robust): n=2000 OLD 1532 → NEW 782ms = **~1.96x self** (NEW < OLD all 4 rounds). scipy inv n=2000 1-thread =
+  1267ms, so fsci flips **1.2x-slower → 0.62x FASTER** (0.27x on a quiet box: standalone NEW 343ms). n=1024 stays
+  SERIAL by the matmul_thread_count gate (blocks 59M<64M macs) → byte-identical, ~parity within heavy-load noise.
+- VERDICT: KEEP — inv (common, factorization-dominated) gets ~2x at large n. The LU serial-trailing-update lever
+  is now closed for BOTH precisions (f32 solve + f64 inv/exact-solve). Reusable: dense factorization trailing/SYRK
+  updates serial while a sibling parallelizes → fan across disjoint output-row chunks, byte-identical.

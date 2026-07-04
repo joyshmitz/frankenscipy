@@ -16903,6 +16903,68 @@ fn permutation_parity_is_odd(perm: &[usize]) -> Option<bool> {
 /// Right-looking blocked LU factorization with partial pivoting in one contiguous
 /// row-major buffer. The panel width matches the profiled flat workspace tile so the
 /// update walks memory linearly instead of materializing L21/U12 as nested vectors.
+/// Trailing update `A22 -= L21·U12` for a disjoint chunk of trailing rows (`tail`,
+/// local row-major, `len = nrows·n`) against the shared U12 panel in `head` (rows
+/// `k..kb`). Register-blocked MR=4×NR=8 f64, identical arithmetic to the serial
+/// kernel (monotonic-p sum-then-subtract) so parallel row chunks are bit-identical.
+fn lu_trailing_update_rows(tail: &mut [f64], head: &[f64], k: usize, kb: usize, n: usize) {
+    const MR: usize = 4;
+    const NR: usize = 8;
+    let nrows = tail.len() / n;
+    let mut j0 = kb;
+    while j0 < n {
+        let nr = (n - j0).min(NR);
+        let mut li = 0;
+        while li < nrows {
+            let mr = (nrows - li).min(MR);
+            if mr == MR && nr == NR {
+                let r0 = li * n;
+                let r1 = (li + 1) * n;
+                let r2 = (li + 2) * n;
+                let r3 = (li + 3) * n;
+                let mut acc0 = Simd::<f64, NR>::splat(0.0);
+                let mut acc1 = Simd::<f64, NR>::splat(0.0);
+                let mut acc2 = Simd::<f64, NR>::splat(0.0);
+                let mut acc3 = Simd::<f64, NR>::splat(0.0);
+                for p in k..kb {
+                    let p_base = p * n + j0;
+                    let urow = Simd::<f64, NR>::from_slice(&head[p_base..p_base + NR]);
+                    acc0 += Simd::splat(tail[r0 + p]) * urow;
+                    acc1 += Simd::splat(tail[r1 + p]) * urow;
+                    acc2 += Simd::splat(tail[r2 + p]) * urow;
+                    acc3 += Simd::splat(tail[r3 + p]) * urow;
+                }
+                let c0 = r0 + j0;
+                let c1 = r1 + j0;
+                let c2 = r2 + j0;
+                let c3 = r3 + j0;
+                (Simd::<f64, NR>::from_slice(&tail[c0..c0 + NR]) - acc0)
+                    .copy_to_slice(&mut tail[c0..c0 + NR]);
+                (Simd::<f64, NR>::from_slice(&tail[c1..c1 + NR]) - acc1)
+                    .copy_to_slice(&mut tail[c1..c1 + NR]);
+                (Simd::<f64, NR>::from_slice(&tail[c2..c2 + NR]) - acc2)
+                    .copy_to_slice(&mut tail[c2..c2 + NR]);
+                (Simd::<f64, NR>::from_slice(&tail[c3..c3 + NR]) - acc3)
+                    .copy_to_slice(&mut tail[c3..c3 + NR]);
+            } else {
+                for di in 0..mr {
+                    let i_base = (li + di) * n;
+                    for dj in 0..nr {
+                        let j = j0 + dj;
+                        let mut s = 0.0;
+                        for p in k..kb {
+                            s += tail[i_base + p] * head[p * n + j];
+                        }
+                        tail[i_base + j] -= s;
+                    }
+                }
+            }
+            li += mr;
+        }
+        j0 += nr;
+    }
+}
+
 #[allow(clippy::needless_range_loop)]
 fn lu_factor_blocked(a_in: &[Vec<f64>]) -> Option<LuFactorsFlat> {
     let n = a_in.len();
@@ -16992,59 +17054,25 @@ fn lu_factor_blocked(a_in: &[Vec<f64>]) -> Option<LuFactorsFlat> {
         // output element is data[i][j] - Σ_p L[i][p]·U[p][j] (sum-then-subtract); the
         // disjoint L (cols < kb) / U (rows < kb) / A22 (rows,cols >= kb) regions never
         // alias, so the single flat buffer is updated in place.
-        const MR: usize = 4;
-        const NR: usize = 8;
-        let mut j0 = kb;
-        while j0 < n {
-            let nr = (n - j0).min(NR);
-            let mut i0 = kb;
-            while i0 < n {
-                let mr = (n - i0).min(MR);
-                if mr == MR && nr == NR {
-                    let r0 = i0 * n;
-                    let r1 = (i0 + 1) * n;
-                    let r2 = (i0 + 2) * n;
-                    let r3 = (i0 + 3) * n;
-                    let mut acc0 = Simd::<f64, NR>::splat(0.0);
-                    let mut acc1 = Simd::<f64, NR>::splat(0.0);
-                    let mut acc2 = Simd::<f64, NR>::splat(0.0);
-                    let mut acc3 = Simd::<f64, NR>::splat(0.0);
-                    for p in k..kb {
-                        let p_base = p * n + j0;
-                        let urow = Simd::<f64, NR>::from_slice(&data[p_base..p_base + NR]);
-                        acc0 += Simd::splat(data[r0 + p]) * urow;
-                        acc1 += Simd::splat(data[r1 + p]) * urow;
-                        acc2 += Simd::splat(data[r2 + p]) * urow;
-                        acc3 += Simd::splat(data[r3 + p]) * urow;
+        // Trailing update A22 -= L21·U12 — the O(n³) bulk. Independent output tiles
+        // fan across cores over disjoint trailing-row chunks (head = shared U12 panel,
+        // tail = trailing rows), mirroring cholesky's SYRK and the f32 path (332e430c).
+        // Same MR×NR kernel, monotonic-p reduction → bit-identical.
+        if kb < n {
+            let m2 = n - kb;
+            let nthreads = matmul_thread_count(m2, kb - k, n - kb);
+            let (head, tail) = data.split_at_mut(kb * n);
+            let head: &[f64] = head;
+            if nthreads <= 1 {
+                lu_trailing_update_rows(tail, head, k, kb, n);
+            } else {
+                let chunk = m2.div_ceil(nthreads).max(1) * n;
+                std::thread::scope(|scope| {
+                    for rows in tail.chunks_mut(chunk) {
+                        scope.spawn(move || lu_trailing_update_rows(rows, head, k, kb, n));
                     }
-                    let c0 = r0 + j0;
-                    let c1 = r1 + j0;
-                    let c2 = r2 + j0;
-                    let c3 = r3 + j0;
-                    (Simd::<f64, NR>::from_slice(&data[c0..c0 + NR]) - acc0)
-                        .copy_to_slice(&mut data[c0..c0 + NR]);
-                    (Simd::<f64, NR>::from_slice(&data[c1..c1 + NR]) - acc1)
-                        .copy_to_slice(&mut data[c1..c1 + NR]);
-                    (Simd::<f64, NR>::from_slice(&data[c2..c2 + NR]) - acc2)
-                        .copy_to_slice(&mut data[c2..c2 + NR]);
-                    (Simd::<f64, NR>::from_slice(&data[c3..c3 + NR]) - acc3)
-                        .copy_to_slice(&mut data[c3..c3 + NR]);
-                } else {
-                    for di in 0..mr {
-                        let i_base = (i0 + di) * n;
-                        for dj in 0..nr {
-                            let j = j0 + dj;
-                            let mut s = 0.0;
-                            for p in k..kb {
-                                s += data[i_base + p] * data[p * n + j];
-                            }
-                            data[i_base + j] -= s;
-                        }
-                    }
-                }
-                i0 += mr;
+                });
             }
-            j0 += nr;
         }
         k = kb;
     }
