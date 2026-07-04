@@ -16266,3 +16266,27 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - LEVER: the parallel-across-units lever extends to COMPUTE-bound per-unit grid/point evaluators (bivariate/tensor
   spline eval), which parallelize cleanly where cheap bandwidth-bound reductions do NOT. Grep interpolate/eval kernels
   for a serial outer `for i in 0..npts` with heavy independent per-point work.
+
+## 2026-07-04 - BlackThrush (cc) - RectBivariateSpline + SmoothBivariateSpline eval_grid -> parallel-across-x-rows (1.1-6.3x self, BYTE-IDENTICAL)
+
+- fsci-interpolate grid-evaluator vein, follow-on to bisplev (8d74d15a). The two remaining SERIAL grid evaluators
+  (`RectBivariateSpline::eval_grid` = xi.iter().map tensor-contract; `SmoothBivariateSpline::eval_grid` =
+  nested map over self.eval) each produce INDEPENDENT output rows (fixed x) → parallel-across-x-rows, BYTE-IDENTICAL.
+  (`bisplev_derivative` already routes through the now-parallel `bisplev`, so it was covered for free.)
+- FIX: shared `par_grid_rows(xi, ncols, &row_fn)` driver (chunks x across cores in thread::scope, concat rows in x
+  order; gate grid≥40000 — same crossover as bisplev, per-point work comparable) + atomic `EVAL_GRID_FORCE_SERIAL`.
+  Both eval_grids hoist their per-row work into a `row_fn` closure and call it.
+- SAME-BINARY A/B (3× interleaved, cubic bivariate splines), **bitmism=0 everywhere**:
+  - RectBivariateSpline (light per-point tensor contract): 200²(40k) 0.67→0.64ms **1.1×**, 500² 6.57→3.08ms **2.1×**,
+    1000² 29.10→13.43ms **2.2×**.
+  - SmoothBivariateSpline (HEAVY per-point full de Boor via self.eval): 200² 14.52→5.05ms **2.9×**, 500²
+    115.85→31.85ms **3.6×**, 1000² 351.27→55.49ms **6.3×**.
+  Both grow with grid; Smooth wins bigger (heavier per point). GATED grid≥40000 (every enabled case a measured win;
+  Rect's 1.1× at the boundary is a small positive win, sub-ms). New test
+  `bivariate_eval_grid_parallel_is_byte_identical_to_serial` (210², both variants, 0 bitmism) + all 17 bivariate
+  tests GREEN.
+- vs ORIG: scipy RectBivariateSpline/SmoothBivariateSpline `__call__(grid=True)` is single-thread FITPACK Fortran;
+  fsci fan-out should reach parity/win on large grids (not runnable on rch — no scipy). Self-ratio 1.1-6.3×.
+- LEVER (grid-evaluator vein now HARVESTED in interpolate): bisplev + bisplev_derivative + Rect/Smooth eval_grid all
+  parallel; query-LIST evaluators already use par_query_map/par_query_try_map. Compute-bound per-row grid eval =
+  clean parallel-across-rows (contrast bandwidth-bound reductions / per-iteration loops).

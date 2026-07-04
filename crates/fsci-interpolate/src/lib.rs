@@ -5098,6 +5098,46 @@ where
     })
 }
 
+/// Runtime switch to force serial tensor-product grid evaluation (`eval_grid`) for
+/// same-binary A/B benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static EVAL_GRID_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Parallel-across-x-rows driver for tensor-product grid evaluators
+/// (`RectBivariateSpline`/`SmoothBivariateSpline::eval_grid`): each x-row produces one
+/// independent, compute-bound row of the output grid, so rows fan across cores
+/// BYTE-IDENTICALLY (chunks concatenated in x order). Gated on total grid points —
+/// same crossover as `bisplev` (≥40k) since the per-point work is comparable.
+fn par_grid_rows<F>(xi: &[f64], ncols: usize, row_fn: &F) -> Vec<Vec<f64>>
+where
+    F: Fn(f64) -> Vec<f64> + Sync,
+{
+    let nrows = xi.len();
+    let grid = nrows.saturating_mul(ncols);
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(nrows.max(1));
+    if cores <= 1
+        || grid < 40_000
+        || EVAL_GRID_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return xi.iter().map(|&xv| row_fn(xv)).collect();
+    }
+    let chunk = nrows.div_ceil(cores);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = xi
+            .chunks(chunk)
+            .map(|xchunk| scope.spawn(move || xchunk.iter().map(|&xv| row_fn(xv)).collect::<Vec<Vec<f64>>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("grid eval worker panicked"))
+            .collect()
+    })
+}
+
 /// Parallel work-gate (= queries × per-query op-cost) for `par_query_map`/`par_query_try_map`.
 /// The parallel path has a large fixed cost — up to one thread per ~2 queries, each allocating
 /// its own result `Vec` that is then `flat_map`-collected — which under fleet contention is
@@ -8608,37 +8648,39 @@ impl RectBivariateSpline {
             })
             .collect();
 
-        xi.iter()
-            .map(|&xv| {
-                if !xv.is_finite() {
-                    return vec![f64::NAN; yi.len()];
-                }
-                let xc = xv.clamp(self.x_bounds.0, self.x_bounds.1);
-                let x_span = BSpline::find_span_n(&self.tx, nx, self.kx, xc);
-                let x_w = bspline_basis_funs(&self.tx, self.kx, xc, x_span);
-                let x_lo = x_span - self.kx;
-
-                y_basis
-                    .iter()
-                    .map(|yb| {
-                        let Some((y_span, y_w)) = yb else {
-                            return f64::NAN;
-                        };
-                        let y_lo = y_span - self.ky;
-                        let mut val = 0.0;
-                        for q in 0..=self.ky {
-                            let row = &self.coeffs[y_lo + q];
-                            let mut inner = 0.0;
-                            for p in 0..=self.kx {
-                                inner += x_w[p] * row[x_lo + p];
-                            }
-                            val += y_w[q] * inner;
+        // One output ROW (fixed x) is an independent, compute-bound tensor contraction:
+        // one x-basis evaluation, then each y-column sums the (kx+1)·(ky+1) coefficient
+        // window against the shared precomputed y-bases. Rows are independent → the grid
+        // fans across cores BYTE-IDENTICALLY.
+        let row_fn = |xv: f64| -> Vec<f64> {
+            if !xv.is_finite() {
+                return vec![f64::NAN; yi.len()];
+            }
+            let xc = xv.clamp(self.x_bounds.0, self.x_bounds.1);
+            let x_span = BSpline::find_span_n(&self.tx, nx, self.kx, xc);
+            let x_w = bspline_basis_funs(&self.tx, self.kx, xc, x_span);
+            let x_lo = x_span - self.kx;
+            y_basis
+                .iter()
+                .map(|yb| {
+                    let Some((y_span, y_w)) = yb else {
+                        return f64::NAN;
+                    };
+                    let y_lo = y_span - self.ky;
+                    let mut val = 0.0;
+                    for q in 0..=self.ky {
+                        let row = &self.coeffs[y_lo + q];
+                        let mut inner = 0.0;
+                        for p in 0..=self.kx {
+                            inner += x_w[p] * row[x_lo + p];
                         }
-                        val
-                    })
-                    .collect()
-            })
-            .collect()
+                        val += y_w[q] * inner;
+                    }
+                    val
+                })
+                .collect()
+        };
+        par_grid_rows(xi, yi.len(), &row_fn)
     }
 
     /// Evaluate the partial derivative d^(dx+dy)f / dx^dx dy^dy.
@@ -8954,9 +8996,11 @@ impl SmoothBivariateSpline {
     }
 
     pub fn eval_grid(&self, x: &[f64], y: &[f64]) -> Vec<Vec<f64>> {
-        x.iter()
-            .map(|&xv| y.iter().map(|&yv| self.eval(xv, yv)).collect())
-            .collect()
+        // Each output row (fixed x) is an independent sweep of `self.eval(xv, yv)` over
+        // the y-columns → fan the x-rows across cores byte-identically (see
+        // `par_grid_rows`).
+        let row_fn = |xv: f64| -> Vec<f64> { y.iter().map(|&yv| self.eval(xv, yv)).collect() };
+        par_grid_rows(x, y.len(), &row_fn)
     }
 
     pub fn eval_derivative(&self, x: f64, y: f64, dx: usize, dy: usize) -> f64 {
@@ -11499,6 +11543,52 @@ mod tests {
         assert!((result[0][1] - 2.0).abs() < 0.2, "got {}", result[0][1]); // (1.5, 0.5)
         assert!((result[1][0] - 2.0).abs() < 0.2, "got {}", result[1][0]); // (0.5, 1.5)
         assert!((result[1][1] - 3.0).abs() < 0.2, "got {}", result[1][1]); // (1.5, 1.5)
+    }
+
+    #[test]
+    fn bivariate_eval_grid_parallel_is_byte_identical_to_serial() {
+        use std::sync::atomic::Ordering;
+        // Both eval_grid variants must be BYTE-IDENTICAL parallel vs serial on a grid
+        // past the ≥40k fan-out gate (each x-row is an independent evaluation).
+        let g: Vec<f64> = (0..210).map(|i| i as f64 / 209.0).collect(); // 210² = 44100 > 40k
+        // RectBivariateSpline from a small data grid.
+        let nd = 24usize;
+        let xd: Vec<f64> = (0..nd).map(|i| i as f64 / (nd - 1) as f64).collect();
+        let zd: Vec<Vec<f64>> = xd
+            .iter()
+            .map(|&yv| xd.iter().map(|&xv| (xv * 4.0).sin() * (yv * 3.0).cos()).collect())
+            .collect();
+        let rbs = rect_bivariate_spline(&xd, &xd, &zd).unwrap();
+        // SmoothBivariateSpline from scattered data.
+        let mut st = 0x9u64;
+        let mut rng = || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (mut sx, mut sy, mut sz) = (vec![], vec![], vec![]);
+        for _ in 0..250 {
+            let (a, b) = (rng(), rng());
+            sx.push(a);
+            sy.push(b);
+            sz.push((a * 4.0).sin() * (b * 3.0).cos());
+        }
+        let sbs = smooth_bivariate_spline(&sx, &sy, &sz).unwrap();
+
+        for (label, ev) in [
+            ("rect", &(|| rbs.eval_grid(&g, &g)) as &dyn Fn() -> Vec<Vec<f64>>),
+            ("smooth", &(|| sbs.eval_grid(&g, &g)) as &dyn Fn() -> Vec<Vec<f64>>),
+        ] {
+            EVAL_GRID_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = ev();
+            EVAL_GRID_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = ev();
+            let mism: usize = serial
+                .iter()
+                .zip(parallel.iter())
+                .map(|(sr, pr)| sr.iter().zip(pr.iter()).filter(|(a, b)| a.to_bits() != b.to_bits()).count())
+                .sum();
+            assert_eq!(mism, 0, "{label} eval_grid parallel must be byte-identical to serial");
+        }
     }
 
     #[test]
