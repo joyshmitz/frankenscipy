@@ -15562,3 +15562,8 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
     vs 139.11-146.87 ms). KEEP.
 - CONF: `cargo test -p fsci-linalg lu_factor_flat_threshold_matches_original_storage -- --nocapture` via RCH GREEN;
   local SciPy oracle `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_linalg_lu_factor_lu_solve -- --nocapture` GREEN.
+- LANDING RE-CONFIRM (BlackThrush cc, same-binary A/B on rch worker `vmi1149989`, `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod`):
+  `1000x1000_flat_factor` **65.122 ms median** (61.219-67.588) vs `1000x1000_orig_nalgebra_factor` **138.61 ms median**
+  (121.80-154.68) = **2.13x faster vs ORIG** (intervals non-overlapping, flat strictly faster) — direction and
+  magnitude reproduced (codex hz1 1.68x, cc 2.13x; loaded-box variance). Independently re-ran the flat-threshold unit
+  test (4 passed) and the SciPy oracle `diff_linalg_lu_factor_lu_solve` (1 passed) GREEN before landing. LANDED.
