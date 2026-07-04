@@ -3530,7 +3530,7 @@ fn reconstruct_qr_matrix(
             b_len: r_rows,
         });
     }
-    matmul(q, r).map(|matrix| {
+    par_matmul(q, r).map(|matrix| {
         if r_cols == 0 {
             vec![Vec::new(); q_rows]
         } else {
@@ -3611,7 +3611,7 @@ pub fn qr_multiply(
     options: DecompOptions,
 ) -> Result<Vec<Vec<f64>>, LinalgError> {
     let (q_rows, q_cols) = matrix_shape(q)?;
-    let (r_rows, _r_cols) = matrix_shape(r)?;
+    let (r_rows, r_cols) = matrix_shape(r)?;
     if q_cols != r_rows {
         return Err(LinalgError::IncompatibleShapes {
             a_shape: (q_rows, q_cols),
@@ -3621,8 +3621,15 @@ pub fn qr_multiply(
     let (c_rows, c_cols) = matrix_shape(c)?;
     hardened_dimension_check(options.mode, c_rows, c_cols)?;
     validate_finite_matrix(c, options.mode, options.check_finite)?;
-    reconstruct_qr_matrix(q, r, options)?;
-    matmul(q, c)
+    // Validate q and r (dimension + finiteness), exactly as `reconstruct_qr_matrix`
+    // did — but WITHOUT its Q·R product, which the previous code computed (an O(n³)
+    // matmul) only to discard the result. The returned value is `Q·C`, independent of
+    // Q·R, so eliding it is behaviour-preserving and skips a whole redundant matmul.
+    hardened_dimension_check(options.mode, q_rows, q_cols)?;
+    hardened_dimension_check(options.mode, r_rows, r_cols)?;
+    validate_finite_matrix(q, options.mode, options.check_finite)?;
+    validate_finite_matrix(r, options.mode, options.check_finite)?;
+    par_matmul(q, c)
 }
 
 /// Apply a rank-1 update `A + u v^T` to a QR factorization.

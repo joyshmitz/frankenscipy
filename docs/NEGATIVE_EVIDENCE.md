@@ -15414,3 +15414,18 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - VERDICT: KEEP — inv (common, factorization-dominated) gets ~2x at large n. The LU serial-trailing-update lever
   is now closed for BOTH precisions (f32 solve + f64 inv/exact-solve). Reusable: dense factorization trailing/SYRK
   updates serial while a sibling parallelizes → fan across disjoint output-row chunks, byte-identical.
+
+## 2026-07-04 - BlackThrush (cc) - qr_multiply: elide a discarded O(n³) Q·R matmul + par_matmul the rest — 2.35x self, byte-identical
+
+- `qr_multiply(q, r, c)` returns `Q·C` but was calling `reconstruct_qr_matrix(q, r, options)?;` which computes the
+  FULL `Q·R` product (an O(n³) matmul) and DISCARDS it — the returned value is independent of Q·R, so it was pure
+  wasted work; its only real effect was validating q/r (dimension + finiteness). Replaced the call with the exact
+  validation (hardened_dimension_check + validate_finite on q and r), skipping the redundant matmul, and routed the
+  remaining `matmul(q, c)` through the byte-identical parallel `par_matmul`. Also routed reconstruct_qr_matrix's own
+  `matmul(q, r)` → par_matmul (helps qr_insert/qr_delete/qr_update, which genuinely need the reconstruction).
+- MEASURED (bin perf_qrmul, interleaved A/B m=1500, byte-identical acc=-2.417 every round): OLD 145.5 → NEW 62ms =
+  **2.35x self** (elide-waste ~2x + par_matmul the survivor; par_matmul-only was 1.20x). BYTE-IDENTICAL output.
+- CONF: full fsci-linalg lib 496/0, qr_multiply lib tests 2/0, local scipy-oracle diff_linalg_qr_multiply_property
+  1/0 (validation/error behaviour preserved). VERDICT: KEEP. LEVER: grep for computed-then-discarded results
+  (`fn(...)?;` where the returned value is dropped and the fn does heavy work) — a redundant-compute smell distinct
+  from serial-vs-parallel; here a whole O(n³) matmul was thrown away.
