@@ -15429,3 +15429,18 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   1/0 (validation/error behaviour preserved). VERDICT: KEEP. LEVER: grep for computed-then-discarded results
   (`fn(...)?;` where the returned value is dropped and the fn does heavy work) — a redundant-compute smell distinct
   from serial-vs-parallel; here a whole O(n³) matmul was thrown away.
+
+## 2026-07-04 - BlackThrush (cc) - LU panel rank-1 update SIMD-vectorized (both precisions) — 1.06x self on inv, byte-identical (the last serial-scalar LU bottleneck)
+
+- After the trailing-update parallelization (332e430c/e96a730b) made the LU factor's O(n³) bulk parallel, the
+  remaining serial-scalar hot loop was the PANEL rank-1 update (`for jj in (j+1)..kb: data[i][jj] -= lᵢⱼ·data[j][jj]`)
+  in both lu_factor_blocked (f64) and lu_factor_blocked_f32. It's an elementwise SAXPY (no reduction), so SIMD is
+  BIT-IDENTICAL: hoist the pivot row's block tail once into a stack `urow_buf` (breaks the flat-buffer aliasing),
+  then each trailing row updates 8-wide (f64) / 16-wide (f32).
+- MEASURED via inv (bin perf_inv, interleaved A/B n=2000, byte-identical acc=0.00300): MAIN ~330 → NEW ~310ms =
+  **~1.06x self** (NEW < MAIN all 4 rounds). Modest because the panel is only a small serial fraction now that the
+  trailing update + inv's multi-RHS back-solve are both parallel — but it is the last scalar hot loop, byte-identical
+  and consistent. The f32 change is the analogous byte-identical SAXPY (helps the mixed-precision `solve` panel).
+- CONF: full fsci-linalg lib 496/0, 41 LU/inv tests green (incl lu_solve_mixed_precision_matches_f64, byte-identity).
+  VERDICT: KEEP (small). LU factorization is now fully parallel (trailing update) + SIMD (panel + U12 solve) in both
+  precisions — the dense-LU serial-work levers are EXHAUSTED; residual gap is the dsyrk/dgemm micro-kernel depth wall.

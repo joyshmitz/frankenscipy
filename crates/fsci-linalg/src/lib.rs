@@ -16985,6 +16985,9 @@ fn lu_factor_blocked(a_in: &[Vec<f64>]) -> Option<LuFactorsFlat> {
         data.extend_from_slice(row);
     }
     let mut perm: Vec<usize> = (0..n).collect();
+    // Reusable stack buffer for the pivot row's block tail, so the panel rank-1
+    // update can SIMD it without aliasing the mutable trailing rows.
+    let mut urow_buf = [0.0f64; NB];
 
     let mut k = 0;
     while k < n {
@@ -17015,12 +17018,28 @@ fn lu_factor_blocked(a_in: &[Vec<f64>]) -> Option<LuFactorsFlat> {
                 data[i * n + j] /= pivot;
             }
             let j_base = j * n;
+            // Rank-1 panel update: rows i>j subtract lᵢⱼ·(pivot row's block tail).
+            // Elementwise SAXPY (no reduction) → SIMD is bit-identical to the scalar
+            // loop; hoist the pivot row once into `urow_buf` to break the flat-buffer
+            // aliasing so each trailing row updates 8-wide.
+            let w = kb - (j + 1);
+            urow_buf[..w].copy_from_slice(&data[j_base + j + 1..j_base + kb]);
             for i in (j + 1)..n {
                 let i_base = i * n;
                 let lij = data[i_base + j];
                 if lij != 0.0 {
-                    for jj in (j + 1)..kb {
-                        data[i_base + jj] -= lij * data[j_base + jj];
+                    let dst = &mut data[i_base + j + 1..i_base + kb];
+                    let lv = Simd::<f64, 8>::splat(lij);
+                    let mut t = 0;
+                    while t + 8 <= w {
+                        (Simd::<f64, 8>::from_slice(&dst[t..t + 8])
+                            - lv * Simd::<f64, 8>::from_slice(&urow_buf[t..t + 8]))
+                        .copy_to_slice(&mut dst[t..t + 8]);
+                        t += 8;
+                    }
+                    while t < w {
+                        dst[t] -= lij * urow_buf[t];
+                        t += 1;
                     }
                 }
             }
@@ -17203,6 +17222,7 @@ fn lu_factor_blocked_f32(a_in: &[Vec<f64>]) -> Option<LuFactorsFlatF32> {
     }
     const NB: usize = 64;
 
+    let mut urow_buf = [0.0f32; 64];
     let mut data: Vec<f32> = Vec::with_capacity(n.checked_mul(n)?);
     for row in a_in {
         data.extend(row.iter().map(|&v| v as f32));
@@ -17238,12 +17258,25 @@ fn lu_factor_blocked_f32(a_in: &[Vec<f64>]) -> Option<LuFactorsFlatF32> {
                 data[i * n + j] /= pivot;
             }
             let j_base = j * n;
+            // Rank-1 panel update (elementwise SAXPY → SIMD bit-identical to scalar).
+            let w = kb - (j + 1);
+            urow_buf[..w].copy_from_slice(&data[j_base + j + 1..j_base + kb]);
             for i in (j + 1)..n {
                 let i_base = i * n;
                 let lij = data[i_base + j];
                 if lij != 0.0 {
-                    for jj in (j + 1)..kb {
-                        data[i_base + jj] -= lij * data[j_base + jj];
+                    let dst = &mut data[i_base + j + 1..i_base + kb];
+                    let lv = Simd::<f32, 16>::splat(lij);
+                    let mut t = 0;
+                    while t + 16 <= w {
+                        (Simd::<f32, 16>::from_slice(&dst[t..t + 16])
+                            - lv * Simd::<f32, 16>::from_slice(&urow_buf[t..t + 16]))
+                        .copy_to_slice(&mut dst[t..t + 16]);
+                        t += 16;
+                    }
+                    while t < w {
+                        dst[t] -= lij * urow_buf[t];
+                        t += 1;
                     }
                 }
             }
