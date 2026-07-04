@@ -55,8 +55,8 @@ fn best_of(
 fn main() {
     let factor = 1.0;
     println!(
-        "{:>5} {:>12} {:>12} {:>8}  {}",
-        "n", "old_us", "new_us", "speedup", "exact"
+        "{:>5} {:>12} {:>12} {:>8}  exact",
+        "n", "old_us", "new_us", "speedup"
     );
     for &n in &[256usize, 512, 1024, 2048] {
         let (t_old, v_old) = best_of(5, || dft_old(n, factor));

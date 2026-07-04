@@ -7,13 +7,14 @@ use std::{
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
-    DecompOptions, InvOptions, LstsqOptions, MatrixAssumption, PinvOptions, SolveOptions,
-    TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv, lstsq, lu_factor, lu_solve,
-    matmul, orthogonal_procrustes, pinv, randomized_eigh, solve, solve_banded, solve_triangular,
-    svd,
+    DecompOptions, InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption,
+    PinvOptions, SolveOptions, TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv,
+    lstsq, lu_factor, lu_solve, matmul, orthogonal_procrustes, pinv, randomized_eigh, solve,
+    solve_banded, solve_triangular, svd,
 };
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
+use std::sync::atomic::Ordering;
 
 // Per SPEC §17, baseline sizes for dense solve family.
 // SIZES: quick smoke tests; BASELINE_SIZES: full p50/p95/p99 capture
@@ -497,11 +498,15 @@ fn bench_det_gauntlet(c: &mut Criterion) {
         let a = make_det_finite(n);
         group.bench_function(format!("{n}x{n}_flat_det"), |bencher| {
             fsci_linalg::DISABLE_FLAT_LU_FACTOR.store(false, Relaxed);
-            bencher.iter(|| black_box(det(black_box(&a), RuntimeMode::Strict, black_box(true)).unwrap()));
+            bencher.iter(|| {
+                black_box(det(black_box(&a), RuntimeMode::Strict, black_box(true)).unwrap())
+            });
         });
         group.bench_function(format!("{n}x{n}_orig_nalgebra_det"), |bencher| {
             fsci_linalg::DISABLE_FLAT_LU_FACTOR.store(true, Relaxed);
-            bencher.iter(|| black_box(det(black_box(&a), RuntimeMode::Strict, black_box(true)).unwrap()));
+            bencher.iter(|| {
+                black_box(det(black_box(&a), RuntimeMode::Strict, black_box(true)).unwrap())
+            });
             fsci_linalg::DISABLE_FLAT_LU_FACTOR.store(false, Relaxed);
         });
     }
@@ -1205,6 +1210,31 @@ fn bench_orthogonal_procrustes_gauntlet(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_khatri_rao_parallel_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("khatri_rao_parallel_ab");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    for &(m, p, r) in &[(200usize, 200usize, 10usize), (1000, 1000, 8)] {
+        let a = make_matmul_matrix(m, r, 0x4b52);
+        let b = make_matmul_matrix(p, r, 0x9a77);
+        group.bench_function(format!("current_parallel_m{m}_p{p}_r{r}"), |bencher| {
+            bencher.iter(|| {
+                KHATRI_RAO_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                black_box(fsci_linalg::khatri_rao(black_box(&a), black_box(&b)).unwrap())
+            });
+        });
+        group.bench_function(format!("orig_strided_m{m}_p{p}_r{r}"), |bencher| {
+            bencher.iter(|| {
+                KHATRI_RAO_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                black_box(fsci_linalg::khatri_rao(black_box(&a), black_box(&b)).unwrap())
+            });
+        });
+    }
+    KHATRI_RAO_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_baseline_pinv(c: &mut Criterion) {
     use std::sync::atomic::Ordering::Relaxed;
     let mut group = c.benchmark_group("baseline_pinv");
@@ -1317,6 +1347,7 @@ criterion_group!(
     bench_lu_factor_gauntlet,
     bench_det_gauntlet,
     bench_orthogonal_procrustes_gauntlet,
+    bench_khatri_rao_parallel_ab,
     bench_lu_factor_solve_gauntlet,
     bench_baseline_pinv
 );

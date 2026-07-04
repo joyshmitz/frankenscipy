@@ -120,7 +120,10 @@ fn bench_cdist_boolean_metrics(c: &mut Criterion) {
     for &d in &[64usize, 256] {
         // Deterministic pseudo-binary {0.0,1.0} data.
         let bit = |i: usize, k: usize| -> f64 {
-            (((i.wrapping_mul(2654435761).wrapping_add(k.wrapping_mul(40503))) >> 13) & 1) as f64
+            (((i.wrapping_mul(2654435761)
+                .wrapping_add(k.wrapping_mul(40503)))
+                >> 13)
+                & 1) as f64
         };
         let xa: Vec<Vec<f64>> = (0..400usize)
             .map(|i| (0..d).map(|k| bit(i, k)).collect())

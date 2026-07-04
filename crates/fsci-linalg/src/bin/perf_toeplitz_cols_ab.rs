@@ -49,7 +49,13 @@ fn serial(fhat: &[(f64, f64)], x_cols: &[Vec<f64>], m: usize, n: usize, l: usize
     x_cols.iter().map(|xc| one_col(fhat, xc, m, n, l)).collect()
 }
 
-fn parallel(fhat: &[(f64, f64)], x_cols: &[Vec<f64>], m: usize, n: usize, l: usize) -> Vec<Vec<f64>> {
+fn parallel(
+    fhat: &[(f64, f64)],
+    x_cols: &[Vec<f64>],
+    m: usize,
+    n: usize,
+    l: usize,
+) -> Vec<Vec<f64>> {
     let k = x_cols.len();
     let cores = std::thread::available_parallelism()
         .map_or(1, std::num::NonZeroUsize::get)
@@ -96,7 +102,10 @@ fn build(n: usize, k: usize) -> (Vec<f64>, Vec<f64>, Vec<Vec<f64>>) {
     (c, r, x_cols)
 }
 
-fn best_of(reps: usize, mut f: impl FnMut() -> Vec<Vec<f64>>) -> (std::time::Duration, Vec<Vec<f64>>) {
+fn best_of(
+    reps: usize,
+    mut f: impl FnMut() -> Vec<Vec<f64>>,
+) -> (std::time::Duration, Vec<Vec<f64>>) {
     let mut best = std::time::Duration::MAX;
     let mut out = Vec::new();
     for _ in 0..reps {

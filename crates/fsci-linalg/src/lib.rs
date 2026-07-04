@@ -4462,6 +4462,7 @@ fn thin_orthonormalized_columns(matrix: &[Vec<f64>], target_cols: usize) -> Vec<
 /// to the random-sketch error, machine-precision when the sketch dimension exceeds the
 /// numerical rank). Returns an [`EighResult`] with the k eigenvalues in ASCENDING order and
 /// matching eigenvector columns.
+#[allow(clippy::needless_range_loop)]
 pub fn randomized_eigh(
     a: &[Vec<f64>],
     k: usize,
@@ -5116,10 +5117,7 @@ pub fn cho_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<ChoFactorRes
         error: None,
     });
 
-    Ok(ChoFactorResult {
-        l_flat,
-        n: rows,
-    })
+    Ok(ChoFactorResult { l_flat, n: rows })
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -5573,7 +5571,12 @@ pub fn ldl(a: &[Vec<f64>], options: DecompOptions) -> Result<LdlResult, LinalgEr
 /// rounding. Returns `None` if a diagonal block is singular (λ is, to working
 /// precision, an eigenvalue of the leading block — a defective/repeated case the
 /// caller handles by falling back to the Schur basis column).
-fn solve_quasi_triangular_real(t: &DMatrix<f64>, lambda: f64, bc: usize, rhs: &[f64]) -> Option<Vec<f64>> {
+fn solve_quasi_triangular_real(
+    t: &DMatrix<f64>,
+    lambda: f64,
+    bc: usize,
+    rhs: &[f64],
+) -> Option<Vec<f64>> {
     let thresh = f64::EPSILON * 100.0;
     let mut y = vec![0.0_f64; bc];
     let mut r = bc;
@@ -6345,10 +6348,10 @@ fn symmetric_lower_band_to_tridiagonal(ab: &[Vec<f64>], n: usize) -> (Vec<f64>, 
     let mut a = vec![0.0f64; n * n];
     for j in 0..n {
         a[j * n + j] = ab[0][j];
-        for l in 1..=kd {
+        for (l, band_row) in ab.iter().enumerate().take(kd + 1).skip(1) {
             let i = j + l;
             if i < n {
-                let v = ab[l][j];
+                let v = band_row[j];
                 a[i * n + j] = v;
                 a[j * n + i] = v;
             }
@@ -6403,7 +6406,9 @@ fn symmetric_lower_band_to_tridiagonal(ab: &[Vec<f64>], n: usize) -> (Vec<f64>, 
     }
 
     let d: Vec<f64> = (0..n).map(|i| a[i * n + i]).collect();
-    let e: Vec<f64> = (0..n.saturating_sub(1)).map(|i| a[(i + 1) * n + i]).collect();
+    let e: Vec<f64> = (0..n.saturating_sub(1))
+        .map(|i| a[(i + 1) * n + i])
+        .collect();
     (d, e)
 }
 
@@ -7480,10 +7485,7 @@ pub fn expm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Lin
 /// forms, so a caller with many matrices loops single-threaded; fanning the
 /// independent per-matrix work across cores wins even when fsci's per-matrix
 /// kernel is slower than SciPy's. Tiny batches stay serial (skip the syscall).
-fn par_matrix_batch_map<F>(
-    mats: &[Vec<Vec<f64>>],
-    f: F,
-) -> Result<Vec<Vec<Vec<f64>>>, LinalgError>
+fn par_matrix_batch_map<F>(mats: &[Vec<Vec<f64>>], f: F) -> Result<Vec<Vec<Vec<f64>>>, LinalgError>
 where
     F: Fn(&[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgError> + Sync,
 {
@@ -7578,7 +7580,7 @@ where
             .min(nb)
     };
     if nthreads <= 1 {
-        return (0..nb).map(|i| f(i)).collect();
+        return (0..nb).map(f).collect();
     }
     let chunk = nb.div_ceil(nthreads);
     let f = &f;
@@ -7588,7 +7590,7 @@ where
             .map(|start| {
                 scope.spawn(move || {
                     let end = (start + chunk).min(nb);
-                    (start..end).map(|i| f(i)).collect::<Result<Vec<_>, _>>()
+                    (start..end).map(f).collect::<Result<Vec<_>, _>>()
                 })
             })
             .collect::<Vec<_>>()
@@ -7886,8 +7888,7 @@ fn expm_pm(a: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
     let a4 = par_dmatmul(&a2, &a2);
     let a6 = par_dmatmul(&a2, &a4);
     let u_inner = &a6 * B[13] + &a4 * B[11] + &a2 * B[9];
-    let p_o =
-        par_dmatmul(&a6, &u_inner) + &a6 * B[7] + &a4 * B[5] + &a2 * B[3] + &identity * B[1];
+    let p_o = par_dmatmul(&a6, &u_inner) + &a6 * B[7] + &a4 * B[5] + &a2 * B[3] + &identity * B[1];
     let w = par_dmatmul(&a_s, &p_o);
     let v_inner = &a6 * B[12] + &a4 * B[10] + &a2 * B[8];
     let p_e = par_dmatmul(&a6, &v_inner) + &a6 * B[6] + &a4 * B[4] + &a2 * B[2] + &identity * B[0];
@@ -8489,11 +8490,9 @@ fn cosm_sinm_blocks(a: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
     let m4 = par_dmatmul(&m2, &m2);
     let m5 = par_dmatmul(&m2, &m3);
     let m6 = par_dmatmul(&m3, &m3);
-    let p_e = &identity * B[0] - &m1 * B[2] + &m2 * B[4] - &m3 * B[6] + &m4 * B[8]
-        - &m5 * B[10]
+    let p_e = &identity * B[0] - &m1 * B[2] + &m2 * B[4] - &m3 * B[6] + &m4 * B[8] - &m5 * B[10]
         + &m6 * B[12];
-    let p_o = &identity * B[1] - &m1 * B[3] + &m2 * B[5] - &m3 * B[7] + &m4 * B[9]
-        - &m5 * B[11]
+    let p_o = &identity * B[1] - &m1 * B[3] + &m2 * B[5] - &m3 * B[7] + &m4 * B[9] - &m5 * B[11]
         + &m6 * B[13];
     let w = par_dmatmul(&a_s, &p_o);
     // X = (Pₑ−iW)⁻¹(Pₑ+iW) = cos(A_s)+i·sin(A_s). Solve the n×n COMPLEX Padé system as
@@ -8506,46 +8505,43 @@ fn cosm_sinm_blocks(a: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
     // factorization is large enough to amortize the extra work — measured crossover is
     // ~n=256 (n=128 loses 0.89×, n=256 wins 1.42×, n=512 wins 1.53×). Below the gate,
     // stay on the complex solve. The atomic forces the complex path for same-binary A/B.
-    let use_complex_solve = n < 256
-        || COSM_NALGEBRA_COMPLEX_SOLVE.load(std::sync::atomic::Ordering::Relaxed);
-    let real_block: Option<(DMatrix<f64>, DMatrix<f64>)> =
-        if use_complex_solve {
-            let den = DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| {
-                Complex::new(p_e[(i, j)], -w[(i, j)])
-            });
-            let num = DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| {
-                Complex::new(p_e[(i, j)], w[(i, j)])
-            });
-            den.lu().solve(&num).map(|x| {
-                (
-                    DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].re),
-                    DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].im),
-                )
-            })
-        } else {
-            let mut m_block = vec![vec![0.0f64; 2 * n]; 2 * n];
-            let mut rhs = vec![0.0f64; (2 * n) * n];
-            for i in 0..n {
-                let (row_i, row_ni) = {
-                    let (top, bot) = m_block.split_at_mut(n);
-                    (&mut top[i], &mut bot[i])
-                };
-                for j in 0..n {
-                    row_i[j] = p_e[(i, j)];
-                    row_i[n + j] = w[(i, j)];
-                    row_ni[j] = -w[(i, j)];
-                    row_ni[n + j] = p_e[(i, j)];
-                    rhs[i * n + j] = p_e[(i, j)];
-                    rhs[(n + i) * n + j] = w[(i, j)];
-                }
+    let use_complex_solve =
+        n < 256 || COSM_NALGEBRA_COMPLEX_SOLVE.load(std::sync::atomic::Ordering::Relaxed);
+    let real_block: Option<(DMatrix<f64>, DMatrix<f64>)> = if use_complex_solve {
+        let den =
+            DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| Complex::new(p_e[(i, j)], -w[(i, j)]));
+        let num =
+            DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| Complex::new(p_e[(i, j)], w[(i, j)]));
+        den.lu().solve(&num).map(|x| {
+            (
+                DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].re),
+                DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].im),
+            )
+        })
+    } else {
+        let mut m_block = vec![vec![0.0f64; 2 * n]; 2 * n];
+        let mut rhs = vec![0.0f64; (2 * n) * n];
+        for i in 0..n {
+            let (row_i, row_ni) = {
+                let (top, bot) = m_block.split_at_mut(n);
+                (&mut top[i], &mut bot[i])
+            };
+            for j in 0..n {
+                row_i[j] = p_e[(i, j)];
+                row_i[n + j] = w[(i, j)];
+                row_ni[j] = -w[(i, j)];
+                row_ni[n + j] = p_e[(i, j)];
+                rhs[i * n + j] = p_e[(i, j)];
+                rhs[(n + i) * n + j] = w[(i, j)];
             }
-            lu_solve_flat_matrix_rhs(&m_block, &rhs, n).map(|xf| {
-                (
-                    DMatrix::<f64>::from_fn(n, n, |i, j| xf[i * n + j]),
-                    DMatrix::<f64>::from_fn(n, n, |i, j| xf[(n + i) * n + j]),
-                )
-            })
-        };
+        }
+        lu_solve_flat_matrix_rhs(&m_block, &rhs, n).map(|xf| {
+            (
+                DMatrix::<f64>::from_fn(n, n, |i, j| xf[i * n + j]),
+                DMatrix::<f64>::from_fn(n, n, |i, j| xf[(n + i) * n + j]),
+            )
+        })
+    };
     let (mut cos, mut sin) = match real_block {
         Some(cs) => cs,
         None => {
@@ -8797,6 +8793,12 @@ pub fn fractional_matrix_power(
 /// column j is the Kronecker product of `A[:,j]` and `B[:,j]`.
 ///
 /// Matches `scipy.linalg.khatri_rao(A, B)`.
+/// Runtime switch to force the original strided `khatri_rao` build for
+/// same-binary A/B benchmarks. Defaults off. `#[doc(hidden)]` -- internal.
+#[doc(hidden)]
+pub static KHATRI_RAO_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn khatri_rao(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgError> {
     let (m, na) = matrix_shape(a)?;
     let (p, nb) = matrix_shape(b)?;
@@ -8808,14 +8810,56 @@ pub fn khatri_rao(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, Linal
     let ncols = na;
     let nrows = m * p;
 
-    let mut result = vec![vec![0.0; ncols]; nrows];
-    for j in 0..ncols {
-        for i in 0..m {
-            for k in 0..p {
-                result[i * p + k][j] = a[i][j] * b[k][j];
+    let build_original_strided = || {
+        let mut result = vec![vec![0.0; ncols]; nrows];
+        for j in 0..ncols {
+            for i in 0..m {
+                let aij = a[i][j];
+                for k in 0..p {
+                    result[i * p + k][j] = aij * b[k][j];
+                }
             }
         }
+        result
+    };
+    if KHATRI_RAO_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(build_original_strided());
     }
+
+    // Output row r = i·p+k (i = r/p, k = r%p): `result[r][j] = a[i][j]·b[k][j]` for all
+    // j. Rows are INDEPENDENT, so build each ROW-MAJOR in a worker via `collect` -- that
+    // is cache-friendly (the old fill wrote column-major `result[..][j]` into row-major
+    // Vecs = a stride-ncols scatter) AND fans across cores. Byte-identical values.
+    let build_row = |r: usize| -> Vec<f64> {
+        let (i, k) = (r / p, r % p);
+        let (ai, bk) = (&a[i], &b[k]);
+        (0..ncols).map(|j| ai[j] * bk[j]).collect()
+    };
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(nrows.max(1));
+    if cores <= 1 || nrows.saturating_mul(ncols) < (1 << 16) {
+        return Ok((0..nrows).map(build_row).collect());
+    }
+    let chunk = nrows.div_ceil(cores);
+    let build_row_ref = &build_row;
+    let result = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..cores)
+            .filter_map(|t| {
+                let r0 = t * chunk;
+                if r0 >= nrows {
+                    return None;
+                }
+                let r1 = (r0 + chunk).min(nrows);
+                Some(scope.spawn(move || (r0..r1).map(build_row_ref).collect::<Vec<Vec<f64>>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("khatri_rao worker panicked"))
+            .collect()
+    });
     Ok(result)
 }
 
@@ -9126,7 +9170,10 @@ pub fn solve_toeplitz_many(
                     return None;
                 }
                 let s1 = (s0 + chunk).min(k);
-                Some(scope.spawn(move || bs[s0..s1].iter().map(|b| solve_ref(b)).collect::<Vec<_>>()))
+                Some(
+                    scope
+                        .spawn(move || bs[s0..s1].iter().map(|b| solve_ref(b)).collect::<Vec<_>>()),
+                )
             })
             .collect();
         handles
@@ -14947,8 +14994,7 @@ pub fn matmul_toeplitz(
     // product (robust to thin matrices, where the embedding length L ~ 2·max(m,n)
     // makes FFT lose) and the inputs are well-formed and finite. The dense
     // fallback below preserves all original shape-error semantics.
-    let well_formed =
-        m > 0 && n > 0 && k > 0 && x.len() == n && x.iter().all(|col| col.len() == k);
+    let well_formed = m > 0 && n > 0 && k > 0 && x.len() == n && x.iter().all(|col| col.len() == k);
     if well_formed {
         let l = (m + n - 1).next_power_of_two();
         let dense_cost = (m as u128) * (n as u128) * (k as u128);
@@ -14958,10 +15004,9 @@ pub fn matmul_toeplitz(
             && c.iter().all(|v| v.is_finite())
             && row.iter().all(|v| v.is_finite())
             && x.iter().flat_map(|col| col.iter()).all(|v| v.is_finite())
+            && let Some(y) = matmul_toeplitz_fft(c, row, x, m, n, k, l)
         {
-            if let Some(y) = matmul_toeplitz_fft(c, row, x, m, n, k, l) {
-                return Ok(y);
-            }
+            return Ok(y);
         }
     }
     let t = toeplitz(c, r);
@@ -15763,7 +15808,11 @@ pub fn dft_matrix(n: usize) -> Vec<Vec<(f64, f64)>> {
                     return None;
                 }
                 let j1 = (j0 + chunk).min(n);
-                Some(scope.spawn(move || (j0..j1).map(build_row_ref).collect::<Vec<Vec<(f64, f64)>>>()))
+                Some(scope.spawn(move || {
+                    (j0..j1)
+                        .map(build_row_ref)
+                        .collect::<Vec<Vec<(f64, f64)>>>()
+                }))
             })
             .collect();
         handles
@@ -16002,7 +16051,11 @@ pub fn bandwidth(a: &[Vec<f64>]) -> (usize, usize) {
 pub fn tri(n: usize, m: usize, k: i64) -> Vec<Vec<f64>> {
     par_fill_rows(n, m, |i, out| {
         for (j, value) in out.iter_mut().enumerate() {
-            *value = if (j as i64) <= (i as i64) + k { 1.0 } else { 0.0 };
+            *value = if (j as i64) <= (i as i64) + k {
+                1.0
+            } else {
+                0.0
+            };
         }
     })
 }
@@ -16062,8 +16115,7 @@ pub fn kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     par_fill_rows(ra * rb, ca * cb, |r, out| {
         let i = r / rb;
         let k = r % rb;
-        for j in 0..ca {
-            let aij = a[i][j];
+        for (j, &aij) in a[i].iter().enumerate().take(ca) {
             let base = j * cb;
             for l in 0..cb {
                 out[base + l] = aij * b[k][l];
@@ -18251,7 +18303,14 @@ fn syrk_sub8(row: &mut [f64], col: usize, c: Simd<f64, 8>) {
 /// Per-row triangular update `row[kb+j] -= Σ_p l21[ii][p]·l21[j][p]` for `j = 0..=ii`,
 /// starting from column `j_start` (the register-tiled path handles `0..j_start`).
 #[inline]
-fn cholesky_syrk_row_tail(row: &mut [f64], ii: usize, j_start: usize, l21: &[f64], nb: usize, kb: usize) {
+fn cholesky_syrk_row_tail(
+    row: &mut [f64],
+    ii: usize,
+    j_start: usize,
+    l21: &[f64],
+    nb: usize,
+    kb: usize,
+) {
     let lhs = &l21[ii * nb..ii * nb + nb];
     let mut j = j_start;
     while j + 4 <= ii + 1 {
@@ -18279,6 +18338,7 @@ fn cholesky_syrk_row_tail(row: &mut [f64], ii: usize, j_start: usize, l21: &[f64
 /// micro-kernel. NOT bit-identical to the dot-product kernel (the contraction sums lane-wise
 /// over `p` rather than 8-wide-then-reduce), but the Cholesky factor is unique and the golden
 /// tests validate to 1e-10; the diagonal-block / tail columns still use the exact dot path.
+#[allow(clippy::needless_range_loop)]
 fn cholesky_syrk_rows(
     rows: &mut [Vec<f64>],
     row_offset: usize,
@@ -18387,12 +18447,14 @@ fn cholesky_solve_matrix_rhs_batched(
                 }
                 let c1 = (c0 + chunk).min(w);
                 Some(scope.spawn(move || {
-                    cholesky_solve_matrix_rhs_columns(chol, rhs, c0, c1)
-                        .map(|block| (c0, block))
+                    cholesky_solve_matrix_rhs_columns(chol, rhs, c0, c1).map(|block| (c0, block))
                 }))
             })
             .collect();
-        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
     });
 
     let mut out = DMatrix::<f64>::zeros(n, w);
@@ -18454,7 +18516,10 @@ fn cholesky_solve_matrix_rhs_rows_batched(
                 }))
             })
             .collect();
-        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
     });
 
     let mut out = vec![vec![0.0; w]; n];
@@ -18508,7 +18573,10 @@ fn cholesky_solve_identity_rhs_rows_batched(chol: &Cholesky<f64, Dyn>) -> Option
                 }))
             })
             .collect();
-        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
     });
 
     let mut out = vec![vec![0.0; n]; n];
@@ -18570,7 +18638,10 @@ fn cholesky_solve_transpose_rhs_rows_batched(
                 }))
             })
             .collect();
-        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
     });
 
     let mut out = vec![vec![0.0; w]; n];
@@ -18675,7 +18746,7 @@ fn cholesky_solve_matrix_rhs_columns_flat(
         }
     }
 
-    cholesky_solve_lower_flat(&l, b, w)
+    cholesky_solve_lower_flat(l, b, w)
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -18698,7 +18769,7 @@ fn cholesky_solve_identity_rhs_columns_flat(
         }
     }
 
-    cholesky_solve_lower_flat(&l, b, w)
+    cholesky_solve_lower_flat(l, b, w)
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -18723,14 +18794,14 @@ fn cholesky_solve_transpose_rhs_columns_flat(
         }
     }
 
-    cholesky_solve_lower_flat(&l, b, w)
+    cholesky_solve_lower_flat(l, b, w)
 }
 
 fn cholesky_rhs_flat_to_rows(n: usize, w: usize, flat: &[f64]) -> Vec<Vec<f64>> {
     let mut rows = vec![vec![0.0; w]; n];
-    for row in 0..n {
+    for (row, row_values) in rows.iter_mut().enumerate().take(n) {
         let src = row * w;
-        rows[row].copy_from_slice(&flat[src..src + w]);
+        row_values.copy_from_slice(&flat[src..src + w]);
     }
     rows
 }
@@ -19006,9 +19077,8 @@ fn cholesky_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
                 std::thread::scope(|scope| {
                     for (t, rows) in lower.chunks_mut(chunk).enumerate() {
                         let r0 = t * chunk;
-                        scope.spawn(move || {
-                            cholesky_syrk_rows(rows, r0, l21_ref, l21t_ref, nb, kb)
-                        });
+                        scope
+                            .spawn(move || cholesky_syrk_rows(rows, r0, l21_ref, l21t_ref, nb, kb));
                     }
                 });
             }
@@ -20196,18 +20266,32 @@ mod tests {
     fn matrix_helpers2_match_numpy() {
         // More previously-untested linalg helpers vs numpy/analytic identities.
         let rank_def = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
-        assert_eq!(numerical_rank(&rank_def, 1e-10, DecompOptions::default()).unwrap(), 1);
+        assert_eq!(
+            numerical_rank(&rank_def, 1e-10, DecompOptions::default()).unwrap(),
+            1
+        );
         let full = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
-        assert_eq!(numerical_rank(&full, 1e-10, DecompOptions::default()).unwrap(), 2);
+        assert_eq!(
+            numerical_rank(&full, 1e-10, DecompOptions::default()).unwrap(),
+            2
+        );
         // eye_k(n,m,k) matches numpy.eye: superdiagonal for k=1.
         assert_eq!(
             eye_k(3, 3, 1),
-            vec![vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 1.0], vec![0.0, 0.0, 0.0]]
+            vec![
+                vec![0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 1.0],
+                vec![0.0, 0.0, 0.0]
+            ]
         );
         // antidiag places v top-right -> bottom-left.
         assert_eq!(
             antidiag(&[1.0, 2.0, 3.0]),
-            vec![vec![0.0, 0.0, 1.0], vec![0.0, 2.0, 0.0], vec![3.0, 0.0, 0.0]]
+            vec![
+                vec![0.0, 0.0, 1.0],
+                vec![0.0, 2.0, 0.0],
+                vec![3.0, 0.0, 0.0]
+            ]
         );
         let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
         assert_eq!(matvec(&a, &[1.0, 1.0]).unwrap(), vec![3.0, 7.0]);
@@ -20225,7 +20309,10 @@ mod tests {
             vec![vec![3.0, 4.0], vec![6.0, 8.0]]
         );
         let m = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
-        assert!((frobenius_norm(&m) - 30.0_f64.sqrt()).abs() < 1e-12, "frobenius=sqrt30");
+        assert!(
+            (frobenius_norm(&m) - 30.0_f64.sqrt()).abs() < 1e-12,
+            "frobenius=sqrt30"
+        );
         // 2x2 adjugate [[a,b],[c,d]] -> [[d,-b],[-c,a]].
         assert_eq!(adjugate(&m), vec![vec![4.0, -2.0], vec![-3.0, 1.0]]);
         // permanent of [[a,b],[c,d]] = ad + bc.
@@ -20264,15 +20351,27 @@ mod tests {
         );
         assert_eq!(
             block_diag(&[vec![vec![1.0, 2.0], vec![3.0, 4.0]], vec![vec![5.0]]]),
-            vec![vec![1.0, 2.0, 0.0], vec![3.0, 4.0, 0.0], vec![0.0, 0.0, 5.0]]
+            vec![
+                vec![1.0, 2.0, 0.0],
+                vec![3.0, 4.0, 0.0],
+                vec![0.0, 0.0, 5.0]
+            ]
         );
         assert_eq!(
             toeplitz(&[1.0, 2.0, 3.0], None),
-            vec![vec![1.0, 2.0, 3.0], vec![2.0, 1.0, 2.0], vec![3.0, 2.0, 1.0]]
+            vec![
+                vec![1.0, 2.0, 3.0],
+                vec![2.0, 1.0, 2.0],
+                vec![3.0, 2.0, 1.0]
+            ]
         );
         assert_eq!(
             circulant(&[1.0, 2.0, 3.0]),
-            vec![vec![1.0, 3.0, 2.0], vec![2.0, 1.0, 3.0], vec![3.0, 2.0, 1.0]]
+            vec![
+                vec![1.0, 3.0, 2.0],
+                vec![2.0, 1.0, 3.0],
+                vec![3.0, 2.0, 1.0]
+            ]
         );
     }
 
@@ -20347,23 +20446,35 @@ mod tests {
         // scipy.linalg.logm/sqrtm of A=[[4,1],[1,4]] (symmetric, eigenvalues 5,3).
         let a = vec![vec![4.0, 1.0], vec![1.0, 4.0]];
         let l = logm(&a, DecompOptions::default()).expect("logm");
-        assert!((l[0][0] - 1.354_025_100_551_104_8).abs() < 1e-10, "logm diag: {}", l[0][0]);
-        assert!((l[0][1] - 0.255_412_811_882_995_25).abs() < 1e-10, "logm off: {}", l[0][1]);
+        assert!(
+            (l[0][0] - 1.354_025_100_551_104_8).abs() < 1e-10,
+            "logm diag: {}",
+            l[0][0]
+        );
+        assert!(
+            (l[0][1] - 0.255_412_811_882_995_25).abs() < 1e-10,
+            "logm off: {}",
+            l[0][1]
+        );
         assert!((l[0][1] - l[1][0]).abs() < 1e-12, "logm symmetric");
         let s = sqrtm(&a, DecompOptions::default()).expect("sqrtm");
-        assert!((s[0][0] - 1.984_059_392_534_333_3).abs() < 1e-10, "sqrtm diag: {}", s[0][0]);
-        assert!((s[0][1] - 0.252_008_584_965_456_2).abs() < 1e-10, "sqrtm off: {}", s[0][1]);
+        assert!(
+            (s[0][0] - 1.984_059_392_534_333_3).abs() < 1e-10,
+            "sqrtm diag: {}",
+            s[0][0]
+        );
+        assert!(
+            (s[0][1] - 0.252_008_584_965_456_2).abs() < 1e-10,
+            "sqrtm off: {}",
+            s[0][1]
+        );
     }
 
     #[test]
     fn expm_match_scipy() {
         // scipy.linalg.expm: rotation generator -> rotation matrix; diagonal ->
         // diag(exp).
-        let rot = expm(
-            &[vec![0.0, 1.0], vec![-1.0, 0.0]],
-            DecompOptions::default(),
-        )
-        .expect("expm");
+        let rot = expm(&[vec![0.0, 1.0], vec![-1.0, 0.0]], DecompOptions::default()).expect("expm");
         let er = [
             [0.540_302_305_868_139_7, 0.841_470_984_807_896_6],
             [-0.841_470_984_807_896_5, 0.540_302_305_868_139_7],
@@ -20374,9 +20485,18 @@ mod tests {
             }
         }
         let diag = expm(&[vec![1.0, 0.0], vec![0.0, 2.0]], DecompOptions::default()).expect("expm");
-        assert!((diag[0][0] - std::f64::consts::E).abs() < 1e-12, "diag[0][0]");
-        assert!((diag[1][1] - 7.389_056_098_930_65).abs() < 1e-12, "diag[1][1]");
-        assert!(diag[0][1].abs() < 1e-14 && diag[1][0].abs() < 1e-14, "off-diag ~0");
+        assert!(
+            (diag[0][0] - std::f64::consts::E).abs() < 1e-12,
+            "diag[0][0]"
+        );
+        assert!(
+            (diag[1][1] - 7.389_056_098_930_65).abs() < 1e-12,
+            "diag[1][1]"
+        );
+        assert!(
+            diag[0][1].abs() < 1e-14 && diag[1][0].abs() < 1e-14,
+            "off-diag ~0"
+        );
     }
 
     #[test]
@@ -20389,11 +20509,7 @@ mod tests {
             vec![2.0, 3.0, 6.0],
         ];
         let r = cholesky(&a, true, DecompOptions::default()).expect("cholesky");
-        let expect = [
-            [2.0, 0.0, 0.0],
-            [1.0, 2.0, 0.0],
-            [1.0, 1.0, 2.0],
-        ];
+        let expect = [[2.0, 0.0, 0.0], [1.0, 2.0, 0.0], [1.0, 1.0, 2.0]];
         for (gr, er) in r.factor.iter().zip(&expect) {
             for (g, e) in gr.iter().zip(er) {
                 assert!((g - e).abs() < 1e-12, "cholesky L: {g} vs {e}");
@@ -20416,7 +20532,11 @@ mod tests {
         let n = 3;
         let mm = |x: &[Vec<f64>], y: &[Vec<f64>]| -> Vec<Vec<f64>> {
             (0..n)
-                .map(|i| (0..n).map(|j| (0..n).map(|k| x[i][k] * y[k][j]).sum()).collect())
+                .map(|i| {
+                    (0..n)
+                        .map(|j| (0..n).map(|k| x[i][k] * y[k][j]).sum())
+                        .collect()
+                })
                 .collect()
         };
         for i in 0..n {
@@ -20458,7 +20578,11 @@ mod tests {
         for i in 0..n {
             for j in 0..n {
                 let s: f64 = (0..n).map(|k| r.u[i][k] * r.s[k] * r.vt[k][j]).sum();
-                assert!((s - a[i][j]).abs() < 1e-9, "USV[{i}][{j}]: {s} vs {}", a[i][j]);
+                assert!(
+                    (s - a[i][j]).abs() < 1e-9,
+                    "USV[{i}][{j}]: {s} vs {}",
+                    a[i][j]
+                );
             }
         }
         for k in 0..n {
@@ -20512,7 +20636,11 @@ mod tests {
         for i in 0..n {
             for j in 0..n {
                 let s: f64 = (0..n).map(|k| res.q[i][k] * res.r[k][j]).sum();
-                assert!((s - a[i][j]).abs() < 1e-9, "QR[{i}][{j}]: {s} vs {}", a[i][j]);
+                assert!(
+                    (s - a[i][j]).abs() < 1e-9,
+                    "QR[{i}][{j}]: {s} vs {}",
+                    a[i][j]
+                );
             }
         }
         for i in 0..n {
@@ -21916,8 +22044,7 @@ mod tests {
         assert!(max_abs_dmatrix_diff(&actual_gram, &expected_gram) <= 1e-10);
 
         let expected_rhs = &a_t * &rhs;
-        let actual_rhs =
-            matrix_transpose_mul_vector_from_columns(&matrix, &rhs).expect("A^T rhs");
+        let actual_rhs = matrix_transpose_mul_vector_from_columns(&matrix, &rhs).expect("A^T rhs");
         let mut max_rhs_diff = 0.0_f64;
         for idx in 0..cols {
             max_rhs_diff = max_rhs_diff.max((actual_rhs[idx] - expected_rhs[idx]).abs());
@@ -21977,12 +22104,24 @@ mod tests {
         let matrix = dmatrix_from_rows(&matrix_rows).expect("matrix rows");
         let rtol = (rows.max(cols) as f64) * f64::EPSILON;
 
-        let diag_gate =
-            pinv_full_rank_wide_cholesky_with_min_rows_impl(&matrix_rows, &matrix, 0.0, rtol, 1, false)
-                .expect("diagonal rcond gate route");
-        let eigen_gate =
-            pinv_full_rank_wide_cholesky_with_min_rows_impl(&matrix_rows, &matrix, 0.0, rtol, 1, true)
-                .expect("eigenspectrum rcond gate route");
+        let diag_gate = pinv_full_rank_wide_cholesky_with_min_rows_impl(
+            &matrix_rows,
+            &matrix,
+            0.0,
+            rtol,
+            1,
+            false,
+        )
+        .expect("diagonal rcond gate route");
+        let eigen_gate = pinv_full_rank_wide_cholesky_with_min_rows_impl(
+            &matrix_rows,
+            &matrix,
+            0.0,
+            rtol,
+            1,
+            true,
+        )
+        .expect("eigenspectrum rcond gate route");
         assert_eq!(diag_gate.rank, eigen_gate.rank);
         assert!(diag_gate.rcond_estimate.is_finite());
         assert!(diag_gate.rcond_estimate > 0.0);
@@ -22088,12 +22227,7 @@ mod tests {
             .expect("transposed-RHS row-major batched solve");
 
         assert!(max_abs_dmatrix_diff(&actual, &expected) <= 1e-12);
-        assert_close_matrix(
-            &actual_rows,
-            &rows_from_dmatrix(&expected),
-            1e-12,
-            1e-12,
-        );
+        assert_close_matrix(&actual_rows, &rows_from_dmatrix(&expected), 1e-12, 1e-12);
         assert_close_matrix(
             &transposed_rows,
             &rows_from_dmatrix(&expected),
@@ -22155,17 +22289,16 @@ mod tests {
         let chol = Cholesky::new(&a_t * &matrix).expect("SPD Gram factor");
 
         let left = cholesky_solve_matrix_rhs_columns(&chol, &a_t, 0, rows / 2).expect("left block");
-        let right = cholesky_solve_matrix_rhs_columns(&chol, &a_t, rows / 2, rows).expect("right block");
+        let right =
+            cholesky_solve_matrix_rhs_columns(&chol, &a_t, rows / 2, rows).expect("right block");
         let full = cholesky_solve_matrix_rhs_columns(&chol, &a_t, 0, rows).expect("full block");
-        let transpose_left =
-            cholesky_solve_transpose_rhs_columns_flat(&chol, &matrix, 0, rows / 2)
-                .expect("left transposed block");
+        let transpose_left = cholesky_solve_transpose_rhs_columns_flat(&chol, &matrix, 0, rows / 2)
+            .expect("left transposed block");
         let transpose_right =
             cholesky_solve_transpose_rhs_columns_flat(&chol, &matrix, rows / 2, rows)
                 .expect("right transposed block");
-        let transpose_full =
-            cholesky_solve_transpose_rhs_columns_flat(&chol, &matrix, 0, rows)
-                .expect("full transposed block");
+        let transpose_full = cholesky_solve_transpose_rhs_columns_flat(&chol, &matrix, 0, rows)
+            .expect("full transposed block");
 
         let mut reassembled = DMatrix::<f64>::zeros(cols, rows);
         for row in 0..cols {
@@ -27137,7 +27270,11 @@ mod tests {
         // bit-for-bit identical to full eig()'s eigenvalues — for real spectra and
         // for complex-conjugate pairs (2×2 blocks).
         let cases: &[Vec<Vec<f64>>] = &[
-            vec![vec![5.0, 2.0, 0.0], vec![2.0, 3.0, 1.0], vec![0.0, 1.0, 4.0]],
+            vec![
+                vec![5.0, 2.0, 0.0],
+                vec![2.0, 3.0, 1.0],
+                vec![0.0, 1.0, 4.0],
+            ],
             // Rotation-like block → complex conjugate eigenvalues.
             vec![vec![0.0, -1.0], vec![1.0, 0.0]],
             vec![
@@ -27546,7 +27683,10 @@ mod tests {
             let a: Vec<Vec<f64>> = (0..n).map(|_| (0..n).map(|_| rng()).collect()).collect();
             let full = hessenberg(&a, DecompOptions::default()).unwrap();
             let h_only = hessenberg_h(&a, DecompOptions::default()).unwrap();
-            assert_eq!(h_only, full.h, "hessenberg_h vs full hessenberg.h for n={n}");
+            assert_eq!(
+                h_only, full.h,
+                "hessenberg_h vs full hessenberg.h for n={n}"
+            );
         }
     }
 
@@ -28518,11 +28658,17 @@ mod tests {
     #[test]
     fn block_diag_empty_block_contributes_zero_width_row_like_scipy() {
         let empty = Vec::<Vec<f64>>::new();
-        assert_eq!(block_diag(std::slice::from_ref(&empty)), vec![Vec::<f64>::new()]);
+        assert_eq!(
+            block_diag(std::slice::from_ref(&empty)),
+            vec![Vec::<f64>::new()]
+        );
 
         let dense = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
         let leading = block_diag(&[empty.clone(), dense.clone()]);
-        assert_eq!(leading, vec![vec![0.0, 0.0], vec![1.0, 2.0], vec![3.0, 4.0]]);
+        assert_eq!(
+            leading,
+            vec![vec![0.0, 0.0], vec![1.0, 2.0], vec![3.0, 4.0]]
+        );
 
         let trailing = block_diag(&[vec![vec![1.0, 2.0]], empty]);
         assert_eq!(trailing, vec![vec![1.0, 2.0], vec![0.0, 0.0]]);
@@ -29091,7 +29237,10 @@ mod tests {
         let serial = convolution_matrix(&h, n, "full");
         CONVMAT_FORCE_SERIAL.store(false, Ordering::Relaxed);
         let parallel = convolution_matrix(&h, n, "full");
-        assert!(serial.len() * n >= (1 << 18), "must exceed the fan-out gate");
+        assert!(
+            serial.len() * n >= (1 << 18),
+            "must exceed the fan-out gate"
+        );
         let mism: usize = serial
             .iter()
             .zip(parallel.iter())
@@ -29102,7 +29251,10 @@ mod tests {
                     .count()
             })
             .sum();
-        assert_eq!(mism, 0, "parallel convolution_matrix must be byte-identical");
+        assert_eq!(
+            mism, 0,
+            "parallel convolution_matrix must be byte-identical"
+        );
     }
 
     #[test]
@@ -29267,7 +29419,11 @@ mod tests {
         let increasing = vander(&[1.0, 2.0, 3.0], None, true);
         assert_eq!(
             increasing,
-            vec![vec![1.0, 1.0, 1.0], vec![1.0, 2.0, 4.0], vec![1.0, 3.0, 9.0]]
+            vec![
+                vec![1.0, 1.0, 1.0],
+                vec![1.0, 2.0, 4.0],
+                vec![1.0, 3.0, 9.0]
+            ]
         );
 
         let zero_cols = vander(&[1.0, 2.0, 3.0], Some(0), false);
@@ -29345,7 +29501,10 @@ mod tests {
                     .count()
             })
             .sum();
-        assert_eq!(mism, 0, "parallel dft_matrix must be byte-identical to serial");
+        assert_eq!(
+            mism, 0,
+            "parallel dft_matrix must be byte-identical to serial"
+        );
     }
 
     // ═══ AuditLedger Integration Tests (§0.19) ═══
@@ -31025,6 +31184,47 @@ mod proptest_tests {
     }
 
     #[test]
+    fn khatri_rao_parallel_is_byte_identical_to_serial_above_gate() {
+        use std::sync::atomic::Ordering;
+        // Above the nrows·ncols ≥ 2^16 fan-out gate the parallel row-major build must be
+        // BYTE-IDENTICAL to the serial build (each output row r=(i·p+k) is independent).
+        let (m, p, r) = (400usize, 400usize, 8usize); // nrows=160000 > 65536 gate
+        let mut s = 0x99u64;
+        let mut mk = |rows: usize| -> Vec<Vec<f64>> {
+            (0..rows)
+                .map(|_| {
+                    (0..r)
+                        .map(|_| {
+                            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+                            (s >> 11) as f64 / (1u64 << 53) as f64
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let a = mk(m);
+        let b = mk(p);
+        KHATRI_RAO_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = khatri_rao(&a, &b).expect("serial");
+        KHATRI_RAO_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = khatri_rao(&a, &b).expect("parallel");
+        let mism: usize = serial
+            .iter()
+            .zip(parallel.iter())
+            .map(|(sr, pr)| {
+                sr.iter()
+                    .zip(pr.iter())
+                    .filter(|(x, y)| x.to_bits() != y.to_bits())
+                    .count()
+            })
+            .sum();
+        assert_eq!(
+            mism, 0,
+            "parallel khatri_rao must be byte-identical to serial"
+        );
+    }
+
+    #[test]
     fn khatri_rao_mismatched_cols() {
         let a = vec![vec![1.0, 2.0]];
         let b = vec![vec![1.0, 2.0, 3.0]];
@@ -31469,12 +31669,7 @@ mod proptest_tests {
         let (eigenvalues, eigenvectors) =
             eig_banded(&ab, false, false, DecompOptions::default()).expect("upper eig_banded");
         let sqrt2 = std::f64::consts::SQRT_2;
-        assert_close_slice(
-            &eigenvalues,
-            &[2.0 - sqrt2, 2.0, 2.0 + sqrt2],
-            1e-8,
-            1e-8,
-        );
+        assert_close_slice(&eigenvalues, &[2.0 - sqrt2, 2.0, 2.0 + sqrt2], 1e-8, 1e-8);
         assert!(eigenvectors.is_some());
     }
 

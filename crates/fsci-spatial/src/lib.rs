@@ -771,7 +771,11 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
                 flat.extend_from_slice(row);
             }
             pdist_fill(n, total, nthreads, |i, j| {
-                metric_distance(&flat[i * dim..i * dim + dim], &flat[j * dim..j * dim + dim], metric)
+                metric_distance(
+                    &flat[i * dim..i * dim + dim],
+                    &flat[j * dim..j * dim + dim],
+                    metric,
+                )
             })
         }
     };
@@ -1630,8 +1634,9 @@ pub fn cdist_metric(
             // per-lane reduction matches the scalar dot (`.sum()` left-fold) bit-for-bit, and
             // `denom=(ssa*ssb).sqrt()` is computed identically. Bandwidth-bound ⇒ cap at 16.
             if dim < 8 {
-                let cb_soa: Vec<Vec<f64>> =
-                    (0..dim).map(|k| pb.iter().map(|(c, _)| c[k]).collect()).collect();
+                let cb_soa: Vec<Vec<f64>> = (0..dim)
+                    .map(|k| pb.iter().map(|(c, _)| c[k]).collect())
+                    .collect();
                 let ssb: Vec<f64> = pb.iter().map(|(_, ss)| *ss).collect();
                 cdist_fill_rows(na, nthreads.min(16), |i| {
                     let (ci, ssa) = &pa[i];
@@ -2122,7 +2127,7 @@ fn cdist_row_jaccard_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
 /// needs d≥8, so it left-folds `k=0..d`; `dk*dk == dk.powi(2)`, the `v<=0` branch
 /// becomes a lane select on a uniformly-true/false mask since `v[k]` is a splat).
 fn cdist_row_seuclidean_soa(ai: &[f64], b: &[Vec<f64>], v: &[f64], nb: usize) -> Vec<f64> {
-    use std::simd::{Select, Simd, StdFloat, cmp::SimdPartialOrd, num::SimdFloat};
+    use std::simd::{Select, Simd, StdFloat, cmp::SimdPartialOrd};
     const L: usize = 8;
     let d = ai.len();
     let zero = Simd::<f64, L>::splat(0.0);
@@ -2724,7 +2729,15 @@ impl KDTree {
 
         let mut best_idx = 0;
         let mut best_dist = f64::INFINITY;
-        nn_search(&self.nodes, &self.points, self.dim, 0, query, &mut best_idx, &mut best_dist);
+        nn_search(
+            &self.nodes,
+            &self.points,
+            self.dim,
+            0,
+            query,
+            &mut best_idx,
+            &mut best_dist,
+        );
 
         Ok((best_idx, best_dist.sqrt()))
     }
@@ -2824,7 +2837,15 @@ impl KDTree {
 
         // Simple approach: find k nearest via repeated queries with exclusion
         // For a proper implementation, use a max-heap bounded to k elements.
-        knn_search(&self.nodes, &self.points, self.dim, 0, query, k, &mut results);
+        knn_search(
+            &self.nodes,
+            &self.points,
+            self.dim,
+            0,
+            query,
+            k,
+            &mut results,
+        );
 
         // Sort by distance and convert from squared to actual distance
         results.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -2878,7 +2899,11 @@ impl KDTree {
         // all cores while keeping ≥32 queries/thread so cheap low-d batches don't
         // over-spawn.
         let per_query_work = self.dim.saturating_mul(kk.max(1));
-        let thread_ceiling = if per_query_work >= 24 { cores } else { cores.min(16) };
+        let thread_ceiling = if per_query_work >= 24 {
+            cores
+        } else {
+            cores.min(16)
+        };
         let nthreads = if nq >= 128 {
             thread_ceiling.min(nq / 32).max(1)
         } else {
@@ -5237,10 +5262,54 @@ fn convex_hull_3d_facets_fast(points: &[[f64; 3]]) -> Option<Vec<[usize; 3]>> {
         EdgeMap::with_capacity_and_hasher(6 * n, std::hash::BuildHasherDefault::default());
 
     let f_ids = [
-        hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, p0, p1, p2),
-        hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, p0, p1, p3),
-        hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, p0, p2, p3),
-        hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, p1, p2, p3),
+        hull_add_face(
+            points,
+            centroid,
+            &mut fv,
+            &mut fnorm,
+            &mut falive,
+            &mut fpts,
+            &mut edge_face,
+            p0,
+            p1,
+            p2,
+        ),
+        hull_add_face(
+            points,
+            centroid,
+            &mut fv,
+            &mut fnorm,
+            &mut falive,
+            &mut fpts,
+            &mut edge_face,
+            p0,
+            p1,
+            p3,
+        ),
+        hull_add_face(
+            points,
+            centroid,
+            &mut fv,
+            &mut fnorm,
+            &mut falive,
+            &mut fpts,
+            &mut edge_face,
+            p0,
+            p2,
+            p3,
+        ),
+        hull_add_face(
+            points,
+            centroid,
+            &mut fv,
+            &mut fnorm,
+            &mut falive,
+            &mut fpts,
+            &mut edge_face,
+            p1,
+            p2,
+            p3,
+        ),
     ];
 
     let mut in_hull = vec![false; n];
@@ -5276,7 +5345,9 @@ fn convex_hull_3d_facets_fast(points: &[[f64; 3]]) -> Option<Vec<[usize; 3]>> {
     let mut order: Vec<usize> = (0..n).filter(|&i| !in_hull[i]).collect();
     let mut rng: u64 = 0x9e37_79b9_7f4a_7c15;
     for i in (1..order.len()).rev() {
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let j = (rng >> 33) as usize % (i + 1);
         order.swap(i, j);
     }
@@ -5362,7 +5433,18 @@ fn convex_hull_3d_facets_fast(points: &[[f64; 3]]) -> Option<Vec<[usize; 3]>> {
         // Cone the horizon to apex p.
         let new_start = fv.len();
         for &(u, v) in &horizon {
-            hull_add_face(points, centroid, &mut fv, &mut fnorm, &mut falive, &mut fpts, &mut edge_face, u, v, p);
+            hull_add_face(
+                points,
+                centroid,
+                &mut fv,
+                &mut fnorm,
+                &mut falive,
+                &mut fpts,
+                &mut edge_face,
+                u,
+                v,
+                p,
+            );
         }
         let new_end = fv.len();
         in_hull[p] = true;
@@ -5462,14 +5544,13 @@ impl SphericalVoronoi {
                 for dx in -1..=1 {
                     for dy in -1..=1 {
                         for dz in -1..=1 {
-                            if grid
-                                .get(&(key.0 + dx, key.1 + dy, key.2 + dz))
-                                .is_some_and(|cands| {
+                            if grid.get(&(key.0 + dx, key.1 + dy, key.2 + dz)).is_some_and(
+                                |cands| {
                                     cands.iter().any(|&c| {
                                         norm3_squared(sub3(points[c], p)) <= radius_tol_sq
                                     })
-                                })
-                            {
+                                },
+                            ) {
                                 return Err(SpatialError::InvalidArgument(
                                     "spherical voronoi requires distinct points".to_string(),
                                 ));
@@ -7327,7 +7408,8 @@ impl Rotation {
             k = 3 - i - j;
         }
         // Levi-Civita sign of the permutation (i, j, k); the product is ±2.
-        let sign = ((i as i32 - j as i32) * (j as i32 - k as i32) * (k as i32 - i as i32) / 2) as f64;
+        let sign =
+            ((i as i32 - j as i32) * (j as i32 - k as i32) * (k as i32 - i as i32) / 2) as f64;
 
         let q = self.quat; // [x, y, z, w]
         let w = q[3];
@@ -7853,8 +7935,11 @@ impl Slerp {
     fn interp_valid(&self, t: f64, ind: usize) -> Rotation {
         let alpha = (t - self.times[ind]) / self.timedelta[ind];
         let rv = self.rotvecs[ind];
-        self.rotations[ind]
-            .multiply(&Rotation::from_rotvec([rv[0] * alpha, rv[1] * alpha, rv[2] * alpha]))
+        self.rotations[ind].multiply(&Rotation::from_rotvec([
+            rv[0] * alpha,
+            rv[1] * alpha,
+            rv[2] * alpha,
+        ]))
     }
 
     /// Interpolate a single rotation at query time `t`.
@@ -7893,7 +7978,11 @@ pub fn rigid_transforms_compose_many(
     a: &[RigidTransform],
     b: &[RigidTransform],
 ) -> Vec<RigidTransform> {
-    assert_eq!(a.len(), b.len(), "rigid_transforms_compose_many: length mismatch");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "rigid_transforms_compose_many: length mismatch"
+    );
     rotation_par_index_map(a.len(), ROTATION_BATCH_GATE, |i| a[i].compose(&b[i]))
 }
 
@@ -9468,12 +9557,8 @@ mod tests {
         };
         for &d in &[1usize, 3, 7, 8, 64, 200] {
             for &(na, nb) in &[(40usize, 43usize), (500, 300)] {
-                let xa: Vec<Vec<f64>> = (0..na)
-                    .map(|_| (0..d).map(|_| bit()).collect())
-                    .collect();
-                let xb: Vec<Vec<f64>> = (0..nb)
-                    .map(|_| (0..d).map(|_| bit()).collect())
-                    .collect();
+                let xa: Vec<Vec<f64>> = (0..na).map(|_| (0..d).map(|_| bit()).collect()).collect();
+                let xb: Vec<Vec<f64>> = (0..nb).map(|_| (0..d).map(|_| bit()).collect()).collect();
                 for metric in [DistanceMetric::Hamming, DistanceMetric::Jaccard] {
                     let got = cdist_metric(&xa, &xb, metric).expect("cdist");
                     for (i, gr) in got.iter().enumerate() {
@@ -11061,7 +11146,9 @@ mod tests {
     // Deterministic pseudo-random unit-sphere points (LCG → Marsaglia method).
     fn lcg_sphere_points(n: usize, mut state: u64) -> Vec<[f64; 3]> {
         let mut next = || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((state >> 11) as f64) / ((1u64 << 53) as f64) * 2.0 - 1.0
         };
         let mut pts = Vec::with_capacity(n);
@@ -11116,7 +11203,11 @@ mod tests {
         let n = 1000usize;
         let pts = lcg_sphere_points(n, 0xdead_beef_cafe_1234);
         let facets = convex_hull_3d_facets(&pts, [0.0, 0.0, 0.0]).expect("fast hull");
-        assert_eq!(facets.len(), 2 * n - 4, "hull is not a complete triangulation");
+        assert_eq!(
+            facets.len(),
+            2 * n - 4,
+            "hull is not a complete triangulation"
+        );
         // Each undirected edge must be shared by exactly two facets (closed mesh).
         let mut edges: std::collections::HashMap<(usize, usize), usize> =
             std::collections::HashMap::new();
@@ -11871,7 +11962,10 @@ mod tests {
             assert_eq!(fm[i].as_quat(), Rotation::from_matrix(mats[i]).as_quat());
             assert_eq!(eu[i], a[i].as_euler("xyz"));
             assert_eq!(ez[i], a[i].as_euler("ZYX"));
-            assert_eq!(fe[i].as_quat(), Rotation::from_euler("xyz", angs[i]).as_quat());
+            assert_eq!(
+                fe[i].as_quat(),
+                Rotation::from_euler("xyz", angs[i]).as_quat()
+            );
             assert_eq!(rv[i], a[i].as_rotvec());
             // from_matrix round-trips: recovered rotation reproduces the matrix.
             let rec = fm[i].as_matrix();
@@ -11910,23 +12004,48 @@ mod tests {
             (0.0, [0.0, 0.0, 0.0, 1.0]),
             (
                 0.5,
-                [0.05231070742733861, 0.10462141485467721, 0.1569321222820158, 0.9806580741717876],
+                [
+                    0.05231070742733861,
+                    0.10462141485467721,
+                    0.1569321222820158,
+                    0.9806580741717876,
+                ],
             ),
             (
                 1.0,
-                [0.10259783520851541, 0.20519567041703082, 0.3077935056255462, 0.9233805168766387],
+                [
+                    0.10259783520851541,
+                    0.20519567041703082,
+                    0.3077935056255462,
+                    0.9233805168766387,
+                ],
             ),
             (
                 2.0,
-                [0.32082346922827804, 0.05295281370689373, 0.2667409875261423, 0.9072582579874562],
+                [
+                    0.32082346922827804,
+                    0.05295281370689373,
+                    0.2667409875261423,
+                    0.9072582579874562,
+                ],
             ),
             (
                 4.5,
-                [0.14813911965010984, 0.15436725350922376, 0.18663685531798327, 0.9588494337018318],
+                [
+                    0.14813911965010984,
+                    0.15436725350922376,
+                    0.18663685531798327,
+                    0.9588494337018318,
+                ],
             ),
             (
                 6.0,
-                [-0.2519763153394849, 0.37796447300922736, 0.12598815766974245, 0.8819171036881969],
+                [
+                    -0.2519763153394849,
+                    0.37796447300922736,
+                    0.12598815766974245,
+                    0.8819171036881969,
+                ],
             ),
         ];
         for (t, want) in cases {
@@ -11934,10 +12053,18 @@ mod tests {
             // Quaternion sign is arbitrary; compare up to sign.
             let d_pos: f64 = (0..4).map(|i| (q[i] - want[i]).abs()).fold(0.0, f64::max);
             let d_neg: f64 = (0..4).map(|i| (q[i] + want[i]).abs()).fold(0.0, f64::max);
-            assert!(d_pos.min(d_neg) < 1e-12, "slerp t={t}: {q:?} vs scipy {want:?}");
+            assert!(
+                d_pos.min(d_neg) < 1e-12,
+                "slerp t={t}: {q:?} vs scipy {want:?}"
+            );
         }
         // Endpoints exactly recover the key rotations (continuity).
-        assert!(sl.eval(3.0).unwrap().multiply(&kr[2].inv()).is_identity(1e-12));
+        assert!(
+            sl.eval(3.0)
+                .unwrap()
+                .multiply(&kr[2].inv())
+                .is_identity(1e-12)
+        );
 
         // Batch is bit-identical to the serial eval loop (n crosses the gate).
         let mut s: u64 = 0xABCD_1234_5678_9EF1;
@@ -12009,11 +12136,7 @@ mod tests {
         // Reference values from scipy.spatial.transform.Rotation (v1.17.1).
         // A generic (non-gimbal) rotation exercised across extrinsic + intrinsic,
         // asymmetric (Tait-Bryan) + symmetric (proper-Euler) sequences.
-        let r = Rotation::from_matrix([
-            [0.36, 0.48, -0.8],
-            [-0.8, 0.6, 0.0],
-            [0.48, 0.64, 0.6],
-        ]);
+        let r = Rotation::from_matrix([[0.36, 0.48, -0.8], [-0.8, 0.6, 0.0], [0.48, 0.64, 0.6]]);
         let close = |g: [f64; 3], e: [f64; 3], seq: &str| {
             for a in 0..3 {
                 assert!(

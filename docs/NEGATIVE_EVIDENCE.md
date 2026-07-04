@@ -6,6 +6,46 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - KEEP: fsci-linalg khatri_rao row-major parallel fill - 2.74x / 4.03x vs ORIG strided fill
+
+- Gap attacked: `khatri_rao`'s original implementation filled the row-major
+  output through a column-major `for j { for i { for k { ... }}}` scatter. The
+  default path now builds independent rows directly and fans large outputs across
+  worker threads. The hidden `KHATRI_RAO_FORCE_SERIAL` switch is corrected to
+  run the literal original strided fill for same-binary ORIG proof.
+- Short per-crate bench command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-linalg --bench linalg_bench --profile release -- khatri_rao_parallel_ab --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+  RCH selected `ovh-b`. This Cargo rejects the requested literal `cargo bench
+  --release` form, so the runnable release bench used `--profile release`.
+
+  | case | current parallel median | ORIG strided median | speedup |
+  |---|---:|---:|---:|
+  | m=200 p=200 r=10 | 1.8903 ms | 5.1846 ms | 2.74x |
+  | m=1000 p=1000 r=8 | 44.645 ms | 179.91 ms | 4.03x |
+
+- Correctness: `khatri_rao_parallel_is_byte_identical_to_serial_above_gate`
+  forces the ORIG path, runs the default parallel path on a 400x400x8 case above
+  the gate, and asserts bit-identical output. Focused RCH test passed on
+  `vmi1227854`.
+
+## 2026-07-04 - BlackThrush (codex) - DROP: fsci-spatial geometric_slerp point-parallel fanout - 1.08x / 0.73x / 1.08x vs ORIG serial loop
+
+- Gap tested: `geometric_slerp` has independent interpolation points, but each
+  output point allocates a small `Vec<f64>`, so thread fanout did not overcome
+  allocation and scheduling cost.
+- Short per-crate bench command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-spatial --bench spatial_bench --profile release -- geometric_slerp_parallel_ab --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+  RCH selected `vmi1264463`.
+
+  | case | attempted parallel median | ORIG serial median | ratio |
+  |---|---:|---:|---:|
+  | m=100000 d=3 | 6.4845 ms | 7.0320 ms | 1.08x |
+  | m=500000 d=3 | 83.881 ms | 61.392 ms | 0.73x |
+  | m=100000 d=16 | 12.758 ms | 13.737 ms | 1.08x |
+
+- Decision: not landed. The switch, test, and bench group were removed; only
+  this measured rejection remains.
+
 ## 2026-07-04 - BlackThrush (codex) - KEEP: fsci-io write_json_array value-parallel formatter - 6.86x / 2.46x vs ORIG serial path
 
 - Gap attacked: `write_json_array` still formatted every `f64` value serially
