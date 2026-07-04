@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - KEEP: fsci-io write_json_array value-parallel formatter - 6.86x / 2.46x vs ORIG serial path
+
+- Gap attacked: `write_json_array` still formatted every `f64` value serially
+  into one output buffer. The new path keeps validation and small arrays serial,
+  then formats contiguous value ranges into private chunk strings and joins those
+  chunks in order. The hidden `WRITE_JSON_FORCE_SERIAL` switch keeps a
+  same-binary ORIG serial path for A/B proof.
+- Short per-crate bench command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-io --bench io_bench --profile release -- write_json_parallel_ab --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+  RCH selected `ovh-a`. The requested literal `cargo bench --release` form was
+  tried first and Cargo rejected it as an unexpected argument, so the runnable
+  release bench used `--profile release`.
+
+  | case | current parallel median | ORIG serial median | speedup |
+  |---|---:|---:|---:|
+  | 200000 values | 1.9932 ms | 13.668 ms | 6.86x |
+  | 1000000 values | 34.683 ms | 85.198 ms | 2.46x |
+
+- Correctness: new `write_json_array_parallel_is_byte_identical_to_serial_above_gate`
+  unit test forces the serial path, runs the default parallel path on 100000
+  values above the gate, and asserts byte-identical output.
+- Gate note: the committed A/B harness is `write_json_parallel_ab` in
+  `crates/fsci-io/benches/io_bench.rs`; no temporary probe file is kept.
+
 ## 2026-07-04 - BlackThrush (codex) - KEEP: fsci-io savetxt row-parallel formatter - 3.25x / 3.62x vs ORIG serial path
 
 - Gap attacked: `savetxt` still formatted each output cell serially into one
@@ -16478,3 +16502,15 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   pre-existing red 0-vs-1-based test — avoid), write_netcdf_classic (binary, endian). RECIPE: grep serial
   `for … {write!/push_str}` value/row formatters → validate-first (preserve first-error-order) + parallel-into-private-
   Strings + ordered join.
+
+## 2026-07-04 - BlackThrush (cc) - savemat_text -> parallel matrix-body format (4.6-6.4x self, BYTE-IDENTICAL)
+
+- fsci-io formatter vein, 4th sibling. `savemat_text` (Octave/MATLAB text) formatted each array's matrix body with a
+  serial `for r {for c {write!}}`. Extracted `savemat_append_matrix_body(out,data,rows,cols)` that parallelizes a
+  large body per-row-range into private Strings + row-order join (BIT-FOR-BIT the serial loop); per-array header +
+  validation stay serial. Gate rows·cols≥2^16, atomic SAVEMAT_TEXT_FORCE_SERIAL.
+- SAME-BINARY A/B (3× interleaved), identical=true everywhere: 2000×20 0.9× (below gate); 10000×20 30.12→6.15ms
+  **4.9×**; 50000×20 135.78→21.08ms **6.4×**; 200000×10 304.37→65.71ms **4.6×**. Test
+  savemat_text_parallel_is_byte_identical_to_serial_above_gate GREEN.
+- IO FORMATTER VEIN COMPLETE (mmwrite lever): mmwrite/savetxt/write_csv/write_json_array/savemat_text all parallel.
+  Remaining: mmwrite_complex (pre-existing red test, avoid), write_netcdf_classic (binary/endian, different lever).

@@ -1623,6 +1623,12 @@ pub fn loadmat(bytes: &[u8]) -> Result<Vec<MatArray>, IoError> {
 /// This provides a basic `savemat`-like interface. Full .mat v5 binary
 /// format requires extensive implementation; this provides a portable
 /// text alternative.
+/// Runtime switch to force the serial `savemat_text` formatter for same-binary A/B
+/// benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static SAVEMAT_TEXT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn savemat_text(arrays: &[MatArray]) -> Result<String, IoError> {
     let mut out = String::new();
     for arr in arrays {
@@ -1650,18 +1656,74 @@ pub fn savemat_text(arrays: &[MatArray]) -> Result<String, IoError> {
             "# name: {}\n# type: matrix\n# rows: {}\n# columns: {}\n",
             arr.name, arr.rows, arr.cols
         ));
-        for r in 0..arr.rows {
-            for c in 0..arr.cols {
-                if c > 0 {
-                    out.push(' ');
-                }
-                let _ = write!(out, "{}", arr.data[r * arr.cols + c]);
-            }
-            out.push('\n');
-        }
+        savemat_append_matrix_body(&mut out, &arr.data, arr.rows, arr.cols);
         out.push('\n');
     }
     Ok(out)
+}
+
+/// Append a space-delimited row-major matrix body to `out` — the f64 Display
+/// formatting dominates and each row is independent, so a large body is formatted in
+/// parallel per-row-range into private Strings and joined in row order (BIT-FOR-BIT
+/// the serial loop). Serial gate BEFORE the available_parallelism syscall.
+fn savemat_append_matrix_body(out: &mut String, data: &[f64], rows: usize, cols: usize) {
+    const SAVEMAT_PAR_GATE: usize = 1 << 16;
+    let n = rows.saturating_mul(cols);
+    let serial = |out: &mut String| {
+        for r in 0..rows {
+            for c in 0..cols {
+                if c > 0 {
+                    out.push(' ');
+                }
+                let _ = write!(out, "{}", data[r * cols + c]);
+            }
+            out.push('\n');
+        }
+    };
+    if n < SAVEMAT_PAR_GATE || SAVEMAT_TEXT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        serial(out);
+        return;
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / 16384)
+        .min(rows)
+        .max(1);
+    if nthreads <= 1 {
+        serial(out);
+        return;
+    }
+    let chunk = rows.div_ceil(nthreads);
+    let mut parts: Vec<String> = (0..nthreads).map(|_| String::new()).collect();
+    std::thread::scope(|scope| {
+        for (t, slot) in parts.iter_mut().enumerate() {
+            let r0 = t * chunk;
+            let r1 = ((t + 1) * chunk).min(rows);
+            scope.spawn(move || {
+                if r0 >= r1 {
+                    return;
+                }
+                let mut local = String::with_capacity((r1 - r0) * cols * 12);
+                for r in r0..r1 {
+                    for c in 0..cols {
+                        if c > 0 {
+                            local.push(' ');
+                        }
+                        let _ = write!(local, "{}", data[r * cols + c]);
+                    }
+                    local.push('\n');
+                }
+                *slot = local;
+            });
+        }
+    });
+    let extra: usize = parts.iter().map(String::len).sum();
+    out.reserve(extra);
+    for p in &parts {
+        out.push_str(p);
+    }
 }
 
 /// Load arrays from the text-based format.
@@ -5471,6 +5533,30 @@ mod tests {
         assert_eq!(loaded[0].data, vec![1.0, 2.0, 3.0, 4.0]);
         assert_eq!(loaded[1].name, "b");
         assert_eq!(loaded[1].data, vec![10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn savemat_text_parallel_is_byte_identical_to_serial_above_gate() {
+        use std::sync::atomic::Ordering;
+
+        let rows = 10_000usize;
+        let cols = 20usize;
+        let data: Vec<f64> = (0..rows * cols)
+            .map(|idx| idx as f64 * 0.001 + 1.0)
+            .collect();
+        let arrays = vec![MatArray {
+            name: "A".to_string(),
+            rows,
+            cols,
+            data,
+        }];
+
+        SAVEMAT_TEXT_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = savemat_text(&arrays).expect("serial savemat text");
+        SAVEMAT_TEXT_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = savemat_text(&arrays).expect("parallel savemat text");
+
+        assert_eq!(serial, parallel, "parallel savemat_text must equal serial");
     }
 
     #[test]
