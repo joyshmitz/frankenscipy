@@ -15948,3 +15948,23 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - Verdict: NO-SHIP. The residual Mathieu gap is not Vec allocation or duplicate matrix setup; Sturm pivots plus
   eigenvector solve dominate. Do not retry matrix-free/matrix-reuse micro-levers. The plausible remaining lever is the
   already-documented full Zhang-Jin/specfun continued-fraction/secant port with a real conformance sweep.
+
+## 2026-07-04 - BlackThrush (cc) - special-fn kernel sweep: hyp1f1/hyp2f1 WIN 5-6x; spence is the one fsci-slower (deferred)
+
+- DIG (special-fn per-element kernel-gap sweep, the documented remaining vein). Measured fsci tensor-API `_many` vs
+  `scipy.special.X(ARRAY)` (n=50k, x∈[0.5,20]): **hyp1f1 fsci 1.29ms vs scipy 8.05ms = 6.2x FASTER; hyp2f1 1.34 vs
+  7.50ms = 5.6x FASTER** (fsci parallel + connection-formula kernels win). Fast-scipy siblings already verified
+  winning (erfcx/dawsn/erfi SIMD, wofz/voigt CF). SLOW-scipy ones (struve 4.5µs/call, airye 2.1µs, gammaincinv 653ns)
+  fsci parallel-wins trivially.
+- THE ONE fsci-SLOWER: **`spence` fsci 1.60ms vs scipy 0.85ms = ~1.9x SLOWER**. Root cause: fsci `spence(x)=
+  dilog_real(1-x)` uses the NAIVE Li₂ power series `Σ zᵏ/k²` (~50 terms at z=½, one divide/term) via `dilog_series`,
+  vs SciPy's short Cephes rational approximation (~17ns/call, 2 deg-7 polynomials, no series/log).
+- TWO MICRO-OPT ATTEMPTS, BOTH DROPPED (reverted): (A) route the real series through the Bernoulli expansion
+  `Σ B_{n-1}/n!·uⁿ, u=-ln(1-z)` (the same table `dilog_complex` uses) — REGRESSED to 2.27ms: the per-call `log` +
+  fixed 20-iter loop lose vs the naive series' adaptive early-exit for the small-arg mix. (B) precompute `1/k²` and
+  multiply instead of divide — NEUTRAL (1.70-2.13ms, contention-noisy; spence is a ~32ns/call op so the loaded box
+  can't resolve sub-2ms differences). Both correct (5 spence lib tests GREEN each) but ~0-gain → reverted.
+- DEFERRED TARGET: closing spence needs a real port of Cephes `spence.c`'s rational approximation (the exact A[8]/B[8]
+  coefficients — not reconstructable from memory). Modest (1.9x, niche) but the ONLY special-fn loss found this sweep.
+  LESSON: cheap per-element special fns (spence ~30ns) can't be A/B'd on the loaded box — need a same-binary switch or
+  a quiet box; and micro-opts (reciprocal table, Bernoulli) don't beat a well-tuned Cephes rational approx — port it.
