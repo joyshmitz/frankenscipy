@@ -6418,6 +6418,41 @@ mod tests {
     }
 
     #[test]
+    fn rader_thirteen_smooth_prime_minus_one_matches_naive() {
+        let naive_dft = |x: &[Complex64]| -> Vec<Complex64> {
+            let n = x.len();
+            (0..n)
+                .map(|k| {
+                    let mut acc = (0.0, 0.0);
+                    for (j, &(re, im)) in x.iter().enumerate() {
+                        let a = -2.0 * std::f64::consts::PI * (k * j % n) as f64 / n as f64;
+                        let (c, s) = (a.cos(), a.sin());
+                        acc.0 += re * c - im * s;
+                        acc.1 += re * s + im * c;
+                    }
+                    acc
+                })
+                .collect()
+        };
+        for &n in &[1093usize, 1409] {
+            let x: Vec<Complex64> = (0..n)
+                .map(|i| ((i as f64 * 0.19).sin(), (i as f64 * 0.13).cos()))
+                .collect();
+            let got = fft(&x, &FftOptions::default()).expect("fft");
+            let want = naive_dft(&x);
+            let maxerr = got
+                .iter()
+                .zip(&want)
+                .map(|(&(a, b), &(c, d))| ((a - c).powi(2) + (b - d).powi(2)).sqrt())
+                .fold(0.0_f64, f64::max);
+            assert!(
+                maxerr < 1e-7,
+                "n={n} Rader FFT maxerr {maxerr} vs naive DFT"
+            );
+        }
+    }
+
+    #[test]
     fn rader_prime_dft_matches_naive() {
         let naive_dft = |x: &[Complex64], inverse: bool| -> Vec<Complex64> {
             let n = x.len();

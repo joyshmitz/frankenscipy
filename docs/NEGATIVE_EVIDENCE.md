@@ -16377,7 +16377,7 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   matrix, rarely hits gate); special-fn matrix builders (lpmn/legendre_p_all/sph_harm_y_all) are sequential
   RECURRENCES (P_l^m ← P_{l-1}^m) + single-point small → NOT row-parallel.
 
-## 2026-07-04 - BlackThrush (cc) - large-prime FFT Rader gate 5-smooth -> 13-smooth (1.4-3.9x on {7,11,13}-smooth n-1)
+## 2026-07-04 - BlackThrush (codex) - KEEP: large-prime FFT Rader gate 5-smooth -> 13-smooth (2.00-3.05x vs ORIG Bluestein)
 
 - BROAD-SWEEP ANOMALY HUNT (the productive lever): timed fsci fft across size classes; PRIMES were the standout —
   n=1409 at 8.2× the pow2 baseline, and 1409 (n-1=1408=2⁷·11, SMOOTH) was SLOWER than 2213 (n-1=2212=2²·7·79,
@@ -16386,15 +16386,25 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   (5-smooth). That threshold is STALE — fsci now runs {2,3,5,7} on dedicated radices and 11/13 on a cheap O(p²)
   direct DFT, so FFT(n-1) is fast for {7,11,13}-smooth n-1 too, and Rader (2× FFT(n-1)) beats Bluestein (2× FFT of
   ≥2n-1, ALWAYS >2× larger, + chirp) there. Relaxed the gate to `<= 13`.
-- SAME-BINARY A/B (atomic `FFT_PRIME_FORCE_BLUESTEIN`, 3× interleaved) — Rader (new) vs forced-Bluestein (old):
-  - n=1409 (1408=2⁷·11):    202.5→55.7µs **3.6×**   n=1373 (1372=2²·7³): 234.1→60.8µs **3.9×**
-  - n=1093 (1092=2²·3·7·13): 100.4→53.2µs **1.9×**   n=2113 (2112=2⁶·3·11): 207.5→145.4µs **1.4×**
-  - n=7841 (7840=2⁵·5·7²):  2273→1291µs **1.8×**     n=4229 (4228=2²·7·151): 1.0× (lpf=151>13, correctly Bluestein)
-  Rader is also MORE ACCURATE (maxerr ≤1.4e-13 vs Bluestein's ~1e-11, both vs naive DFT). Not byte-identical (Rader
-  vs Bluestein are different exact algorithms). 184 existing fft tests GREEN + new
-  `large_prime_rader_path_matches_naive_dft` (n=1409/1373/1093 vs naive DFT + round-trip, <1e-9).
+- Per-crate bench command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-fft --bench fft_bench --profile release -- fft_prime_rader --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- Same-binary A/B on RCH `hz2` (atomic `FFT_PRIME_FORCE_BLUESTEIN`) — Rader (new) vs forced-Bluestein (ORIG):
+  - n=1093 (1092=2²·3·7·13): 50.644→22.886µs **2.213×**
+  - n=1373 (1372=2²·7³): 87.057→28.543µs **3.050×**
+  - n=1409 (1408=2⁷·11): 96.483→31.743µs **3.040×**
+  - n=2113 (2112=2⁶·3·11): 98.886→49.522µs **1.997×**
+  Rader is not byte-identical to Bluestein (different exact algorithms), but the new route is covered by
+  `large_prime_rader_path_matches_naive_dft` / `rader_thirteen_smooth_prime_minus_one_matches_naive`.
 - vs ORIG: scipy/pocketfft uses Bluestein for primes but with a tuned pow2 length; fsci's Rader (when n-1 smooth) is
-  a different, faster route for these sizes. Self-ratio 1.4-3.9× (primes with {7,11,13}-smooth n-1).
+  a different, faster route for these sizes. Self-ratio **1.997-3.050×** vs the forced ORIG Bluestein path.
+- VALIDATION: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo check -p fsci-fft --all-targets`
+  passed on RCH `ovh-a`; `... cargo clippy -p fsci-fft --all-targets -- -D warnings` passed on RCH `hz2` after the
+  local lint cleanups; `... cargo test -p fsci-fft --lib -- --nocapture` passed 186/0 on RCH `vmi1149989`; and
+  `... cargo test -p fsci-conformance --test diff_fft -- --nocapture` passed 34/0 on RCH `vmi1149989`.
+- Dropped variant: factor-19 iterative odd-tail admission was tested separately with
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-fft --bench fft_bench --profile release -- fft_mixed_radix19 --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`
+  on RCH `vmi1227854`; it showed mixed/no keep (small-size regressions, only the largest row improved), so the
+  factor-19 code and bench entries were removed before commit.
 - LEVER: a Rader-vs-Bluestein prime-FFT gate keyed on a smoothness threshold goes STALE as the base FFT gains radices
   — re-tune it to the current fast-kernel coverage. BROAD-SWEEP + relative-to-pow2 (load-invariant) spots such
   anomalies; confirm with same-binary A/B (box load varies run-to-run).

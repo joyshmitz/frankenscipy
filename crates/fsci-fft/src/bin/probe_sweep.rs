@@ -1,12 +1,12 @@
 //! Broad FFT size sweep to spot anomalously slow size classes.
-use fsci_fft::{fft, Complex64, FftOptions};
+use fsci_fft::{Complex64, FftOptions, fft};
 use std::time::Instant;
 
 fn factor_label(mut n: usize) -> String {
     let mut parts = Vec::new();
     for p in [2usize, 3, 5, 7, 11, 13] {
         let mut c = 0;
-        while n % p == 0 {
+        while n.is_multiple_of(p) {
             n /= p;
             c += 1;
         }
@@ -24,7 +24,9 @@ fn time_fft(n: usize) -> f64 {
     let mut state = 0x9E37u64;
     let input: Vec<Complex64> = (0..n)
         .map(|_| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((state >> 12) as f64 / (1u64 << 52) as f64 - 0.5, 0.0)
         })
         .collect();

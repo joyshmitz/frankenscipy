@@ -163,7 +163,7 @@ mod tests {
                 .collect();
             let got = fft(&x, &opts).expect("fft");
             // naive DFT reference
-            for k in 0..n {
+            for (k, &got_k) in got.iter().enumerate() {
                 let mut acc = (0.0f64, 0.0f64);
                 for (t, &(xr, xi)) in x.iter().enumerate() {
                     let ang = -2.0 * PI * (t * k % n) as f64 / n as f64;
@@ -172,10 +172,10 @@ mod tests {
                     acc.1 += xr * s + xi * c;
                 }
                 assert!(
-                    (got[k].0 - acc.0).abs() < 1e-9 && (got[k].1 - acc.1).abs() < 1e-9,
+                    (got_k.0 - acc.0).abs() < 1e-9 && (got_k.1 - acc.1).abs() < 1e-9,
                     "n={n} k={k}: fft ({},{}) vs naive ({},{})",
-                    got[k].0,
-                    got[k].1,
+                    got_k.0,
+                    got_k.1,
                     acc.0,
                     acc.1
                 );

@@ -1,12 +1,17 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use fsci_fft::{FftOptions, cross_spectral_density, dct, fft, fft2, ifft, irfft, rfft};
+use fsci_fft::{
+    FFT_PRIME_FORCE_BLUESTEIN, FftOptions, cross_spectral_density, dct, fft, fft2, ifft, irfft,
+    rfft,
+};
 use std::hint::black_box;
+use std::sync::atomic::Ordering;
 
 type Complex64 = (f64, f64);
 
 const SIZES_1D: &[usize] = &[16, 64, 256, 1024];
 const MIXED_RADIX_1D: &[usize] = &[720, 1000, 1080, 1500, 1920, 3000, 5000, 10000];
 const MIXED_RADIX_17_1D: &[usize] = &[1088, 2176, 4352, 8704, 17408];
+const PRIME_RADER_1D: &[usize] = &[1093, 1373, 1409, 2113];
 const SIZES_2D: &[(usize, usize)] = &[(8, 8), (16, 16), (32, 32)];
 const CSD_SIZES: &[usize] = &[4096, 65536];
 
@@ -103,6 +108,34 @@ fn bench_mixed_radix17_fft(c: &mut Criterion) {
         });
     }
 
+    group.finish();
+}
+
+fn bench_prime_rader_fft(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fft_prime_rader");
+    group.sample_size(10);
+
+    for &n in PRIME_RADER_1D {
+        let input = make_complex_input(n);
+        group.bench_with_input(BenchmarkId::new("current_rader", n), &input, |b, input| {
+            let opts = default_opts();
+            b.iter(|| {
+                FFT_PRIME_FORCE_BLUESTEIN.store(false, Ordering::Relaxed);
+                let out = fft(black_box(input), black_box(&opts)).expect("rader fft");
+                black_box(out.len());
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("orig_bluestein", n), &input, |b, input| {
+            let opts = default_opts();
+            b.iter(|| {
+                FFT_PRIME_FORCE_BLUESTEIN.store(true, Ordering::Relaxed);
+                let out = fft(black_box(input), black_box(&opts)).expect("bluestein fft");
+                black_box(out.len());
+            });
+        });
+    }
+
+    FFT_PRIME_FORCE_BLUESTEIN.store(false, Ordering::Relaxed);
     group.finish();
 }
 
@@ -301,6 +334,7 @@ criterion_group!(
     bench_fft,
     bench_mixed_radix_fft,
     bench_mixed_radix17_fft,
+    bench_prime_rader_fft,
     bench_ifft,
     bench_rfft,
     bench_dct,
