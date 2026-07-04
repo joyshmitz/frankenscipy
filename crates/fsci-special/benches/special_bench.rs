@@ -3,7 +3,7 @@ use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialTensor, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, gamma, gammainc,
     gammaln, hyperu, hyperu_scalar, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv, ndtri, pbdv,
-    pbdv_many, rgamma, y0, zeta, zeta_scalar,
+    pbdv_many, rgamma, spence_scalar, y0, zeta, zeta_scalar,
 };
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -952,6 +952,82 @@ fn bench_pbdv_integer_gauntlet(c: &mut Criterion) {
     group.finish();
 }
 
+fn legacy_spence_scalar(x: f64) -> f64 {
+    if x.is_nan() || x.is_infinite() || x < 0.0 {
+        return f64::NAN;
+    }
+    legacy_dilog_real(1.0 - x)
+}
+
+fn legacy_dilog_real(z: f64) -> f64 {
+    if z.is_nan() {
+        return f64::NAN;
+    }
+    if z == 1.0 {
+        return PI * PI / 6.0;
+    }
+    if z == 0.0 {
+        return 0.0;
+    }
+    if z < 0.0 {
+        let log_term = (1.0 - z).ln();
+        let transformed = z / (z - 1.0);
+        return -legacy_dilog_real(transformed) - 0.5 * log_term * log_term;
+    }
+    if z > 0.5 {
+        let complement = 1.0 - z;
+        return PI * PI / 6.0 - z.ln() * complement.ln() - legacy_dilog_series(complement);
+    }
+    legacy_dilog_series(z)
+}
+
+fn legacy_dilog_series(z: f64) -> f64 {
+    let mut term = z;
+    let mut sum = z;
+    for k in 2..=128usize {
+        term *= z;
+        let kf = k as f64;
+        let addend = term / (kf * kf);
+        sum += addend;
+        if addend.abs() <= f64::EPSILON * sum.abs().max(1.0) {
+            break;
+        }
+    }
+    sum
+}
+
+fn bench_spence_cephes_gauntlet(c: &mut Criterion) {
+    let xs: Vec<f64> = (0..200_000)
+        .map(|i| 0.05 + 9.95 * (i as f64) / 199_999.0)
+        .collect();
+    let mut group = c.benchmark_group("spence_cephes_gauntlet");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("current_cephes_scalar_loop", |b| {
+        b.iter(|| {
+            let mut acc = 0.0_f64;
+            for &x in &xs {
+                acc += spence_scalar(black_box(x));
+            }
+            black_box(acc);
+        })
+    });
+
+    group.bench_function("orig_series_scalar_loop", |b| {
+        b.iter(|| {
+            let mut acc = 0.0_f64;
+            for &x in &xs {
+                acc += legacy_spence_scalar(black_box(x));
+            }
+            black_box(acc);
+        })
+    });
+
+    group.finish();
+}
+
 fn bench_ncfdtr(c: &mut Criterion) {
     let mut group = c.benchmark_group("ncfdtr");
     // cost scales with nc: the Poisson(nc/2) mixture spans ~O(√nc) incomplete-beta
@@ -985,6 +1061,7 @@ fn bench_ncfdtr(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_spence_cephes_gauntlet,
     bench_pbdv_integer_gauntlet,
     bench_ncfdtr,
     bench_array,

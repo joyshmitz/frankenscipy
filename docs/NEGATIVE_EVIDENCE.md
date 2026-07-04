@@ -6,6 +6,44 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - KEEP: spence ports Cephes rational approximation - 1.97x / 2.08x vs ORIG series path
+
+- Continuation note: while this pass was measuring and cleaning the dirty
+  `spence` source, the Cephes implementation itself landed on `main` as
+  `b447e010` (`perf(special): port Cephes spence rational approx`). This follow-up
+  keeps the same-binary ORIG/current gauntlet and records the measured evidence
+  instead of leaving the benchmark/ledger dirty.
+- Gap attacked: prior sweep showed `spence` as the one remaining slower
+  cheap-kernel special function because fsci evaluated `Li2(1-x)` with the
+  original `dilog_real` power-series/reflection path. The landed source uses the
+  Cephes degree-7 rational approximation with argument reduction; complex
+  `spence` remains on the existing complex dilog path.
+- Command discipline: the requested literal
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench --release -p fsci-special --bench special_bench -- spence_cephes_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`
+  was attempted first and Cargo rejected it on RCH `ovh-a` with `unexpected
+  argument '--release'`. Runnable rows used
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-special --bench special_bench --profile release -- spence_cephes_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- Same-binary ORIG ratio: RCH `ovh-a` remote row measured current Cephes median
+  `3.7391 ms` vs inline ORIG series median `7.3571 ms` over 200k points, ratio
+  `7.3571 / 3.7391 = 1.97x`. Final harness replay under RCH local fallback
+  measured current `5.6742 ms` vs ORIG `11.788 ms`, ratio `2.08x`.
+- Correctness/conformance: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-special spence --lib -- --nocapture`
+  passed 6/6 on RCH `vmi1227854` with only pre-existing warnings.
+- Build/gate notes: final `spence_cephes_gauntlet` replay compiled and ran
+  through `rch exec` with `CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod`
+  under local fallback because no remote slot was admissible. `rustfmt --edition
+  2024 --check crates/fsci-special/benches/special_bench.rs` and `git diff
+  --check -- crates/fsci-special/benches/special_bench.rs
+  docs/NEGATIVE_EVIDENCE.md` passed. `ubs
+  crates/fsci-special/benches/special_bench.rs docs/NEGATIVE_EVIDENCE.md`
+  still exits nonzero on pre-existing benchmark panic/expect surfaces, while its
+  cargo check/clippy/fmt subchecks were clean.
+- Source/bench kept: `crates/fsci-special/src/convenience.rs` contains the
+  Cephes rational port from `b447e010`; `crates/fsci-special/benches/special_bench.rs`
+  now carries `spence_cephes_gauntlet`, including an inline copy of the original
+  series path for future ratio checks without adding a benchmark-only switch to
+  the public crate.
+
 ## 2026-07-04 - BlackThrush (codex) - KEEP: pbdv nonnegative integer orders use Hermite recurrence - 6.55x vs ORIG scalar kernel
 
 - Land-or-dig audit: `.scratch` / `.worktrees` was checked before digging. The
@@ -40,6 +78,14 @@ ledger above so the project has one source of truth.
   rational gap. No `spence` source or benchmark code is kept in this commit.
 - Correctness/conformance: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-special pbdv --lib -- --nocapture`
   passed 3/3 under RCH local fallback with only pre-existing warnings.
+- Build/gate notes: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo check -p fsci-special --all-targets`
+  passed on RCH `vmi1264463`; `rustfmt --edition 2024 --check
+  crates/fsci-special/src/hyper.rs crates/fsci-special/benches/special_bench.rs`
+  and `git diff --check -- crates/fsci-special/src/hyper.rs
+  crates/fsci-special/benches/special_bench.rs docs/NEGATIVE_EVIDENCE.md`
+  passed. Package-wide `cargo fmt -p fsci-special --check` and `ubs` remain
+  blocked by unrelated pre-existing fsci-special formatting drift and benchmark
+  panic-surface warnings.
 - Source kept: `crates/fsci-special/src/hyper.rs` adds the integer-order
   Hermite recurrence fast path for `pbdv`; `crates/fsci-special/benches/special_bench.rs`
   keeps the ORIG/current `pbdv_integer_gauntlet` ratio harness.
