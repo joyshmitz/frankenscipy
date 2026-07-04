@@ -15380,3 +15380,22 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - VERDICT: cholesky is NOT a huge gap (1.5-2x fair, parity-to-1.7x at the pinned single-thread bar most agents use)
   and the residual is the SYRK/GEMM microkernel + parallel-scaling wall (the ongoing "SYRK campaign", diminishing).
   Don't chase the phantom 9x. Re-measure dense-LAPACK gaps BOTH-multicore before believing a big ratio.
+
+## 2026-07-04 - BlackThrush (cc) - LU solve: parallelize the SERIAL trailing update (f32 mixed-precision path) — 1.35-1.5x self at n=2000, flips fsci past scipy(1-thread)
+
+- Measured general `solve` (blocked-LU) vs scipy cleanly: fsci n=2000 848ms; scipy DEFAULT is oversubscription
+  garbage (5867ms on the loaded box), scipy 1-thread = 569ms. fsci was 1.49x slower than scipy-1-thread — but
+  ROOT CAUSE found: unlike cholesky (parallel SYRK), the LU factor's O(n³) trailing update `A22 -= L21·U12` was
+  fully SERIAL in BOTH lu_factor_blocked (f64) and lu_factor_blocked_f32 (the path solve actually uses via
+  mixed-precision). ~95% of the factorization runs single-thread.
+- FIX (shipped, f32 path): factored the trailing update into `lu_trailing_update_rows_f32(tail, head, k, kb, n)`
+  and fan it across disjoint trailing-row chunks (split the flat buffer at row kb → `head` = shared U12 panel,
+  `tail` = trailing rows) via thread::scope, exactly like cholesky's SYRK. Same MR=4×NR=16 microkernel, monotonic-p
+  reduction → BIT-IDENTICAL (acc identical every A/B round; lu_solve_mixed_precision_matches_f64 + 7 LU tests green;
+  full fsci-linalg lib 496/0). Gated by the existing matmul_thread_count (macs≥64M) so n≤1024 stays SERIAL (its
+  blocks are 59M<64M) — no small-n regression.
+- MEASURED (bin perf_gesv, interleaved A/B 4 rounds, byte-identical): n=2000 OLD best 523 → NEW best 388ms =
+  **1.35x self** (NEW < OLD every round; ~1.5x median); vs scipy-1-thread 569ms, fsci flips 1.49x-slower →
+  **0.93x FASTER**. n=1024 stays serial (byte-identical, ~parity/noise). VERDICT: KEEP.
+- FOLLOW-ON: the f64 lu_factor_blocked trailing update (exact fallback path) is still serial — same lever applies
+  (factor `lu_trailing_update_rows` f64 + thread::scope); do it next for the non-mixed-precision route.
