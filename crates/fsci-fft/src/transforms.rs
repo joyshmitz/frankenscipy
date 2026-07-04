@@ -607,9 +607,9 @@ fn distinct_prime_factors(mut n: usize) -> Vec<usize> {
     let mut f = Vec::new();
     let mut d = 2usize;
     while d * d <= n {
-        if n % d == 0 {
+        if n.is_multiple_of(d) {
             f.push(d);
-            while n % d == 0 {
+            while n.is_multiple_of(d) {
                 n /= d;
             }
         }
@@ -626,7 +626,7 @@ fn largest_prime_factor(mut n: usize) -> usize {
     let mut largest = 1usize;
     let mut d = 2usize;
     while d * d <= n {
-        while n % d == 0 {
+        while n.is_multiple_of(d) {
             largest = d;
             n /= d;
         }
@@ -712,9 +712,7 @@ fn rader_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
     }
     COOLEY_TUKEY_BACKEND.transform_1d_inplace(&mut a, true);
 
-    let x0 = input
-        .iter()
-        .fold((0.0, 0.0), |acc, &v| complex_add(acc, v));
+    let x0 = input.iter().fold((0.0, 0.0), |acc, &v| complex_add(acc, v));
     let inv_l = 1.0 / l as f64;
     let mut out = vec![(0.0, 0.0); p];
     out[0] = x0;
@@ -758,8 +756,8 @@ fn mixed_radix_split_factor(n: usize) -> usize {
         // 2/4 first so the large prime is reached as a standalone prime length
         // (e.g. 502 = 2·251 → peel 2 → 251 via Rader, not a radix-251 O(251²)
         // combine; this compounds badly when nested, e.g. 2510 = 2·5·251).
-        if p > MIXED_RADIX_DIRECT_MAX_PRIME && n % 2 == 0 {
-            if n % 4 == 0 { 4 } else { 2 }
+        if p > MIXED_RADIX_DIRECT_MAX_PRIME && n.is_multiple_of(2) {
+            if n.is_multiple_of(4) { 4 } else { 2 }
         } else {
             p
         }
@@ -1261,7 +1259,11 @@ fn mixed_radix_combine_stage(
         const S1: f64 = 0.781_831_482_468_029_8;
         const S2: f64 = 0.974_927_912_181_823_6;
         const S3: f64 = 0.433_883_739_117_558_1;
-        let (s1, s2, s3) = if inverse { (-S1, -S2, -S3) } else { (S1, S2, S3) };
+        let (s1, s2, s3) = if inverse {
+            (-S1, -S2, -S3)
+        } else {
+            (S1, S2, S3)
+        };
         let (out0, tail) = out.split_at_mut(m);
         let (out1, tail) = tail.split_at_mut(m);
         let (out2, tail) = tail.split_at_mut(m);
@@ -1319,10 +1321,7 @@ fn mixed_radix_combine_stage(
                 s3 * m1.0 - s1 * m2.0 + s2 * m3.0,
                 s3 * m1.1 - s1 * m2.1 + s2 * m3.1,
             );
-            out0[r] = (
-                t0.0 + p1.0 + p2.0 + p3.0,
-                t0.1 + p1.1 + p2.1 + p3.1,
-            );
+            out0[r] = (t0.0 + p1.0 + p2.0 + p3.0, t0.1 + p1.1 + p2.1 + p3.1);
             out1[r] = (a1.0 + b1.1, a1.1 - b1.0);
             out2[r] = (a2.0 + b2.1, a2.1 - b2.0);
             out3[r] = (a3.0 + b3.1, a3.1 - b3.0);
@@ -1431,15 +1430,15 @@ fn mixed_radix_combine_stage(
         // Radix-13 combine: six conjugate pairs (1,12)(2,11)(3,10)(4,9)(5,8)(6,7).
         // cₖ=cos(2πk/13), sₖ=sin(2πk/13) for k=1..6; a-terms are cosine sums with
         // the (k·u mod 13) permutation, b-terms sine diffs with the reflection sign.
-        const C1: f64 = 0.885_456_025_653_210_0;
+        const C1: f64 = 0.885_456_025_653_21;
         const C2: f64 = 0.568_064_746_731_155_9;
         const C3: f64 = 0.120_536_680_255_323_1;
         const C4: f64 = -0.354_604_887_042_535_6;
         const C5: f64 = -0.748_510_748_171_101_1;
-        const C6: f64 = -0.970_941_817_426_052_0;
+        const C6: f64 = -0.970_941_817_426_052;
         const S1: f64 = 0.464_723_172_043_768_6;
         const S2: f64 = 0.822_983_865_893_656_4;
-        const S3: f64 = 0.992_708_874_098_054_0;
+        const S3: f64 = 0.992_708_874_098_054;
         const S4: f64 = 0.935_016_242_685_414_8;
         const S5: f64 = 0.663_122_658_240_795_3;
         const S6: f64 = 0.239_315_664_287_557_8;
@@ -2649,8 +2648,8 @@ pub fn dct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
         // Split the k ≤ N/2 (Vₖ = half[k]) and k > N/2 (Vₖ = conj(half[N−k]))
         // ranges into two branch-free loops. The conjugate's real part folds the
         // sign into a `+`: 2·(half[N−k].re·tw.re + half[N−k].im·tw.im). Bit-identical.
-        for k in 0..=n / 2 {
-            result.push(extract(k, half[k]));
+        for (k, &vk) in half.iter().enumerate().take(n / 2 + 1) {
+            result.push(extract(k, vk));
         }
         for k in (n / 2 + 1)..n {
             let (vr, vi) = half[n - k];
@@ -5453,11 +5452,11 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_axis2d, dct_iv, dctn,
-        dst, dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_axis2d, fft_with_audit, fft2, fftn,
-        fwht, hfft, hfft2, hfftn, idct, idct_axis2d, idctn, idstn, ifft, ifft2, ifftn, ihfft, ihfft2,
-        ihfftn, irfft, irfft2, irfftn, is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_axis2d,
-        rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
+        Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_axis2d, dct_iv,
+        dctn, dst, dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_axis2d, fft_with_audit,
+        fft2, fftn, fwht, hfft, hfft2, hfftn, idct, idct_axis2d, idctn, idstn, ifft, ifft2, ifftn,
+        ihfft, ihfft2, ihfftn, irfft, irfft2, irfftn, is_fast_len, next_fast_len, prev_fast_len,
+        rfft, rfft_axis2d, rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
     };
     use super::{
         cooley_tukey_radix2_inplace, cooley_tukey_radix4_inplace_with_twiddles,
@@ -6393,7 +6392,10 @@ mod tests {
                 .zip(&want)
                 .map(|(&(a, b), &(c, d))| ((a - c).powi(2) + (b - d).powi(2)).sqrt())
                 .fold(0.0_f64, f64::max);
-            assert!(maxerr < 1e-7, "n={n} Bluestein fft maxerr {maxerr} vs naive DFT");
+            assert!(
+                maxerr < 1e-7,
+                "n={n} Bluestein fft maxerr {maxerr} vs naive DFT"
+            );
         }
     }
 
@@ -7129,12 +7131,28 @@ mod tests {
                 let frow = fft(&cplx[r * ncols..(r + 1) * ncols], &opts).unwrap();
                 let rrow = rfft(&real[r * ncols..(r + 1) * ncols], &opts).unwrap();
                 for c in 0..ncols {
-                    assert_eq!(fa[r * ncols + c].0.to_bits(), frow[c].0.to_bits(), "fft re {r},{c}");
-                    assert_eq!(fa[r * ncols + c].1.to_bits(), frow[c].1.to_bits(), "fft im {r},{c}");
+                    assert_eq!(
+                        fa[r * ncols + c].0.to_bits(),
+                        frow[c].0.to_bits(),
+                        "fft re {r},{c}"
+                    );
+                    assert_eq!(
+                        fa[r * ncols + c].1.to_bits(),
+                        frow[c].1.to_bits(),
+                        "fft im {r},{c}"
+                    );
                 }
                 for c in 0..rout {
-                    assert_eq!(ra[r * rout + c].0.to_bits(), rrow[c].0.to_bits(), "rfft re {r},{c}");
-                    assert_eq!(ra[r * rout + c].1.to_bits(), rrow[c].1.to_bits(), "rfft im {r},{c}");
+                    assert_eq!(
+                        ra[r * rout + c].0.to_bits(),
+                        rrow[c].0.to_bits(),
+                        "rfft re {r},{c}"
+                    );
+                    assert_eq!(
+                        ra[r * rout + c].1.to_bits(),
+                        rrow[c].1.to_bits(),
+                        "rfft im {r},{c}"
+                    );
                 }
             }
         }
@@ -7154,8 +7172,16 @@ mod tests {
                 let drow = dct(&real[r * ncols..(r + 1) * ncols], &opts).unwrap();
                 let irow = idct(&real[r * ncols..(r + 1) * ncols], &opts).unwrap();
                 for c in 0..ncols {
-                    assert_eq!(da[r * ncols + c].to_bits(), drow[c].to_bits(), "dct {r},{c}");
-                    assert_eq!(ia[r * ncols + c].to_bits(), irow[c].to_bits(), "idct {r},{c}");
+                    assert_eq!(
+                        da[r * ncols + c].to_bits(),
+                        drow[c].to_bits(),
+                        "dct {r},{c}"
+                    );
+                    assert_eq!(
+                        ia[r * ncols + c].to_bits(),
+                        irow[c].to_bits(),
+                        "idct {r},{c}"
+                    );
                 }
             }
         }

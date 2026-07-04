@@ -152,6 +152,33 @@ ledger above so the project has one source of truth.
 - Own files: `crates/fsci-odr/src/lib.rs`, `crates/fsci-odr/Cargo.toml`, `crates/fsci-odr/benches/odr_structured.rs`,
   `crates/fsci-odr/src/bin/perf_odr_structured.rs`, `crates/fsci-odr/src/bin/perf_odr_jacobian.rs`, and `Cargo.lock`.
 
+## 2026-07-04 - codex - REJECT (dropped): DCT-II Makhoul pack/extract fusion regresses vs shipped original
+
+- Land-or-dig scan: the only unmerged measured FrankenSciPy worktree HEAD found was the old `e3b744f4` GEMM
+  threshold-768 commit, but current `main` already has the stronger threshold-256 route and the ledger/bead closeout
+  mark the old worktree superseded. Nothing measured and unlanded was safe to land, so this pass dug the current
+  measured `fsci-fft` DCT-II gap instead.
+- Added a narrow `fft_dct/dct_ii/{2048,4096,8192,16384}` Criterion group to make this lead reproducible under
+  per-crate `cargo bench -p fsci-fft --bench fft_bench`. Cargo in this workspace rejects `cargo bench --release`, so the
+  runnable release-profile form is `cargo bench -p fsci-fft --bench fft_bench --profile release -- fft_dct`.
+- ORIGINAL (shipped DCT-II path, `hz2`, command:
+  `AGENT_NAME=codex CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-codex-perf-dig-fft rch exec -- cargo bench -p fsci-fft --bench fft_bench --profile release -- fft_dct`):
+  n=2048 16.558us, n=4096 34.244us, n=8192 75.444us, n=16384 164.02us.
+- VARIANT A (dropped): fuse the Makhoul reorder into the real-FFT packed input but keep the half-spectrum/extract pass.
+  Cross-worker smoke (`vmi1152480`) gave n=2048 18.662us, n=4096 36.740us, n=8192 80.959us, n=16384 162.82us;
+  rough speed ratios vs original are 0.89x, 0.93x, 0.93x, 1.01x. This is neutral-to-negative and not same-worker proof.
+- VARIANT B (dropped): also fuse real-FFT unpack with DCT extraction to avoid the half-spectrum allocation. It stayed
+  correct on focused DCT tests (21/0) but regressed heavily in the bench smoke (`vmi1264463`): n=2048 31.877us,
+  n=4096 66.336us, n=8192 148.11us, n=16384 329.46us; rough speed ratios vs original are 0.52x, 0.52x, 0.51x,
+  0.50x. Likely cause: the old half-spectrum split loops are vector/cache friendlier than the fused branchy recombine.
+- RCH note: `RCH_WORKER=hz2` / `RCH_WORKER=ovh-a` did not pin selection in this session, so same-worker keep proof was
+  unavailable. The variants were still far enough from positive to drop. No transform code shipped.
+- Conformance GREEN: local live-SciPy `AGENT_NAME=codex FSCI_REQUIRE_SCIPY_ORACLE=1
+  CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod cargo test -p
+  fsci-conformance --test diff_fft_dct_dst -- --nocapture` passed 1/0. RCH attempts against this same gate were blocked
+  by worker Python environments without SciPy (`ModuleNotFoundError: No module named 'scipy'`) or a stale worker; the
+  focused `fsci-fft` DCT unit lane passed via RCH on `hz2` (21/0).
+
 ## 2026-07-04 - BlackThrush (codex) - KEEP: fsci-io CSV/JSON writers stream into output buffer - 1.70x / 1.99x self vs legacy original
 
 - Bead `frankenscipy-d1uxy`. `write_csv` and `write_json_array` still

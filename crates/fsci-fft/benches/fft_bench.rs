@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use fsci_fft::{FftOptions, cross_spectral_density, fft, fft2, ifft, irfft, rfft};
+use fsci_fft::{FftOptions, cross_spectral_density, dct, fft, fft2, ifft, irfft, rfft};
 use std::hint::black_box;
 
 type Complex64 = (f64, f64);
@@ -115,6 +115,25 @@ fn bench_rfft(c: &mut Criterion) {
             let opts = default_opts();
             b.iter(|| {
                 let out = rfft(black_box(input), black_box(&opts)).expect("rfft");
+                black_box(out.len());
+            });
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_dct(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fft_dct");
+    group.sample_size(50);
+
+    let sizes: &[usize] = &[2048, 4096, 8192, 16384];
+    for &n in sizes {
+        let input = make_real_input(n);
+        group.bench_with_input(BenchmarkId::new("dct_ii", n), &input, |b, input| {
+            let opts = default_opts();
+            b.iter(|| {
+                let out = dct(black_box(input), black_box(&opts)).expect("dct");
                 black_box(out.len());
             });
         });
@@ -264,6 +283,7 @@ criterion_group!(
     bench_mixed_radix_fft,
     bench_ifft,
     bench_rfft,
+    bench_dct,
     bench_irfft,
     bench_fft2,
     bench_cross_spectral_density
