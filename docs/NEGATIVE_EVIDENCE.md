@@ -16514,3 +16514,21 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   savemat_text_parallel_is_byte_identical_to_serial_above_gate GREEN.
 - IO FORMATTER VEIN COMPLETE (mmwrite lever): mmwrite/savetxt/write_csv/write_json_array/savemat_text all parallel.
   Remaining: mmwrite_complex (pre-existing red test, avoid), write_netcdf_classic (binary/endian, different lever).
+
+## 2026-07-04 - BlackThrush (cc) - khatri_rao -> row-major alloc-in-worker parallel build (1.5-2.2x self, BYTE-IDENTICAL)
+
+- fsci-linalg. `khatri_rao(a,b)` (column-wise Kronecker, output row r=i·p+k = a[i][:]·b[k][:]) built the (m·p)×ncols
+  result by a COLUMN-MAJOR triple loop `for j {for i {for k {result[i*p+k][j]=...}}}` — that scatters writes column-j
+  across all row-major Vecs (stride-ncols, cache-unfriendly). Rows are INDEPENDENT, so build each ROW-MAJOR in a
+  worker via `(0..ncols).map(|j| a[i][j]*b[k][j]).collect()` — cache-friendly AND fans across cores. Byte-identical
+  values (same a[i][j]·b[k][j] at the same [i*p+k][j]).
+- SAME-BINARY A/B (atomic KHATRI_RAO_FORCE_SERIAL, 3× interleaved, row-major-serial vs row-major-parallel),
+  **bitmism=0 everywhere**: m=200 p=200 r=10 (40k rows) **1.5×**; m=1000 p=1000 r=8 (1M rows) 82.28→37.19ms **2.2×**;
+  m=2000 p=500 r=16 (1M) 96.93→48.52ms **2.0×**; m=300 p=300 r=100 (90k) 14.37→8.81ms **1.6×**. Alloc-bound (many
+  small rows) so caps ~2× like laplacian; the row-major fill ALSO beats the old strided serial (extra, unmeasured).
+  Gated nrows·ncols≥2^16. New test khatri_rao_parallel_is_byte_identical_to_serial_above_gate + khatri_rao_basic GREEN.
+- vs ORIG: scipy.linalg.khatri_rao is single-thread; self-ratio 1.5-2.2× + cache-friendlier fill.
+- TURN NOTE: geometric_slerp (spatial) parallel was ~0-gain (1.0-1.1×, alloc-bound many-small-Vec output — the
+  earlier "1.6× at m=10000" was NOISE: m·d=30000 < the 2^15 gate so BOTH paths were serial) → NOT landed. codex agent
+  (separate CARGO_TARGET_DIR=scipy-cod, same loop) is racing obvious parallel targets in io/fft/spatial; PIVOT to
+  algorithmic/cache wins in uncontested crates.
