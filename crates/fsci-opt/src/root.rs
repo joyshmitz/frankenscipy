@@ -1418,11 +1418,23 @@ where
     let mut nfev = 0usize;
     let mut jac = vec![vec![0.0; n]; n];
 
-    for iteration in 0..maxiter {
-        let fx = evaluate_multivariate_root(&func, &x, n, "fsolve")?;
-        nfev += 1;
+    // F(x) is carried across iterations (refreshed only when we take a step), so it
+    // is never re-evaluated at the top of the loop.
+    let mut fx = evaluate_multivariate_root(&func, &x, n, "fsolve")?;
+    nfev += 1;
 
-        // Check convergence: ||F(x)|| < tol.
+    // Broyden ("good") quasi-Newton. scipy/MINPACK's hybr does not rebuild the
+    // finite-difference Jacobian every step — it computes it once and refreshes it
+    // with an O(n^2) rank-1 update per accepted step, recomputing the full FD
+    // Jacobian only when an update goes stale. fsci previously recomputed the full
+    // FD Jacobian (n residual evaluations) every iteration; for expensive residuals
+    // that dominates the cost. Here `jac_valid` is cleared whenever a step fails to
+    // reduce ‖F‖, forcing a fresh FD Jacobian and keeping the method as robust as
+    // plain Newton (restart-on-failure), while accepted steps cost only one residual
+    // evaluation plus the O(n^2) update.
+    let mut jac_valid = false;
+
+    for iteration in 0..maxiter {
         let norm_fx: f64 = fx.iter().map(|v| v * v).sum::<f64>().sqrt();
         if norm_fx < tol {
             return Ok(MultivariateRootResult {
@@ -1435,17 +1447,20 @@ where
             });
         }
 
-        // Compute Jacobian via finite differences.
-        for j in 0..n {
-            let h = eps * (1.0 + x[j].abs());
-            let original = x[j];
-            x[j] += h;
-            let fx_plus = evaluate_multivariate_root(&func, &x, n, "fsolve")?;
-            x[j] = original; // restore
-            nfev += 1;
-            for i in 0..n {
-                jac[i][j] = (fx_plus[i] - fx[i]) / h;
+        // (Re)build the finite-difference Jacobian only when we lack a usable one.
+        if !jac_valid {
+            for j in 0..n {
+                let h = eps * (1.0 + x[j].abs());
+                let original = x[j];
+                x[j] += h;
+                let fx_plus = evaluate_multivariate_root(&func, &x, n, "fsolve")?;
+                x[j] = original; // restore
+                nfev += 1;
+                for i in 0..n {
+                    jac[i][j] = (fx_plus[i] - fx[i]) / h;
+                }
             }
+            jac_valid = true;
         }
 
         // Solve J * dx = -F(x) using Gaussian elimination with partial pivoting.
@@ -1453,9 +1468,11 @@ where
         for val in &mut neg_fx {
             *val = -*val;
         }
+        let mut singular = false;
         let dx = match solve_dense(&jac, &neg_fx) {
             Some(d) => d,
             None => {
+                singular = true;
                 // Rank-deficient/singular Jacobian (e.g. a start where two columns
                 // coincide). Fall back to a Levenberg-Marquardt damped Gauss-Newton
                 // step (JᵀJ + λI) dx = -Jᵀ F: well-posed for λ>0 and a descent
@@ -1491,11 +1508,12 @@ where
             }
         };
 
-        // Line search: try full step, then halve until improvement found.
+        // Line search: try full step, then halve until ‖F‖ improves. Keep the
+        // residual at the accepted point so the Broyden update needs no extra eval.
         let mut alpha = 1.0;
-        let mut best_x = x.clone();
-        let best_norm = norm_fx;
         let mut improved = false;
+        let mut new_x = x.clone();
+        let mut new_fx = fx.clone();
         for _ in 0..10 {
             let trial: Vec<f64> = x
                 .iter()
@@ -1505,29 +1523,60 @@ where
             let ftrial = evaluate_multivariate_root(&func, &trial, n, "fsolve")?;
             nfev += 1;
             let trial_norm: f64 = ftrial.iter().map(|v| v * v).sum::<f64>().sqrt();
-            if trial_norm < best_norm {
-                best_x = trial;
+            if trial_norm < norm_fx {
+                new_x = trial;
+                new_fx = ftrial;
                 improved = true;
                 break;
             }
             alpha *= 0.5;
         }
 
-        if !improved {
-            // No step improved; take the smallest step anyway to avoid stalling.
+        if improved {
+            if singular {
+                // The step came from the LM-damped fallback, not the true Jacobian —
+                // a Broyden update off it is meaningless. Rebuild a fresh FD Jacobian
+                // next iteration (as plain Newton did) until the Jacobian is
+                // well-conditioned, then let Broyden take over.
+                jac_valid = false;
+            } else {
+                // Broyden "good" update: J ← J + ((y − J s) / (sᵀs)) sᵀ, with
+                // s = new_x − x and y = new_fx − fx. Costs O(n^2) and no residual evals.
+                let s: Vec<f64> = new_x.iter().zip(&x).map(|(a, b)| a - b).collect();
+                let sts: f64 = s.iter().map(|v| v * v).sum();
+                if sts > 0.0 {
+                    for i in 0..n {
+                        let js_i: f64 = (0..n).map(|k| jac[i][k] * s[k]).sum();
+                        let coeff = (new_fx[i] - fx[i] - js_i) / sts;
+                        if coeff != 0.0 {
+                            for k in 0..n {
+                                jac[i][k] += coeff * s[k];
+                            }
+                        }
+                    }
+                } else {
+                    jac_valid = false; // degenerate step; rebuild the FD Jacobian next iter
+                }
+            }
+            x = new_x;
+            fx = new_fx;
+        } else {
+            // No tried step reduced ‖F‖. Take the smallest step to avoid stalling and
+            // force a fresh FD Jacobian next iteration (whether the current Jacobian
+            // was a stale Broyden approximation or a fresh finite-difference one).
             let trial: Vec<f64> = x
                 .iter()
                 .zip(&dx)
                 .map(|(&xi, &di)| xi + alpha * di)
                 .collect();
-            best_x = trial;
+            let ftrial = evaluate_multivariate_root(&func, &trial, n, "fsolve")?;
+            nfev += 1;
+            x = trial;
+            fx = ftrial;
+            jac_valid = false;
         }
-
-        x = best_x;
     }
 
-    let fx = evaluate_multivariate_root(&func, &x, n, "fsolve")?;
-    nfev += 1;
     Ok(MultivariateRootResult {
         x,
         fun: fx,
@@ -3500,6 +3549,31 @@ mod tests {
         assert!((result.x[0] - 1.0).abs() < 0.1, "x = {}", result.x[0]);
         assert!((result.x[1] - 2.0).abs() < 0.1, "y = {}", result.x[1]);
         assert!((result.x[2] - 3.0).abs() < 0.1, "z = {}", result.x[2]);
+    }
+
+    #[test]
+    fn fsolve_broyden_cuts_function_calls() {
+        // A larger nonlinear system: F_i(x) = x_i^2 - (i+1), root x_i = sqrt(i+1).
+        // Broyden reuses the Jacobian via rank-1 updates instead of rebuilding the
+        // full finite-difference Jacobian (n residual evals) every iteration, so the
+        // total residual evaluations stay well under `iterations * n` (which a
+        // full-FD-every-iteration solver would exceed).
+        let n = 12usize;
+        let f = |x: &[f64]| (0..x.len()).map(|i| x[i] * x[i] - (i as f64 + 1.0)).collect();
+        let result = fsolve(f, &vec![0.5; n]).expect("fsolve should converge");
+        assert!(result.converged, "fsolve failed: {}", result.message);
+        for i in 0..n {
+            let want = ((i + 1) as f64).sqrt();
+            assert!((result.x[i] - want).abs() < 1e-4, "x[{i}]={}, want {want}", result.x[i]);
+        }
+        // Full-FD-every-iteration would need >= iterations*n Jacobian evals alone;
+        // Broyden's bound is one FD Jacobian plus O(1) evals per iteration.
+        assert!(
+            result.function_calls <= 2 * n + 4 * result.iterations.max(1),
+            "function_calls={} too high for {} iterations (n={n})",
+            result.function_calls,
+            result.iterations
+        );
     }
 
     #[test]

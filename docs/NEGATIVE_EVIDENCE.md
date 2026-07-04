@@ -14913,3 +14913,30 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   matters more. Quasi-Newton Broyden + dogleg is the right lever; it changes convergence (validate by
   "converges to the same root" + scipy-ref, not byte-id). Substantial — deferred, not attempted under context
   budget. Same pattern likely in root.rs other methods and fsci-integrate BDF/Radau Newton (Jacobian reuse).
+
+## 2026-07-03 - BlackThrush (cc) - fsolve Broyden quasi-Newton (WIN — closes the function-eval gap vs scipy hybr)
+
+- Follow-up to the 4e77b280 finding: fsci `fsolve_with_options` (root.rs) rebuilt the FULL finite-difference
+  Jacobian (n residual evals) EVERY Newton iteration, whereas scipy's fsolve/hybr (MINPACK hybrd) computes it
+  ONCE then refreshes it with Broyden rank-1 updates. Implemented Broyden's "good" update J += ((y-Js)/(sᵀs))sᵀ
+  in place (O(n^2), zero extra evals; y,s from the accepted line-search step), with restart-on-failure: any
+  step that fails to reduce ‖F‖ clears the Jacobian → fresh FD next iteration, keeping robustness = plain
+  Newton. GOTCHA fixed: never Broyden-update off the LM-damped singular-Jacobian fallback (skip the update +
+  force FD next iter) — else the singular-start conformance test regresses.
+- MEASURED (standalone rustc A/B, old-full-FD vs Broyden, both converge to the root; F_i = x_i^2-(i+1) + a
+  `work`-knob coupling term):
+    FUNCTION CALLS (scipy-parity metric — MINPACK minimizes callbacks): 1.43x (n=10) → 1.69x (n=20) →
+      2.37x (n=40) fewer; grows with n (old = iters*(n+~2), Broyden = n + iters*~2).
+    WALL-TIME expensive RHS (work=200): 1.67x (n=20), 2.22x (n=40) faster.
+    WALL-TIME cheap RHS (work=4): 0.89x/0.55x/0.44x — a LOSS, because Broyden trades n evals/iter for MORE
+      iterations (superlinear vs Newton's quadratic) and each iteration still does an O(n^3) dense solve.
+- SHIP DECISION (WIN vs the original): the cheap-RHS wall LOSS is fsci-internal and lives in a regime
+  (n<=40, <0.5ms) where BOTH fsci variants already crush scipy by orders of magnitude (native evals vs
+  scipy's Python callback), so it does NOT regress the fsci-vs-scipy scorecard. Where fsolve speed actually
+  matters (expensive RHS), Broyden wins wall-time 1.67-2.22x AND closes the function-eval gap vs scipy hybr
+  (1.4-2.4x) — the true "biggest gap vs the original". A deterministic gate to skip Broyden for cheap RHS is
+  impossible (RHS cost is opaque; a timing gate would make iteration counts machine-dependent = non-repro),
+  so shipped unconditionally as the scipy-matching algorithm. Conformance: 326/0 green incl. a new
+  fsolve_broyden_cuts_function_calls test (asserts calls <= 2n+4*iters, which full-FD-every-iter violates)
+  and the singular-start hybr test. LEVER: any Newton root/opt solver rebuilding a full FD Jacobian per
+  iteration → Broyden rank-1 update + restart-on-failure (quasi-Newton) = fewer residual evals, scipy-parity.
