@@ -15271,3 +15271,21 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   turn, but the 4.9e-16 max-rel margin is 5 orders inside it and erfc_scalar is untouched (all its callers —
   norm/lognorm/ndtr/… — unaffected). LEVER: `simd_exp` now enables erf/erfi/dawsn/ndtr vector-path SIMD (same
   exp·rational shape) — the reusable transcendental SIMD primitive the sweep scoped.
+
+## 2026-07-04 - BlackThrush (cc) - erf SIMD (reuses simd_exp) — 1.44x self, FLIPS scipy 1.34x-slower → 1.07x FASTER; closes the error-family SIMD vein
+
+- FINAL error-family lever (after erfcx a73edb6c, erfc 2c9c639b). erf(x): `|x|≤1` = the odd rational `x·T(x²)/U(x²)`
+  (byte-identical SIMD Horner); `1<|x|<25` = `sign(x)·(1 − exp(−x²)·erfcx_cephes(|x|))` (reuses `simd_exp` +
+  `erfcx_cephes_real_simd`); `|x|≥25` scalar (erf≈±1). Gate `64≤n<1<<20`; erf_scalar untouched.
+- ACCURACY: max abs diff vs erf_scalar = **1.1e-16** (unit test `erf_simd_matches_scalar_within_tol` <1e-14).
+  `|x|≤1` is byte-identical (odd rational, IEEE-exact sign); the tail carries simd_exp's ~4 ulp but erf≈±1 there
+  so the `1−erfc` subtraction is well-conditioned → ~1e-16 abs.
+- MEASURED (bin check_erfcx_simd A/B, sweep domain 0.2-20.2, same box/moment, threads=1): erf SIMD 1959us vs
+  scalar 2818us = **1.44x self**; scipy erf 2103us (fresh same-box), so scalar 1.34x-slower → **SIMD 1.07x FASTER
+  (flip)**. (erfc re-confirmed 1.47x self / 1.10x-faster; erfcx 1.32x self same run.)
+- CONF: full fsci-special lib suite **1142/0** (incl erf/erfc/simd_exp accuracy asserts); **local scipy-oracle
+  diff_special_error (tol 1e-13) 1/0** — this covers erf AND erfc, so it also CLOSES last turn's (2c9c639b)
+  skipped erfc conformance: both pass vs scipy at 1e-13.
+- VERDICT: KEEP — error family (erf/erfc/erfcx) now all FLIPPED to wins/parity via SIMD, the only serial single-arg
+  losses the 2a032a74 sweep found. SIMD-vectorizable serial special-fn surface EXHAUSTED. `simd_exp`+`simd_horner`+
+  `erfcx_cephes_real_simd` remain reusable for erfi/dawsn/ndtr should a workload need them (same exp·rational shape).

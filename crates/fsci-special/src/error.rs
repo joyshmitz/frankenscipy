@@ -76,6 +76,15 @@ const INV_SQRT_PI: f64 = 0.564_189_583_547_756_3;
 const TWO_INV_SQRT_PI: f64 = 2.0 * INV_SQRT_PI;
 
 pub fn erf(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    // Same SIMD lever as erfc (2c9c639b): the |x|≤1 rational is a byte-identical SIMD
+    // Horner, and the |x|>1 tail is `sign(x)·(1 − exp(−x²)·erfcx_cephes(|x|))` — the
+    // exp via `simd_exp` (≤4 ulp) and the rational SIMD. Below the parallel gate, where
+    // the scalar map lost ~1.5x to SciPy's SIMD ufunc.
+    if let SpecialTensor::RealVec(values) = z {
+        if (64..(1 << 20)).contains(&values.len()) {
+            return Ok(SpecialTensor::RealVec(erf_real_vec_simd(values)));
+        }
+    }
     map_unary_input_rp(
         "erf",
         z,
@@ -84,6 +93,46 @@ pub fn erf(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         |value| Ok(erf_complex_scalar(value)),
         1 << 20, // work-gated: serial small, par_map_indices for huge arrays (>=1M)
     )
+}
+
+/// 8-wide erf over a real slice. `|x| ≤ 1`: the odd rational `x·T(x²)/U(x²)`
+/// (byte-identical SIMD Horner). `1 < |x| < 25`: `sign(x)·(1 − erfc(|x|))` with
+/// `erfc(|x|) = exp(−x²)·erfcx_cephes(|x|)` (simd_exp × SIMD rational). `|x| ≥ 25`:
+/// scalar (erf ≈ ±1). Accurate to a few ulp vs the scalar map, inside erf's 1e-13 tol.
+fn erf_real_vec_simd(values: &[f64]) -> Vec<f64> {
+    const LANES: usize = 8;
+    let mut out = vec![0.0f64; values.len()];
+    let mut i = 0;
+    while i + LANES <= values.len() {
+        let x = Simd::<f64, LANES>::from_slice(&values[i..i + LANES]);
+        let z = x * x;
+        let rat =
+            (x * simd_horner(z, &CEPHES_ERF_T, 0.0) / simd_horner(z, &CEPHES_ERF_U, 1.0)).to_array();
+        let ez = simd_exp(-z).to_array(); // exp(−x²)
+        let cx = erfcx_cephes_real_simd(x.abs()); // erfcx_cephes(|x|)
+        for j in 0..LANES {
+            let xj = values[i + j];
+            let xaj = xj.abs();
+            out[i + j] = if xaj <= 1.0 {
+                rat[j]
+            } else if xaj < 25.0 {
+                let erfc_abs = ez[j] * cx[j]; // erfc(|x|)
+                if xj > 0.0 {
+                    1.0 - erfc_abs
+                } else {
+                    erfc_abs - 1.0
+                }
+            } else {
+                erf_scalar(xj)
+            };
+        }
+        i += LANES;
+    }
+    while i < values.len() {
+        out[i] = erf_scalar(values[i]);
+        i += 1;
+    }
+    out
 }
 
 pub fn erfc(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -869,6 +918,24 @@ fn inv_norm_cdf_scalar(p: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erf_simd_matches_scalar_within_tol() {
+        // erf's SIMD vector path vs the scalar kernel across every branch/sign boundary.
+        let mut xs: Vec<f64> = (0..2000).map(|i| -28.0 + 56.0 * (i as f64) / 2000.0).collect();
+        for b in [-1.0, 1.0, -25.0, 25.0, 0.9999999, -0.9999999, 0.0, 2.0, -2.0] {
+            xs.push(b);
+        }
+        let simd = match erf(&SpecialTensor::RealVec(xs.clone()), RuntimeMode::Strict).unwrap() {
+            SpecialTensor::RealVec(v) => v,
+            _ => unreachable!(),
+        };
+        let mut max_abs = 0.0f64;
+        for (k, &x) in xs.iter().enumerate() {
+            max_abs = max_abs.max((simd[k] - erf_scalar(x)).abs());
+        }
+        assert!(max_abs < 1e-14, "erf simd max abs diff vs scalar = {max_abs:e}");
+    }
 
     #[test]
     fn erfc_simd_matches_scalar_within_tol() {
