@@ -3667,10 +3667,16 @@ pub fn obl_ang1_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
 /// Bit-identical to a serial map of [`obl_rad1`](crate::obl_rad1).
 #[must_use]
 pub fn obl_rad1_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    // The characteristic value `cv` is x-INVARIANT (the expensive spheroidal
+    // eigenproblem). SciPy's ufunc — and a naive `obl_rad1` par-map — re-solve it for
+    // every element; hoist it out of the loop and fan only the cheap per-x radial
+    // series across threads. `obl_cv == spheroidal_cv(m,n,c,false)`, exactly the cv
+    // `obl_rad1` computes internally, so this is bit-identical to a serial map.
+    let cv = crate::orthopoly::obl_cv(m, n, c);
     par_map_indices(x.len(), |i| {
-        Ok::<(f64, f64), SpecialError>(crate::orthopoly::obl_rad1(m, n, c, x[i]))
+        Ok::<(f64, f64), SpecialError>(crate::orthopoly::obl_rad1_cv(m, n, c, cv, x[i]))
     })
-    .expect("obl_rad1 is infallible")
+    .expect("obl_rad1_cv is infallible")
 }
 
 /// Vectorized oblate-spheroidal radial function of the second kind `obl_rad2(m, n, c, x)`
@@ -3679,10 +3685,14 @@ pub fn obl_rad1_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
 /// [`obl_rad2`](crate::obl_rad2).
 #[must_use]
 pub fn obl_rad2_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    // See [`obl_rad1_many`]: hoist the x-invariant characteristic value out of the
+    // per-element loop. Bit-identical to a serial map of [`obl_rad2`](crate::obl_rad2)
+    // (`obl_rad2_cv` shares its `n<m` guard and driver).
+    let cv = crate::orthopoly::obl_cv(m, n, c);
     par_map_indices(x.len(), |i| {
-        Ok::<(f64, f64), SpecialError>(crate::orthopoly::obl_rad2(m, n, c, x[i]))
+        Ok::<(f64, f64), SpecialError>(crate::orthopoly::obl_rad2_cv(m, n, c, cv, x[i]))
     })
-    .expect("obl_rad2 is infallible")
+    .expect("obl_rad2_cv is infallible")
 }
 
 /// Vectorized even periodic Mathieu function `mathieu_cem(m, q, x)` (value and

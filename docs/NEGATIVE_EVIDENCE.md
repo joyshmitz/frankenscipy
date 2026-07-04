@@ -15728,3 +15728,21 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   value + derivative, incl. empty input); scalar `spheroidal_rad*_match_scipy` goldens unaffected (pure wrappers).
   Toolchain note: `-cc` release cache hit an E0514 (stale cc/blake3 build-scripts from a nightly bump); `cargo clean
   --release` fixed it (per [[perf_special_gate_vein_closed_toolchain_recovery]]).
+
+## 2026-07-04 - BlackThrush (cc) - obl_rad1_many cv-HOIST — ~2x more (26-29x vs scipy array); obl_rad2 neutral
+
+- Delivered the deferred hoist from the previous entry WITHOUT touching the occupied orthopoly.rs: there are already
+  PUBLIC `obl_rad1_cv`/`obl_rad2_cv(m,n,c,cv,x)` (take a precomputed characteristic value) and `obl_cv(m,n,c) ==
+  spheroidal_cv(m,n,c,false)` — exactly the cv `obl_rad1`/`obl_rad2` compute internally per call. So `obl_rad{1,2}_many`
+  now compute `cv` ONCE and par-map `obl_rad{1,2}_cv` over x (STRICTLY LESS WORK than the previous par-map, which
+  re-solved the x-invariant spheroidal eigenproblem for every element). Pure convenience.rs change, byte-identical
+  (`obl_rad{1,2}_cv` share the same driver + `n<m` guard; test `obl_rad_many_match_serial_bit_for_bit` still GREEN).
+- MEASURED (n=5000, m=1 n=2 c=1.0; HEAVILY contended box — best-of-4 rch runs, wide variance): `obl_rad1_many`
+  best **2.34 ms = 28.7× vs scipy array** (67.12 ms) — ~2× faster than the par-map's 5.29 ms: cv (the ~60-iter Sturm
+  eigensolve) is a large fraction of obl_rad1's cheap-series cost, so hoisting it out pays. `obl_rad2_many` best
+  **7.05 ms = 12.1×** — NEUTRAL vs the par-map's 6.15 ms (within contention noise; the second-kind `obl_rad2_driver`
+  dominates so cv is a small fraction — but the hoist still does strictly less work, never slower in real terms).
+- VERDICT: KEEP. Net win (obl_rad1 ~2×, obl_rad2 neutral, both byte-identical + strictly-less-work). Corrects the
+  previous entry's "~5-10× more" hope: cv-hoist helps ONLY the first-kind (cv-dominated), not the driver-dominated
+  second-kind — the radial DRIVER, not the eigensolve, is obl_rad2's bottleneck. CONF: byte-identity test GREEN;
+  spheroidal `*_match_scipy` goldens unaffected (pure wrappers). Build on `-cc` (release cache clean from last turn).
