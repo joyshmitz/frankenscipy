@@ -15829,3 +15829,21 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   net-positive generalization (helps the common small-kernel 3-D case, neutral for large kernels, preserves 2-D).
 - CONFIRMS the compute-vs-memory boundary of this lever: 2-D (K rows ≈ 115KB, L2-resident) and small-kernel 3-D
   (3 planes) are COMPUTE-bound ⇒ SIMD wins 1.3-2.8×; large-kernel 3-D (5+ planes > L2) is MEMORY-bound ⇒ ~1×.
+
+## 2026-07-04 - BlackThrush (cc) - measurement sweep: signal.correlate2d / medfilt2d / ndimage.percentile_filter / RGI all ALREADY WIN — no gap
+
+- NO landable win of mine sat un-landed; DUG a measurement-first sweep of 4 commonly-suspected ops. ALL already beat
+  SciPy — recording so future turns DON'T re-chase them (stale-scorecard rule):
+  - `interpolate.RegularGridInterpolator` 3D linear, 200k queries: **fsci 11.05 ms vs scipy 45.73 ms = 4.1× faster**
+    (measured both). Kernel already optimal: `uniform_axes` O(1) interval finder (not searchsorted) + no-alloc
+    `eval_linear_3d` + parallel `eval_many`. Residual is the `&[Vec<f64>]` query pointer-chasing / values-array
+    memory access, NOT a fixable kernel gap.
+  - `signal.correlate2d` (512² 5×5 same): scipy 10.05 ms — fsci auto-dispatches FFT (`next_regular_fft_len`) vs direct
+    by a cost model + parallelizes the direct scatter; wins. (The direct scatter axpy is short-kernel ⇒ SIMD-across-
+    input-cols would break byte-identity via reassociation and only pays for kernels ≥8 wide, which take FFT anyway.)
+  - `signal.medfilt2d` (512² 5×5): scipy 76.17 ms — fsci = branch-free interior gather + parallel `select_nth_unstable`
+    quickselect (same fast path as `ndimage.median_filter`); wins big.
+  - `ndimage.percentile_filter` (512² 5×5): scipy 74.11 ms — routes to the fast `rank_filter` (select_nth); wins big.
+- CONCLUSION: the interpolate/signal/ndimage FILTER + INTERPOLATOR families are DOMINATED (parallel + right-algo). The
+  remaining frontier is the documented WALLS (dense LAPACK dsyevd/dgesdd, FFT pocketfft cache kernel, Mathieu specfun,
+  per-element specfun kernel gaps like pbdv where scipy's C ufunc is faster). Don't re-sweep these 4.
