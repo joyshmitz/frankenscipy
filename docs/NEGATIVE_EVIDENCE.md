@@ -15224,3 +15224,27 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - VERDICT: the SERIAL single-arg special-fn surface is EXHAUSTED except this one SIMD-vectorizable error-family
   gap. Records exact ratios so it is not re-swept. Don't re-chase exp1/expi/zetac/k0/spence/i0/gammaln/etc —
   fsci already wins those 1.1-11x.
+
+## 2026-07-04 - BlackThrush (cc) - erfcx SIMD-vectorized Cephes rational — 1.33x self BYTE-IDENTICAL, narrows scipy 1.53x → 1.15x (converts the SIMD lever scoped in 2a032a74 into a landed win)
+
+- FOLLOW-ON to 2a032a74's broad-sweep finding (erfcx 1.64x slower = scipy SIMD-vectorizes the cephes rational
+  across lanes, fsci was scalar-per-element). SHIPPED the byte-identical SIMD path for the exact regime where
+  the loss lived (serial, n below the 1<<18 parallel gate).
+- FIX: `erfcx_cephes_real_simd` (error.rs) evaluates the P/Q (x<8) and R/S (x≥8) cephes rationals 8-wide via
+  `simd_horner` — a lane-wise Horner is BIT-FOR-BIT the scalar `cephes_polevl`/`p1evl` fold (same op order, no
+  FMA contraction) — with a cheap scalar lane-select for the P/Q-vs-R/S branch. `erfcx_real_vec_simd`
+  (convenience.rs) SIMDs the 1≤x<25 majority and scalar-falls-back the exp path (x<1) and asymptotic (x≥25),
+  so the output Vec is bit-for-bit `values.map(erfcx_scalar)`. Gate `64 ≤ n < 1<<18`; scalar path kept for the
+  complex arm, tiny arrays, and n≥gate (parallel already wins).
+- BYTE-IDENTITY PROVEN: check_erfcx_simd asserts SIMD-tensor-path == scalar map bit-for-bit over 200,008 points
+  spanning every branch boundary (x<1, 1, [1,8), 8, [8,25), 25, ≥25, negatives) → **0 mismatches**.
+- MEASURED (in-binary A/B, sweep domain 0.2-20.2, same box/moment, threads=1): SIMD 966us vs scalar 1286us =
+  **1.33x self**; scipy erfcx 838us (fresh same-box), so scalar was 1.53x-slower → **SIMD 1.15x-slower** (nearly
+  parity, was 1.64x). Residual = fsci computes BOTH rational branches per chunk + the to_array/scalar-select
+  round-trip vs scipy's single-branch vectorized ufunc.
+- VERDICT: KEEP — byte-identical self-speedup, narrows to ~parity. First std::simd use in fsci-special
+  (`#![feature(portable_simd)]` added; `#![forbid(unsafe_code)]` intact — portable_simd is safe). CONF:
+  fsci-special lib 1139/0, focused erfcx 5/5, local scipy-oracle diff_special_dawsn_erfcx_exprel 1/0.
+- LEVER: cheap cephes-rational special-fn vector paths (erf/erfc need a validated SIMD exp, harder) →
+  SIMD `simd_horner` (byte-identical) + scalar fallback for minority branches. `simd_horner` +
+  `erfcx_cephes_real_simd` now available in error.rs.

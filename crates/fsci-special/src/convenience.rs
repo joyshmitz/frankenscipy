@@ -4970,6 +4970,17 @@ pub fn erfcinv_conv(y: f64) -> f64 {
 ///
 /// Avoids overflow for large x. Matches `scipy.special.erfcx`.
 pub fn erfcx(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    // The scalar-per-element serial map lost ~1.6x to SciPy's SIMD-vectorized ufunc
+    // (broad sweep 2a032a74): the erfcx Cephes rational is the dominant cost and it
+    // SIMD-vectorises byte-identically (a lane-wise Horner is bit-for-bit the scalar
+    // fold). Take the 8-wide path below the parallel gate — that is exactly the
+    // serial regime where the loss lived; at/above the gate the parallel path already
+    // wins, and small arrays keep the scalar path (SIMD setup ~= per-element cost).
+    if let SpecialTensor::RealVec(values) = x_tensor {
+        if (64..(1 << 18)).contains(&values.len()) {
+            return Ok(SpecialTensor::RealVec(erfcx_real_vec_simd(values)));
+        }
+    }
     map_real_or_complex(
         "erfcx",
         x_tensor,
@@ -4978,6 +4989,35 @@ pub fn erfcx(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         |x| Ok(erfcx_scalar(x)),
         |z| erfcx_complex_scalar(z, mode),
     )
+}
+
+/// 8-wide erfcx over a real slice. The Cephes rational (1 ≤ x < 25, its P/Q and R/S
+/// branches) is evaluated SIMD; the exp path (x < 1) and the asymptotic (x ≥ 25) stay
+/// scalar. Every lane is byte-identical to `erfcx_scalar`, so the returned Vec is
+/// bit-for-bit `values.iter().map(erfcx_scalar).collect()`.
+fn erfcx_real_vec_simd(values: &[f64]) -> Vec<f64> {
+    use std::simd::Simd;
+    const LANES: usize = 8;
+    let mut out = vec![0.0f64; values.len()];
+    let mut i = 0;
+    while i + LANES <= values.len() {
+        let x = Simd::<f64, LANES>::from_slice(&values[i..i + LANES]);
+        let cephes = crate::error::erfcx_cephes_real_simd(x);
+        for j in 0..LANES {
+            let xj = values[i + j];
+            out[i + j] = if (1.0..25.0).contains(&xj) {
+                cephes[j]
+            } else {
+                erfcx_scalar(xj)
+            };
+        }
+        i += LANES;
+    }
+    while i < values.len() {
+        out[i] = erfcx_scalar(values[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Scaled complementary error function for complex argument:

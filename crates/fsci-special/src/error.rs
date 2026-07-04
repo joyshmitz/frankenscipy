@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 use std::f64::consts::PI;
+use std::simd::num::SimdFloat;
+use std::simd::Simd;
 
 use fsci_runtime::RuntimeMode;
 
@@ -422,6 +424,34 @@ pub(crate) fn erfcx_cephes_real(x: f64) -> f64 {
     } else {
         cephes_polevl(xa, &CEPHES_ERFC_R) / cephes_p1evl(xa, &CEPHES_ERFC_S)
     }
+}
+
+/// 8-wide Cephes Horner: `Σ coef[k]·x^(n-k)` starting from `init` (0.0 = polevl,
+/// 1.0 = p1evl leading-1). Each lane runs the IDENTICAL fold as `cephes_polevl`/
+/// `cephes_p1evl` (same op order, no FMA contraction), so it is bit-for-bit the
+/// scalar result per lane.
+fn simd_horner(x: Simd<f64, 8>, coef: &[f64], init: f64) -> Simd<f64, 8> {
+    let mut acc = Simd::splat(init);
+    for &c in coef {
+        acc = acc * x + Simd::splat(c);
+    }
+    acc
+}
+
+/// 8-wide [`erfcx_cephes_real`]: per lane bit-identical to the scalar kernel (same
+/// P/Q vs R/S split at `xa < 8`, same Horner). Caller guarantees each lane `x ≥ 1`.
+/// Both rationals are evaluated SIMD (the dominant cost); the cheap P/Q-vs-R/S
+/// pick is a scalar lane loop, returned as an array.
+pub(crate) fn erfcx_cephes_real_simd(x: Simd<f64, 8>) -> [f64; 8] {
+    let xa = x.abs();
+    let pq = (simd_horner(xa, &CEPHES_ERFC_P, 0.0) / simd_horner(xa, &CEPHES_ERFC_Q, 1.0)).to_array();
+    let rs = (simd_horner(xa, &CEPHES_ERFC_R, 0.0) / simd_horner(xa, &CEPHES_ERFC_S, 1.0)).to_array();
+    let xa = xa.to_array();
+    let mut out = [0.0f64; 8];
+    for k in 0..8 {
+        out[k] = if xa[k] < 8.0 { pq[k] } else { rs[k] };
+    }
+    out
 }
 
 fn erfc_complex_scalar(z: Complex64) -> Complex64 {
