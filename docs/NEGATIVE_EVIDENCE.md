@@ -14884,3 +14884,32 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - NET: large curve_fit/least_squares fits (many params and/or >=8192 data points) get the measured
   2.75-13.66x Jacobian speedup byte-identically; small fits are untouched. scipy's MINPACK peer builds the FD
   Jacobian single-threaded, so this is a straight parallel-vs-single-threaded win at scale.
+
+## 2026-07-03 - BlackThrush (cc) - fsolve parallel FD Jacobian: CONDITIONAL (dropped), Broyden is the real lever
+
+- Tried extending the proven parallel-FD-Jacobian lever (see least_squares win 06fb975e) to fsci-opt
+  `fsolve`/`fsolve_with_options` (root.rs:1439), which rebuilds the full n-column FD Jacobian every Newton
+  iteration (each column = one multivariate RHS eval), then does an O(n^3) dense Gaussian solve.
+- MEASURED end-to-end (Jacobian + dense solve, standalone rustc prototype; byte-identical Jacobian mism=0
+  throughout; `work` = per-point RHS cost knob):
+    n=100 work=4    0.14x   (LOSS)
+    n=200 work=4    0.53x   (LOSS)
+    n=400 work=4    0.78x   (LOSS)
+    n=200 work=40   2.43x   (WIN)
+    n=400 work=40   2.11x   (WIN)
+    n=200 work=200  5.66x   (WIN)
+  => CONDITIONAL: parallel columns only win when the RHS is EXPENSIVE. fsolve is a square system (m=n), so the
+  O(n^3) solve dominates the O(n^2) Jacobian for cheap RHS and parallelizing the Jacobian loses (thread
+  overhead + solve-bound). Unlike least_squares, where m (data points) >> n makes the Jacobian reliably
+  dominate, fsolve has no size-only gate that separates win from loss — it needs the RHS eval cost, unknown a
+  priori. A monotone runtime gate is POSSIBLE (time one RHS eval; cap nthreads=cores.min(n).min(n*eval_ns/K),
+  serial below a work floor — the reduce_axis_2d thread-cap recipe) but the payoff is narrow. DROPPED for now
+  (per "drop ~0-gain variants").
+- REAL LEVER (radical, for a future tick): fsci `fsolve` recomputes the FULL FD Jacobian EVERY Newton
+  iteration = n RHS evals/iter. scipy's `fsolve`/`hybr` (MINPACK hybrd) computes ONE FD Jacobian then uses
+  BROYDEN rank-1 updates + a dogleg trust region, recomputing the full Jacobian only when progress stalls —
+  so it does ~n + iters RHS evals total instead of n*iters. For expensive RHS that is a large function-eval
+  gap (the true "biggest gap" here), and it also makes the Jacobian a one-time cost so parallelizing it then
+  matters more. Quasi-Newton Broyden + dogleg is the right lever; it changes convergence (validate by
+  "converges to the same root" + scipy-ref, not byte-id). Substantial — deferred, not attempted under context
+  budget. Same pattern likely in root.rs other methods and fsci-integrate BDF/Radau Newton (Jacobian reuse).
