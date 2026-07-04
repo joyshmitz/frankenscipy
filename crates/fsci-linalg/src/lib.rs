@@ -16004,17 +16004,55 @@ pub fn kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
 /// Vandermonde matrix: `V[i][j] = x[i]^j`.
 ///
 /// Matches `numpy.vander`.
+/// Runtime switch to force the serial `vander` build for same-binary A/B benchmarks.
+/// Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static VANDER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn vander(x: &[f64], n: Option<usize>, increasing: bool) -> Vec<Vec<f64>> {
     let m = x.len();
     let cols = n.unwrap_or(m);
-    let mut v = vec![vec![0.0; cols]; m];
-    for (i, row) in v.iter_mut().enumerate().take(m) {
-        for (j, item) in row.iter_mut().enumerate().take(cols) {
-            let power = if increasing { j } else { cols - 1 - j };
-            *item = x[i].powi(power as i32);
-        }
+    // Each row i = powers of x[i] (`x[i].powi(power)`), independent of every other row
+    // and COMPUTE-bound (powi is ~log₂(power) mults). Build each row directly in a
+    // worker via `collect` — no serial pre-zero pass — so the fan-out parallelizes the
+    // whole cost BYTE-IDENTICALLY (each entry is the same `x[i].powi(power)`).
+    let build_row = |i: usize| -> Vec<f64> {
+        (0..cols)
+            .map(|j| {
+                let power = if increasing { j } else { cols - 1 - j };
+                x[i].powi(power as i32)
+            })
+            .collect()
+    };
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(m.max(1));
+    if cores <= 1
+        || VANDER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || m.saturating_mul(cols) < (1 << 16)
+    {
+        return (0..m).map(build_row).collect();
     }
-    v
+    let chunk = m.div_ceil(cores);
+    let build_row_ref = &build_row;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..cores)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= m {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(m);
+                Some(scope.spawn(move || (i0..i1).map(build_row_ref).collect::<Vec<Vec<f64>>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("vander worker panicked"))
+            .collect()
+    })
 }
 
 /// Hankel matrix from first column and (optionally) last row.
@@ -29134,6 +29172,42 @@ mod tests {
 
         let zero_cols = vander(&[1.0, 2.0, 3.0], Some(0), false);
         assert_eq!(zero_cols, vec![Vec::<f64>::new(), Vec::new(), Vec::new()]);
+    }
+
+    #[test]
+    fn vander_parallel_is_byte_identical_to_serial_above_gate() {
+        use std::sync::atomic::Ordering;
+        // Above the m·cols ≥ 65536 fan-out gate the parallel-across-rows build must be
+        // BYTE-IDENTICAL to the serial loop (each row = powers of x[i], independent), for
+        // both power directions.
+        let m = 300usize;
+        let cols = 300usize; // 90000 > 65536 gate
+        let mut state = 0x1357u64;
+        let x: Vec<f64> = (0..m)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                0.5 + (state >> 12) as f64 / (1u64 << 52) as f64
+            })
+            .collect();
+        for inc in [true, false] {
+            VANDER_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = vander(&x, Some(cols), inc);
+            VANDER_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = vander(&x, Some(cols), inc);
+            let mism: usize = serial
+                .iter()
+                .zip(parallel.iter())
+                .map(|(sr, pr)| {
+                    sr.iter()
+                        .zip(pr.iter())
+                        .filter(|(a, b)| a.to_bits() != b.to_bits())
+                        .count()
+                })
+                .sum();
+            assert_eq!(mism, 0, "inc={inc}: parallel vander must be byte-identical");
+        }
     }
 
     #[test]

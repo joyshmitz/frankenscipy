@@ -16316,3 +16316,27 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   k=7/9, ~parity k=11, only 1.4× at k=15. A lightweight direct 1-D-pass rewrite would win broadly but needs the
   symm-boundary/centering reimplemented (>60min risk). LESSON: a separable-filter algorithmic win only pays if the
   1-D passes are LIGHTWEIGHT — routing them through a general 2-D-conv entry point re-pays its fixed overhead twice.
+
+## 2026-07-04 - BlackThrush (cc) - vander -> parallel-across-rows alloc-in-worker (1.3-6.0x self, BYTE-IDENTICAL)
+
+- fsci-linalg dense-constructor sweep (extends the laplacian dense-build lever). `vander(x, n, increasing)` built the
+  m×cols Vandermonde matrix with a SERIAL double loop, each entry `x[i].powi(power)`. Rows are INDEPENDENT (row i =
+  powers of x[i]) and COMPUTE-bound (powi ≈ log₂(power) mults), so it fans across cores BYTE-IDENTICALLY.
+- FIX: build each row directly in a worker via `(0..cols).map(|j| x[i].powi(power)).collect()` — alloc-in-worker, NO
+  serial pre-zero pass (contrast `par_fill_rows`, which pre-allocates `vec![vec![0.0;ncols];nrows]` serially; for a
+  fully-overwritten compute-bound fill that serial zero would cap the speedup, so vander uses the laplacian-style
+  alloc-in-worker fan-out instead). Gate m·cols ≥ 65536, atomic `VANDER_FORCE_SERIAL`.
+- SAME-BINARY A/B (3× interleaved, x∈[0.5,1.5)), **bitmism=0 everywhere**:
+  - 256×256 (65536): serial 0.71/0.67ms → **1.3×** (just above gate)
+  - 1000×1000: 10.25→2.26ms **4.5×** / 2.20ms **4.7×** (inc true/false)
+  - 2000×2000: 43.31→7.80ms **5.6×** / 7.21ms **6.0×**
+  - 4000×1000: 41.99→8.09ms **5.2×** / 7.93ms **5.3×**
+  BYTE-IDENTICAL, speedup grows with size to ~6× (compute-bound powi parallelizes FAR better than the bandwidth-bound
+  laplacian dense build's 2-3×). GATED m·cols≥65536. New test
+  `vander_parallel_is_byte_identical_to_serial_above_gate` (300², both directions, 0 bitmism) + numpy-golden test GREEN.
+- vs ORIG: numpy.vander is a single-thread C broadcast power; fsci's fan-out should win vs numpy on large matrices
+  (not runnable on rch — no scipy/numpy). Self-ratio 1.3-6.0×.
+- LEVER refined: dense-constructor row-parallel splits by fill cost — COMPUTE-bound fills (vander powi) use
+  alloc-in-worker `map().collect()` (no wasted pre-zero, ~6×); ALLOC/memset-bound fills (laplacian D−A) also parallel
+  but capped ~2-3× by bandwidth. Sequential-recurrence constructors (pascal row i←i−1) are NOT row-parallel; tiny-n
+  ones (pascal/companion/leslie) not worth it. par_fill_rows already covers toeplitz/circulant/hankel/hilbert/tri/kron.
