@@ -15889,3 +15889,24 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - CONCLUSION: the interpolate/signal/ndimage FILTER + INTERPOLATOR families are DOMINATED (parallel + right-algo). The
   remaining frontier is the documented WALLS (dense LAPACK dsyevd/dgesdd, FFT pocketfft cache kernel, Mathieu specfun,
   per-element specfun kernel gaps like pbdv where scipy's C ufunc is faster). Don't re-sweep these 4.
+
+## 2026-07-04 - BlackThrush (cod) - NO-SHIP: Mathieu matrix-free/reuse micro-levers are ~0-gain
+
+- Land-or-dig audit: no measured unlanded `.scratch/.worktrees` win was safe to land; the stale GEMM-threshold bench
+  worktree remained superseded by current `main`, so this turn dug the live Mathieu specfun wall instead.
+- Alien/extreme mapping: tested two constants/cache levers short of the known full Zhang-Jin/specfun port: matrix-free
+  Sturm characteristic values for `mathieu_a/b`, and common-subexpression reuse in `mathieu_fourier` so the characteristic
+  value is extracted from the already-built tridiagonal instead of rebuilding through `mathieu_a/b`.
+- Required latest-target command was attempted literally:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench --release -p fsci-special --bench special_bench -- mathieu_characteristic_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`;
+  Cargo rejected that ordering with `unexpected argument '--release'`, so the runnable equivalent used `--profile release`.
+- Variant A (dropped): matrix-free `mathieu_a/b` avoiding diag/off/e2 allocations. Same-binary Criterion on RCH worker
+  `vmi1227854`: original allocated Sturm `371.62 us` median vs candidate `373.53 us` median = `0.995x` (candidate
+  slower, overlapping intervals). Focused parity test against the allocating Sturm path passed. Reverted.
+- Variant B (dropped): `mathieu_fourier` reusing existing diag/off and computing the characteristic value from that
+  matrix. Same-binary Criterion on RCH worker `ovh-a`: original rebuild `426.93 us` median vs candidate reuse
+  `429.09 us` median = `0.995x` (candidate slower, overlapping intervals). `mathieu_cem_sem_match_scipy` passed and
+  `cargo check -p fsci-special --all-targets` passed via RCH with only pre-existing warnings. Reverted.
+- Verdict: NO-SHIP. The residual Mathieu gap is not Vec allocation or duplicate matrix setup; Sturm pivots plus
+  eigenvector solve dominate. Do not retry matrix-free/matrix-reuse micro-levers. The plausible remaining lever is the
+  already-documented full Zhang-Jin/specfun continued-fraction/secant port with a real conformance sweep.
