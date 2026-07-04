@@ -1595,6 +1595,11 @@ pub fn convolve_axes(
 //     precomputed flat deltas — no boundary handling, no per-tap index arithmetic;
 //   • BORDER pixels fall back to `get_boundary`.
 // The old path's per-tap `weights.unravel` heap alloc and per-pixel `input.unravel` are gone.
+/// Same-binary A/B switch: force the scalar interior path (for benchmarking only).
+#[doc(hidden)]
+pub static ND_FILTER_FORCE_SCALAR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn nd_filter_apply(
     input: &NdArray,
     weights: &[f64],
@@ -1629,7 +1634,8 @@ fn nd_filter_apply(
     // slots per tap — process them as one 8-wide accumulator (LLVM auto-vectorizes the
     // fixed `[f64;8]` k-accumulation). Bit-identical to the scalar interior: each lane
     // sums the SAME taps in the SAME k-order (`+= w*x`, no FMA contraction).
-    let simd_2d = ndim == 2;
+    let simd_2d = ndim == 2
+        && !ND_FILTER_FORCE_SCALAR.load(std::sync::atomic::Ordering::Relaxed);
     let work = |start: usize, os: &mut [f64]| {
         let mut out_idx = vec![0i64; ndim];
         let mut in_idx = vec![0i64; ndim];

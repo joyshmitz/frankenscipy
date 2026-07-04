@@ -15807,3 +15807,11 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   C-order axis → 8-wide `Simd` over consecutive interior output pixels, byte-identical (lane-independent k-order).
   GOTCHA that cost this turn: `[f64;8]` does NOT auto-vectorize without `portable_simd` → use `std::simd::Simd`; and
   NEVER trust a sub-ms parallel-op timing on a loaded box — go compute-bound + same-binary A/B.
+- CONFIRMED via gold-standard SAME-BINARY interleaved A/B (`ND_FILTER_FORCE_SCALAR` atomic switch, min-of-8 each,
+  toggled in one process to cancel cross-run drift): 1600² 9×9 SIMD 14.83ms vs scalar 32.86ms = **2.22×**; 5×5 3.76
+  vs 10.31ms = **2.75×**. This REFUTES a doubt from a 4-day-old memory (`b20d5345`: "dense 2-D nd_filter SIMD-across-
+  pixels is memory-bound, ~1.025×, LOSES") — that predates the current parallel + interior-flat-gather `nd_filter_apply`;
+  at these sizes the K-row kernel working set is L2-resident (9×1600×8B≈115KB, reused across the row) so the op is
+  COMPUTE-bound, not memory-bound, and 8-wide SIMD wins cleanly. The ratio being kernel-size-dependent (5×5 2.75× >
+  9×9 2.22×, bigger kernel = more memory pressure = closer to the bandwidth wall) is the physical signature of a real
+  compute-bound win, not contention noise.
