@@ -15542,3 +15542,23 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   slow generic — LEVER: any fsci function still using nalgebra `.lu()`/`.qr()`/etc. on large matrices where a faster
   in-house blocked path exists is a candidate (verify factor-format/reconstruction conformance). NEXT: lu_factor/
   lu_solve still use nalgebra LU (tighter coupling — LuFactorResult stores the nalgebra object; a bigger refactor).
+
+## 2026-07-04 - BlackThrush (cod) - lu_factor/lu_solve routed to flat blocked LU storage — 1.68x self vs ORIG nalgebra at n=1000
+
+- LAND/DIG decision: no measured ahead worktree was landable (only stale `e3b744f4` GEMM-threshold branch, already
+  superseded by main's stronger LU/GEMM work), so dug the ledger's explicit remaining LU candidate: `lu_factor` /
+  `lu_solve` still stored nalgebra's serial `LU` object while public `lu()` already used the flat parallel blocked
+  factorization.
+- FIX: kept `LuFactorResult` opaque but changed its private storage to `Nalgebra(LU)` or `Flat(LuFactorsFlat)`.
+  Large `lu_factor` (`n>=1000`) now stores the in-house flat blocked LU factors; `lu_solve` solves directly from
+  those factors. Added a flat LU transpose solve and Higham-style rcond estimator so ill-conditioned warning
+  behavior stays tied to the cached factor, not a second nalgebra factorization. Small/singular fallback remains
+  nalgebra; `DISABLE_FLAT_LU_FACTOR` is only the same-binary ORIG A/B switch.
+- MEASURED per-crate via RCH with project target dir:
+  - required literal command was attempted and rejected by this Cargo: `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo bench --release -p fsci-linalg --bench linalg_bench -- lu_factor_gauntlet ...` -> `unexpected argument '--release'`.
+  - accepted release-profile equivalent: `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo bench -p fsci-linalg --bench linalg_bench --profile release -- lu_factor_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 3 --noplot`.
+  - worker `hz1`, same Criterion binary: `lu_factor_gauntlet/1000x1000_flat_factor` **84.566 ms median** vs
+    `1000x1000_orig_nalgebra_factor` **142.43 ms median** = **1.68x faster vs ORIG** (95% intervals 81.835-86.143 ms
+    vs 139.11-146.87 ms). KEEP.
+- CONF: `cargo test -p fsci-linalg lu_factor_flat_threshold_matches_original_storage -- --nocapture` via RCH GREEN;
+  local SciPy oracle `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_linalg_lu_factor_lu_solve -- --nocapture` GREEN.

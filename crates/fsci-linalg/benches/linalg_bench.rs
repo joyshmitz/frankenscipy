@@ -8,7 +8,7 @@ use std::{
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
     DecompOptions, InvOptions, LstsqOptions, MatrixAssumption, PinvOptions, SolveOptions,
-    TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv, lstsq, matmul,
+    TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv, lstsq, lu_factor, matmul,
     orthogonal_procrustes, pinv, randomized_eigh, solve, solve_banded, solve_triangular, svd,
 };
 use fsci_runtime::RuntimeMode;
@@ -22,6 +22,7 @@ const EIGH_SIZES: &[usize] = &[256, 512];
 const RANDOMIZED_EIGH_CASES: &[(usize, usize)] = &[(256, 16), (512, 24)];
 const DFT_GAUNTLET_SIZES: &[usize] = &[256, 512, 1024];
 const CHO_FACTOR_GAUNTLET_SIZES: &[usize] = &[500, 1000];
+const LU_FACTOR_GAUNTLET_SIZES: &[usize] = &[1000];
 const ORTHOGONAL_PROCRUSTES_CASES: &[(usize, usize)] = &[(3000, 150), (5000, 200)];
 
 /// Diagonally-dominant matrix: guaranteed non-singular, well-conditioned.
@@ -333,6 +334,30 @@ fn bench_baseline_solve(c: &mut Criterion) {
             fsci_linalg::DISABLE_MIXED_LU.store(true, Relaxed);
             bencher.iter(|| solve(&a, &b, SolveOptions::default()).unwrap());
             fsci_linalg::DISABLE_MIXED_LU.store(false, Relaxed);
+        });
+    }
+    group.finish();
+}
+
+fn bench_lu_factor_gauntlet(c: &mut Criterion) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut group = c.benchmark_group("lu_factor_gauntlet");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
+    for &n in LU_FACTOR_GAUNTLET_SIZES {
+        let a = make_diag_dominant(n);
+        group.bench_function(format!("{n}x{n}_flat_factor"), |bencher| {
+            fsci_linalg::DISABLE_FLAT_LU_FACTOR.store(false, Relaxed);
+            bencher.iter(|| {
+                black_box(lu_factor(black_box(&a), black_box(DecompOptions::default())).unwrap())
+            });
+        });
+        group.bench_function(format!("{n}x{n}_orig_nalgebra_factor"), |bencher| {
+            fsci_linalg::DISABLE_FLAT_LU_FACTOR.store(true, Relaxed);
+            bencher.iter(|| {
+                black_box(lu_factor(black_box(&a), black_box(DecompOptions::default())).unwrap())
+            });
+            fsci_linalg::DISABLE_FLAT_LU_FACTOR.store(false, Relaxed);
         });
     }
     group.finish();
@@ -1121,6 +1146,7 @@ criterion_group!(
     bench_randomized_eigh_gauntlet_scipy,
     bench_dft_gauntlet_scipy,
     bench_cho_factor_gauntlet_scipy,
+    bench_lu_factor_gauntlet,
     bench_orthogonal_procrustes_gauntlet,
     bench_baseline_pinv
 );

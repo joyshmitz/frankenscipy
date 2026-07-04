@@ -474,8 +474,8 @@ pub struct LuResult {
 /// Compact LU factorization for use with `lu_solve`.
 #[derive(Clone)]
 pub struct LuFactorResult {
-    /// The internal nalgebra LU object.
-    lu_internal: LU<f64, Dyn, Dyn>,
+    /// The internal factorization storage.
+    storage: LuFactorStorage,
     /// Matrix dimension.
     n: usize,
     /// 1-norm of the original matrix.
@@ -486,12 +486,22 @@ pub struct LuFactorResult {
 
 impl fmt::Debug for LuFactorResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let storage = match &self.storage {
+            LuFactorStorage::Nalgebra(_) => "nalgebra",
+            LuFactorStorage::Flat(_) => "flat",
+        };
         f.debug_struct("LuFactorResult")
-            .field("lu_internal", &self.lu_internal)
+            .field("storage", &storage)
             .field("n", &self.n)
             .field("a_norm_1", &self.a_norm_1)
             .finish()
     }
+}
+
+#[derive(Clone)]
+enum LuFactorStorage {
+    Nalgebra(LU<f64, Dyn, Dyn>),
+    Flat(LuFactorsFlat),
 }
 
 /// Result of QR decomposition.
@@ -1093,6 +1103,23 @@ fn matrix_norm1(matrix: &DMatrix<f64>) -> f64 {
         }
     }
     max_col_sum
+}
+
+fn matrix_norm1_rows(rows: &[Vec<f64>], ncols: usize) -> f64 {
+    if rows.is_empty() || ncols == 0 {
+        return 0.0;
+    }
+    let mut column_sums = vec![0.0_f64; ncols];
+    for row in rows {
+        for (col, &value) in row.iter().enumerate() {
+            let abs_value = value.abs();
+            if !abs_value.is_finite() {
+                return f64::NAN;
+            }
+            column_sums[col] += abs_value;
+        }
+    }
+    column_sums.into_iter().fold(0.0_f64, f64::max)
 }
 
 fn rcond_from_singular_values(values: &DVector<f64>) -> f64 {
@@ -3318,6 +3345,14 @@ pub fn lu(a: &[Vec<f64>], options: DecompOptions) -> Result<LuResult, LinalgErro
 ///
 /// Matches `scipy.linalg.lu_factor(a)`.
 pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResult, LinalgError> {
+    lu_factor_with_flat_threshold(a, options, FLAT_LU_SOLVE_MIN_DIM)
+}
+
+fn lu_factor_with_flat_threshold(
+    a: &[Vec<f64>],
+    options: DecompOptions,
+    flat_min_dim: usize,
+) -> Result<LuFactorResult, LinalgError> {
     let (rows, cols) = matrix_shape(a)?;
     if rows != cols {
         return Err(LinalgError::ExpectedSquareMatrix);
@@ -3325,8 +3360,30 @@ pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResul
     hardened_dimension_check(options.mode, rows, cols)?;
     validate_finite_matrix(a, options.mode, options.check_finite)?;
 
+    let a_norm_1 = matrix_norm1_rows(a, cols);
+    if rows >= flat_min_dim
+        && !flat_lu_factor_disabled()
+        && let Some(factors) = lu_factor_blocked(a)
+    {
+        let rcond_estimate = fast_rcond_from_flat_lu(&factors, a_norm_1);
+        emit_trace(LinalgTrace {
+            operation: "lu_factor",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+
+        return Ok(LuFactorResult {
+            storage: LuFactorStorage::Flat(factors),
+            n: rows,
+            a_norm_1,
+            rcond_estimate,
+        });
+    }
+
     let matrix = dmatrix_from_rows(a)?;
-    let a_norm_1 = matrix_norm1(&matrix);
     let lu_decomp: LU<f64, Dyn, Dyn> = matrix.lu();
     let rcond_estimate = fast_rcond_from_lu(&lu_decomp, a_norm_1, rows);
 
@@ -3340,7 +3397,7 @@ pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResul
     });
 
     Ok(LuFactorResult {
-        lu_internal: lu_decomp,
+        storage: LuFactorStorage::Nalgebra(lu_decomp),
         n: rows,
         a_norm_1,
         rcond_estimate,
@@ -3358,11 +3415,19 @@ pub fn lu_solve(lu_factor: &LuFactorResult, b: &[f64]) -> Result<SolveResult, Li
         });
     }
 
-    let rhs = DVector::from_column_slice(b);
-    let x = lu_factor
-        .lu_internal
-        .solve(&rhs)
-        .ok_or(LinalgError::SingularMatrix)?;
+    let x = match &lu_factor.storage {
+        LuFactorStorage::Nalgebra(lu) => {
+            let rhs = DVector::from_column_slice(b);
+            lu.solve(&rhs)
+                .ok_or(LinalgError::SingularMatrix)?
+                .iter()
+                .copied()
+                .collect()
+        }
+        LuFactorStorage::Flat(factors) => {
+            lu_solve_flat_factored(factors, b).ok_or(LinalgError::SingularMatrix)?
+        }
+    };
 
     let rcond = lu_factor.rcond_estimate;
 
@@ -3376,7 +3441,7 @@ pub fn lu_solve(lu_factor: &LuFactorResult, b: &[f64]) -> Result<SolveResult, Li
     });
 
     Ok(SolveResult {
-        x: x.iter().copied().collect(),
+        x,
         warning: rcond_warning(rcond),
         backward_error: None,
         certificate: None,
@@ -16908,6 +16973,7 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
 const FLAT_LU_SOLVE_MIN_DIM: usize = 1000;
 const FLAT_LU_INV_MIN_DIM: usize = 1024;
 
+#[derive(Clone)]
 struct LuFactorsFlat {
     n: usize,
     data: Vec<f64>,
@@ -17166,13 +17232,111 @@ fn lu_subst_factored(factors: &LuFactorsFlat, mut y: Vec<f64>) -> Option<Vec<f64
     Some(y)
 }
 
-fn lu_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
-    if b.len() != a_in.len() {
+#[allow(clippy::needless_range_loop)]
+fn lu_subst_factored_transpose(factors: &LuFactorsFlat, b: &[f64]) -> Option<Vec<f64>> {
+    let n = factors.n;
+    if b.len() != n {
         return None;
     }
-    let factors = lu_factor_blocked(a_in)?;
+
+    // P A = L U, so A^T = U^T L^T P. First solve U^T y = b.
+    let mut y = vec![0.0; n];
+    for i in 0..n {
+        let mut s = b[i];
+        for p in 0..i {
+            s -= factors.data[p * n + i] * y[p];
+        }
+        let d = factors.data[i * n + i];
+        if d == 0.0 {
+            return None;
+        }
+        y[i] = s / d;
+    }
+
+    // Then solve L^T z = y; L has an implicit unit diagonal.
+    let mut z = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut s = y[i];
+        for p in (i + 1)..n {
+            s -= factors.data[p * n + i] * z[p];
+        }
+        z[i] = s;
+    }
+
+    // Finally P x = z, so x[original_row] = z[factored_row].
+    let mut x = vec![0.0; n];
+    for (factored_row, &original_row) in factors.perm.iter().enumerate() {
+        x[original_row] = z[factored_row];
+    }
+    Some(x)
+}
+
+fn lu_solve_flat_factored(factors: &LuFactorsFlat, b: &[f64]) -> Option<Vec<f64>> {
+    if b.len() != factors.n {
+        return None;
+    }
     let pb: Vec<f64> = factors.perm.iter().map(|&orig| b[orig]).collect();
-    lu_subst_factored(&factors, pb)
+    lu_subst_factored(factors, pb)
+}
+
+fn fast_rcond_from_flat_lu(factors: &LuFactorsFlat, a_norm: f64) -> f64 {
+    let n = factors.n;
+    if n == 0 {
+        return 1.0;
+    }
+    if a_norm == 0.0 || !a_norm.is_finite() {
+        return 0.0;
+    }
+
+    let mut x = vec![1.0 / (n as f64); n];
+    let mut inv_a_norm = 0.0;
+    for _ in 0..5 {
+        let sign_x: Vec<f64> = x
+            .iter()
+            .map(|&value| if value >= 0.0 { 1.0 } else { -1.0 })
+            .collect();
+        let w = match lu_subst_factored_transpose(factors, &sign_x) {
+            Some(w) => w,
+            None => return 0.0,
+        };
+        let sign_w: Vec<f64> = w
+            .iter()
+            .map(|&value| if value >= 0.0 { 1.0 } else { -1.0 })
+            .collect();
+        let x_new = match lu_solve_flat_factored(factors, &sign_w) {
+            Some(x_new) => x_new,
+            None => return 0.0,
+        };
+
+        let new_norm = x_new.iter().map(|value| value.abs()).sum::<f64>();
+        let direction_delta = x_new
+            .iter()
+            .zip(x.iter())
+            .map(|(&new, &old)| (new - old).abs())
+            .sum::<f64>();
+        if (new_norm - inv_a_norm).abs() <= 1e-10 * new_norm {
+            inv_a_norm = new_norm;
+            break;
+        }
+        inv_a_norm = new_norm;
+        x = x_new;
+
+        if direction_delta <= f64::EPSILON * new_norm {
+            break;
+        }
+    }
+
+    if inv_a_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let rcond = 1.0 / (a_norm * inv_a_norm);
+    if rcond.is_nan() { 0.0 } else { rcond.min(1.0) }
+}
+
+fn lu_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+    let factors = lu_factor_blocked(a_in)?;
+    lu_solve_flat_factored(&factors, b)
 }
 
 struct LuFactorsFlatF32 {
@@ -17411,6 +17575,13 @@ fn lu_subst_factored_f32(factors: &LuFactorsFlatF32, rhs: &[f64]) -> Option<Vec<
 pub static DISABLE_MIXED_LU: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Runtime switch to force `lu_factor` onto the original nalgebra storage path.
+/// This exists for same-worker A/B Criterion evidence; production default is the
+/// flat blocked factor path for large matrices.
+#[doc(hidden)]
+pub static DISABLE_FLAT_LU_FACTOR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn mixed_lu_disabled() -> bool {
     if DISABLE_MIXED_LU.load(std::sync::atomic::Ordering::Relaxed) {
         return true;
@@ -17418,6 +17589,14 @@ fn mixed_lu_disabled() -> bool {
     // Operational escape hatch via env, read once.
     static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENV.get_or_init(|| std::env::var_os("FSCI_DISABLE_MIXED_LU").is_some())
+}
+
+fn flat_lu_factor_disabled() -> bool {
+    if DISABLE_FLAT_LU_FACTOR.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENV.get_or_init(|| std::env::var_os("FSCI_DISABLE_FLAT_LU_FACTOR").is_some())
 }
 
 fn lu_solve_mixed_precision(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
@@ -22037,7 +22216,10 @@ mod tests {
         let a = vec![vec![1.0, 0.0], vec![0.0, 1e-14]];
         let b = vec![1.0, 1e-14];
         let factor = lu_factor(&a, DecompOptions::default()).expect("lu_factor works");
-        let recomputed = fast_rcond_from_lu(&factor.lu_internal, factor.a_norm_1, factor.n);
+        let recomputed = match &factor.storage {
+            LuFactorStorage::Nalgebra(lu) => fast_rcond_from_lu(lu, factor.a_norm_1, factor.n),
+            LuFactorStorage::Flat(factors) => fast_rcond_from_flat_lu(factors, factor.a_norm_1),
+        };
 
         assert_eq!(factor.rcond_estimate.to_bits(), recomputed.to_bits());
 
@@ -22052,6 +22234,28 @@ mod tests {
         assert!(debug.contains("LuFactorResult"));
         assert!(debug.contains("a_norm_1"));
         assert!(!debug.contains("rcond_estimate"));
+    }
+
+    #[test]
+    fn lu_factor_flat_threshold_matches_original_storage() {
+        let a = vec![
+            vec![8.0, 1.0, 2.0, -1.0],
+            vec![2.0, 7.0, -1.0, 1.0],
+            vec![1.0, -2.0, 6.0, 2.0],
+            vec![-1.0, 1.0, 2.0, 5.0],
+        ];
+        let b = vec![3.0, -1.0, 4.0, 2.0];
+
+        let original =
+            lu_factor_with_flat_threshold(&a, DecompOptions::default(), usize::MAX).unwrap();
+        let flat = lu_factor_with_flat_threshold(&a, DecompOptions::default(), 1).unwrap();
+        assert!(matches!(original.storage, LuFactorStorage::Nalgebra(_)));
+        assert!(matches!(flat.storage, LuFactorStorage::Flat(_)));
+
+        let original_x = lu_solve(&original, &b).unwrap();
+        let flat_x = lu_solve(&flat, &b).unwrap();
+        assert_close_slice(&flat_x.x, &original_x.x, 1e-12, 1e-12);
+        assert_eq!(flat_x.warning, rcond_warning(flat.rcond_estimate));
     }
 
     #[test]
