@@ -15636,3 +15636,24 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - CONF: `cargo test -p fsci-linalg --lib det` GREEN (18 passed incl new `det_flat_threshold_matches_nalgebra`);
   local SciPy oracle `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_linalg_misc_deterministic`
   GREEN (det conformance cases are n<=8, below the n>=1000 flat gate → unaffected, still exercise the nalgebra path).
+
+## 2026-07-04 - BlackThrush (cc) - it2i0k0_many / it2j0y0_many vectorized gapfill — 9.85-41.9x faster than looped SciPy
+
+- LAND/DIG: the only un-landed candidate was another agent's uncommitted Mathieu matrix-free Sturm rewrite in
+  orthopoly.rs — VERIFIED it benches ~0-gain (`candidate_matrix_free_sweep` 361.2µs vs `orig_alloc_sturm_sweep`
+  367.0µs = 1.016x, intervals OVERLAP; the Vec allocs were never the bottleneck, the ~60-iter Sturm bisection is).
+  NOT landable (~0-gain) and not mine — left untouched. DUG the cc-ledger's proven scalar→`_many` gapfill vein
+  (struve 1206x, kelvin 172x): `it2i0k0`/`it2j0y0` (second integrals of I0/K0 and J0/Y0) had scalar kernels + SciPy
+  peers but NO vectorized `_many` wrapper, while their siblings `iti0k0_many`/`itj0y0_many` did — a missed pair.
+- FIX: added `it2i0k0_many`/`it2j0y0_many` = `par_map_indices` over the existing scalar kernels (order-preserving
+  parallel fan, bit-identical to a serial map incl. NaN/±1e300 sentinels + x<0 branches), exported from lib.rs.
+  Only touched `convenience.rs` + `lib.rs` (NOT the foreign-occupied orthopoly.rs / special_bench.rs).
+- MEASURED (n=50000, x∈[0.1,15]; fsci self-timed via a gitignored temp bin best-of-9, SciPy looped via
+  `scipy.special.it2{i0k0,j0y0}` best-of-3):
+  - `it2i0k0_many` **4.584 ms** vs SciPy **191.9 ms** = **41.9x FASTER than SciPy** (self-parallel 7.572→4.584 = 1.65x).
+  - `it2j0y0_many` **15.673 ms** vs SciPy **154.4 ms** = **9.85x FASTER than SciPy** (self-parallel ~parity 0.93x —
+    the heavier J0/Y0-integral kernel is compute-bound and the box was loaded; the win is fsci's fast scalar kernel +
+    Rust, the parallel fan is byte-identical either way, matching sibling `itj0y0_many`). KEEP.
+- CONF: `cargo test -p fsci-special --lib it2_second_integral_many_match_serial_bit_for_bit` GREEN (par == serial
+  bit-for-bit across x∈[-4,40]); existing scalar `it2{i0k0,j0y0}_matches_reference_values` (SciPy 1.17.1 goldens)
+  unaffected. No fsci-conformance mathieu/it2 oracle exists; correctness rides on these lib tests + the value goldens.

@@ -3533,6 +3533,20 @@ pub fn itj0y0_many(x: &[f64]) -> Vec<(f64, f64)> {
     par_map_indices(x.len(), |i| Ok::<(f64, f64), SpecialError>(itj0y0(x[i])))
         .expect("itj0y0 is infallible")
 }
+/// Vectorized second integrals of I_0/K_0 (∫₀ˣ (I_0−1)/t, ∫ₓ^∞ K_0/t); see
+/// [`fresnel_many`]. Matches a serial map of [`it2i0k0`] bit-for-bit.
+#[must_use]
+pub fn it2i0k0_many(x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| Ok::<(f64, f64), SpecialError>(it2i0k0(x[i])))
+        .expect("it2i0k0 is infallible")
+}
+/// Vectorized second integrals of J_0/Y_0 (∫₀ˣ (1−J_0)/t, ∫ₓ^∞ Y_0/t); see
+/// [`fresnel_many`]. Matches a serial map of [`it2j0y0`] bit-for-bit.
+#[must_use]
+pub fn it2j0y0_many(x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| Ok::<(f64, f64), SpecialError>(it2j0y0(x[i])))
+        .expect("it2j0y0 is infallible")
+}
 /// Vectorized generalized exponential integral E_n(x) for fixed order `n`; see [`fresnel_many`].
 #[must_use]
 pub fn expn_many(n: usize, x: &[f64]) -> Vec<f64> {
@@ -14425,6 +14439,29 @@ mod tests {
         assert_eq!(super::it2i0k0(0.0), (0.0, 1e300));
         let (n0, nk) = super::it2i0k0(-1.0);
         assert!((n0 - 0.12897944249456852).abs() < 1e-9 && nk.is_nan());
+    }
+
+    #[test]
+    fn it2_second_integral_many_match_serial_bit_for_bit() {
+        // The order-preserving parallel fan must be bit-identical to a serial map
+        // (incl. the NaN/±1e300 sentinels and x<0 branches).
+        let xs: Vec<f64> = (-40..=400).map(|i| i as f64 * 0.1).collect();
+
+        let i0k0 = super::it2i0k0_many(&xs);
+        let j0y0 = super::it2j0y0_many(&xs);
+        assert_eq!(i0k0.len(), xs.len());
+        assert_eq!(j0y0.len(), xs.len());
+        for (idx, &x) in xs.iter().enumerate() {
+            let (si, sk) = super::it2i0k0(x);
+            assert_eq!(i0k0[idx].0.to_bits(), si.to_bits(), "it2i0k0 I0 at x={x}");
+            assert_eq!(i0k0[idx].1.to_bits(), sk.to_bits(), "it2i0k0 K0 at x={x}");
+            let (sj, sy) = super::it2j0y0(x);
+            assert_eq!(j0y0[idx].0.to_bits(), sj.to_bits(), "it2j0y0 J0 at x={x}");
+            assert_eq!(j0y0[idx].1.to_bits(), sy.to_bits(), "it2j0y0 Y0 at x={x}");
+        }
+        // Empty input is handled without spawning.
+        assert!(super::it2i0k0_many(&[]).is_empty());
+        assert!(super::it2j0y0_many(&[]).is_empty());
     }
 
     #[test]
