@@ -14816,3 +14816,21 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   least_squares, `cargo build -p fsci-opt` to confirm the Sync propagation compiles, run the fsci-opt suite,
   land. LEVER class: any solver building a dense FD Jacobian column-by-column over an independent residual
   closure with a single-threaded reference peer -> parallel columns + serial fill, work-gated, byte-identical.
+
+## 2026-07-03 - BlackThrush (cc) - parallel FD Jacobian LANDED into least_squares/curve_fit (follow-up to d7512eef)
+
+- The `+ Sync` integration blocker from the entry above is RESOLVED and the lever is SHIPPED. Added
+  `finite_diff_jacobian_parallel_into` (work-gated: `n>=4 && m>=8192 && n*m>=131072`; below the gate, and
+  when available_parallelism()<=1, it calls the serial `finite_diff_jacobian_into` verbatim — so small fits
+  are unchanged and the syscall stays off their hot path). Propagated `+ Sync` through the 5 public closure
+  bounds (`least_squares`, `curve_fit`, `least_squares_bounded`, `curve_fit_bounded`, `leastsq`) and wired the
+  4 hot-loop Jacobian call sites (3 in `least_squares`, 1 in `least_squares_bounded`) to the parallel routine.
+- VERIFIED (dedicated CARGO_TARGET_DIR, fresh artifacts — sidesteps the E0514 churn): fsci-opt lib compiles
+  clean; `cargo test -p fsci-opt` = 325 passed / 0 failed INCLUDING a new
+  `parallel_fd_jacobian_byte_identical_to_serial` test (m=9000, n=6 clears the gate → exercises the real
+  worker-pool path, asserts `.to_bits()` equality vs serial); the two fsci-conformance callers
+  (diff_opt_curve_fit, diff_opt_least_squares) compile clean under `+ Sync` (no external breakage). The
+  `+ Sync` bound is satisfied by every real residual closure (captures Vec/slice/f64/Sync-fn).
+- NET: large curve_fit/least_squares fits (many params and/or >=8192 data points) get the measured
+  2.75-13.66x Jacobian speedup byte-identically; small fits are untouched. scipy's MINPACK peer builds the FD
+  Jacobian single-threaded, so this is a straight parallel-vs-single-threaded win at scale.
