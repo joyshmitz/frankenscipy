@@ -15175,3 +15175,26 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   fixed-step quadrature in special-fn kernels → replace with the self-validating Temme/CF/asymptotic scipy
   itself uses; prototype + mpmath-validate in Python before the Rust port. Temme `bessik` (beschb Γ Chebyshev
   + CF2) is now available in bessel.rs for any remaining modified-Bessel quadrature site.
+
+## 2026-07-04 - BlackThrush (cc) - mathieu_a/b: Sturm-count double early-exit — 1.67x self BYTE-IDENTICAL, narrows scipy gap 3.79x → 2.26x
+
+- GAP: mathieu_a/mathieu_b compute the k-th eigenvalue of the DLMF-28.4 tridiagonal via `tridiagonal_kth_eigenvalue`
+  (orthopoly.rs) = bisection whose `count(x)` closure runs the FULL O(n) Sturm sequence every iteration. The
+  documented ~2x scipy gap is this bisection (scipy's specfun cva1/cva2 uses a faster non-bisection method).
+- FIX (shipped, byte-identical): the bisection only needs the boolean `count(x) >= target`, so evaluate it with a
+  TWO-SIDED early exit instead of the full count — stop as soon as `target` negative pivots are seen (already ≥),
+  or as soon as too few pivots remain to reach `target` (`c + (n-i) < target`, already <). The boolean is
+  provably identical to the full count (if final count ≥ target then c+remaining ≥ target throughout, so the
+  false-exit never fires; and target is reached iff a negative makes c hit it), so the bisection path — hence the
+  eigenvalue — is BIT-FOR-BIT unchanged; only the pivots scanned per iteration drop. Benefits all 5 callers
+  (mathieu_a×2, mathieu_b×2, orthopoly line-1294).
+- MEASURED (bin perf_mathieu, best-of-3, m∈{1,2,4,8,16,30} × q∈{1,10,50,200,800}, threads=1):
+  OLD 19.28 → NEW 11.53 us/pair = **1.67x self**; scipy 5.09 us/pair, so OLD **3.79x** slower → NEW **2.26x**
+  slower. acc identical OLD=NEW=scipy (2.5752e6) — values bit-unchanged. Win grows with q (bigger tridiagonal ⇒
+  more Sturm tail to skip), exactly the regime where fsci was relatively slowest.
+- VERDICT: KEEP — safe byte-identical self-speedup, narrows the gap; does NOT flip. The residual 2.26x is the
+  bisection-vs-specfun algorithmic wall (Newton-on-pivot was pole-riddled/rejected; a globally-convergent
+  pole-free Laguerre iteration for the tridiagonal eigenvalue is the remaining deferred lever, higher-risk).
+- CONF: fsci-special lib 1139/0 (byte-identical, all mathieu tests unchanged). LEVER: any single-eigenvalue
+  Sturm-bisection targeting a fixed index k → replace the full O(n) count with the two-sided `count>=target`
+  early-exit; free, byte-identical, ∝ how far into the spectrum k sits and how large the tail is.

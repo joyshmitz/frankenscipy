@@ -751,15 +751,30 @@ fn tridiagonal_kth_eigenvalue(diagonal: &[f64], offdiagonal: &[f64], k: usize) -
     lo -= pad;
     hi += pad;
 
-    // count(x) = number of eigenvalues strictly below x (negatives in the Sturm
-    // sequence dᵢ = (Dᵢ−x) − eᵢ₋₁²/dᵢ₋₁), monotone non-decreasing in x.
-    let count = |x: f64| -> usize {
+    // Bisect to the smallest x whose eigenvalue count reaches k+1 = the k-th
+    // eigenvalue. The bisection only needs the boolean `count(x) >= target`, where
+    // count(x) = #eigenvalues strictly below x = #negatives in the Sturm sequence
+    // dᵢ = (Dᵢ−x) − eᵢ₋₁²/dᵢ₋₁ (monotone non-decreasing in x). Evaluate that boolean
+    // with a two-sided early exit instead of the full O(n) count: stop as soon as
+    // `target` negatives are seen (already ≥ target), or as soon as too few pivots
+    // remain to ever reach `target` (already < target). The boolean is identical to
+    // the full count, so the bisection path — and thus the eigenvalue — is
+    // bit-for-bit unchanged; only the pivots scanned per iteration drop.
+    let target = k + 1;
+    let at_least = |x: f64| -> bool {
         let mut c = 0usize;
         let mut d = diagonal[0] - x;
         if d < 0.0 {
             c += 1;
+            if c >= target {
+                return true;
+            }
         }
         for i in 1..n {
+            // Even if every remaining pivot were negative, target is out of reach.
+            if c + (n - i) < target {
+                return false;
+            }
             d = if d == 0.0 {
                 // zero-pivot guard (LAPACK dstebz style)
                 (diagonal[i] - x) - offdiagonal[i - 1].abs() / f64::EPSILON
@@ -768,19 +783,20 @@ fn tridiagonal_kth_eigenvalue(diagonal: &[f64], offdiagonal: &[f64], k: usize) -
             };
             if d < 0.0 {
                 c += 1;
+                if c >= target {
+                    return true;
+                }
             }
         }
-        c
+        false
     };
 
-    // Bisect to the smallest x whose count reaches k+1 = the k-th eigenvalue.
-    let target = k + 1;
     for _ in 0..200 {
         let mid = lo + (hi - lo) * 0.5;
         if mid <= lo || mid >= hi {
             break; // collapsed to adjacent f64s
         }
-        if count(mid) >= target {
+        if at_least(mid) {
             hi = mid;
         } else {
             lo = mid;
