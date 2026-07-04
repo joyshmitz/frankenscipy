@@ -14971,3 +14971,24 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
        ~1e-10 on stiff test systems (Van der Pol, Robertson).
   LEVER class: any implicit RK / collocation solver factorizing the full (s·n)×(s·n) stage system → decouple
   by the eigendecomposition of the RK A-matrix into real + complex n×n factors (Hairer-Wanner). ~5x here.
+
+## 2026-07-03 - BlackThrush (cc) - Radau eigen-decoupling LANDED (2.5-4.3x end-to-end on dense stiff ODEs; follow-up to 71f97179)
+
+- Implemented the lever measured in 71f97179. Replaced Radau's dense-Jacobian full 3n×3n LU of the Newton
+  matrix `I_{3n} − h(A⊗J)` with scipy's eigen-decoupling: one real n×n factor `(MU_REAL/h)I − J` (already
+  computed for the error estimate — now reused for the main solve) + one complex n×n factor
+  `(MU_COMPLEX/h)I − J`. Ported scipy's exact T/TI/MU_COMPLEX constants (scipy/integrate/_ivp/radau.py) and a
+  `solve_collocation_decoupled` helper: transform rhs by TI → solve real block (lu_real) + complex block
+  (lu_complex, nalgebra DMatrix<Complex>) → transform back by T. Formula VERIFIED in Python vs the full
+  I−h(A⊗J) solve to 4.6e-16 BEFORE porting (de-risked the Rust cold-build loop).
+- CORRECTNESS proven 3 ways: (1) new unit test `decoupled_collocation_solve_matches_full_3n_lu` — decoupled
+  vs a direct full 3n×3n LU on random dense J to <1e-10; (2) the existing `solve_ivp_radau_matches_scipy_
+  reference` test still passes (decoupled Radau matches scipy end-to-end); (3) fsci-integrate suite 268/0 GREEN.
+- MEASURED end-to-end (bin perf_radau_e2e, dense stiff linear system, SAME nfev old vs new → identical
+  integration path, only the linear algebra differs):
+    n=20  old 3.39ms  → new 1.34ms  = 2.53x
+    n=40  old 21.25ms → new 5.73ms  = 3.71x
+    n=80  old 173.37ms→ new 40.32ms = 4.30x   (grows with n toward the 27/5≈5.4x LU ceiling)
+  The diagonal-J fast path is untouched; only dense-Jacobian stiff systems (where the 3n×3n LU dominated) are
+  affected. LEVER (done, reusable): implicit-RK/collocation solver factorizing the full (s·n)×(s·n) stage
+  system → decouple by the RK A-matrix eigendecomposition into real + complex n×n factors (Hairer-Wanner).

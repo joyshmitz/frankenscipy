@@ -17,12 +17,68 @@ use crate::validation::{
     ToleranceValue, validate_first_step, validate_max_step, validate_rhs_shape, validate_tol,
 };
 use fsci_runtime::RuntimeMode;
-use nalgebra::{DMatrix, DVector};
+use nalgebra::{Complex, DMatrix, DVector};
 
 const NEWTON_MAXITER: usize = 6;
 const MIN_FACTOR: f64 = 0.2;
 const MAX_FACTOR: f64 = 8.0;
 const ERR_EXP: f64 = -0.25; // embedded estimator is order 3 → 1/(3+1).
+
+// scipy's Radau IIA eigen-transform constants (`scipy/integrate/_ivp/radau.py`).
+// `MU_REAL` (see `RadauSolver::new`) and `MU_COMPLEX` are the eigenvalues of the
+// inverse collocation matrix A⁻¹; `T`/`TI = T⁻¹` are the real similarity transform
+// that block-diagonalises A. They let the dense Newton matrix `I_{3n} − h(A⊗J)` be
+// solved as one real `n×n` factor `(MU_REAL/h)I − J` plus one complex `n×n` factor
+// `(MU_COMPLEX/h)I − J`, instead of a full `3n×3n` LU (~5× less work for large n).
+const MU_COMPLEX: Complex<f64> = Complex::new(2.6810828736277523, -3.050430199247411);
+const RADAU_T: [[f64; 3]; 3] = [
+    [0.09443876248897524, -0.1412552950209542, 0.03002919410514742],
+    [0.2502131229653333, 0.20412935229379994, -0.3829421127572619],
+    [1.0, 1.0, 0.0],
+];
+const RADAU_TI: [[f64; 3]; 3] = [
+    [4.178718591551904, 0.32768282076106237, 0.5233764454994495],
+    [-4.178718591551904, -0.32768282076106237, 0.47662355450055044],
+    [0.5028726349457868, -2.571926949855605, 0.5960392048282249],
+];
+
+/// Solve the Radau dense Newton system `(I_{3n} − h(A⊗J)) dz = rhs` via scipy's
+/// eigen-decoupling: transform `rhs` by `TI`, solve the real block with `lu_real`
+/// = `(MU_REAL/h)I − J` and the complex block with `lu_complex` = `(MU_COMPLEX/h)
+/// I − J`, then transform back by `T`. Mathematically identical to a full `3n×3n`
+/// LU solve (verified byte-close), at ~one real + one complex `n×n` solve.
+#[allow(clippy::too_many_arguments)]
+fn solve_collocation_decoupled(
+    rhs: &DVector<f64>,
+    mu_real: f64,
+    h: f64,
+    lu_real: &nalgebra::linalg::LU<f64, nalgebra::Dyn, nalgebra::Dyn>,
+    lu_complex: &nalgebra::linalg::LU<Complex<f64>, nalgebra::Dyn, nalgebra::Dyn>,
+    n: usize,
+) -> Option<Vec<f64>> {
+    let mut g0 = DVector::<f64>::zeros(n);
+    let mut gc = DVector::<Complex<f64>>::zeros(n);
+    for i in 0..n {
+        let (r0, r1, r2) = (rhs[i], rhs[n + i], rhs[2 * n + i]);
+        g0[i] = RADAU_TI[0][0] * r0 + RADAU_TI[0][1] * r1 + RADAU_TI[0][2] * r2;
+        let re = RADAU_TI[1][0] * r0 + RADAU_TI[1][1] * r1 + RADAU_TI[1][2] * r2;
+        let im = RADAU_TI[2][0] * r0 + RADAU_TI[2][1] * r1 + RADAU_TI[2][2] * r2;
+        gc[i] = Complex::new(re, im);
+    }
+    let w0 = lu_real.solve(&g0)?;
+    let wc = lu_complex.solve(&gc)?;
+    let sr = mu_real / h;
+    let sc = MU_COMPLEX / Complex::new(h, 0.0);
+    let mut out = vec![0.0; 3 * n];
+    for i in 0..n {
+        let dw0 = sr * w0[i];
+        let dwc = sc * wc[i];
+        for p in 0..3 {
+            out[p * n + i] = RADAU_T[p][0] * dw0 + RADAU_T[p][1] * dwc.re + RADAU_T[p][2] * dwc.im;
+        }
+    }
+    Some(out)
+}
 
 /// Configuration for the Radau solver (mirrors `BdfSolverConfig`).
 #[derive(Debug, Clone)]
@@ -416,30 +472,26 @@ impl RadauSolver {
             // Exactly diagonal Jacobians split M_3n into n independent 3x3
             // systems and M_real into scalar solves, avoiding dense assembly
             // and LU while preserving the same simplified-Newton equations.
-            let mut lu_3n = None;
             let mut lu_real = None;
+            let mut lu_complex = None;
             let diagonal_jac = {
                 let jac = self.jac.as_ref().expect("jacobian present");
                 let diagonal = diagonal_jacobian_entries(jac);
                 if diagonal.is_none() {
-                    let mut m = DMatrix::<f64>::zeros(3 * n, 3 * n);
-                    for bi in 0..3 {
-                        for bj in 0..3 {
-                            let coef = h * self.a[bi][bj];
-                            for r in 0..n {
-                                for col in 0..n {
-                                    let mut val = -coef * jac[(r, col)];
-                                    if bi == bj && r == col {
-                                        val += 1.0;
-                                    }
-                                    m[(bi * n + r, bj * n + col)] = val;
-                                }
-                            }
-                        }
-                    }
+                    // Dense Jacobian: factor the eigen-decoupled real and complex
+                    // n×n blocks `(MU_REAL/h)I − J` and `(MU_COMPLEX/h)I − J` rather
+                    // than a full 3n×3n LU (see `solve_collocation_decoupled`). The
+                    // real factor is also the one the error estimate reuses.
                     let m_real = DMatrix::<f64>::identity(n, n) * (self.mu_real / h) - jac;
-                    lu_3n = Some(m.lu());
+                    let m_complex = DMatrix::<Complex<f64>>::from_fn(n, n, |r, col| {
+                        let mut val = -Complex::new(jac[(r, col)], 0.0);
+                        if r == col {
+                            val += MU_COMPLEX / Complex::new(h, 0.0);
+                        }
+                        val
+                    });
                     lu_real = Some(m_real.lu());
+                    lu_complex = Some(m_complex.lu());
                 }
                 diagonal
             };
@@ -483,11 +535,10 @@ impl RadauSolver {
                 }
                 let dz = if let Some(diagonal) = diagonal_jac.as_deref() {
                     solve_collocation_diagonal(diagonal, h, &self.a, &rhs)
+                } else if let (Some(lr), Some(lc)) = (lu_real.as_ref(), lu_complex.as_ref()) {
+                    solve_collocation_decoupled(&rhs, self.mu_real, h, lr, lc, n)
                 } else {
-                    lu_3n
-                        .as_ref()
-                        .and_then(|lu| lu.solve(&rhs))
-                        .map(|dz| dz.iter().copied().collect())
+                    None
                 };
                 let Some(dz) = dz else {
                     bad = true;
@@ -612,6 +663,75 @@ impl RadauSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoupled_collocation_solve_matches_full_3n_lu() {
+        // The eigen-decoupled solve must equal a direct full 3n×3n LU of the Radau
+        // Newton matrix `I_{3n} − h(A⊗J)` on random dense Jacobians, to roundoff.
+        let s6 = 6.0_f64.sqrt();
+        let a = [
+            [
+                (88.0 - 7.0 * s6) / 360.0,
+                (296.0 - 169.0 * s6) / 1800.0,
+                (-2.0 + 3.0 * s6) / 225.0,
+            ],
+            [
+                (296.0 + 169.0 * s6) / 1800.0,
+                (88.0 + 7.0 * s6) / 360.0,
+                (-2.0 - 3.0 * s6) / 225.0,
+            ],
+            [(16.0 - s6) / 36.0, (16.0 + s6) / 36.0, 1.0 / 9.0],
+        ];
+        let mu_real = 3.0 + 3.0_f64.powf(2.0 / 3.0) - 3.0_f64.powf(1.0 / 3.0);
+        let mut seed = 0x1234_5678u64;
+        let mut rng = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+        };
+        let mut worst = 0.0_f64;
+        for n in [1usize, 2, 5, 9] {
+            let h = 0.037;
+            let jac = DMatrix::<f64>::from_fn(n, n, |_, _| rng());
+            let rhs = DVector::<f64>::from_fn(3 * n, |_, _| rng());
+
+            // Oracle: full 3n×3n LU of I − h(A⊗J).
+            let mut m = DMatrix::<f64>::zeros(3 * n, 3 * n);
+            for bi in 0..3 {
+                for bj in 0..3 {
+                    let coef = h * a[bi][bj];
+                    for r in 0..n {
+                        for col in 0..n {
+                            let mut val = -coef * jac[(r, col)];
+                            if bi == bj && r == col {
+                                val += 1.0;
+                            }
+                            m[(bi * n + r, bj * n + col)] = val;
+                        }
+                    }
+                }
+            }
+            let z_full = m.lu().solve(&rhs).expect("full 3n solve");
+
+            // Decoupled path.
+            let m_real = DMatrix::<f64>::identity(n, n) * (mu_real / h) - &jac;
+            let m_complex = DMatrix::<Complex<f64>>::from_fn(n, n, |r, col| {
+                let mut val = -Complex::new(jac[(r, col)], 0.0);
+                if r == col {
+                    val += MU_COMPLEX / Complex::new(h, 0.0);
+                }
+                val
+            });
+            let lu_real = m_real.lu();
+            let lu_complex = m_complex.lu();
+            let z_dec =
+                solve_collocation_decoupled(&rhs, mu_real, h, &lu_real, &lu_complex, n).unwrap();
+
+            for i in 0..3 * n {
+                worst = worst.max((z_full[i] - z_dec[i]).abs());
+            }
+        }
+        assert!(worst < 1e-10, "decoupled vs full-3n worst abs diff = {worst:.3e}");
+    }
 
     #[test]
     fn diagonal_collocation_solve_matches_dense_block_solve() {
