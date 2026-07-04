@@ -6,6 +6,44 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - KEEP: pbdv nonnegative integer orders use Hermite recurrence - 6.55x vs ORIG scalar kernel
+
+- Land-or-dig audit: `.scratch` / `.worktrees` was checked before digging. The
+  fresh July 4 bench worktrees were already ancestors of `main`; the only stale
+  non-ancestor worktree was still
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), superseded by current
+  `main`'s threshold-256 dense-kernel route. No measured unlanded win was safe
+  to land, so this pass dug a fresh `fsci-special` scalar-kernel lever.
+- Gap attacked: the prior `pbdv_many` wrapper was rejected against SciPy's real
+  array ufunc because the scalar `pbdv` kernel was the wall. For nonnegative
+  integer order `n`, `D_n(x) = He_n(x) * exp(-x^2/4)`, so the shipped path
+  computes `(D_n, D_{n+1})` with the probabilists-Hermite recurrence and keeps
+  the existing derivative formula `D'_n(x) = x/2 D_n(x) - D_{n+1}(x)`. Other
+  orders still use the original hyperu-backed path.
+- Command discipline: the requested literal
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench --release -p fsci-special --bench special_bench -- pbdv_integer_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`
+  was attempted first and Cargo rejected it on `hz2` with `unexpected argument
+  '--release'`. The runnable per-crate release-profile command was
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-special --bench special_bench --profile release -- pbdv_integer_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- Same-worker ORIG ratio on RCH `hz2`: the Criterion group measured the current
+  integer fast path and an inline copy of the original positive-x
+  hyperu-backed scalar formula in the same benchmark binary over 20k points at
+  `v=2`. Current median `227.88 us`; ORIG median `1.4916 ms`; speed ratio
+  `1.4916 ms / 227.88 us = 6.55x`. The existing `pbdv_many` wrapper on the same
+  input measured `754.23 us`, confirming the shipped scalar fast path is the
+  load-bearing improvement rather than another parallel-wrapper claim.
+- Dropped no-ship probe: a `spence` reciprocal-table micro-variant was measured
+  separately on RCH `vmi1264463` and discarded. Current median `20.382 ms`,
+  ORIG divide-per-term median `20.762 ms`, ratio `1.02x` with overlapping
+  intervals, which is not a stable win and does not close the documented Cephes
+  rational gap. No `spence` source or benchmark code is kept in this commit.
+- Correctness/conformance: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-special pbdv --lib -- --nocapture`
+  passed 3/3 under RCH local fallback with only pre-existing warnings.
+- Source kept: `crates/fsci-special/src/hyper.rs` adds the integer-order
+  Hermite recurrence fast path for `pbdv`; `crates/fsci-special/benches/special_bench.rs`
+  keeps the ORIG/current `pbdv_integer_gauntlet` ratio harness.
+
 ## 2026-07-04 - BlackThrush (codex) - NO-SHIP: solve_triangular fused x/b norm accounting regresses
 
 - Land-or-dig audit: the only unmerged FrankenSciPy scratch/worktree HEAD was

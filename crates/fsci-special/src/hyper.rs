@@ -1861,7 +1861,8 @@ pub fn hyperu_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, S
         // fall through to the integral with no accuracy regression.
         let nb = b.round();
         if is_near_integer(b) && (1.0..=200.0).contains(&nb) {
-            if let Some(v) = hyperu_positive_integer_b_log(a, (nb as u32) - 1, x, HYPERU_INTB_MAX_ERR)
+            if let Some(v) =
+                hyperu_positive_integer_b_log(a, (nb as u32) - 1, x, HYPERU_INTB_MAX_ERR)
             {
                 return Ok(v);
             }
@@ -2247,11 +2248,7 @@ fn hyperu_connection_formula_checked(
         return None;
     }
     let value = std::f64::consts::PI * diff / sin_pi_b;
-    if value.is_finite() {
-        Some(value)
-    } else {
-        None
-    }
+    if value.is_finite() { Some(value) } else { None }
 }
 
 /// U(a, n+1, x) for a>0 and n = b−1 a nonnegative integer, via the DLMF 13.2.9
@@ -3134,12 +3131,33 @@ fn parabolic_cylinder_d(v: f64, x: f64) -> f64 {
     }
 }
 
+fn parabolic_cylinder_d_integer_pair(n: usize, x: f64) -> (f64, f64) {
+    let scale = (-x * x / 4.0).exp();
+    if n == 0 {
+        return (scale, x * scale);
+    }
+
+    let mut h_prev = 1.0_f64;
+    let mut h_cur = x;
+    for k in 1..=n {
+        let h_next = x * h_cur - k as f64 * h_prev;
+        h_prev = h_cur;
+        h_cur = h_next;
+    }
+    (h_prev * scale, h_cur * scale)
+}
+
 /// Parabolic cylinder function `D_v(x)` and its derivative `D_v'(x)`.
 ///
 /// Matches `scipy.special.pbdv(v, x)`, returning `(D_v(x), D_v'(x))`. The
 /// derivative uses the recurrence `D_v'(x) = (x/2) D_v(x) − D_{v+1}(x)`.
 #[must_use]
 pub fn pbdv(v: f64, x: f64) -> (f64, f64) {
+    if v >= 0.0 && v <= 128.0 && v.fract() == 0.0 {
+        let (d, d_next) = parabolic_cylinder_d_integer_pair(v as usize, x);
+        return (d, 0.5 * x * d - d_next);
+    }
+
     let d = parabolic_cylinder_d(v, x);
     let d_next = parabolic_cylinder_d(v + 1.0, x);
     (d, 0.5 * x * d - d_next)

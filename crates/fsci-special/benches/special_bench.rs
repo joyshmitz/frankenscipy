@@ -2,8 +2,8 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialTensor, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, gamma, gammainc,
-    gammaln, hyperu, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv, ndtri, rgamma, y0, zeta,
-    zeta_scalar,
+    gammaln, hyperu, hyperu_scalar, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv, ndtri, pbdv,
+    pbdv_many, rgamma, y0, zeta, zeta_scalar,
 };
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -902,25 +902,90 @@ fn bench_array(c: &mut Criterion) {
     group.finish();
 }
 
+fn legacy_pbdv_positive(v: f64, x: f64) -> (f64, f64) {
+    let d = legacy_parabolic_cylinder_d_positive(v, x);
+    let d_next = legacy_parabolic_cylinder_d_positive(v + 1.0, x);
+    (d, 0.5 * x * d - d_next)
+}
+
+fn legacy_parabolic_cylinder_d_positive(v: f64, x: f64) -> f64 {
+    let coef = 2.0_f64.powf(v / 2.0) * (-x * x / 4.0).exp();
+    let z = x * x / 2.0;
+    coef * hyperu_scalar(-v / 2.0, 0.5, z, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+fn bench_pbdv_integer_gauntlet(c: &mut Criterion) {
+    let xs: Vec<f64> = (0..20_000)
+        .map(|i| 0.1 + 9.9 * (i as f64) / 19_999.0)
+        .collect();
+    let mut group = c.benchmark_group("pbdv_integer_gauntlet");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("v2_current_integer_scalar_loop", |b| {
+        b.iter(|| {
+            let mut acc = 0.0_f64;
+            for &x in &xs {
+                let (d, dp) = pbdv(black_box(2.0), black_box(x));
+                acc += d + dp;
+            }
+            black_box(acc);
+        })
+    });
+
+    group.bench_function("v2_orig_hyperu_scalar_loop", |b| {
+        b.iter(|| {
+            let mut acc = 0.0_f64;
+            for &x in &xs {
+                let (d, dp) = legacy_pbdv_positive(black_box(2.0), black_box(x));
+                acc += d + dp;
+            }
+            black_box(acc);
+        })
+    });
+
+    group.bench_function("v2_current_many", |b| {
+        b.iter(|| black_box(pbdv_many(black_box(2.0), black_box(&xs))))
+    });
+
+    group.finish();
+}
+
 fn bench_ncfdtr(c: &mut Criterion) {
     let mut group = c.benchmark_group("ncfdtr");
     // cost scales with nc: the Poisson(nc/2) mixture spans ~O(√nc) incomplete-beta
     // terms. Evaluate a batch of f for each (dfn, dfd, nc).
     let fs: Vec<f64> = (0..256).map(|i| 0.05 + (i as f64) * 0.02).collect();
-    for &(dfn, dfd, nc) in &[(10.0_f64, 10.0_f64, 2.0_f64), (20.0, 30.0, 200.0), (50.0, 50.0, 2000.0)] {
-        group.bench_function(BenchmarkId::new("cdf", format!("dfn{dfn}_dfd{dfd}_nc{nc}")), |b| {
-            b.iter(|| {
-                fs.iter()
-                    .map(|&f| fsci_special::ncfdtr(black_box(dfn), black_box(dfd), black_box(nc), black_box(f)))
-                    .sum::<f64>()
-            })
-        });
+    for &(dfn, dfd, nc) in &[
+        (10.0_f64, 10.0_f64, 2.0_f64),
+        (20.0, 30.0, 200.0),
+        (50.0, 50.0, 2000.0),
+    ] {
+        group.bench_function(
+            BenchmarkId::new("cdf", format!("dfn{dfn}_dfd{dfd}_nc{nc}")),
+            |b| {
+                b.iter(|| {
+                    fs.iter()
+                        .map(|&f| {
+                            fsci_special::ncfdtr(
+                                black_box(dfn),
+                                black_box(dfd),
+                                black_box(nc),
+                                black_box(f),
+                            )
+                        })
+                        .sum::<f64>()
+                })
+            },
+        );
     }
     group.finish();
 }
 
 criterion_group!(
     benches,
+    bench_pbdv_integer_gauntlet,
     bench_ncfdtr,
     bench_array,
     bench_gamma,
