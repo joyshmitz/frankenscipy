@@ -15892,6 +15892,12 @@ pub fn leslie(f_vals: &[f64], s_vals: &[f64]) -> Result<Vec<Vec<f64>>, LinalgErr
     Ok(l)
 }
 
+/// Runtime switch to force the serial `convolution_matrix` build for same-binary A/B
+/// benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static CONVMAT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Convolution matrix for a 1D filter.
 ///
 /// Creates a Toeplitz matrix that performs convolution when multiplied by a vector.
@@ -15916,17 +15922,48 @@ pub fn convolution_matrix(h: &[f64], n: usize, mode: &str) -> Vec<Vec<f64>> {
         _ => 0,
     };
 
-    let mut mat = vec![vec![0.0; n]; out_len];
-    for (i, row) in mat.iter_mut().enumerate() {
+    // Each output row places up to k = h.len() taps into an otherwise-zero length-n row
+    // and is independent of every other row, so the O(out_len·n) materialization (which
+    // is dominated by the per-row alloc+zero, the taps being sparse) fans across cores
+    // BYTE-IDENTICALLY via alloc-in-worker.
+    let build_row = |i: usize| -> Vec<f64> {
+        let mut row = vec![0.0f64; n];
         for (j, &hj) in h.iter().enumerate() {
             let col = i as i64 + offset as i64 - j as i64;
             if col >= 0 && (col as usize) < n {
                 row[col as usize] = hj;
             }
         }
+        row
+    };
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(out_len.max(1));
+    if cores <= 1
+        || CONVMAT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || out_len.saturating_mul(n) < (1 << 18)
+    {
+        return (0..out_len).map(build_row).collect();
     }
-
-    mat
+    let chunk = out_len.div_ceil(cores);
+    let build_row_ref = &build_row;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..cores)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= out_len {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(out_len);
+                Some(scope.spawn(move || (i0..i1).map(build_row_ref).collect::<Vec<Vec<f64>>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("convolution_matrix worker panicked"))
+            .collect()
+    })
 }
 
 /// Compute the bandwidth of a matrix (lower and upper).
@@ -29041,6 +29078,31 @@ mod tests {
         assert_eq!(m[0].len(), 4);
         // First row should be [1, 0, 0, 0] (h[0] applied to first input)
         assert_eq!(m[0][0], 1.0);
+    }
+
+    #[test]
+    fn convolution_matrix_parallel_is_byte_identical_to_serial_above_gate() {
+        use std::sync::atomic::Ordering;
+        // Above the out_len·n ≥ 2^18 fan-out gate the parallel-across-rows build must be
+        // BYTE-IDENTICAL to the serial loop (each row is an independent tap placement).
+        let n = 600usize; // out_len = 600 + 32 - 1 = 631; 631*600 > 2^18
+        let h: Vec<f64> = (0..32).map(|i| (i as f64) * 0.5 - 3.0).collect();
+        CONVMAT_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = convolution_matrix(&h, n, "full");
+        CONVMAT_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = convolution_matrix(&h, n, "full");
+        assert!(serial.len() * n >= (1 << 18), "must exceed the fan-out gate");
+        let mism: usize = serial
+            .iter()
+            .zip(parallel.iter())
+            .map(|(sr, pr)| {
+                sr.iter()
+                    .zip(pr.iter())
+                    .filter(|(a, b)| a.to_bits() != b.to_bits())
+                    .count()
+            })
+            .sum();
+        assert_eq!(mism, 0, "parallel convolution_matrix must be byte-identical");
     }
 
     #[test]

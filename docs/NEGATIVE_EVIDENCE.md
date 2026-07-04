@@ -16357,3 +16357,22 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   transcendental (cos/sin > powi > memset), the better the fan-out AND the lower the crossover — dft_matrix wins 2× at
   the 65536 boundary where vander only hit 1.3×. Remaining serial dense constructors are alloc/memset-bound
   (helmert_full triangular constant-fill, convolution_matrix sparse-placement) — modest ~2-3× ceiling, deferred.
+
+## 2026-07-04 - BlackThrush (cc) - convolution_matrix -> parallel-across-rows alloc-in-worker (2.2-2.6x self, BYTE-IDENTICAL)
+
+- fsci-linalg dense-constructor sweep, 4th ship. `convolution_matrix(h, n, mode)` built the out_len×n Toeplitz conv
+  matrix with a SERIAL loop, each row placing k=h.len() taps into an otherwise-zero length-n row. Rows independent →
+  alloc-in-worker `let mut row=vec![0.0;n]; place taps; row` fan-out, BYTE-IDENTICAL. This is an ALLOC/memset-bound
+  fill (sparse taps in a zeroed row), so it caps at the laplacian-style ~2-3× (not the compute-bound vander/dft ~6×).
+- SAME-BINARY A/B (atomic `CONVMAT_FORCE_SERIAL`, 3× interleaved), **bitmism=0 everywhere**:
+  out 1015×1000 k=16: 3.01→1.24ms **2.4×**; 2031×2000 k=32: 12.32→4.66ms **2.6×**; 4007×4000 k=8: 45.21→17.89ms
+  **2.5×**; 8015×8000 k=16: 153.69→71.48ms **2.2×**. Consistent 2.2-2.6× (alloc-bound plateau). GATED out_len·n≥2^18
+  (higher than the compute-bound 65536 gate — alloc-bound needs more total work to amortize). New test
+  `convolution_matrix_parallel_is_byte_identical_to_serial_above_gate` (0 bitmism) + scipy-mode tests GREEN.
+- vs ORIG: scipy.linalg.convolution_matrix materializes single-thread; self-ratio 2.2-2.6×.
+- DENSE-CONSTRUCTOR VEIN STATUS (4 ships: laplacian/vander/dft_matrix/convolution_matrix): compute-bound fills
+  (vander powi 6×, dft_matrix cos/sin 5.3×) via alloc-in-worker; alloc-bound fills (laplacian 3×, convolution_matrix
+  2.6×) also alloc-in-worker but bandwidth-capped. par_fill_rows covers the rest (circulant/toeplitz/hankel/hilbert/
+  invhilbert/fiedler/tri/tril/triu/kron/dft/hadamard). NOT-DONE (deferred, low-value): helmert_full (tiny-n contrast
+  matrix, rarely hits gate); special-fn matrix builders (lpmn/legendre_p_all/sph_harm_y_all) are sequential
+  RECURRENCES (P_l^m ← P_{l-1}^m) + single-point small → NOT row-parallel.
