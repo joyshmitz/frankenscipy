@@ -15051,3 +15051,43 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   INCREMENTALLY during substitution (O(n), the row `sum` is already in hand) to drop one of the two O(n²)
   passes → ~2x slower (still the ‖A‖ norm remains); fragile on unit_diagonal/improper-input edge cases vs the
   generic helper, so not done. LEVER: scalar substitution/matvec/norm over contiguous rows → simd_dot.
+
+## 2026-07-04 - BlackThrush (cc) - solve_triangular: fuse the O(n²) backward-error certificate INTO substitution — 1.4-2.0x self, narrows the ~3x soft-wall by ~½ (NEXT-TIER from 842aa8e1)
+
+- FOLLOW-ON to 842aa8e1's residual entry, which scoped only dropping the residual matvec ("still the
+  ‖A‖ norm remains → ~2x"). This goes one step further: fold BOTH the residual AND ‖A‖_F² into the
+  substitution's single streamed pass over the nonzero triangle.
+- INSIGHT: for a triangular solve the certificate's O(n²) residual matvec is REDUNDANT with the
+  substitution — the running dot `sum_i = Σ_{j∈offdiag} A[i][j]·x[j]` is exactly the off-diagonal part
+  of (A·x)_i, so the true row residual is `r_i = sum_i + A[i][i]·x[i] − b[i]` (O(1)/row, no matvec).
+  And ‖A‖_F² accumulates over the SAME pass via a new `simd_dot_and_normsq(row,x)->(Σrow·x, Σrow·row)`
+  kernel (one load, two accumulators). Drops the certificate's two full-n² passes (matvec + norm over
+  the full stored matrix incl. the zero opposite-triangle) that SciPy's dtrsv never does: 2.5n² → ~0.5n².
+- BIT-IDENTITY: `simd_dot_and_normsq`'s dot term reuses `simd_dot`'s exact 8-lane layout+reduction, so
+  the solution `x` is BIT-IDENTICAL (unchanged). For a properly-formed triangular input the ignored
+  triangle is structurally 0, so summing only the stored triangle equals the full-matrix
+  `compute_backward_error_dense` (0·x=0, 0²=0 no-ops) — the same argument the banded certificate relies
+  on. The certificate VALUE reassociates → tolerance-checked (it is the true, tinier triangular residual),
+  not bit-checked; the <1e-14 policy assertion and calibrator consume the magnitude, both preserved.
+- MEASURED (bin perf_band_tri, OPENBLAS/OMP_NUM_THREADS=1, interleaved A/B best-of-8 same box):
+  | n | OLD (842aa8e1) | NEW (fused) | self | scipy best-of | OLD/scipy | NEW/scipy |
+  | 64   |    3.5us |    2.5us | 1.40x |   6.7us | 0.52x(win) | 0.37x(win) |
+  | 256  |   42.5us |   29.6us | 1.44x |  13.3us | 3.2x  | 2.2x  |
+  | 512  |  161.6us |  102.4us | 1.58x |  29.0us | 5.6x  | 3.5x  |
+  | 1024 |  615.9us |  381.5us | 1.61x |  75.0us | 8.2x  | 5.1x  |
+  | 2048 | 5656us   | 2844us   | 1.99x | 276.6us | 20.4x | 10.3x |
+  The interleaved SELF ratio (1.4-2.0x, growing with n as the certificate dominates) is the robust number;
+  the vs-scipy column is box-noise-sensitive (scipy dtrsv is quiet-box-fast here) but NEW roughly HALVES
+  the gap at every size. Verdict: KEEP — narrows, does not flip.
+- SOFT WALL (residual): the remaining gap is SciPy's LAPACK dtrsv (tuned assembly, contiguous column-major,
+  1 flop/elt) vs fsci's `Vec<Vec<f64>>` row storage + the fused 2-flop/elt certificate pass. Layout-bound,
+  not removable without abandoning the required certificate or the Vec<Vec> API. n≤64 already WINS scipy
+  (native, no Python/LAPACK call overhead).
+- CONF: fsci-linalg lib suite 496/0 (incl. solve_triangular_{lower,upper,transposed,unit_diagonal},
+  the solve_triangular_matches_solve proptest, and backward_error tests); focused triangular+backward_error
+  25/25. (Live scipy-oracle conformance diffs run LOCAL-only — the rch remote host has no scipy, so
+  det/svd/solve diffs all fail there environmentally, unrelated to this change.)
+- LEVER: any triangular/structured solve computing a residual-based certificate → the substitution ALREADY
+  has the off-diagonal dot; residual is `sum + diag·x_i − b_i` for free, and ‖A‖² folds into the same pass
+  via a fused dot+normsq kernel. Grep solvers that call a generic full-matrix `compute_backward_error_*`
+  after a structured solve.

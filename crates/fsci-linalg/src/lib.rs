@@ -9104,31 +9104,66 @@ fn solve_triangular_internal(
     let mat = mat_storage.as_ref();
 
     let mut x = vec![0.0; n];
-    // The substitution's running dot Σ_j mat[i][j]·x[j] is over a contiguous row
-    // prefix/suffix and the already-solved x prefix/suffix, so it vectorises with
-    // `simd_dot` (the scalar loop did not — this was the bulk of the cost vs BLAS
-    // dtrsv). The 8-wide reduction reassociates, so results match to roundoff.
+    // Fuse the O(n²) backward-error certificate INTO the substitution instead of
+    // recomputing it with two extra full-matrix passes afterward (SciPy's dtrsv
+    // computes no certificate at all — that redundant work was the ~3x gap).
+    //
+    // The substitution's running dot `sum_i = Σ_{j∈offdiag} mat[i][j]·x[j]` is
+    // exactly the off-diagonal part of `(A·x)_i`, so the row residual is
+    // `r_i = sum_i + mat[i][i]·x[i] − b[i]` — O(1) per row, no residual matvec.
+    // `‖A‖_F²` accumulates over the SAME single streamed pass over the nonzero
+    // triangle via `simd_dot_and_normsq`, so the norm needs no second pass either.
+    // For a properly-formed triangular input the ignored (opposite) triangle is
+    // structurally zero, so summing only the stored triangle is bit-identical to
+    // the full-matrix `compute_backward_error_dense` (`0·x = 0`, `0² = 0` are
+    // no-op terms) — the same argument the banded certificate already relies on.
+    // The `sum_i` dot reuses `simd_dot`'s exact lane layout, so `x` is unchanged.
+    let mut residual_sum_sq = 0.0_f64;
+    let mut a_sum_sq = 0.0_f64;
     if is_lower {
         for i in 0..n {
-            let sum = simd_dot(&mat[i][..i], &x[..i]);
-            let diag = if unit_diagonal { 1.0 } else { mat[i][i] };
+            let (sum, row_nsq) = simd_dot_and_normsq(&mat[i][..i], &x[..i]);
+            let dstored = mat[i][i];
+            let diag = if unit_diagonal { 1.0 } else { dstored };
             if diag == 0.0 {
                 return Err(LinalgError::SingularMatrix);
             }
-            x[i] = (b[i] - sum) / diag;
+            let xi = (b[i] - sum) / diag;
+            x[i] = xi;
+            let res_i = sum + dstored * xi - b[i];
+            residual_sum_sq += res_i * res_i;
+            a_sum_sq += row_nsq + dstored * dstored;
         }
     } else {
         for i in (0..n).rev() {
-            let sum = simd_dot(&mat[i][(i + 1)..n], &x[(i + 1)..n]);
-            let diag = if unit_diagonal { 1.0 } else { mat[i][i] };
+            let (sum, row_nsq) = simd_dot_and_normsq(&mat[i][(i + 1)..n], &x[(i + 1)..n]);
+            let dstored = mat[i][i];
+            let diag = if unit_diagonal { 1.0 } else { dstored };
             if diag == 0.0 {
                 return Err(LinalgError::SingularMatrix);
             }
-            x[i] = (b[i] - sum) / diag;
+            let xi = (b[i] - sum) / diag;
+            x[i] = xi;
+            let res_i = sum + dstored * xi - b[i];
+            residual_sum_sq += res_i * res_i;
+            a_sum_sq += row_nsq + dstored * dstored;
         }
     }
 
-    let backward_error = compute_backward_error_dense(mat, &x, b);
+    // Finalize the normwise relative backward error `‖Ax−b‖ / (‖A‖·‖x‖ + ‖b‖)`,
+    // matching `compute_backward_error_dense`'s reduction exactly.
+    let residual_norm = residual_sum_sq.sqrt();
+    let a_norm = a_sum_sq.sqrt();
+    let x_norm = simd_dot(&x, &x).sqrt();
+    let b_norm = simd_dot(b, b).sqrt();
+    let denom = a_norm * x_norm + b_norm;
+    let backward_error = if !residual_norm.is_finite() || !denom.is_finite() {
+        f64::INFINITY
+    } else if denom > 0.0 {
+        residual_norm / denom
+    } else {
+        0.0
+    };
 
     Ok(SolveResult {
         x,
@@ -17380,6 +17415,33 @@ fn simd_dot(x: &[f64], y: &[f64]) -> f64 {
         p += 1;
     }
     s
+}
+
+/// Single pass over `row`, returning `(Σ row·x, Σ row·row)`. The `dot` term uses
+/// the identical 8-lane accumulation and final reduction as [`simd_dot`], so it is
+/// bit-for-bit `simd_dot(row, x)`; the `normsq` term folds `‖row‖²` into the SAME
+/// load. A triangular solve's substitution already streams each nonzero row once,
+/// so this lets it emit the backward-error certificate's residual and `‖A‖_F²`
+/// with no extra O(n²) passes.
+#[inline]
+fn simd_dot_and_normsq(row: &[f64], x: &[f64]) -> (f64, f64) {
+    let mut dot = Simd::<f64, 8>::splat(0.0);
+    let mut nsq = Simd::<f64, 8>::splat(0.0);
+    let mut p = 0;
+    while p + 8 <= row.len() {
+        let r = Simd::<f64, 8>::from_slice(&row[p..p + 8]);
+        dot += r * Simd::<f64, 8>::from_slice(&x[p..p + 8]);
+        nsq += r * r;
+        p += 8;
+    }
+    let mut d: f64 = dot.to_array().iter().sum();
+    let mut s: f64 = nsq.to_array().iter().sum();
+    while p < row.len() {
+        d += row[p] * x[p];
+        s += row[p] * row[p];
+        p += 1;
+    }
+    (d, s)
 }
 
 /// Four 8-wide dot products sharing the same left-hand vector load. The per-dot
