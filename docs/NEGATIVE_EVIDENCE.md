@@ -15198,3 +15198,29 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - CONF: fsci-special lib 1139/0 (byte-identical, all mathieu tests unchanged). LEVER: any single-eigenvalue
   Sturm-bisection targeting a fixed index k → replace the full O(n) count with the two-sided `count>=target`
   early-exit; free, byte-identical, ∝ how far into the spectrum k sits and how large the tail is.
+
+## 2026-07-04 - BlackThrush (cc) - BROAD SWEEP (17 single-arg special fns @ n=200k serial): fsci DOMINATES expensive kernels; only the cheap ERROR FAMILY loses (1.4-1.6x), root-caused to scipy SIMD-vectorizing the lane (not threads) — SIMD-kernel lever scoped, deferred
+
+- Method: bin perf_sweep times fsci vectorized special fns on a 200k positive grid (0.2,20.2]; scipy oracle
+  (sweep_scipy.py) on the identical grid, threads=1. n=200k is BELOW every error-fn parallel gate (1<<20),
+  so this isolates the SERIAL kernel/map path (the gate is correct — erfcinv A/B already found parallel
+  "still loses at 262k" for these cheap kernels; the gap is per-element SIMD, not threads).
+- RESULT (fsci us/call best-of-2 ÷ scipy us/call; <1 = fsci wins):
+  exp1 0.11x, expi 0.09x, zetac 0.15x, k0 0.39x, spence 0.42x — fsci 2.4-11x FASTER (expensive series/CF
+  kernels where fsci's algorithm + scalar beats scipy); i0 0.74x, gammaln 0.73x, digamma 0.86x, rgamma 0.88x,
+  j1 0.83x, y0 0.90x — fsci wins; gamma 1.01x, dawsn 1.07x, j0 1.09x — parity.
+  **LOSSES (only the cheap error family): erf 1.50x, erfc 1.44x, erfcx 1.64x SLOWER.**
+- ROOT CAUSE (diagnosed, not a wrong-algo): fsci's erf/erfc/erfcx already use the EXACT cephes rationals scipy
+  wraps (same coefficients, same polevl Horner via iter().fold — bounds-check-free), so it is NOT the algorithm.
+  The gap is that scipy/numpy ufuncs SIMD-VECTORIZE the whole per-element loop (the P/Q rational, and a vectorized
+  exp for erf/erfc) across 4-8 array lanes, while fsci evaluates the kernel SCALAR per element. Confirmed by the
+  shape: erfcx (x≥1 is rational-ONLY, no exp) still loses 1.64x — pure rational SIMD; erf/erfc add a vectorized-exp
+  edge. Expensive kernels (exp1/expi/zetac/kv…) don't show it because per-element compute dwarfs the SIMD factor.
+- LEVER (scoped, DEFERRED — not a clean 60m ship): SIMD-vectorize the cheap error-family vector path with
+  std::simd (portable_simd, already used in fsci-linalg's simd_dot). A SIMD Horner is BIT-IDENTICAL to the scalar
+  fold (same ops per lane), so an 8-wide erfcx rational for the x≥1 majority + scalar fixup for x<1/x<0 lanes would
+  flip erfcx byte-identically; erf/erfc additionally need a SIMD f64 exp (range-reduction + minimax poly, accuracy
+  vs cephes to validate). Only pays for cheap kernels (erf/erfc/erfcx/ndtr-family), n below the 1<<20 thread gate.
+- VERDICT: the SERIAL single-arg special-fn surface is EXHAUSTED except this one SIMD-vectorizable error-family
+  gap. Records exact ratios so it is not re-swept. Don't re-chase exp1/expi/zetac/k0/spence/i0/gammaln/etc —
+  fsci already wins those 1.1-11x.
