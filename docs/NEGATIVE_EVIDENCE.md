@@ -15657,3 +15657,25 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - CONF: `cargo test -p fsci-special --lib it2_second_integral_many_match_serial_bit_for_bit` GREEN (par == serial
   bit-for-bit across x∈[-4,40]); existing scalar `it2{i0k0,j0y0}_matches_reference_values` (SciPy 1.17.1 goldens)
   unaffected. No fsci-conformance mathieu/it2 oracle exists; correctness rides on these lib tests + the value goldens.
+
+## 2026-07-04 - BlackThrush (cc) - itairy_many / pbdv_many / pbvv_many / pbwa_many vectorized gapfill — 7.4-28.0x faster than looped SciPy
+
+- LAND/DIG: working tree clean of my own work, in sync. DUG the scalar→`_many` MISSED-PAIR vein again (after last
+  turn's it2i0k0/it2j0y0): found four more specfun-based scalars with SciPy peers but NO vectorized `_many` —
+  `itairy` (integrals of Airy, convenience.rs) and the parabolic-cylinder trio `pbdv`/`pbvv`/`pbwa` (hyper.rs).
+  SciPy loops all four via slow specfun: measured looped n=20000 = itairy 39.3ms (1.76µs/call), pbdv(2) 25.6ms,
+  pbvv(2) 102.9ms (5.1µs/call), pbwa(1) 41.9ms — none is a fast C ufunc, so a parallel fan wins big.
+- FIX: added `itairy_many`/`pbdv_many`/`pbvv_many`/`pbwa_many` = `par_map_indices` over the existing scalar kernels
+  (fixed order `v`/`a`, vary `x` — same shape as `expn_many`), order-preserving so bit-identical to a serial map
+  incl. NaN + x<0 branches. Only touched `convenience.rs` (`par_map_indices` lives there; pb* reached via `crate::`)
+  + `lib.rs` exports — NOT the foreign-occupied orthopoly.rs / special_bench.rs.
+- MEASURED (n=20000, x∈[0.1,10]; fsci self-timed gitignored temp bin best-of-7 on rch `-cc`; SciPy looped best-of-3):
+  - `itairy_many` **4.305 ms** vs 39.3 = **9.1x FASTER**
+  - `pbdv_many`   **3.450 ms** vs 25.6 = **7.4x FASTER**
+  - `pbvv_many`   **3.670 ms** vs 102.9 = **28.0x FASTER**
+  - `pbwa_many`   **3.755 ms** vs 41.9 = **11.2x FASTER**
+  KEEP (all four are byte-identical parallel fans; win = fsci's fast scalar kernels + Rust + parallelism vs SciPy's
+  per-call specfun Python loop).
+- CONF: `cargo test -p fsci-special --lib itairy_pbdv_pbvv_pbwa_many_match_serial_bit_for_bit` GREEN (par == serial
+  bit-for-bit across x∈[-3,12], incl. empty input); existing scalar reference-value goldens (itairy mpmath, pb* in
+  hyper.rs) unaffected — the `_many` are pure wrappers over unchanged kernels.

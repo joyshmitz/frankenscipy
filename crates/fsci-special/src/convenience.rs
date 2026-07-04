@@ -3547,6 +3547,43 @@ pub fn it2j0y0_many(x: &[f64]) -> Vec<(f64, f64)> {
     par_map_indices(x.len(), |i| Ok::<(f64, f64), SpecialError>(it2j0y0(x[i])))
         .expect("it2j0y0 is infallible")
 }
+/// Vectorized integrals of Airy functions `(∫₀ˣAi, ∫₀ˣBi, ∫₋∞..0 Ai-pair)`; see
+/// [`fresnel_many`]. Bit-identical to a serial map of [`itairy`]. SciPy's specfun
+/// `itairy` is looped ~1.8µs/call, so the parallel fan is a large gapfill win.
+#[must_use]
+pub fn itairy_many(x: &[f64]) -> Vec<(f64, f64, f64, f64)> {
+    par_map_indices(x.len(), |i| {
+        Ok::<(f64, f64, f64, f64), SpecialError>(itairy(x[i]))
+    })
+    .expect("itairy is infallible")
+}
+/// Vectorized parabolic cylinder `D_v(x)` and its derivative for fixed order `v`;
+/// see [`fresnel_many`]. Bit-identical to a serial map of [`pbdv`](crate::pbdv).
+#[must_use]
+pub fn pbdv_many(v: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| {
+        Ok::<(f64, f64), SpecialError>(crate::pbdv(v, x[i]))
+    })
+    .expect("pbdv is infallible")
+}
+/// Vectorized parabolic cylinder `V_v(x)` and its derivative for fixed order `v`;
+/// see [`fresnel_many`]. Bit-identical to a serial map of [`pbvv`](crate::pbvv).
+#[must_use]
+pub fn pbvv_many(v: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| {
+        Ok::<(f64, f64), SpecialError>(crate::pbvv(v, x[i]))
+    })
+    .expect("pbvv is infallible")
+}
+/// Vectorized parabolic cylinder `W(a, x)` and its derivative for fixed parameter
+/// `a`; see [`fresnel_many`]. Bit-identical to a serial map of [`pbwa`](crate::pbwa).
+#[must_use]
+pub fn pbwa_many(a: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    par_map_indices(x.len(), |i| {
+        Ok::<(f64, f64), SpecialError>(crate::pbwa(a, x[i]))
+    })
+    .expect("pbwa is infallible")
+}
 /// Vectorized generalized exponential integral E_n(x) for fixed order `n`; see [`fresnel_many`].
 #[must_use]
 pub fn expn_many(n: usize, x: &[f64]) -> Vec<f64> {
@@ -14462,6 +14499,40 @@ mod tests {
         // Empty input is handled without spawning.
         assert!(super::it2i0k0_many(&[]).is_empty());
         assert!(super::it2j0y0_many(&[]).is_empty());
+    }
+
+    #[test]
+    fn itairy_pbdv_pbvv_pbwa_many_match_serial_bit_for_bit() {
+        // Order-preserving parallel fans must be bit-identical to a serial map
+        // (incl. NaN branches and x<0). Covers the itairy 4-tuple and the three
+        // parabolic-cylinder (value, derivative) pairs.
+        let xs: Vec<f64> = (-30..=120).map(|i| i as f64 * 0.1).collect();
+
+        let air = super::itairy_many(&xs);
+        let dv = super::pbdv_many(2.0, &xs);
+        let vv = super::pbvv_many(2.0, &xs);
+        let wa = super::pbwa_many(1.0, &xs);
+        assert_eq!(air.len(), xs.len());
+        for (idx, &x) in xs.iter().enumerate() {
+            let (a0, a1, a2, a3) = super::itairy(x);
+            assert_eq!(air[idx].0.to_bits(), a0.to_bits(), "itairy.0 at x={x}");
+            assert_eq!(air[idx].1.to_bits(), a1.to_bits(), "itairy.1 at x={x}");
+            assert_eq!(air[idx].2.to_bits(), a2.to_bits(), "itairy.2 at x={x}");
+            assert_eq!(air[idx].3.to_bits(), a3.to_bits(), "itairy.3 at x={x}");
+            let (d, dp) = crate::pbdv(2.0, x);
+            assert_eq!(dv[idx].0.to_bits(), d.to_bits(), "pbdv.0 at x={x}");
+            assert_eq!(dv[idx].1.to_bits(), dp.to_bits(), "pbdv.1 at x={x}");
+            let (v, vp) = crate::pbvv(2.0, x);
+            assert_eq!(vv[idx].0.to_bits(), v.to_bits(), "pbvv.0 at x={x}");
+            assert_eq!(vv[idx].1.to_bits(), vp.to_bits(), "pbvv.1 at x={x}");
+            let (w, wp) = crate::pbwa(1.0, x);
+            assert_eq!(wa[idx].0.to_bits(), w.to_bits(), "pbwa.0 at x={x}");
+            assert_eq!(wa[idx].1.to_bits(), wp.to_bits(), "pbwa.1 at x={x}");
+        }
+        assert!(super::itairy_many(&[]).is_empty());
+        assert!(super::pbdv_many(2.0, &[]).is_empty());
+        assert!(super::pbvv_many(2.0, &[]).is_empty());
+        assert!(super::pbwa_many(1.0, &[]).is_empty());
     }
 
     #[test]
