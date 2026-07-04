@@ -6,6 +6,47 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - KEEP: factor-17 FFT enters iterative odd-tail path - 2.43-3.33x vs ORIG recursive combine
+
+- Land-or-dig audit: `.scratch` / `.worktrees` was checked before digging. The
+  old non-ancestor bench worktrees were either code-first/pending-test FFT
+  drafts, already-reachable wide-pinv evidence, or the superseded June
+  eigvalsh GEMM threshold lane, so no measured unlanded win was safe to land.
+- Gap attacked: prior FFT radix work shipped 7/11/13 butterflies, but any
+  factor-17 length still missed `mixed_radix_iterative_odd_power_tail` and fell
+  back to the recursive mixed-radix route with the generic O(p^2) combine.
+  Commit `eba94dff` adds a generic conjugate-pair prime-radix combine and admits
+  17 into the iterative odd-tail planner, keeping existing 7/11/13 behavior
+  unchanged.
+- Per-crate bench command used for both rows:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-fft --bench fft_bench --profile release -- fft_mixed_radix17 --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- Same-worker ORIG/current ratio on RCH `vmi1152480` (ORIG temporarily restored
+  the pre-lever planner gate so factor 17 declined the iterative path; the final
+  source was restored before validation):
+
+  | n | ORIG recursive median | current median | speedup |
+  |---|---:|---:|---:|
+  | 1088 | 50.996 us | 16.579 us | 3.08x |
+  | 2176 | 111.09 us | 33.343 us | 3.33x |
+  | 4352 | 200.66 us | 82.538 us | 2.43x |
+  | 8704 | 425.66 us | 154.85 us | 2.75x |
+  | 17408 | 827.65 us | 310.17 us | 2.67x |
+
+- Correctness/conformance: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-fft --lib -- --nocapture`
+  passed 183/0 on RCH `ovh-a`, including the new factor-17 naive-DFT check.
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-conformance --test diff_fft -- --nocapture`
+  passed 34/0 on RCH `ovh-a`.
+- Build/gate notes: `rustfmt --edition 2024 --check
+  crates/fsci-fft/src/transforms.rs crates/fsci-fft/benches/fft_bench.rs`
+  passed locally. `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo check -p fsci-fft --all-targets`
+  and `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo clippy -p fsci-fft --all-targets -- -D warnings`
+  passed on RCH `hz2`. The first exploratory baseline fell open locally due an
+  RCH dependency-preflight error on unrelated `fsci-special/src/bin/probe_sw.rs`;
+  it is not used for the keep ratio above.
+- Coordination note: Agent Mail registration existed as `BlackThrush`, but file
+  reservation failed because the mail DB reported a malformed database image;
+  the target edit surface was still clean when the work began.
+
 ## 2026-07-04 - BlackThrush (codex) - KEEP: spence ports Cephes rational approximation - 1.97x / 2.08x vs ORIG series path
 
 - Continuation note: while this pass was measuring and cleaning the dirty
