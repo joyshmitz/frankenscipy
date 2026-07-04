@@ -3004,6 +3004,12 @@ pub fn read_json_array(content: &str) -> Result<Vec<f64>, IoError> {
         .collect()
 }
 
+/// Runtime switch to force the serial `write_json_array` formatter for same-binary A/B
+/// benchmarks. Defaults off.
+#[doc(hidden)]
+pub static WRITE_JSON_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Write a vector as a JSON array.
 pub fn write_json_array(data: &[f64]) -> Result<String, IoError> {
     if let Some((idx, value)) = data
@@ -3016,13 +3022,76 @@ pub fn write_json_array(data: &[f64]) -> Result<String, IoError> {
             "JSON array value at index {idx} is not finite: {value}"
         )));
     }
-    let mut out = String::new();
+
+    // f64 Display dominates here. Each value is independent, so format
+    // contiguous ranges into private Strings and join chunks in order.
+    const JSON_PAR_GATE: usize = 1 << 16;
+    let n = data.len();
+    if n < JSON_PAR_GATE || WRITE_JSON_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut out = String::with_capacity(n * 8 + 2);
+        out.push('[');
+        for (idx, value) in data.iter().enumerate() {
+            if idx > 0 {
+                out.push_str(", ");
+            }
+            let _ = write!(out, "{value}");
+        }
+        out.push(']');
+        return Ok(out);
+    }
+
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / 16384)
+        .min(n)
+        .max(1);
+    if nthreads <= 1 {
+        let mut out = String::with_capacity(n * 8 + 2);
+        out.push('[');
+        for (idx, value) in data.iter().enumerate() {
+            if idx > 0 {
+                out.push_str(", ");
+            }
+            let _ = write!(out, "{value}");
+        }
+        out.push(']');
+        return Ok(out);
+    }
+    let chunk = n.div_ceil(nthreads);
+    let mut parts: Vec<String> = (0..nthreads).map(|_| String::new()).collect();
+    std::thread::scope(|scope| {
+        for (t, slot) in parts.iter_mut().enumerate() {
+            let i0 = t * chunk;
+            let i1 = ((t + 1) * chunk).min(n);
+            scope.spawn(move || {
+                if i0 >= i1 {
+                    return;
+                }
+                let mut local = String::with_capacity((i1 - i0) * 8);
+                for (k, value) in data[i0..i1].iter().enumerate() {
+                    if k > 0 {
+                        local.push_str(", ");
+                    }
+                    let _ = write!(local, "{value}");
+                }
+                *slot = local;
+            });
+        }
+    });
+    let total: usize = parts.iter().map(String::len).sum();
+    let mut out = String::with_capacity(total + parts.len() * 2 + 2);
     out.push('[');
-    for (idx, value) in data.iter().enumerate() {
-        if idx > 0 {
+    let mut first = true;
+    for p in &parts {
+        if p.is_empty() {
+            continue;
+        }
+        if !first {
             out.push_str(", ");
         }
-        let _ = write!(out, "{value}");
+        out.push_str(p);
+        first = false;
     }
     out.push(']');
     Ok(out)
@@ -6064,6 +6133,32 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("JSON array value at index 1 is not finite: NaN".to_string())
+        );
+    }
+
+    #[test]
+    fn write_json_array_parallel_is_byte_identical_to_serial_above_gate() {
+        use std::sync::atomic::Ordering;
+        // Above the len ≥ 2^16 fan-out gate the parallel per-chunk formatter must be
+        // BIT-FOR-BIT the serial `[v0, v1, …]` (each chunk `", "`-joined, chunks joined
+        // with `", "`).
+        let n = 100_000usize; // > 65536 gate
+        let mut state = 0x13579u64;
+        let data: Vec<f64> = (0..n)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (state >> 11) as f64 / (1u64 << 53) as f64 * 200.0 - 100.0
+            })
+            .collect();
+        WRITE_JSON_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = write_json_array(&data).expect("serial");
+        WRITE_JSON_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = write_json_array(&data).expect("parallel");
+        assert_eq!(
+            serial, parallel,
+            "parallel write_json_array must equal serial"
         );
     }
 

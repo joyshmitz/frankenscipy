@@ -16461,3 +16461,20 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - COLLISION NOTE: the concurrent BlackThrush agent (shared checkout, git add -A) landed my savetxt code as c62b7f17
   (swept my uncommitted lib.rs + probe); check `git ls-files probe_*.rs` before rm (probes get committed) and
   `git log --oneline` for already-landed dupes before re-committing. write_csv committed by me before it was swept.
+
+## 2026-07-04 - BlackThrush (cc) - write_json_array -> parallel value-format (4.0-6.4x self, BYTE-IDENTICAL)
+
+- fsci-io formatter vein, 3rd sibling (after savetxt/write_csv) getting the mmwrite lever. `write_json_array` formatted
+  a flat f64 array to `[v0, v1, …]` with a serial `for value { write!("{}") }` loop. Keep the finite-check validation
+  (first non-finite index) serial + cheap; then format contiguous value ranges into private Strings (each `", "`-joined)
+  and join the parts with `", "` — BIT-FOR-BIT the serial output.
+- SAME-BINARY A/B (atomic WRITE_JSON_FORCE_SERIAL, 3× interleaved), identical=true everywhere:
+  n=40000 1.0× (below gate); n=200000 21.59→5.08ms **4.2×**; n=1000000 113.47→17.74ms **6.4×**;
+  n=4000000 637.36→159.31ms **4.0×**. Gated len≥2^16. New test
+  write_json_array_parallel_is_byte_identical_to_serial_above_gate + finite-reject test GREEN.
+- vs ORIG: Python/serde JSON writers are single-threaded; self-ratio 4.0-6.4×.
+- IO FORMATTER VEIN (mmwrite lever) now covers: mmwrite (5e5c6119), savetxt (c62b7f17), write_csv (f2895f40),
+  write_json_array (this). Remaining serial formatters: savemat_text (per-array/row), mmwrite_complex (has a
+  pre-existing red 0-vs-1-based test — avoid), write_netcdf_classic (binary, endian). RECIPE: grep serial
+  `for … {write!/push_str}` value/row formatters → validate-first (preserve first-error-order) + parallel-into-private-
+  Strings + ordered join.
