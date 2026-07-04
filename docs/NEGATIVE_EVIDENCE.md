@@ -15500,3 +15500,18 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   now procrustes). Remaining serial matmul is only the small toeplitz dense fallback (gate keeps it serial). The
   dense-linalg serial-work levers (trailing-update parallelization, panel SIMD, discarded-matmul elision, serial→
   par_matmul) are now EXHAUSTED; residual = dsyrk/dgemm micro-kernel depth + eig/svd D&C port walls.
+
+## 2026-07-04 - BlackThrush (cc) - public lu() (scipy.linalg.lu) routed to the parallel blocked LU — ~7-11x self, flips 8.3x-slower-than-scipy → 1.20x (near parity)
+
+- The public `lu(a)` (P/L/U decomposition, scipy.linalg.lu) used nalgebra's generic serial `.lu()` — MUCH slower
+  than this session's parallel+cache-blocked+SIMD `lu_factor_blocked`. Routed n≥1000 through the blocked LU and
+  extract L (unit lower) / U (upper) from the flat factors + build P with `P[perm[j]][j]=1` (A = P·L·U, SciPy's
+  convention). Same partial-pivot GEPP → L/U match nalgebra to roundoff; nalgebra fallback kept for singular/small.
+- MEASURED (bin perf_lu, interleaved A/B n=2000): OLD (nalgebra) ~1370 → NEW (blocked) ~199ms = **~7x self** (best
+  10.9x; NEW < OLD every round). scipy.linalg.lu n=2000 1-thread = 165ms, so fsci flips **8.3x-slower → 1.20x (near
+  parity)**. Reconstruction max|A−P·L·U| = **1.37e-14** (correct); u[n-1][n-1] acc identical OLD=NEW.
+- CONF: full fsci-linalg lib 496/0, 19 lu tests green. VERDICT: KEEP — big win on a common scipy function; the
+  blocked-LU parallelization work (this session) now benefits `solve`, `inv`, AND `lu`. nalgebra's `.lu()` is a
+  slow generic — LEVER: any fsci function still using nalgebra `.lu()`/`.qr()`/etc. on large matrices where a faster
+  in-house blocked path exists is a candidate (verify factor-format/reconstruction conformance). NEXT: lu_factor/
+  lu_solve still use nalgebra LU (tighter coupling — LuFactorResult stores the nalgebra object; a bigger refactor).
