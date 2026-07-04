@@ -242,6 +242,8 @@ pub use convenience::{
     poch,
     obl_ang1_many,
     obl_cv_many,
+    obl_rad1_many,
+    obl_rad2_many,
     poch_many,
     positive,
     power,

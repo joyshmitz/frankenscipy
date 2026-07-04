@@ -15705,3 +15705,26 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   Python loop. The loop baseline inflates ~9× and can turn a scipy-LOSS (pbdv) or PARITY (it2j0y0) into a fake win.
   Only functions where SciPy's ufunc is genuinely slow per-element (pbvv 96 ms/50k, it2i0k0/itairy specfun) yield a
   real win; where SciPy has a fast ufunc (pbdv, agm, hyp2f1 6 ms/50k) a parallel fan loses.
+
+## 2026-07-04 - BlackThrush (cc) - obl_rad1_many / obl_rad2_many vectorized gapfill — 12.7-13.8x vs scipy ARRAY ufunc
+
+- DIG (applying the previous entry's FAIR-baseline lesson from the start): the oblate-spheroidal RADIAL functions
+  `obl_rad1`/`obl_rad2` had scalar kernels but no `_many` (their angular siblings `pro_ang1_many`/`obl_ang1_many` and
+  the char-values `pro_cv_many`/`obl_cv_many` already exist). Verified FIRST that SciPy is genuinely slow per-element:
+  `scipy.special.obl_rad{1,2}(1,2,1.0, ARRAY)` = **13.4µs / 17.0µs per call** (67.12 / 85.01 ms at n=5000) — Zhang-Jin
+  specfun re-solves the spheroidal eigenproblem every element, NOT a fast ufunc. (Contrast: `pro_rad1`/`pro_rad2` ARE
+  fast ~18ns/call for these params → deliberately NOT wrapped, would lose like pbdv.)
+- FIX: added `obl_rad1_many`/`obl_rad2_many` = `par_map_indices` over `crate::orthopoly::obl_rad{1,2}` in
+  convenience.rs (fixed m,n,c, vary x), order-preserving so bit-identical to a serial map. Only touched
+  `convenience.rs` + `lib.rs` — NOT the foreign-occupied orthopoly.rs / special_bench.rs.
+- MEASURED FAIR (fsci `_many` vs `scipy.special.obl_rad{1,2}(ARRAY)`, n=5000, m=1 n=2 c=1.0, x∈[0.05,0.95]):
+  `obl_rad1_many` **5.287 ms** vs 67.12 = **12.7× FASTER**; `obl_rad2_many` **6.146 ms** vs 85.01 = **13.8× FASTER**.
+  KEEP — a genuine win vs the array ufunc (not just a python loop). Win = fsci's faster scalar kernel × parallel fan.
+  NOTE a further ~5-10× is left on the table: this par_map re-solves the x-invariant characteristic value `cv` per
+  element (like SciPy); a HOISTED `spheroidal_rad*_many` (compute cv ONCE, evaluate the series per x, as
+  `spheroidal_ang1_many` already does for the angular fns) would be much faster — deferred because it needs a helper
+  in orthopoly.rs, currently occupied by another agent's uncommitted (verified ~0-gain) Mathieu work.
+- CONF: `cargo test -p fsci-special --lib obl_rad_many_match_serial_bit_for_bit` GREEN (par == serial bit-for-bit,
+  value + derivative, incl. empty input); scalar `spheroidal_rad*_match_scipy` goldens unaffected (pure wrappers).
+  Toolchain note: `-cc` release cache hit an E0514 (stale cc/blake3 build-scripts from a nightly bump); `cargo clean
+  --release` fixed it (per [[perf_special_gate_vein_closed_toolchain_recovery]]).
