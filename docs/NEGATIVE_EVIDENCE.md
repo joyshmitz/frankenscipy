@@ -16198,3 +16198,26 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   + `graph_metrics_on_path_graph` GREEN.
 - LEVER (paid 3×): csgraph per-source-independent metrics (all-pairs reducers AND per-source-accumulate like Brandes)
   → parallel-across-sources with private partials, sum-reduce. Grep serial `for s in 0..n` over graph sources.
+
+## 2026-07-04 - BlackThrush (cc) - clustering_coefficient: serial per-node -> parallel-across-nodes (1.2-5.9x self, BYTE-IDENTICAL)
+
+- csgraph metric vein, ship #4. `clustering_coefficient` ran a serial `for i in 0..n` loop; each node's coefficient
+  = (edges among its neighbors)/(k choose 2) via a double neighbor-loop + binary_search on the sorted CSR rows =
+  O(k²·log k) per node. Each `cc[i]` is INDEPENDENT (no cross-node reduction) → the per-node work fans across cores
+  with a BYTE-IDENTICAL result (unlike betweenness's cross-source float sum). `average_clustering` inherits it.
+- FIX: hoist the per-node computation into a `node_cc(i)` closure; parallel branch splits `cc` via `chunks_mut`
+  across cores in `thread::scope`, each thread filling its disjoint slice. Gate on total edge count `nnz>=8192`
+  (per-node cost ∝ deg²) so cheap/tiny graphs stay serial.
+- SAME-BINARY A/B (atomic `CLUSTERING_FORCE_SERIAL`, 3× interleaved, undirected random graphs), **bitmism=0 everywhere**:
+  - n=500  deg10 nnz=9796:   serial 0.55ms / parallel 0.45ms = **1.2×** (just above gate)
+  - n=2000 deg12 nnz=47700:  2.81ms / 0.80ms = **3.5×**
+  - n=5000 deg15 nnz=149502: 11.87ms / 2.38ms = **5.0×**
+  - n=20000 deg10 nnz=399792: 23.18ms / 3.96ms = **5.9×**
+  Speedup GROWS with nnz. BYTE-IDENTICAL (to_bits, 0 mismatches — each cc[i] computed identically, just on
+  different threads). New test `clustering_parallel_is_byte_identical_to_serial` (n=700, nnz>8192, 0 bitmism) +
+  `clustering_coefficient_triangle` GREEN.
+- vs ORIG: clustering_coefficient/average_clustering have NO scipy.sparse.csgraph equivalent (networkx routines) →
+  self-ratio (serial→parallel), consistent with betweenness/diameter precedent.
+- LEVER (paid 4×): csgraph per-source/per-node-independent metric → parallel-across-units. Byte-IDENTICAL when the
+  per-unit result has no cross-unit reduction (clustering — each cc[i] standalone); tolerance-only when it accumulates
+  cross-unit (betweenness bc[w]+=). Grep serial `for i/s in 0..n` over graph nodes/sources with non-trivial per-unit work.

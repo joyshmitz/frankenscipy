@@ -5399,39 +5399,74 @@ pub fn eccentricity(graph: &CsrMatrix) -> Vec<f64> {
         .collect()
 }
 
+/// Runtime switch to force the serial clustering-coefficient loop for same-binary
+/// A/B benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static CLUSTERING_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the clustering coefficient for each node.
 ///
 /// The clustering coefficient measures how interconnected a node's neighbors are.
 pub fn clustering_coefficient(graph: &CsrMatrix) -> Vec<f64> {
     let n = graph.shape().rows;
     let mut cc = vec![0.0; n];
+    if n == 0 {
+        return cc;
+    }
+    let indptr = graph.indptr();
+    let indices = graph.indices();
 
-    for (i, cc_val) in cc.iter_mut().enumerate() {
-        // The CSR row's indices ARE node i's neighbor list — borrow the contiguous
-        // slice instead of allocating a Vec per node. frankenscipy-icl0h.
-        let neighbors = &graph.indices()[graph.indptr()[i]..graph.indptr()[i + 1]];
-
+    // Node i's coefficient = (edges among its neighbors) / (k choose 2). The CSR row's
+    // indices ARE node i's neighbor list; count neighbor-pairs that are themselves
+    // adjacent via binary_search on the sorted rows. Each `cc[i]` is INDEPENDENT (no
+    // cross-node reduction), so the O(k²·log k) per-node work fans across cores with a
+    // BYTE-IDENTICAL result. frankenscipy-icl0h.
+    let node_cc = |i: usize| -> f64 {
+        let neighbors = &indices[indptr[i]..indptr[i + 1]];
         let k = neighbors.len();
         if k < 2 {
-            continue;
+            return 0.0;
         }
-
-        // Count edges between neighbors
-        let mut edges = 0;
+        let mut edges = 0usize;
         for &u in neighbors {
             for &v in neighbors {
                 if u < v {
-                    // Check if edge (u, v) exists
-                    let u_start = graph.indptr()[u];
-                    let u_end = graph.indptr()[u + 1];
-                    if graph.indices()[u_start..u_end].binary_search(&v).is_ok() {
+                    let u_start = indptr[u];
+                    let u_end = indptr[u + 1];
+                    if indices[u_start..u_end].binary_search(&v).is_ok() {
                         edges += 1;
                     }
                 }
             }
         }
+        2.0 * edges as f64 / (k * (k - 1)) as f64
+    };
 
-        *cc_val = 2.0 * edges as f64 / (k * (k - 1)) as f64;
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n);
+    let force_serial = CLUSTERING_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    // Fan out only when there is enough per-node work to amortize the spawn: gate on
+    // total edge count (per-node cost ∝ deg²), measured crossover ~nnz≥8k.
+    if cores <= 1 || force_serial || indices.len() < 8192 {
+        for (i, cc_val) in cc.iter_mut().enumerate() {
+            *cc_val = node_cc(i);
+        }
+    } else {
+        let chunk = n.div_ceil(cores);
+        let node_cc_ref = &node_cc;
+        std::thread::scope(|scope| {
+            for (t, slice) in cc.chunks_mut(chunk).enumerate() {
+                let base = t * chunk;
+                scope.spawn(move || {
+                    for (j, cc_val) in slice.iter_mut().enumerate() {
+                        *cc_val = node_cc_ref(base + j);
+                    }
+                });
+            }
+        });
     }
 
     cc
@@ -6164,6 +6199,54 @@ mod tests {
         .unwrap();
         assert_eq!(clustering_coefficient(&k3), vec![1.0, 1.0, 1.0]);
         assert!((average_clustering(&k3) - 1.0).abs() < 1e-12, "avg clustering K3 = 1");
+    }
+
+    #[test]
+    fn clustering_parallel_is_byte_identical_to_serial() {
+        // Above the nnz>=8192 fan-out gate the parallel per-node clustering must be
+        // BYTE-IDENTICAL to the serial loop (each cc[i] is independent — no reduction).
+        use crate::{CooMatrix, FormatConvertible, Shape2D};
+        use std::sync::atomic::Ordering;
+        let n = 700usize;
+        let mut state = 0xC0FFEEu64;
+        let mut nextu = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let mut seen = std::collections::HashSet::new();
+        let (mut rs, mut cs, mut data) = (Vec::new(), Vec::new(), Vec::new());
+        for u in 0..n {
+            for _ in 0..14 {
+                let v = (nextu() >> 11) as usize % n;
+                if v == u {
+                    continue;
+                }
+                for &(a, b) in &[(u, v), (v, u)] {
+                    if seen.insert((a, b)) {
+                        rs.push(a);
+                        cs.push(b);
+                        data.push(1.0);
+                    }
+                }
+            }
+        }
+        let g = CooMatrix::from_triplets(Shape2D::new(n, n), data, rs, cs, true)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        assert!(g.data().len() >= 8192, "graph must exceed the fan-out gate");
+        CLUSTERING_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = clustering_coefficient(&g);
+        CLUSTERING_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = clustering_coefficient(&g);
+        let mism = serial
+            .iter()
+            .zip(parallel.iter())
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count();
+        assert_eq!(mism, 0, "parallel clustering must be byte-identical to serial");
     }
 
     #[test]
