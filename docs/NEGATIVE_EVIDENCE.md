@@ -16221,3 +16221,25 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - LEVER (paid 4×): csgraph per-source/per-node-independent metric → parallel-across-units. Byte-IDENTICAL when the
   per-unit result has no cross-unit reduction (clustering — each cc[i] standalone); tolerance-only when it accumulates
   cross-unit (betweenness bc[w]+=). Grep serial `for i/s in 0..n` over graph nodes/sources with non-trivial per-unit work.
+
+## 2026-07-04 - BlackThrush (cc) - spmv_csr: serial -> parallel-across-rows (1.4-2.6x self at nnz>=1M, BYTE-IDENTICAL) + PageRank NEGATIVE
+
+- fsci-sparse core op. `spmv_csr` (sparse matrix-vector product) ran a serial unrolled loop; each output row is an
+  INDEPENDENT dot of a CSR row with `vector`, and the column gather `vector[indices[idx]]` is LATENCY-bound (scattered
+  cache misses on a large vector) → fanning rows across cores buys memory-level parallelism (the AoS-cliff lever), not
+  just flops. Each `result[row]` computed identically → BYTE-IDENTICAL.
+- SAME-BINARY A/B (atomic `SPMV_FORCE_SERIAL`, 3× interleaved, random scattered-column matrices), **bitmism=0 everywhere**:
+  - n=20000  deg8  nnz=160k (160KB L2-resident vector): serial 260.6µs / parallel 1589.5µs = **0.2× (LOSES** — spawn dominates)
+  - n=100000 deg10 nnz=1.0M (800KB vector): 1489.7µs / 1076.5µs = **1.4×**
+  - n=300000 deg12 nnz=3.6M (2.4MB vector): 5342.3µs / 2089.8µs = **2.6×**
+  - n=1000000 deg8 nnz=8.0M (8MB vector):  12648.9µs / 4883.3µs = **2.6×**
+  The win needs BOTH large nnz AND a cache-SPILLING vector (small vector → serial gather is L2-fast → parallel loses to
+  spawn). GATED `nnz>=1M && cols>=65536` (every enabled case measured to win; the 160k/L2 loss sits below the gate).
+  Test `spmv_parallel_is_byte_identical_to_serial_above_gate` (n=70000, nnz>1M, 0 bitmism) + all 6 spmv tests GREEN.
+- vs ORIG: self-ratio (serial→parallel); scipy's csr_matvec is serial C, so parallel fsci should also gain vs scipy on
+  large latency-bound matvecs (not runnable on the rch host — no scipy).
+- NEGATIVE this turn (REVERTED): PageRank push-scatter → parallel pull-style (transpose once, parallel gather per node,
+  BYTE-IDENTICAL for no-dangling graphs — bitmism=0 confirmed). LOSES 0.1-0.6× at n=5k-50k: PageRank's per-iteration
+  work is O(nnz) and it CONVERGES FAST (~tens of iters), so per-iteration `thread::scope` spawn (×100 iters × 64
+  threads) dwarfs the cheap gather (serial push is already <8ms @ n=50k). LESSON: the parallel-across-units lever needs
+  ONE-SHOT heavy per-unit work (Brandes/Dijkstra/clustering/spmv), NOT many-cheap-iterations (per-iteration spawn tax).

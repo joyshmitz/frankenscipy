@@ -345,6 +345,12 @@ pub fn triu_array<T: FormatConvertible>(matrix: &T, k: isize) -> SparseResult<Co
     triu(matrix, k)
 }
 
+/// Runtime switch to force the serial `spmv_csr` loop for same-binary A/B
+/// benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static SPMV_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn spmv_csr(matrix: &CsrMatrix, vector: &[f64]) -> SparseResult<Vec<f64>> {
     if vector.len() != matrix.shape().cols {
         return Err(SparseError::IncompatibleShape {
@@ -356,7 +362,12 @@ pub fn spmv_csr(matrix: &CsrMatrix, vector: &[f64]) -> SparseResult<Vec<f64>> {
     let indices = matrix.indices();
     let data = matrix.data();
     let mut result = vec![0.0; rows];
-    for row in 0..rows {
+
+    // One output row = one independent dot of a CSR row with `vector`; the column
+    // gather `vector[indices[idx]]` is latency-bound (scattered cache misses), so
+    // fanning rows across cores buys memory-level parallelism, not just flops. Each
+    // `result[row]` is computed identically → BYTE-IDENTICAL to the serial loop.
+    let row_dot = |row: usize| -> f64 {
         let mut sum = 0.0;
         let mut idx = indptr[row];
         let end = indptr[row + 1];
@@ -371,7 +382,36 @@ pub fn spmv_csr(matrix: &CsrMatrix, vector: &[f64]) -> SparseResult<Vec<f64>> {
             sum += data[idx] * vector[indices[idx]];
             idx += 1;
         }
-        result[row] = sum;
+        sum
+    };
+
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(rows.max(1));
+    let force_serial = SPMV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    // Fan out only when BOTH the total work is large (spmv is memory-bound, ~2
+    // flops/nnz) AND the gathered `vector` is big enough to spill cache — that is when
+    // the serial gather turns latency-bound and parallel MLP pays. Measured: nnz=160k
+    // with a 160 KB (L2-resident) vector LOSES 0.2× (spawn dominates), while nnz≥1M
+    // with a ≥800 KB vector WINS 1.4–2.6×. Below the gate: unchanged serial loop.
+    if cores <= 1 || force_serial || data.len() < 1_048_576 || vector.len() < 65_536 {
+        for (row, r) in result.iter_mut().enumerate() {
+            *r = row_dot(row);
+        }
+    } else {
+        let chunk = rows.div_ceil(cores);
+        let row_dot_ref = &row_dot;
+        std::thread::scope(|scope| {
+            for (t, slice) in result.chunks_mut(chunk).enumerate() {
+                let base = t * chunk;
+                scope.spawn(move || {
+                    for (o, r) in slice.iter_mut().enumerate() {
+                        *r = row_dot_ref(base + o);
+                    }
+                });
+            }
+        });
     }
     Ok(result)
 }
@@ -1362,6 +1402,54 @@ mod tests {
             out[coo.row_indices()[idx]][coo.col_indices()[idx]] = coo.data()[idx];
         }
         out
+    }
+
+    #[test]
+    fn spmv_parallel_is_byte_identical_to_serial_above_gate() {
+        use crate::FormatConvertible;
+        use std::sync::atomic::Ordering;
+        // Build an n×n matrix past the fan-out gate (nnz≥1M, cols≥65536): the
+        // parallel-across-rows spmv must be BYTE-IDENTICAL to the serial loop (each
+        // output row is an independent dot — no reassociation).
+        let n = 70_000usize;
+        let mut state = 0xF00Du64;
+        let mut nextu = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let mut seen = std::collections::HashSet::new();
+        let (mut rs, mut cs, mut data) = (Vec::new(), Vec::new(), Vec::new());
+        for u in 0..n {
+            for _ in 0..16 {
+                let v = (nextu() >> 11) as usize % n;
+                if !seen.insert((u, v)) {
+                    continue;
+                }
+                rs.push(u);
+                cs.push(v);
+                data.push(0.5 + (nextu() >> 11) as f64 / (1u64 << 53) as f64);
+            }
+        }
+        let m = CooMatrix::from_triplets(Shape2D::new(n, n), data, rs, cs, true)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        assert!(m.data().len() >= 1_048_576, "matrix must exceed the fan-out gate");
+        let x: Vec<f64> = (0..n)
+            .map(|_| (nextu() >> 11) as f64 / (1u64 << 53) as f64)
+            .collect();
+        SPMV_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = spmv_csr(&m, &x).unwrap();
+        SPMV_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = spmv_csr(&m, &x).unwrap();
+        let mism = serial
+            .iter()
+            .zip(parallel.iter())
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count();
+        assert_eq!(mism, 0, "parallel spmv must be byte-identical to serial");
     }
 
     #[test]
