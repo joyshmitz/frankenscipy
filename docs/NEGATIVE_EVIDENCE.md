@@ -16290,3 +16290,29 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - LEVER (grid-evaluator vein now HARVESTED in interpolate): bisplev + bisplev_derivative + Rect/Smooth eval_grid all
   parallel; query-LIST evaluators already use par_query_map/par_query_try_map. Compute-bound per-row grid eval =
   clean parallel-across-rows (contrast bandwidth-bound reductions / per-iteration loops).
+
+## 2026-07-04 - BlackThrush (cc) - laplacian dense build -> parallel-across-rows (1.2-3.0x self, BYTE-IDENTICAL) + sepfir2d NEGATIVE
+
+- fsci-sparse. `laplacian(graph, normed)` returns a DENSE n×n `Vec<Vec<f64>>` built by a SERIAL loop:
+  `vec![vec![0.0; n]; n]` (n allocs + n² zero-fill) + per-row diagonal/edge fill + (normed) per-row scaling. Each
+  row is INDEPENDENT (writes its own Vec), so the O(n²) materialization fans across cores BYTE-IDENTICALLY. The
+  dedup-normalized scaling FUSES into the per-row build (each row's scaling depends only on that row + d_inv_sqrt).
+- FIX: `build_row(i)` closure (alloc + D−A + fused dedup-normed scale); parallel branch spawns row-chunks in
+  thread::scope, concatenates in row order. Non-dedup normed keeps its serial dense post-scan (rare). Gate n≥512.
+- SAME-BINARY A/B (atomic `LAPLACIAN_FORCE_SERIAL`, 3× interleaved, undirected random graphs), **bitmism=0 everywhere**:
+  - n=500:  serial 0.99/0.96ms → 1.0× (below gate)
+  - n=1000: normed=false 4.56→3.73ms **1.2×**, normed=true 4.82→3.05ms **1.6×**
+  - n=2000: false 18.41→7.38ms **2.5×**, true 18.09→5.94ms **3.0×**
+  - n=4000: false 71.65→34.18ms **2.1×**, true 69.81→32.42ms **2.2×**
+  BYTE-IDENTICAL. The win is parallel first-touch + parallel memset of the dense matrix (I wrongly expected a
+  bandwidth-bound loss — the n² alloc/zero DOES parallelize on this box). GATED n≥512. New test
+  `laplacian_parallel_is_byte_identical_to_serial_above_gate` (n=640, both normed, 0 bitmism) + all laplacian tests GREEN.
+- vs ORIG: scipy.sparse.csgraph.laplacian returns SPARSE by default (O(nnz)), so this dense O(n²) fsci path is a
+  wrong-data-structure wall vs sparse scipy; the ratio is self (serial→parallel dense build).
+- NEGATIVE this turn (REVERTED): `sepfir2d` full outer-product-kernel 2D conv → separable two 1-D passes via
+  `convolve2d_with_boundary` (1×nhr then nhc×1 kernels). Algorithmically O(N·nhr·nhc)→O(N·(nhr+nhc)) and BYTE-close
+  (maxdiff 1e-14, matches scipy which IS separable), BUT `convolve2d_with_boundary` is too heavyweight for 1-D passes
+  (per-call pad/alloc/extract ×2) and the old full-kernel path already FFT-dispatches/parallelizes → LOST 0.8× at
+  k=7/9, ~parity k=11, only 1.4× at k=15. A lightweight direct 1-D-pass rewrite would win broadly but needs the
+  symm-boundary/centering reimplemented (>60min risk). LESSON: a separable-filter algorithmic win only pays if the
+  1-D passes are LIGHTWEIGHT — routing them through a general 2-D-conv entry point re-pays its fixed overhead twice.

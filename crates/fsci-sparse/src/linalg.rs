@@ -8931,6 +8931,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn laplacian_parallel_is_byte_identical_to_serial_above_gate() {
+        // Above the n>=512 fan-out gate the parallel-across-rows dense build must be
+        // BYTE-IDENTICAL to the serial build (each row is independent; the dedup-normed
+        // scaling fuses per-row). Checks both normed variants.
+        use std::sync::atomic::Ordering;
+        let n = 640usize;
+        let mut state = 0x5EEDu64;
+        let mut nextu = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let mut seen = std::collections::HashSet::new();
+        let (mut rs, mut cs, mut data) = (Vec::new(), Vec::new(), Vec::new());
+        for u in 0..n {
+            for _ in 0..8 {
+                let v = (nextu() >> 11) as usize % n;
+                if v == u {
+                    continue;
+                }
+                for &(a, b) in &[(u, v), (v, u)] {
+                    if seen.insert((a, b)) {
+                        rs.push(a);
+                        cs.push(b);
+                        data.push(1.0 + (nextu() >> 40) as f64 / 1e6);
+                    }
+                }
+            }
+        }
+        let g = CooMatrix::from_triplets(Shape2D::new(n, n), data, rs, cs, true)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        for normed in [false, true] {
+            LAPLACIAN_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = laplacian(&g, normed).unwrap();
+            LAPLACIAN_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = laplacian(&g, normed).unwrap();
+            let mism: usize = serial
+                .iter()
+                .zip(parallel.iter())
+                .map(|(sr, pr)| {
+                    sr.iter()
+                        .zip(pr.iter())
+                        .filter(|(a, b)| a.to_bits() != b.to_bits())
+                        .count()
+                })
+                .sum();
+            assert_eq!(mism, 0, "normed={normed}: parallel laplacian must be byte-identical");
+        }
+    }
+
     // ── BiCG iterative solver tests ─────────────────────────────────
 
     fn diagonally_dominant_csr_3x3() -> CsrMatrix {
@@ -11751,6 +11805,12 @@ pub fn depth_first_order(graph: &CsrMatrix, source: usize) -> SparseResult<(Vec<
 /// * `normed` — If true, compute the symmetric normalized Laplacian L_sym = D^(-1/2) L D^(-1/2).
 ///
 /// Returns the Laplacian as a dense matrix (`Vec<Vec<f64>>`).
+/// Runtime switch to force the serial `laplacian` dense build for same-binary A/B
+/// benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static LAPLACIAN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>> {
     let n = graph.shape().rows;
     let indptr = graph.indptr();
@@ -11765,48 +11825,77 @@ pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>>
         }
     }
 
-    // Build L = D - A
-    let mut lapl: Vec<Vec<f64>> = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        lapl[i][i] = degree[i];
-        for idx in indptr[i]..indptr[i + 1] {
-            let j = indices[idx];
-            lapl[i][j] -= data[idx];
-        }
-    }
+    let dedup = graph.canonical_meta().deduplicated;
+    // For the symmetric-normalized case on a DEDUPLICATED graph the scaling touches only
+    // the O(n+nnz) structurally-nonzero positions (diagonal + edges), so it FUSES into the
+    // per-row build (each row's scaling depends only on that row + d_inv_sqrt) — byte-
+    // identical to the build-then-scale loops. Non-dedup graphs keep the dense post-scan.
+    let d_inv_sqrt: Vec<f64> = if normed {
+        (0..n)
+            .map(|i| if degree[i] > 0.0 { 1.0 / degree[i].sqrt() } else { 0.0 })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let scale_in_row = normed && dedup;
 
-    if normed {
-        // Symmetric normalized: L_sym = D^(-1/2) L D^(-1/2)
-        let mut d_inv_sqrt = vec![0.0; n];
-        for i in 0..n {
-            d_inv_sqrt[i] = if degree[i] > 0.0 {
-                1.0 / degree[i].sqrt()
-            } else {
-                0.0
-            };
+    // Build one dense row of L = D - A (with fused dedup-normalized scaling). Rows are
+    // independent (each writes its own Vec), so the O(n²) dense materialization fans
+    // across cores BYTE-IDENTICALLY — the whole cost is the n allocations + zero-fills.
+    let build_row = |i: usize| -> Vec<f64> {
+        let mut row = vec![0.0f64; n];
+        row[i] = degree[i];
+        for idx in indptr[i]..indptr[i + 1] {
+            row[indices[idx]] -= data[idx];
         }
-        // L is structurally nonzero only on the diagonal and at the graph's edge
-        // positions; every other entry is already 0.0 and `0.0 * (finite scale)`
-        // stays 0.0. For a DEDUPLICATED graph (each (i,j) stored once) scale only
-        // those O(n + nnz) positions instead of the full O(n²) dense matrix —
-        // byte-identical (the `j != i` guard scales the diagonal exactly once,
-        // even with a self-loop edge). A non-deduplicated graph could revisit a
-        // position, so it keeps the dense scan.
-        if graph.canonical_meta().deduplicated {
-            for i in 0..n {
-                lapl[i][i] *= d_inv_sqrt[i] * d_inv_sqrt[i];
-                for idx in indptr[i]..indptr[i + 1] {
-                    let j = indices[idx];
-                    if j != i {
-                        lapl[i][j] *= d_inv_sqrt[i] * d_inv_sqrt[j];
-                    }
+        if scale_in_row {
+            row[i] *= d_inv_sqrt[i] * d_inv_sqrt[i];
+            for idx in indptr[i]..indptr[i + 1] {
+                let j = indices[idx];
+                if j != i {
+                    row[j] *= d_inv_sqrt[i] * d_inv_sqrt[j];
                 }
             }
-        } else {
-            for i in 0..n {
-                for j in 0..n {
-                    lapl[i][j] *= d_inv_sqrt[i] * d_inv_sqrt[j];
-                }
+        }
+        row
+    };
+
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n.max(1));
+    let mut lapl: Vec<Vec<f64>> = if cores <= 1
+        || LAPLACIAN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 512
+    {
+        (0..n).map(build_row).collect()
+    } else {
+        let chunk = n.div_ceil(cores);
+        let build_row_ref = &build_row;
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..cores)
+                .filter_map(|t| {
+                    let i0 = t * chunk;
+                    if i0 >= n {
+                        return None;
+                    }
+                    let i1 = (i0 + chunk).min(n);
+                    Some(scope.spawn(move || (i0..i1).map(build_row_ref).collect::<Vec<Vec<f64>>>()))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("laplacian worker panicked"))
+                .collect()
+        })
+    };
+
+    // Non-deduplicated graph + normalized: a stored position may repeat, so scale the
+    // full dense matrix (rare path, kept serial).
+    if normed && !dedup {
+        for i in 0..n {
+            for j in 0..n {
+                lapl[i][j] *= d_inv_sqrt[i] * d_inv_sqrt[j];
             }
         }
     }
