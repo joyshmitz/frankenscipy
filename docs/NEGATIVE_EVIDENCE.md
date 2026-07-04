@@ -15344,3 +15344,21 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - VERDICT: SIMD-special cheap-kernel vein CLOSED. Reusable infra shipped: `simd_exp`, `simd_horner`,
   `erfcx_cephes_real_simd`, `erfc_full_simd_chunk` (error.rs). NEXT genuine gaps are the WALLS — dense cholesky/
   dtrsv (~2-9× vs LAPACK microkernels), Mathieu specfun (2.26× bisection), pocketfft non-pow2 — not SIMD-lane wins.
+
+## 2026-07-04 - BlackThrush (cc) - FFT sweep: fsci WINS 16/19 composite sizes; only prime-CUBES (7³,11³) lose = multi-prime cache-thrash WALL (radix-7 AND radix-11 already exist)
+
+- Swept 19 composite/prime/pow2 sizes, fsci `fft` vs numpy (bin perf_fftsweep, threads=1). fsci DOMINATES:
+  n=1400(2³5²7) 0.23×, 1300(2²5²13) 0.25×, 1100(2²5²11) 0.41×, 5005(5·7·11·13) 0.43×, 700 0.52×, primes
+  1009/2003 0.38/0.56×, 2048 0.13×, 4096 0.77× — **16/19 sizes fsci 1.3-7.6× FASTER**.
+- ONLY LOSSES: **n=1372 (2²·7³) 1.35× slower, n=1331 (11³) 1.43× slower** (n=1408=2⁷·11 single-11 is 1.04× parity).
+- ROOT CAUSE = multi-prime-power cache-thrash, NOT a missing radix: the p==7 (transforms.rs:1253) AND p==11
+  (:1333) conjugate-pair butterfly combines BOTH already exist and ARE used (split_factor picks the small odd
+  prime). 7³/11³ are PURE-ODD composites — the recursive strided mixed-radix (`mixed_radix_fft`) does 3 nested
+  radix-p levels with no power-of-two part to ride the cache-friendly in-place radix-4, so the strided
+  gather/scatter across levels thrashes cache. Single-prime sizes (2⁷·11, 2²·5²·7…) stay fast because the pow2
+  part dominates via radix-4 in-place. Confirmed: adding radices won't help (both present); needs a cache-blocked
+  ITERATIVE mixed-radix (transpose-blocked, pocketfft-style) — a real engineering WALL, not a quick lever.
+- VERDICT: FFT frontier is DONE for practical sizes (5-smooth/pow2/single-odd-prime/primes all win). The residual
+  prime-cube losses are rare sizes behind the cache-thrash wall. Don't re-attempt radix-11 (already shipped).
+  Frontier now firmly = the documented WALLS (dense cholesky/dtrsv microkernel, pocketfft cache-blocking, Mathieu
+  specfun CF) — each needs a heavy, different lever, not a SIMD-lane or add-a-radix quick win.
