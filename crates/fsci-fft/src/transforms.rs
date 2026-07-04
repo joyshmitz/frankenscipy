@@ -114,6 +114,12 @@ impl FftBackend for CooleyTukeyBackend {
 
 static COOLEY_TUKEY_BACKEND: CooleyTukeyBackend = CooleyTukeyBackend;
 
+/// Runtime switch to force the Bluestein path for large-prime FFTs (bypassing the
+/// Rader route) for same-binary A/B benchmarks. Defaults off. `#[doc(hidden)]`.
+#[doc(hidden)]
+pub static FFT_PRIME_FORCE_BLUESTEIN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Create a new shared audit ledger for synchronous FFT operations.
 #[must_use]
 pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
@@ -806,13 +812,17 @@ fn mixed_radix_fft(
     if p == n {
         if n > MIXED_RADIX_DIRECT_MAX_PRIME {
             // Large prime: gather the strided samples. Rader (a length-(n-1) cyclic
-            // convolution) only beats Bluestein (length ≥ 2n-1) when n-1 is itself
-            // 5-SMOOTH, so its two inner transforms run entirely on fast radix-2/3/5
-            // butterflies. If n-1 carries a prime factor > 5 (e.g. 103→102=2·3·17,
-            // whose 17 needs an O(17²) direct DFT), the inner FFT(n-1) costs about
-            // as much as Bluestein's pow2 FFT and Rader gives nothing — use it.
+            // convolution) beats Bluestein (length ≥ 2n-1, ALWAYS >2× larger + a chirp
+            // multiply) whenever the inner FFT(n-1) itself stays on fast kernels. fsci
+            // now runs {2,3,5,7} on dedicated radices and 11/13 on a cheap O(p²) direct
+            // DFT, so the Rader break-even sits at n-1 being {2,3,5,7,11,13}-smooth (was
+            // 5-smooth, stale — it forced e.g. 1409→1408=2⁷·11 onto Bluestein even
+            // though FFT(1408) is fast). Above 13 the direct-DFT combine (up to O(61²))
+            // rivals Bluestein's pow2 FFT, so keep those on Bluestein.
             let gathered: Vec<Complex64> = (0..n).map(|t| src[base + t * stride]).collect();
-            let spectrum = if largest_prime_factor(n - 1) <= 5 {
+            let spectrum = if largest_prime_factor(n - 1) <= 13
+                && !FFT_PRIME_FORCE_BLUESTEIN.load(std::sync::atomic::Ordering::Relaxed)
+            {
                 rader_fft(&gathered, inverse)
             } else {
                 bluestein_fft(&gathered, inverse)
