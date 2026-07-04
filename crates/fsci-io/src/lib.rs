@@ -528,7 +528,11 @@ pub fn mmread_sparse(content: &str) -> Result<MmSparse, IoError> {
     // Off-diagonal entries of the symmetric families expand to two triplets.
     let cap = info
         .nnz
-        .saturating_mul(if info.symmetry == MmSymmetry::General { 1 } else { 2 });
+        .saturating_mul(if info.symmetry == MmSymmetry::General {
+            1
+        } else {
+            2
+        });
     let mut row_indices: Vec<usize> = Vec::with_capacity(cap);
     let mut col_indices: Vec<usize> = Vec::with_capacity(cap);
     let mut values: Vec<f64> = Vec::with_capacity(cap);
@@ -1310,9 +1314,9 @@ fn read_v5_element(bytes: &[u8], off: usize) -> Result<(u32, &[u8], usize), IoEr
         let data_end = data_start
             .checked_add(size)
             .ok_or_else(|| IoError::InvalidFormat("MAT v5 element size overflow".to_string()))?;
-        let payload = bytes
-            .get(data_start..data_end)
-            .ok_or_else(|| IoError::InvalidFormat("truncated MAT v5 element payload".to_string()))?;
+        let payload = bytes.get(data_start..data_end).ok_or_else(|| {
+            IoError::InvalidFormat("truncated MAT v5 element payload".to_string())
+        })?;
         // Elements are padded to an 8-byte boundary.
         let next = (data_end + 7) & !7usize;
         Ok((raw, payload, next))
@@ -1460,7 +1464,9 @@ fn parse_v5_matrix(payload: &[u8]) -> Result<MatArray, IoError> {
 
 fn mat5_dim_usize(value: i64, name: &str) -> Result<usize, IoError> {
     usize::try_from(value).map_err(|_| {
-        IoError::InvalidFormat(format!("MAT v5 array '{name}' has invalid dimension {value}"))
+        IoError::InvalidFormat(format!(
+            "MAT v5 array '{name}' has invalid dimension {value}"
+        ))
     })
 }
 
@@ -2830,8 +2836,12 @@ pub fn write_csv(
             }
             expected_cols = Some(row.len());
         }
-        let row_str: Vec<String> = row.iter().map(|v| format!("{v}")).collect();
-        out.push_str(&row_str.join(&delimiter.to_string()));
+        for (idx, value) in row.iter().enumerate() {
+            if idx > 0 {
+                out.push(delimiter);
+            }
+            let _ = write!(out, "{value}");
+        }
         out.push('\n');
     }
     Ok(out)
@@ -2878,8 +2888,16 @@ pub fn write_json_array(data: &[f64]) -> Result<String, IoError> {
             "JSON array value at index {idx} is not finite: {value}"
         )));
     }
-    let items: Vec<String> = data.iter().map(|v| format!("{v}")).collect();
-    Ok(format!("[{}]", items.join(", ")))
+    let mut out = String::new();
+    out.push('[');
+    for (idx, value) in data.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        let _ = write!(out, "{value}");
+    }
+    out.push(']');
+    Ok(out)
 }
 
 /// Read a simple NPY-like header (shape + dtype) from text representation.
@@ -4931,7 +4949,10 @@ mod tests {
         // exact MatrixMarket text they emit. (Round-tripping through mmread is NOT
         // valid yet — mmread does not parse complex; see frankenscipy-77rtl.)
         let s = mmwrite_complex(1, 1, &[(3.0, -4.0)]).unwrap();
-        assert_eq!(s, "%%MatrixMarket matrix array complex general\n1 1\n3 -4\n");
+        assert_eq!(
+            s,
+            "%%MatrixMarket matrix array complex general\n1 1\n3 -4\n"
+        );
         // sparse coordinate complex: (0,0)=1+2i, (1,1)=5+6i.
         let ss = mmwrite_sparse_complex(2, 2, &[(0, 0, (1.0, 2.0)), (1, 1, (5.0, 6.0))]).unwrap();
         assert_eq!(
@@ -5325,19 +5346,19 @@ mod tests {
         // format='5')` (SciPy 1.17.1, uncompressed default). fsci loadmat must
         // detect the v5 header and recover SciPy's shapes/row-major values.
         let scipy_mat5: &[u8] = &[
-            77, 65, 84, 76, 65, 66, 32, 53, 46, 48, 32, 77, 65, 84, 45, 102, 105, 108, 101, 32,
-            80, 108, 97, 116, 102, 111, 114, 109, 58, 32, 112, 111, 115, 105, 120, 44, 32, 67,
-            114, 101, 97, 116, 101, 100, 32, 111, 110, 58, 32, 87, 101, 100, 32, 74, 117, 110, 32,
-            49, 55, 32, 50, 49, 58, 53, 51, 58, 50, 57, 32, 50, 48, 50, 54, 0, 0, 0, 0, 0, 0, 0, 0,
+            77, 65, 84, 76, 65, 66, 32, 53, 46, 48, 32, 77, 65, 84, 45, 102, 105, 108, 101, 32, 80,
+            108, 97, 116, 102, 111, 114, 109, 58, 32, 112, 111, 115, 105, 120, 44, 32, 67, 114,
+            101, 97, 116, 101, 100, 32, 111, 110, 58, 32, 87, 101, 100, 32, 74, 117, 110, 32, 49,
+            55, 32, 50, 49, 58, 53, 51, 58, 50, 57, 32, 50, 48, 50, 54, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 73, 77, 14, 0, 0, 0, 96, 0, 0, 0, 6, 0,
-            0, 0, 8, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0,
-            0, 1, 0, 1, 0, 65, 0, 0, 0, 9, 0, 0, 0, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 63, 0, 0,
-            0, 0, 0, 0, 16, 64, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 20, 64, 0, 0, 0, 0, 0,
-            0, 8, 64, 0, 0, 0, 0, 0, 0, 24, 64, 14, 0, 0, 0, 80, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0,
-            6, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 1, 0, 1, 0,
-            118, 0, 0, 0, 9, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 36, 64, 0, 0, 0, 0, 0, 0, 52,
-            64, 0, 0, 0, 0, 0, 0, 62, 64, 0, 0, 0, 0, 0, 0, 68, 64,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 73, 77, 14, 0, 0, 0, 96, 0, 0, 0, 6, 0, 0,
+            0, 8, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0,
+            1, 0, 1, 0, 65, 0, 0, 0, 9, 0, 0, 0, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 63, 0, 0, 0,
+            0, 0, 0, 16, 64, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 20, 64, 0, 0, 0, 0, 0, 0,
+            8, 64, 0, 0, 0, 0, 0, 0, 24, 64, 14, 0, 0, 0, 80, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0, 6,
+            0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 1, 0, 1, 0, 118,
+            0, 0, 0, 9, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 36, 64, 0, 0, 0, 0, 0, 0, 52, 64,
+            0, 0, 0, 0, 0, 0, 62, 64, 0, 0, 0, 0, 0, 0, 68, 64,
         ];
         let loaded = loadmat(scipy_mat5).expect("fsci loadmat must read scipy MAT v5 output");
         assert_eq!(loaded.len(), 2);
