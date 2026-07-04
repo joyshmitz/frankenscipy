@@ -16340,3 +16340,20 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   alloc-in-worker `map().collect()` (no wasted pre-zero, ~6×); ALLOC/memset-bound fills (laplacian D−A) also parallel
   but capped ~2-3× by bandwidth. Sequential-recurrence constructors (pascal row i←i−1) are NOT row-parallel; tiny-n
   ones (pascal/companion/leslie) not worth it. par_fill_rows already covers toeplitz/circulant/hankel/hilbert/tri/kron.
+
+## 2026-07-04 - BlackThrush (cc) - dft_matrix -> parallel-across-rows alloc-in-worker (2.0-5.3x self, BYTE-IDENTICAL)
+
+- fsci-linalg dense-constructor sweep, sibling of vander (6051283f). `dft_matrix(n)` (returns Vec<Vec<(f64,f64)>>,
+  the tuple DFT matrix — distinct from `dft` which was already parallel) built the n×n matrix with a SERIAL double
+  loop, each cell `(scale·cos θ, scale·sin θ)`, θ=−2π·j·k/n. Rows independent + COMPUTE-bound (TWO transcendentals
+  per cell) → alloc-in-worker `(0..n).map().collect()` fan-out, BYTE-IDENTICAL.
+- SAME-BINARY A/B (atomic `DFT_MATRIX_FORCE_SERIAL`, 3× interleaved), **bitmism=0 everywhere**:
+  256² 1.37→0.67ms **2.0×**, 512² 5.14→1.38ms **3.7×**, 1000² 19.24→4.04ms **4.8×**, 2000² 75.60→14.34ms **5.3×**.
+  Even the boundary (256²) wins 2.0× (cos/sin is heavier per cell than vander's powi, so it beats the spawn overhead
+  more decisively). GATED n²≥65536. New test `dft_matrix_parallel_is_byte_identical_to_serial_above_gate` (n=300, 0
+  bitmism) + `dft_matrix_unitary` GREEN.
+- vs ORIG: scipy.linalg.dft materializes single-thread; fsci fan-out wins on large n. Self-ratio 2.0-5.3×.
+- LEVER (compute-bound dense-constructor vein, 3 ships now: laplacian/vander/dft_matrix): the heavier the per-cell
+  transcendental (cos/sin > powi > memset), the better the fan-out AND the lower the crossover — dft_matrix wins 2× at
+  the 65536 boundary where vander only hit 1.3×. Remaining serial dense constructors are alloc/memset-bound
+  (helmert_full triangular constant-fill, convolution_matrix sparse-placement) — modest ~2-3× ceiling, deferred.

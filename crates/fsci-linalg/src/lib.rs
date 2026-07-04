@@ -15722,17 +15722,55 @@ pub fn invpascal(n: usize, kind: &str) -> Vec<Vec<f64>> {
 /// `F[j][k] = exp(-2πijk/n) / sqrt(n)`  (unitary normalization).
 ///
 /// Matches `scipy.linalg.dft`.
+/// Runtime switch to force the serial `dft_matrix` build for same-binary A/B
+/// benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static DFT_MATRIX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn dft_matrix(n: usize) -> Vec<Vec<(f64, f64)>> {
     let scale = 1.0 / (n as f64).sqrt();
     let two_pi = 2.0 * std::f64::consts::PI;
-    let mut f = vec![vec![(0.0, 0.0); n]; n];
-    for (j, row) in f.iter_mut().enumerate() {
-        for (k, value) in row.iter_mut().enumerate() {
-            let angle = -two_pi * (j * k) as f64 / n as f64;
-            *value = (scale * angle.cos(), scale * angle.sin());
-        }
+    // Each row j is `(scale·cos(θ), scale·sin(θ))` with θ = −2π·j·k/n — independent of
+    // every other row and COMPUTE-bound (two transcendentals per cell). Build each row
+    // directly in a worker via `collect` (alloc-in-worker, no serial pre-zero), so the
+    // fan-out parallelizes the whole cost BYTE-IDENTICALLY.
+    let build_row = |j: usize| -> Vec<(f64, f64)> {
+        (0..n)
+            .map(|k| {
+                let angle = -two_pi * (j * k) as f64 / n as f64;
+                (scale * angle.cos(), scale * angle.sin())
+            })
+            .collect()
+    };
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n.max(1));
+    if cores <= 1
+        || DFT_MATRIX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n.saturating_mul(n) < (1 << 16)
+    {
+        return (0..n).map(build_row).collect();
     }
-    f
+    let chunk = n.div_ceil(cores);
+    let build_row_ref = &build_row;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..cores)
+            .filter_map(|t| {
+                let j0 = t * chunk;
+                if j0 >= n {
+                    return None;
+                }
+                let j1 = (j0 + chunk).min(n);
+                Some(scope.spawn(move || (j0..j1).map(build_row_ref).collect::<Vec<Vec<(f64, f64)>>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("dft_matrix worker panicked"))
+            .collect()
+    })
 }
 
 /// Fiedler matrix: `F[i][j] = |i - j|`.
@@ -29221,6 +29259,31 @@ mod tests {
             dot.0 += r * r + i * i;
         }
         assert!((dot.0 - 1.0).abs() < 1e-10, "first row norm = {}", dot.0);
+    }
+
+    #[test]
+    fn dft_matrix_parallel_is_byte_identical_to_serial_above_gate() {
+        use std::sync::atomic::Ordering;
+        // Above the n² ≥ 65536 fan-out gate the parallel-across-rows build must be
+        // BYTE-IDENTICAL to the serial loop (each row is an independent cos/sin sweep).
+        let n = 300usize; // 90000 > 65536 gate
+        DFT_MATRIX_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = dft_matrix(n);
+        DFT_MATRIX_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = dft_matrix(n);
+        let mism: usize = serial
+            .iter()
+            .zip(parallel.iter())
+            .map(|(sr, pr)| {
+                sr.iter()
+                    .zip(pr.iter())
+                    .filter(|(a, b)| {
+                        a.0.to_bits() != b.0.to_bits() || a.1.to_bits() != b.1.to_bits()
+                    })
+                    .count()
+            })
+            .sum();
+        assert_eq!(mism, 0, "parallel dft_matrix must be byte-identical to serial");
     }
 
     // ═══ AuditLedger Integration Tests (§0.19) ═══
