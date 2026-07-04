@@ -15610,3 +15610,29 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   (121.80-154.68) = **2.13x faster vs ORIG** (intervals non-overlapping, flat strictly faster) — direction and
   magnitude reproduced (codex hz1 1.68x, cc 2.13x; loaded-box variance). Independently re-ran the flat-threshold unit
   test (4 passed) and the SciPy oracle `diff_linalg_lu_factor_lu_solve` (1 passed) GREEN before landing. LANDED.
+
+## 2026-07-04 - BlackThrush (cc) - det() routed to flat blocked LU — 1.20x self vs ORIG nalgebra at n=1000; wires up dead helper
+
+- LAND/DIG: no measured win of mine sat un-landed (working tree clean, in sync). DUG the ledger's remaining named
+  nalgebra-`.lu()` caller after `lu_factor` (cffc394c): **`det()`** still computed `matrix.lu().determinant()` via
+  nalgebra's serial generic LU. Applied the SAME proven lever (route large n to the parallel+SIMD `lu_factor_blocked`).
+- DISCOVERY: `det_flat_lu_product` (blocked-LU determinant `sign(P)·∏ Uᵢᵢ` with an overflow guard that defers to
+  nalgebra when the product would exceed `f64::MAX`, so the value matches the generic path exactly) AND its dep
+  `permutation_parity_is_odd` were ALREADY WRITTEN — but gated `#[cfg(test)]` and only called from a golden test; they
+  were dead code in every production/bench build. Someone staged the helper for exactly this routing and never wired it.
+  FIX: un-gated both (now live via `det`) + `det_with_flat_threshold(a, mode, cf, flat_min_dim)` routes `n >= 1000`
+  (respecting the `DISABLE_FLAT_LU_FACTOR` same-binary A/B switch) through it, nalgebra fallback for small/overflow/singular.
+- MEASURED same-binary A/B (`det_gauntlet` bench, rch worker, finite-det matrix diag=1.5 so the flat path is actually
+  exercised — `make_diag_dominant`'s huge diagonal trips the overflow guard → nalgebra): `1000x1000_flat_det`
+  **67.294 ms median** (65.639-69.242) vs `1000x1000_orig_nalgebra_det` **80.701 ms median** (77.935-84.100) =
+  **1.20x faster vs ORIG nalgebra** (intervals non-overlapping, flat strictly faster). More modest than `lu_factor`'s
+  2.13x because `det` computes no rcond estimate (lu_factor's larger flat margin was partly its near-free flat rcond vs
+  nalgebra's Hager estimate; here both paths are pure LU + O(n) product). KEEP — real, byte-consistent self-win that
+  also removes dead code.
+- vs SciPy (honest, PINNED to strip the OpenBLAS oversubscription artifact per the dense-LAPACK memory): `OPENBLAS_NUM_THREADS=1`
+  `scipy.linalg.det` n=1000 = **13.603 ms** (det=2.239748e+163, finite, matches fsci). So fsci flat det ~4.9x slower than
+  LAPACK `dgetrf` pinned (narrowed from nalgebra's ~5.9x) — the SAME dgetrf microkernel-depth WALL as cholesky/general-solve,
+  NOT flipped. UNPINNED scipy det was 1960 ms (144x oversubscription inflation — do NOT quote as a "win").
+- CONF: `cargo test -p fsci-linalg --lib det` GREEN (18 passed incl new `det_flat_threshold_matches_nalgebra`);
+  local SciPy oracle `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_linalg_misc_deterministic`
+  GREEN (det conformance cases are n<=8, below the n>=1000 flat gate → unaffected, still exercise the nalgebra path).

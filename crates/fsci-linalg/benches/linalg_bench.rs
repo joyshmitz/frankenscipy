@@ -468,6 +468,46 @@ fn bench_lu_factor_gauntlet(c: &mut Criterion) {
     group.finish();
 }
 
+/// Well-conditioned, finite-determinant matrix (diagonal 1.5): its `∏ pivots` stays
+/// under `f64::MAX`, so `det`'s flat blocked-LU path is exercised rather than falling
+/// back to nalgebra on the overflow guard (which `make_diag_dominant`'s huge diagonal
+/// would trip).
+fn make_det_finite(n: usize) -> Vec<Vec<f64>> {
+    let mut a = vec![vec![0.0; n]; n];
+    for (i, row) in a.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = if i == j {
+                1.5
+            } else {
+                0.4 / ((i as f64 - j as f64).abs() + 1.0)
+            };
+        }
+    }
+    a
+}
+
+/// Same-binary A/B for `det`: the flat blocked-LU determinant vs the original nalgebra
+/// `.lu().determinant()`, toggled through `DISABLE_FLAT_LU_FACTOR`.
+fn bench_det_gauntlet(c: &mut Criterion) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut group = c.benchmark_group("det_gauntlet");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
+    for &n in LU_FACTOR_GAUNTLET_SIZES {
+        let a = make_det_finite(n);
+        group.bench_function(format!("{n}x{n}_flat_det"), |bencher| {
+            fsci_linalg::DISABLE_FLAT_LU_FACTOR.store(false, Relaxed);
+            bencher.iter(|| black_box(det(black_box(&a), RuntimeMode::Strict, black_box(true)).unwrap()));
+        });
+        group.bench_function(format!("{n}x{n}_orig_nalgebra_det"), |bencher| {
+            fsci_linalg::DISABLE_FLAT_LU_FACTOR.store(true, Relaxed);
+            bencher.iter(|| black_box(det(black_box(&a), RuntimeMode::Strict, black_box(true)).unwrap()));
+            fsci_linalg::DISABLE_FLAT_LU_FACTOR.store(false, Relaxed);
+        });
+    }
+    group.finish();
+}
+
 fn bench_baseline_solve_pos(c: &mut Criterion) {
     let mut group = c.benchmark_group("baseline_solve_pos");
     group.sample_size(100);
@@ -1275,6 +1315,7 @@ criterion_group!(
     bench_dft_gauntlet_scipy,
     bench_cho_factor_gauntlet_scipy,
     bench_lu_factor_gauntlet,
+    bench_det_gauntlet,
     bench_orthogonal_procrustes_gauntlet,
     bench_lu_factor_solve_gauntlet,
     bench_baseline_pinv

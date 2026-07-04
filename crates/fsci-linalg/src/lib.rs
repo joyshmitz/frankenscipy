@@ -990,6 +990,20 @@ pub fn inv_with_audit(
 }
 
 pub fn det(a: &[Vec<f64>], mode: RuntimeMode, check_finite: bool) -> Result<f64, LinalgError> {
+    det_with_flat_threshold(a, mode, check_finite, FLAT_LU_SOLVE_MIN_DIM)
+}
+
+/// `det` with an explicit flat-blocked-LU dimension threshold (for same-binary A/B
+/// evidence and unit tests). Large matrices (`n >= flat_min_dim`) factor through the
+/// parallel+SIMD blocked LU and read the determinant as `sign(P)·∏ Uᵢᵢ`, avoiding
+/// nalgebra's serial generic `.lu()` (the same slow generic `lu_factor` routed away
+/// from). `P·A = L·U`, so `det(A) = det(P)·∏ Uᵢᵢ` with `det(P) = (-1)^(n − cycles)`.
+fn det_with_flat_threshold(
+    a: &[Vec<f64>],
+    mode: RuntimeMode,
+    check_finite: bool,
+    flat_min_dim: usize,
+) -> Result<f64, LinalgError> {
     let (rows, cols) = matrix_shape(a)?;
     if rows != cols {
         return Err(LinalgError::ExpectedSquareMatrix);
@@ -1000,6 +1014,26 @@ pub fn det(a: &[Vec<f64>], mode: RuntimeMode, check_finite: bool) -> Result<f64,
     if rows == 0 {
         return Ok(1.0);
     }
+
+    // Large finite-determinant matrices factor through the parallel+SIMD blocked LU;
+    // `det_flat_lu_product` reads `sign(P)·∏ Uᵢᵢ` and self-guards, returning `None`
+    // (→ nalgebra fallback) when the product would overflow or the matrix is singular,
+    // so the returned value matches the generic path exactly.
+    if rows >= flat_min_dim
+        && !flat_lu_factor_disabled()
+        && let Some(result) = det_flat_lu_product(a)
+    {
+        emit_trace(LinalgTrace {
+            operation: "det",
+            matrix_size: (rows, cols),
+            mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return Ok(result);
+    }
+
     let matrix = dmatrix_from_rows(a)?;
     let result = matrix.lu().determinant();
     emit_trace(LinalgTrace {
@@ -16980,7 +17014,6 @@ struct LuFactorsFlat {
     perm: Vec<usize>,
 }
 
-#[cfg(test)]
 fn permutation_parity_is_odd(perm: &[usize]) -> Option<bool> {
     let n = perm.len();
     let mut values_seen = vec![false; n];
@@ -17680,7 +17713,6 @@ fn lu_solve_mixed_precision(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     None
 }
 
-#[cfg(test)]
 fn det_flat_lu_product(a_in: &[Vec<f64>]) -> Option<f64> {
     if a_in.is_empty() || a_in.iter().flatten().any(|value| !value.is_finite()) {
         return None;
@@ -22256,6 +22288,34 @@ mod tests {
         let flat_x = lu_solve(&flat, &b).unwrap();
         assert_close_slice(&flat_x.x, &original_x.x, 1e-12, 1e-12);
         assert_eq!(flat_x.warning, rcond_warning(flat.rcond_estimate));
+    }
+
+    #[test]
+    fn det_flat_threshold_matches_nalgebra() {
+        // Well-conditioned, finite-determinant matrix so the flat blocked-LU path is
+        // actually taken (its overflow guard would otherwise defer to nalgebra).
+        let n = 24usize;
+        let a: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| {
+                        if i == j {
+                            1.5
+                        } else {
+                            0.4 / ((i as f64 - j as f64).abs() + 1.0)
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let nalgebra = det_with_flat_threshold(&a, RuntimeMode::Strict, true, usize::MAX).unwrap();
+        let flat = det_with_flat_threshold(&a, RuntimeMode::Strict, true, 1).unwrap();
+        assert!(flat.is_finite());
+        assert!(
+            (flat - nalgebra).abs() <= 1e-9 * nalgebra.abs().max(1.0),
+            "flat det {flat} vs nalgebra det {nalgebra}"
+        );
     }
 
     #[test]
