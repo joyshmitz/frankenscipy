@@ -6,6 +6,56 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - NO-SHIP: Cholesky packed-SYRK panel-major tile walk is not a stable measured win
+
+- Land-or-dig audit: no measured `.scratch` / `.worktrees` bench worktree win
+  was available to land. The stale non-ancestor GEMM threshold worktree
+  (`frankenscipy-eigvalsh-blackthrush-20260609`, `e3b744f4`) is superseded by
+  current `main`'s stronger `MATMUL_FLAT_WORKSPACE_MIN_DIM = 256`, and the ODR
+  structured-solver win is already on `origin/main`.
+- Gap attacked: dense `fsci-linalg` `cho_factor` remains the largest live
+  documented measured wall. Lever tried and dropped: reorder only the existing
+  packed Cholesky SYRK full 4x8 off-diagonal tiles from row-major to
+  panel-major traversal, hoping each packed `nb*8` L21 panel would stay hot
+  across row groups. The diagonal and tail dot path stayed unchanged.
+- Command discipline: the requested literal
+  `rch exec -- cargo bench --release -p fsci-linalg --bench linalg_bench -- ...`
+  was tried first and rejected by Cargo on `vmi1227854` with `unexpected
+  argument '--release'`. All measured rows below used the accepted equivalent
+  per-crate release-profile spelling:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-blackthrush-linalg-cholesky
+  rch exec -- cargo bench -p fsci-linalg --bench linalg_bench --profile release
+  -- 1000x1000_rust_cho_factor --sample-size 10 --warm-up-time 1
+  --measurement-time 2 --noplot`.
+- Original/current-source baselines:
+  - `hz1`: factor `43.435 ms`, factor+solve `34.585 ms`.
+  - `hz2`: factor `39.941 ms`, factor+solve `36.053 ms`; immediate repeat
+    factor `40.469 ms`, factor+solve `35.950 ms` with Criterion reporting no
+    significant change (`p=0.65` factor, `p=0.40` solve).
+- Candidate evidence:
+  - `vmi1227854`: factor `30.927 ms`, factor+solve `34.526 ms`; cross-worker
+    only, not keep-grade versus the `hz1`/`hz2` original rows.
+  - `ovh-a` first run: factor `24.695 ms`, factor+solve `19.733 ms`; promising
+    but no same-worker original baseline.
+  - `ovh-a` immediate candidate replay: factor `41.214 ms`, factor+solve
+    `19.166 ms`; Criterion compared against the previous candidate history and
+    reported factor regression `+64.250%`, `p = 0.00`, while solve was no
+    significant change.
+- Ratio vs original: the best cross-worker factor ratio would be `40.469 /
+  24.695 = 1.64x`, but it is rejected as non-comparable. The stable/repeated
+  rows do not prove a factor win: the same candidate on `ovh-a` moved
+  `24.695 -> 41.214 ms` (`0.60x` replay ratio, regression), and the only
+  comparable original rows on `hz2` were stable around `40 ms`. Source restored
+  completely; do not retry panel-major SYRK traversal without an RCH worker pin
+  or an in-binary same-process A/B harness.
+- Correctness while candidate was present: `rch exec -- cargo test -p
+  fsci-linalg cholesky_lower_blocked_matches_unblocked_factorization --lib --
+  --nocapture` passed 1/1 on `vmi1264463`. Final conformance after source
+  restore: `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test
+  diff_linalg_structured_solvers -- --nocapture` passed 1/1 locally with
+  SciPy 1.17.1; the same RCH test was blocked by remote `ModuleNotFoundError:
+  No module named 'scipy'`. Final commit is docs-only.
+
 ## 2026-07-04 - codex - KEEP: ODR scalar-separable Schur LM step - 162-2317x self vs dense original
 
 - LEVER: scalar separable explicit ODR no longer forms the full `(n_beta + n_delta)` finite-difference Jacobian and
