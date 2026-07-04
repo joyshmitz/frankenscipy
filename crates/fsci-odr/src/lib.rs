@@ -1984,8 +1984,10 @@ mod tests {
     #[test]
     fn multilinear_model_uses_chunked_input_rows() -> Result<(), OdrError> {
         let x = vec![1.0, 2.0, 2.0, 1.0, -1.0, 3.0, 0.0, -2.0];
-        let y = x
-            .chunks_exact(2)
+        let (rows, remainder) = x.as_chunks::<2>();
+        assert!(remainder.is_empty());
+        let y = rows
+            .iter()
             .map(|row| 0.5 + 2.0 * row[0] - 3.0 * row[1])
             .collect();
         let mut odr = ODR::new(Data::new(x, y)?, multilinear(2), vec![0.0, 0.0, 0.0])?;

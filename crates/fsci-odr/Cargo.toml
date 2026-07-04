@@ -7,6 +7,11 @@ license.workspace = true
 [dependencies]
 
 [dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "odr_structured"
+harness = false
 
 [lints]
 workspace = true

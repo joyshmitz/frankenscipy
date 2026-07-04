@@ -36,8 +36,11 @@ fn invert_matrix(mut matrix: Vec<Vec<f64>>) -> Option<Vec<Vec<f64>>> {
         row[idx] = 1.0;
     }
     for pivot in 0..n {
-        let best = (pivot..n)
-            .max_by(|&lhs, &rhs| matrix[lhs][pivot].abs().total_cmp(&matrix[rhs][pivot].abs()))?;
+        let best = (pivot..n).max_by(|&lhs, &rhs| {
+            matrix[lhs][pivot]
+                .abs()
+                .total_cmp(&matrix[rhs][pivot].abs())
+        })?;
         if matrix[best][pivot].abs() <= 1.0e-14 {
             return None;
         }

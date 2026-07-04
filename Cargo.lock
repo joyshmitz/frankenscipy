@@ -966,6 +966,9 @@ dependencies = [
 [[package]]
 name = "fsci-odr"
 version = "0.1.0"
+dependencies = [
+ "criterion",
+]
 
 [[package]]
 name = "fsci-opt"
