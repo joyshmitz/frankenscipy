@@ -15013,3 +15013,22 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   displacement-structure) would beat scipy's O(n²) dramatically at large n (n=2048: scipy 4844µs → ~hundreds
   of µs). Numerically delicate (stability for non-symmetric/indefinite), a multi-tick implementation, not a
   bounded win. solve_toeplitz_many already reuses the predictor recursion + parallel per-RHS (prior win).
+
+## 2026-07-03 - BlackThrush (cc) - solve_toeplitz FLIPPED: 1.8x LOSS -> 1.6-1.7x WIN vs scipy (follow-up to 64a5bc51)
+
+- The 64a5bc51 measurement found solve_toeplitz 1.6-1.8x SLOWER than scipy and I DROPPED the SIMD idea as
+  ~0-gain — WRONG (too pessimistic on the reverse-copy). Two levers closed and flipped it:
+  1. The descending band `c[m-j]` read by ε_f/θ equals the FORWARD window `crev[(n-1-m)..(n-1)]` of a
+     ONCE-precomputed reversed `c` — so all three Levinson dots (ε_f, ε_b, θ) become forward 8-wide simd_dot,
+     no per-step copy (my earlier "reverse-copy negates the gain" was the mistake: the reverse is O(n) once).
+  2. The predictor UPDATE loop divided by `denom` 2·m times/step (n² divisions) with boundary branches that
+     blocked vectorisation. Peeled the i=0/i=m boundaries → branch-free vectorisable interior axpy, and
+     scaled by 1/denom ONCE/step (reciprocal-multiply). This was the dominant win.
+- MEASURED (same bin perf_structured_solvers, same-box vs scipy): self 2.2x(n=256) → 3.0x(n=2048);
+  fsci-vs-scipy n=256 1.65x, n=512 1.62x, n=1024 1.70x, n=2048 1.65x — all WIN (n=64 5.98x). The prior
+  1.8x LOSS at n=2048 is now a 1.65x WIN.
+- Applied to BOTH solve_toeplitz and solve_toeplitz_many's shared recursion (kept bit-identical to each
+  other — the _many==single-rhs bit-for-bit test still passes). Conformance: fsci-linalg 496/0 GREEN incl.
+  scipy-match + proptests. simd_dot + reciprocal-multiply reassociate → not byte-identical to the prior
+  code, validated to scipy tolerance instead. LEVER: descending-band dot → forward-window of a
+  precomputed reversed array + simd_dot; boundary-peel + reciprocal-multiply branchy per-step update loops.

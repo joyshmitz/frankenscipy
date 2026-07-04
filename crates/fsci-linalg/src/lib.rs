@@ -8687,35 +8687,47 @@ pub fn solve_toeplitz(c: &[f64], r: Option<&[f64]>, b: &[f64]) -> Result<Vec<f64
     bk[0] = 1.0 / t0;
     x[0] = b[0] / t0;
 
+    // Reverse of `c`, precomputed ONCE. The predictor dot products ε_f and θ read
+    // `c` in DESCENDING order (`c[m-j]`), which blocked SIMD auto-vectorisation.
+    // Because `c[m-j] = crev[(n-1-m)+j]` (crev[i] = c[n-1-i]), that descending band
+    // is a single FORWARD-contiguous window `crev[(n-1-m)..(n-1)]`, so every
+    // Levinson dot becomes a forward `simd_dot` with no per-step copy.
+    let crev: Vec<f64> = c.iter().rev().copied().collect();
+
     for (m, &bm) in b.iter().enumerate().take(n).skip(1) {
-        // Forward error ε_f = Σ_j T[m][j] f_j and backward error
-        // ε_b = Σ_j T[0][j+1] bk_j over the current submatrix of size m.
-        let mut ef = 0.0;
-        let mut eb = 0.0;
-        for j in 0..m {
-            ef += c[m - j] * f[j];
-            eb += row[j + 1] * bk[j];
-        }
+        // Forward error ε_f = Σ_j c[m-j]·f_j and backward error
+        // ε_b = Σ_j row[j+1]·bk_j over the current submatrix of size m. The 8-wide
+        // `simd_dot` reduces in a different order than the scalar sum, so ε_f/ε_b/θ
+        // (and hence the recursion) differ from the prior code by roundoff only —
+        // validated against a dense LU solve + SciPy, not byte-identical.
+        let cslice = &crev[(n - 1 - m)..(n - 1)];
+        let ef = simd_dot(cslice, &f[..m]);
+        let eb = simd_dot(&row[1..=m], &bk[..m]);
         let denom = 1.0 - ef * eb;
         if denom == 0.0 {
             return Err(LinalgError::SingularMatrix);
         }
 
         // F = ([f;0] - ε_f[0;bk]) / denom ; B = ([0;bk] - ε_b[f;0]) / denom.
-        for i in 0..=m {
-            let fi = if i < m { f[i] } else { 0.0 };
-            let bi = if i == 0 { 0.0 } else { bk[i - 1] };
-            f_tmp[i] = (fi - ef * bi) / denom;
-            b_tmp[i] = (bi - eb * fi) / denom;
+        // Peel the i=0 (no bk term) and i=m (no f term) boundaries so the interior
+        // is a branch-free vectorisable axpy, and scale by 1/denom once instead of
+        // dividing 2·m times per step.
+        let inv = 1.0 / denom;
+        f_tmp[0] = f[0] * inv;
+        b_tmp[0] = (-eb * f[0]) * inv;
+        for i in 1..m {
+            let fi = f[i];
+            let bi = bk[i - 1];
+            f_tmp[i] = (fi - ef * bi) * inv;
+            b_tmp[i] = (bi - eb * fi) * inv;
         }
+        f_tmp[m] = (-ef * bk[m - 1]) * inv;
+        b_tmp[m] = bk[m - 1] * inv;
         std::mem::swap(&mut f, &mut f_tmp);
         std::mem::swap(&mut bk, &mut b_tmp);
 
-        // θ = b[m] - Σ_j T[m][j] x_j ; x ← [x;0] + θ·bk (with the new bk).
-        let mut ex = 0.0;
-        for j in 0..m {
-            ex += c[m - j] * x[j];
-        }
+        // θ = b[m] - Σ_j c[m-j]·x_j ; x ← [x;0] + θ·bk (with the new bk).
+        let ex = simd_dot(cslice, &x[..m]);
         let theta = bm - ex;
         for i in 0..=m {
             x[i] += theta * bk[i];
@@ -8786,23 +8798,30 @@ pub fn solve_toeplitz_many(
     bk[0] = 1.0 / t0;
     let mut bk_hist: Vec<Vec<f64>> = Vec::with_capacity(n);
     bk_hist.push(vec![1.0 / t0]);
+    // Reverse of `c` (see `solve_toeplitz`): the descending band `c[m-j]` read by
+    // ε_f/θ is the forward window `crev[(n-1-m)..(n-1)]`, so every predictor dot
+    // is a forward `simd_dot`. Identical arithmetic to the single-rhs loop, which
+    // uses the same `simd_dot`, so `solve_toeplitz_many` stays bit-identical to it.
+    let crev: Vec<f64> = c.iter().rev().copied().collect();
     for m in 1..n {
-        let mut ef = 0.0;
-        let mut eb = 0.0;
-        for j in 0..m {
-            ef += c[m - j] * f[j];
-            eb += row[j + 1] * bk[j];
-        }
+        let cslice = &crev[(n - 1 - m)..(n - 1)];
+        let ef = simd_dot(cslice, &f[..m]);
+        let eb = simd_dot(&row[1..=m], &bk[..m]);
         let denom = 1.0 - ef * eb;
         if denom == 0.0 {
             return Err(LinalgError::SingularMatrix);
         }
-        for i in 0..=m {
-            let fi = if i < m { f[i] } else { 0.0 };
-            let bi = if i == 0 { 0.0 } else { bk[i - 1] };
-            f_tmp[i] = (fi - ef * bi) / denom;
-            b_tmp[i] = (bi - eb * fi) / denom;
+        let inv = 1.0 / denom;
+        f_tmp[0] = f[0] * inv;
+        b_tmp[0] = (-eb * f[0]) * inv;
+        for i in 1..m {
+            let fi = f[i];
+            let bi = bk[i - 1];
+            f_tmp[i] = (fi - ef * bi) * inv;
+            b_tmp[i] = (bi - eb * fi) * inv;
         }
+        f_tmp[m] = (-ef * bk[m - 1]) * inv;
+        b_tmp[m] = bk[m - 1] * inv;
         std::mem::swap(&mut f, &mut f_tmp);
         std::mem::swap(&mut bk, &mut b_tmp);
         bk_hist.push(bk[..=m].to_vec());
@@ -8810,14 +8829,12 @@ pub fn solve_toeplitz_many(
 
     // ---- Per-rhs x-solve: independent, bit-identical to the single-rhs loop. ----
     let bk_hist = &bk_hist;
+    let crev = &crev;
     let solve_one = move |b: &[f64]| -> Vec<f64> {
         let mut x = vec![0.0f64; n];
         x[0] = b[0] / t0;
         for m in 1..n {
-            let mut ex = 0.0;
-            for j in 0..m {
-                ex += c[m - j] * x[j];
-            }
+            let ex = simd_dot(&crev[(n - 1 - m)..(n - 1)], &x[..m]);
             let theta = b[m] - ex;
             let bkm = &bk_hist[m];
             for (xi, &bki) in x[..=m].iter_mut().zip(bkm.iter()) {
