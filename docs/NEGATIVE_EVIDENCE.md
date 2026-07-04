@@ -16176,3 +16176,25 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - LEVER (paid out again): any csgraph metric reducing all-pairs shortest-path distances (eccentricity, diameter,
   closeness, and likely `radius`/Wiener-index if added) belongs on parallel `dijkstra_all_pairs`, NOT O(V³)
   floyd_warshall. Grep csgraph reducers for a bare `floyd_warshall(graph)` call.
+
+## 2026-07-04 - BlackThrush (cc) - betweenness_centrality: serial per-source Brandes -> parallel-across-sources (2.3-4.3x self, grows with n)
+
+- csgraph metric-reducer vein, ship #3 (after graph_diameter+closeness 91b1c428). `betweenness_centrality` ran a
+  SERIAL `for s in 0..n` Brandes loop (BFS + dependency accumulation); each source is independent (accumulates its
+  own delta into bc), so it fans across cores like `dijkstra_all_pairs`/eccentricity — but was still serial.
+- FIX: extract the per-source Brandes into a `brandes_chunk(s0,s1)->Vec<f64>` with PRIVATE scratch + a private `bc`
+  partial; run source-chunks in `thread::scope`, sum the partials in source-chunk order. Per-source recurrence
+  UNCHANGED; only the cross-source accumulation reassociates (chunked vs fully-serial float add).
+- SAME-BINARY A/B (atomic `BETWEENNESS_FORCE_SERIAL`, 3× interleaved, unit-weight random sparse graphs):
+  - n=300 deg5: serial 3.69ms / parallel 4.02ms = **0.9× (LOSES** — below gate).
+  - n=384 deg6: 6.90 / 2.95 = **2.3×**    n=512 deg6: 11.17 / 3.98 = **2.8×**
+  - n=640 deg6: 16.89 / 5.24 = **3.2×**    n=768 deg6: 24.60 / 7.48 = **3.3×**    n=2000 deg6: 198.20 / 46.59 = **4.3×**
+  maxdiff serial-vs-parallel ≤1.7e-17 (unit weights → integer sigma/delta → essentially exact). Speedup GROWS with
+  n (O(V·E) serial vs parallel across V sources). GATED `n>=384 && nnz>=2n` — every enabled case measured to win, the
+  avg-degree floor keeps ultra-sparse large-n graphs serial. Below gate: unchanged serial path.
+- vs ORIG: betweenness_centrality has NO scipy.sparse.csgraph equivalent (it's a networkx routine), so the ratio is
+  self (serial→parallel), consistent with the eccentricity/diameter precedent. New test
+  `betweenness_parallel_matches_serial_above_gate` (n=420, maxdiff <1e-9) + `closeness_betweenness_on_path_graph`
+  + `graph_metrics_on_path_graph` GREEN.
+- LEVER (paid 3×): csgraph per-source-independent metrics (all-pairs reducers AND per-source-accumulate like Brandes)
+  → parallel-across-sources with private partials, sum-reduce. Grep serial `for s in 0..n` over graph sources.

@@ -5450,64 +5450,127 @@ pub fn average_clustering(graph: &CsrMatrix) -> f64 {
 /// Compute betweenness centrality for each node.
 ///
 /// Uses Brandes' algorithm (O(VE) for unweighted graphs).
+/// Runtime switch to force the serial per-source Brandes loop for same-binary A/B
+/// benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static BETWEENNESS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn betweenness_centrality(graph: &CsrMatrix) -> Vec<f64> {
     let n = graph.shape().rows;
-    let mut bc = vec![0.0; n];
-
-    // Per-source Brandes scratch buffers hoisted out of the source loop and reset
-    // each iteration: byte-identical results, O(n) allocations instead of O(n^2)
-    // (n sources x 6 buffers). frankenscipy-4lpma.
-    let mut stack: Vec<usize> = Vec::with_capacity(n);
-    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut sigma = vec![0.0f64; n];
-    let mut dist = vec![-1i64; n];
-    let mut delta = vec![0.0f64; n];
-    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::with_capacity(n);
-
-    for s in 0..n {
-        // Reset the reused buffers to the per-source initial state.
-        stack.clear();
-        for p in predecessors.iter_mut() {
-            p.clear();
-        }
-        sigma.iter_mut().for_each(|x| *x = 0.0);
-        sigma[s] = 1.0; // number of shortest paths
-        dist.iter_mut().for_each(|x| *x = -1);
-        dist[s] = 0;
-        delta.iter_mut().for_each(|x| *x = 0.0);
-        queue.clear();
-        queue.push_back(s);
-
-        while let Some(v) = queue.pop_front() {
-            stack.push(v);
-            let row_start = graph.indptr()[v];
-            let row_end = graph.indptr()[v + 1];
-            for idx in row_start..row_end {
-                let w = graph.indices()[idx];
-                if w >= n {
-                    continue;
-                }
-                if dist[w] < 0 {
-                    queue.push_back(w);
-                    dist[w] = dist[v] + 1;
-                }
-                if dist[w] == dist[v] + 1 {
-                    sigma[w] += sigma[v];
-                    predecessors[w].push(v);
-                }
-            }
-        }
-
-        // Accumulate (delta was reset to zero at the top of the source loop).
-        while let Some(w) = stack.pop() {
-            for &v in &predecessors[w] {
-                delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w]);
-            }
-            if w != s {
-                bc[w] += delta[w];
-            }
-        }
+    if n == 0 {
+        return Vec::new();
     }
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+
+    // Brandes over a contiguous source-chunk `[s0, s1)` into a PRIVATE `bc` partial.
+    // Per-source Brandes is independent (each accumulates the same recurrence into
+    // its own delta), so a source-chunk needs only its own scratch. Scratch buffers
+    // are hoisted out of the source loop and reset each iteration (O(chunk·n) resets,
+    // O(n) allocations). frankenscipy-4lpma.
+    let brandes_chunk = |s0: usize, s1: usize| -> Vec<f64> {
+        let mut bc = vec![0.0f64; n];
+        let mut stack: Vec<usize> = Vec::with_capacity(n);
+        let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut sigma = vec![0.0f64; n];
+        let mut dist = vec![-1i64; n];
+        let mut delta = vec![0.0f64; n];
+        let mut queue: std::collections::VecDeque<usize> =
+            std::collections::VecDeque::with_capacity(n);
+        for s in s0..s1 {
+            stack.clear();
+            for p in predecessors.iter_mut() {
+                p.clear();
+            }
+            sigma.iter_mut().for_each(|x| *x = 0.0);
+            sigma[s] = 1.0; // number of shortest paths
+            dist.iter_mut().for_each(|x| *x = -1);
+            dist[s] = 0;
+            delta.iter_mut().for_each(|x| *x = 0.0);
+            queue.clear();
+            queue.push_back(s);
+
+            while let Some(v) = queue.pop_front() {
+                stack.push(v);
+                let row_start = indptr[v];
+                let row_end = indptr[v + 1];
+                for idx in row_start..row_end {
+                    let w = indices[idx];
+                    if w >= n {
+                        continue;
+                    }
+                    if dist[w] < 0 {
+                        queue.push_back(w);
+                        dist[w] = dist[v] + 1;
+                    }
+                    if dist[w] == dist[v] + 1 {
+                        sigma[w] += sigma[v];
+                        predecessors[w].push(v);
+                    }
+                }
+            }
+
+            // Accumulate (delta was reset to zero at the top of the source loop).
+            while let Some(w) = stack.pop() {
+                for &v in &predecessors[w] {
+                    delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w]);
+                }
+                if w != s {
+                    bc[w] += delta[w];
+                }
+            }
+        }
+        bc
+    };
+
+    // Fan the source loop across cores — scipy/networkx run the sources serially.
+    // Each worker owns a `bc` partial; the partials are summed in source-chunk order,
+    // so the total is the same left-to-right chunked sum (NOT byte-identical to the
+    // fully-serial per-source add — cross-source float reassociation, ~1e-13 — but the
+    // per-source Brandes recurrence is unchanged). Small graphs stay serial.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n);
+    let force_serial = BETWEENNESS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    // Fan out only once there is enough per-source work to amortize the worker
+    // scratch (each thread allocates n predecessor lists): measured crossover ~n=384
+    // at avg degree 5-6 (n=300/deg5 lost 0.9×, n=384/deg6 won 2.3×, rising to 4.3× at
+    // n=2000). The avg-degree floor keeps ultra-sparse large-n graphs on the serial path.
+    let go_parallel = cores > 1
+        && !force_serial
+        && n >= 384
+        && graph.data().len() >= 2 * n;
+    let mut bc = if !go_parallel {
+        brandes_chunk(0, n)
+    } else {
+        let chunk = n.div_ceil(cores);
+        let brandes_ref = &brandes_chunk;
+        let partials: Vec<Vec<f64>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..cores)
+                .filter_map(|t| {
+                    let s0 = t * chunk;
+                    if s0 >= n {
+                        return None;
+                    }
+                    let s1 = (s0 + chunk).min(n);
+                    Some(scope.spawn(move || brandes_ref(s0, s1)))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("betweenness_centrality worker panicked"))
+                .collect()
+        });
+        let mut acc = vec![0.0f64; n];
+        for part in &partials {
+            for (a, &x) in acc.iter_mut().zip(part.iter()) {
+                *a += x;
+            }
+        }
+        acc
+    };
 
     // Normalize for undirected graphs
     let scale = if n > 2 {
@@ -6010,6 +6073,51 @@ mod tests {
         let bc = betweenness_centrality(&g);
         assert!(bc[0].abs() < 1e-12 && bc[2].abs() < 1e-12, "endpoints 0: {bc:?}");
         assert!(bc[1] > 0.0, "center > 0: {bc:?}");
+    }
+
+    #[test]
+    fn betweenness_parallel_matches_serial_above_gate() {
+        // Above the n>=384 fan-out gate the parallel-across-sources Brandes must agree
+        // with the serial per-source loop (cross-source float reassociation only, tol).
+        use crate::{CooMatrix, FormatConvertible, Shape2D};
+        use std::sync::atomic::Ordering;
+        let n = 420usize;
+        let mut state = 0x1234_5678u64;
+        let mut nextu = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let mut seen = std::collections::HashSet::new();
+        let (mut rs, mut cs, mut data) = (Vec::new(), Vec::new(), Vec::new());
+        for u in 0..n {
+            for _ in 0..6 {
+                let v = (nextu() >> 11) as usize % n;
+                if v == u || !seen.insert((u, v)) {
+                    continue;
+                }
+                rs.push(u);
+                cs.push(v);
+                data.push(1.0);
+            }
+        }
+        let g = CooMatrix::from_triplets(Shape2D::new(n, n), data, rs, cs, true)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        BETWEENNESS_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = betweenness_centrality(&g);
+        BETWEENNESS_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = betweenness_centrality(&g);
+        let maxdiff = serial
+            .iter()
+            .zip(parallel.iter())
+            .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()));
+        assert!(
+            maxdiff < 1e-9,
+            "parallel vs serial betweenness disagree: maxdiff = {maxdiff:.3e}"
+        );
     }
 
     #[test]
