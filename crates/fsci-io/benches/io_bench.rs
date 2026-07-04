@@ -1,7 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_io::{
-    SAVETXT_FORCE_SERIAL, WRITE_JSON_FORCE_SERIAL, loadtxt, mmread, mmwrite, savetxt, write_csv,
-    write_json_array,
+    MatArray, SAVEMAT_TEXT_FORCE_SERIAL, SAVETXT_FORCE_SERIAL, WRITE_JSON_FORCE_SERIAL, loadtxt,
+    mmread, mmwrite, savemat_text, savetxt, write_csv, write_json_array,
 };
 use std::sync::atomic::Ordering;
 
@@ -108,12 +108,41 @@ fn bench_write_json_parallel_ab(c: &mut Criterion) {
     group.finish();
 }
 
+/// Same-binary A/B for the row-parallel MATLAB text formatter against the
+/// legacy serial path.
+fn bench_savemat_text_parallel_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("savemat_text_parallel_ab");
+    for &(rows, cols) in &[(10_000usize, 20usize), (50_000, 20)] {
+        let arrays = vec![MatArray {
+            name: "A".to_string(),
+            rows,
+            cols,
+            data: matrix(rows, cols),
+        }];
+        group.bench_function(format!("current_parallel/{rows}x{cols}"), |b| {
+            b.iter(|| {
+                SAVEMAT_TEXT_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                savemat_text(&arrays)
+            })
+        });
+        group.bench_function(format!("orig_serial/{rows}x{cols}"), |b| {
+            b.iter(|| {
+                SAVEMAT_TEXT_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                savemat_text(&arrays)
+            })
+        });
+    }
+    SAVEMAT_TEXT_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_text_io,
     bench_matrix_market,
     bench_write_helpers,
     bench_savetxt_parallel_ab,
-    bench_write_json_parallel_ab
+    bench_write_json_parallel_ab,
+    bench_savemat_text_parallel_ab
 );
 criterion_main!(benches);
