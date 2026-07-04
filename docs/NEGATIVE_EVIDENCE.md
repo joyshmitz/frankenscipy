@@ -6,6 +6,44 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - NO-SHIP: solve_triangular fused x/b norm accounting regresses
+
+- Land-or-dig audit: the only unmerged FrankenSciPy scratch/worktree HEAD was
+  still `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), which is superseded by
+  current `main`'s threshold-256 dense-kernel work. No measured unlanded win was
+  safe to land.
+- Gap attacked: `fsci-linalg::solve_triangular` still sits behind SciPy's
+  BLAS/LAPACK triangular microkernel wall. New lever tried: fold `x` norm
+  accumulation into the triangular substitution and precompute `b` norm, avoiding
+  the two post-solve `simd_dot` passes used only for the backward-error
+  denominator. The substitution dot products and returned `x` were unchanged.
+- Command discipline: the requested literal
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench --release -p fsci-linalg --bench linalg_bench -- solve_triangular --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`
+  was attempted first and Cargo rejected it with `unexpected argument
+  '--release'`. Runnable rows used
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-linalg --bench linalg_bench --profile release -- solve_triangular --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`.
+- ORIG baseline on RCH `ovh-a`: 4x4 `82.681 ns`, 16x16 `417.33 ns`, 64x64
+  `3.4071 us`, 256x256 `39.726 us`. Source-restored replay on the same worker:
+  4x4 `80.736 ns`, 16x16 `411.20 ns`, 64x64 `3.3383 us`, 256x256 `38.898 us`.
+- Candidate row: RCH local fallback because workers were saturated. Candidate
+  medians were 4x4 `98.265 ns`, 16x16 `492.80 ns`, 64x64 `4.1196 us`,
+  256x256 `49.879 us`, i.e. source-restored ORIG / candidate ratios of
+  `0.82x`, `0.83x`, `0.81x`, and `0.78x`. Criterion reported regressions of
+  `+15.695%`, `+14.712%`, `+19.549%`, and `+25.984%` against the earlier
+  history.
+- Strict remote candidate replay was attempted with
+  `RCH_REQUIRE_REMOTE=1 RCH_NO_SELF_HEALING=1 rch --no-self-healing exec`, but
+  RCH refused local fallback (`remote required; refusing local fallback`) due
+  `critical_pressure=3,insufficient_slots=8`. Because the only candidate row was
+  slower by a large margin and no strict remote slot was available, this is
+  recorded as NO-SHIP rather than keep-grade evidence.
+- Source disposition: the `crates/fsci-linalg/src/lib.rs` probe was manually
+  reverted; the final commit is docs-only.
+- Correctness/conformance after source restore: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-linalg solve_triangular --lib -- --nocapture`
+  passed 6/6 on `ovh-a`. `AGENT_NAME=BlackThrush FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo test -p fsci-conformance --test diff_linalg_structured_solvers -- --nocapture`
+  passed 1/1 locally with the SciPy oracle.
+
 ## 2026-07-04 - BlackThrush (codex) - NO-SHIP: mathieu matrix-free Sturm and Fourier characteristic reuse are ~0-gain
 
 - Land-or-dig audit: `.scratch` / `.worktrees` was checked before digging. The
