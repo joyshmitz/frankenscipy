@@ -7429,6 +7429,12 @@ pub fn spalde(
 /// the FITPACK / scipy layout), and the two degrees. Returns `z` with
 /// `z[i][j] == spline(x[i], y[j])`.
 ///
+/// Runtime switch to force the serial `bisplev` grid loop for same-binary A/B
+/// benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static BISPLEV_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Matches `scipy.interpolate.bisplev(x, y, tck)` for the value case
 /// (`dx == dy == 0`). The coefficient layout is scipy's, so a `tck` produced by
 /// `scipy.interpolate.bisplrep` can be evaluated directly.
@@ -7465,7 +7471,12 @@ pub fn bisplev(
     let by_all: Vec<Vec<f64>> = y.iter().map(|&yj| eval_basis_all(ty, yj, ky, ny_c)).collect();
 
     let mut out = vec![vec![0.0; y.len()]; x.len()];
-    for (i, &xi) in x.iter().enumerate() {
+
+    // One output ROW (fixed x) is an independent, compute-bound tensor-product
+    // evaluation: the x-basis is one de Boor sweep, then each y-column sums the
+    // (kx+1)·(ky+1) nonzero coefficient block. Rows are independent (each writes its
+    // own `out[i]`), so the loop fans across cores BYTE-IDENTICALLY.
+    let fill_row = |xi: f64, row_out: &mut [f64]| {
         let bx = eval_basis_all(tx, xi, kx, nx_c);
         for (j, by) in by_all.iter().enumerate() {
             let mut s = 0.0;
@@ -7478,8 +7489,36 @@ pub fn bisplev(
                     s += c[row + b] * bxa * byb;
                 }
             }
-            out[i][j] = s;
+            row_out[j] = s;
         }
+    };
+
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(x.len().max(1));
+    let force_serial = BISPLEV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    // Fan out only when the grid is large enough to amortize the spawn + the serial
+    // `by_all` precompute; the per-point work is only (kx+1)·(ky+1) mults, so gate on
+    // total grid points. Measured: 64² stays serial, 200² (40k) wins 1.4×, 500² 2.3×,
+    // 1000² 2.5× — gate at ≥40k so every enabled case is a measured win.
+    let grid = x.len().saturating_mul(y.len());
+    if cores <= 1 || force_serial || grid < 40_000 {
+        for (&xi, row_out) in x.iter().zip(out.iter_mut()) {
+            fill_row(xi, row_out);
+        }
+    } else {
+        let chunk = x.len().div_ceil(cores);
+        let fill_row_ref = &fill_row;
+        std::thread::scope(|scope| {
+            for (xchunk, outchunk) in x.chunks(chunk).zip(out.chunks_mut(chunk)) {
+                scope.spawn(move || {
+                    for (&xi, row_out) in xchunk.iter().zip(outchunk.iter_mut()) {
+                        fill_row_ref(xi, row_out);
+                    }
+                });
+            }
+        });
     }
     Ok(out)
 }
@@ -12244,6 +12283,50 @@ mod tests {
         // Inconsistent coefficient count -> error.
         let bad = (vec![0.0; 8], vec![0.0; 8], vec![0.0; 9], 3usize, 3usize);
         assert!(bisplev(&x, &y, &bad).is_err());
+    }
+
+    #[test]
+    fn bisplev_parallel_is_byte_identical_to_serial_above_gate() {
+        use std::sync::atomic::Ordering;
+        // Build a valid cubic tck, then evaluate on a grid past the ≥40k fan-out gate:
+        // the parallel-across-x-rows path must be BYTE-IDENTICAL to the serial loop
+        // (each output row is an independent tensor-product evaluation).
+        let (kx, ky) = (3usize, 3usize);
+        let mut t = vec![0.0f64; 4];
+        for i in 1..=16 {
+            t.push(i as f64 / 17.0);
+        }
+        t.extend(vec![1.0f64; 4]);
+        let (tx, ty) = (t.clone(), t);
+        let nx_c = tx.len() - kx - 1;
+        let ny_c = ty.len() - ky - 1;
+        let mut state = 0xBEEFu64;
+        let c: Vec<f64> = (0..nx_c * ny_c)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (state >> 11) as f64 / (1u64 << 53) as f64
+            })
+            .collect();
+        let tck = (tx, ty, c, kx, ky);
+        let n = 210usize; // 210*210 = 44100 > 40000 gate
+        let g: Vec<f64> = (0..n).map(|i| i as f64 / (n as f64 - 1.0)).collect();
+        BISPLEV_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = bisplev(&g, &g, &tck).unwrap();
+        BISPLEV_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = bisplev(&g, &g, &tck).unwrap();
+        let mism: usize = serial
+            .iter()
+            .zip(parallel.iter())
+            .map(|(sr, pr)| {
+                sr.iter()
+                    .zip(pr.iter())
+                    .filter(|(a, b)| a.to_bits() != b.to_bits())
+                    .count()
+            })
+            .sum();
+        assert_eq!(mism, 0, "parallel bisplev must be byte-identical to serial");
     }
 
     #[test]

@@ -16243,3 +16243,26 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   work is O(nnz) and it CONVERGES FAST (~tens of iters), so per-iteration `thread::scope` spawn (×100 iters × 64
   threads) dwarfs the cheap gather (serial push is already <8ms @ n=50k). LESSON: the parallel-across-units lever needs
   ONE-SHOT heavy per-unit work (Brandes/Dijkstra/clustering/spmv), NOT many-cheap-iterations (per-iteration spawn tax).
+
+## 2026-07-04 - BlackThrush (cc) - bisplev: serial grid loop -> parallel-across-x-rows (1.4-2.5x self, BYTE-IDENTICAL)
+
+- fsci-interpolate. `bisplev(x,y,tck)` (scipy.interpolate.bisplev — bivariate B-spline on an x×y grid) ran a SERIAL
+  outer loop over x-rows. Each output row (fixed x) is an INDEPENDENT compute-bound tensor-product evaluation: one
+  x-direction de Boor basis sweep, then each y-column sums the (kx+1)·(ky+1) nonzero coefficient block. Rows write
+  disjoint `out[i]` → parallel-across-rows is BYTE-IDENTICAL. Compute-bound (small cached coeff block) → parallelizes
+  cleanly, unlike bandwidth-bound sparse reductions.
+- FIX: hoist the per-row work into a `fill_row(xi, &mut row)` closure; parallel branch splits x and `out` via
+  `chunks_mut` across `thread::scope`. `by_all` (y-basis) precomputed once and shared read-only.
+- SAME-BINARY A/B (atomic `BISPLEV_FORCE_SERIAL`, 3× interleaved, cubic tck), **bitmism=0 everywhere**:
+  - 64×64 (4096 pts):     serial 0.32ms / parallel 0.32ms = 1.0× (below gate)
+  - 200×200 (40000 pts):  3.05ms / 2.16ms = **1.4×**
+  - 500×500 (250000 pts): 19.14ms / 8.31ms = **2.3×**
+  - 1000×1000 (1M pts):   73.30ms / 29.35ms = **2.5×**
+  Speedup grows with grid; BYTE-IDENTICAL (each out[i][j] computed identically). GATED grid≥40000 (every enabled case
+  a measured win; 64² stays serial). New test `bisplev_parallel_is_byte_identical_to_serial_above_gate` (210², 0
+  bitmism) + `bisplev_matches_scipy_on_shared_tck` GREEN.
+- vs ORIG: scipy.interpolate.bisplev is single-thread FITPACK Fortran; on large grids fsci's fan-out should reach
+  parity/win (not runnable on the rch host — no scipy). Self-ratio 1.4-2.5×.
+- LEVER: the parallel-across-units lever extends to COMPUTE-bound per-unit grid/point evaluators (bivariate/tensor
+  spline eval), which parallelize cleanly where cheap bandwidth-bound reductions do NOT. Grep interpolate/eval kernels
+  for a serial outer `for i in 0..npts` with heavy independent per-point work.
