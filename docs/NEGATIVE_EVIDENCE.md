@@ -16052,3 +16052,20 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   coefficients — not reconstructable from memory). Modest (1.9x, niche) but the ONLY special-fn loss found this sweep.
   LESSON: cheap per-element special fns (spence ~30ns) can't be A/B'd on the loaded box — need a same-binary switch or
   a quiet box; and micro-opts (reciprocal table, Bernoulli) don't beat a well-tuned Cephes rational approx — port it.
+  UPDATE: spence CLOSED (b447e010, Cephes port, 1.84x self / flips 1.9x loss → parity; the A[8]/B[8] coefficients WERE
+  recallable + validated by a compare-to-series test). Codex recorded the ratio bench in 96341b6b.
+
+## 2026-07-04 - BlackThrush (cc) - special-fn kernel sweep COMPLETE: everything wins post-spence — no more losses
+
+- Extended the kernel-gap sweep (fsci `_many`/tensor vs `scipy.special.X(ARRAY)`, n=50k) after fixing spence. ALL
+  measured fns now WIN — spence (b447e010) was the LAST fsci-slower. Ratios (fsci ms vs scipy ms):
+  - `airye` **2.09 / 105.7 = 50.6× FASTER** (fsci parallel + fast kernel vs scipy's slow specfun ~2.1µs/call).
+  - `gammaincinv` 13.85 / 32.6 = **2.35×** (parallel-eager + Wilson-Hilferty seed + bracketed Newton ~3-4 iters,
+    already tuned — residual is fsci per-elt root-find ~4× scipy but parallel wins; not worth a kernel rewrite).
+  - `gammainccinv` 18.80ms, `betaincinv` 17.82ms (parallel-eager, win). `ellipkinc` 3.91 / 4.90 = **1.25×** (serial
+    kernel already slightly faster than scipy's Cephes). `ellipeinc` 2.27ms (win). `hyp1f1`/`hyp2f1` 6.2×/5.6× (prior).
+  - `permutation_test` ALREADY parallel (thread::scope over resample chunks, deterministic jump-RNG) — scipy is
+    single-thread 628ms/9999-resample so fsci dominates; `bootstrap_ci`/`monte_carlo_test` similarly.
+- CONCLUSION: the special-fn KERNEL-gap vein is EXHAUSTED (spence + pbdv were the two losses, both now fixed —
+  b447e010 / codex 8b6c7306). Everything else wins 1.25–50×. STOP sweeping special-fn kernels. Frontier = documented
+  WALLS (dense LAPACK dsyevd/dgesdd, FFT pocketfft cache kernel, Mathieu specfun continued-fraction port).
