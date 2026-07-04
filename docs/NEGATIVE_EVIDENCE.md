@@ -15125,3 +15125,25 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   has the off-diagonal dot; residual is `sum + diag·x_i − b_i` for free, and ‖A‖² folds into the same pass
   via a fused dot+normsq kernel. Grep solvers that call a generic full-matrix `compute_backward_error_*`
   after a structured solve.
+
+## 2026-07-04 - BlackThrush (cc) - NO-SHIP (reverted): parallel `symmetric_gram_matrix_from_columns` for tall pinv/lstsq — ~0-gain widen of an ALREADY-6-8x win, gram is <⅓ of the cost
+
+- CONTEXT: par_matmul's ledger flagged the serial `symmetric_gram_matrix_from_columns` (Aᵀ·A over n²/2
+  column-pair `simd_dot`s) as an unexploited GEMM-parallel target. It feeds the full-rank tall pinv/lstsq
+  fast path (lib.rs:12516/12972). Prototyped a byte-identical round-robin-over-`left` thread fan-out
+  (gated work≥1<<22, cap threads by cols and work≥1M/worker), then MEASURE-FIRST checked the premise.
+- MEASURE-FIRST KILLED IT on two independent grounds:
+  1. NOT A GAP — fsci tall pinv/lstsq ALREADY WIN scipy 6.6-7.7x (threads=1, best-of-3): lstsq 2000×1000
+     95.6ms vs scipy 628.6ms (6.6x), pinv 221.3 vs 1603.2 (7.2x), lstsq 3000×1500 504 vs 3192.7 (6.3x),
+     pinv 779.4 vs 6003.3 (7.7x). scipy's full-SVD `gesdd` pinv is glacial single-threaded; fsci's
+     normal-equations route dominates. Parallelizing the gram only WIDENS a win — the guidance says don't.
+  2. LOW CEILING — the gram is `rows·cols²/2` FMAs, but the tall-pinv path's dominant matmul is forming
+     the n×m result `(AᵀA)⁻¹Aᵀ` at `cols²·rows` FMAs ≈ 2× the gram. So the gram is <⅓ of the matmul cost;
+     even an ideal free gram caps the self-speedup at ~1.3x. Interleaved A/B (noisy contended box) showed
+     NEW pinv 2000×1000 = 108.7ms vs OLD best 66.2ms — no measurable win, consistent with the <1.3x ceiling
+     drowning in box noise. Reverted; lib.rs back to the byte-identical serial gram.
+- LESSON: before parallelizing a "single-threaded GEMM" sub-step, (a) re-confirm the FUNCTION is a loss vs
+  scipy (pinv/lstsq already win — STALE-scorecard rule), and (b) size the sub-step vs the whole — the gram is
+  the SMALLER of the two big products in tall-pinv. The real (still low-value) lever would be the final
+  `(AᵀA)⁻¹Aᵀ` product, but it's widening an existing 7x win. Tall pinv/lstsq is CLOSED (fsci wins). Remaining
+  genuine linalg gaps are BLAS walls (spd-solve/cholesky ~9x = dpotrf, dtrsv), not the normal-equations route.
