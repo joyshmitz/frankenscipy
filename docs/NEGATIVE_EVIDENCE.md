@@ -14940,3 +14940,34 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   fsolve_broyden_cuts_function_calls test (asserts calls <= 2n+4*iters, which full-FD-every-iter violates)
   and the singular-start hybr test. LEVER: any Newton root/opt solver rebuilding a full FD Jacobian per
   iteration → Broyden rank-1 update + restart-on-failure (quasi-Newton) = fewer residual evals, scipy-parity.
+
+## 2026-07-03 - BlackThrush (cc) - Radau stage-solve: full 3n×3n LU -> real+complex n×n decoupling (MEASURED WIN, impl-gated)
+
+- fsci-integrate Radau IIA (radau.rs) has a fast per-component 3×3-block path ONLY when the Jacobian J is
+  DIAGONAL (`diagonal_jacobian_entries` + `solve_collocation_diagonal`). For a general DENSE J it builds and
+  LU-factorizes the FULL Newton matrix `I_{3n} − h(A⊗J)` (radau.rs:425 `DMatrix::zeros(3n,3n)`, :441
+  `m.lu()`) every Jacobian refresh — O((3n)^3)=27·n^3. scipy's Radau decouples via the eigendecomposition of
+  the 3-stage A-matrix (`A = V Λ V⁻¹`, Λ=diag(λ_real, λ_c, conj λ_c)): `I−h(A⊗J)` similarity-transforms to
+  blockdiag(`I−h·λ_i·J`) → ONE real n×n LU + ONE complex n×n LU ≈ 5·n^3. BONUS: fsci ALREADY factorizes the
+  real n×n factor for its embedded error estimate (radau.rs:442 `lu_real`), so the decoupled MAIN solve only
+  adds the complex n×n LU while removing the 3n×3n LU.
+- MEASURED (bin `perf_radau_decompose`, dedicated CARGO_TARGET_DIR, nalgebra; full-3n LU+solve vs
+  real n×n LU + complex n×n LU + solve; A eigenvalues real=0.274889, complex=0.162556±0.184949i):
+    n=10 2.36x | n=20 3.26x | n=40 5.17x | n=80 4.46x | n=160 5.63x  (→ theoretical 27/5≈5.4x at scale)
+  This is the per-step linear-algebra speedup for stiff systems with DENSE coupling (the diagonal-J case is
+  already fast). RHS-eval cost is orthogonal; for stiff problems the factorization/solve dominates.
+- IMPL PLAN (impl-gated: delicate complex transform, deferred to a focused tick — a subtly-wrong stage
+  transform = silent stiff-ODE errors, and Radau conformance is strict):
+    1. At solver init, eigendecompose the fixed 3×3 A once → λ_real (real), λ_c (complex), V (3×3 complex
+       eigenvectors), VI=V⁻¹. (Or hardcode scipy's real T/TI + MU_REAL/MU_COMPLEX from _ivp/radau.py.)
+    2. Per Jacobian refresh: factor real `(I − h·λ_real·J)` (REUSE existing lu_real) + complex
+       `(I − h·λ_c·J)` (nalgebra DMatrix<Complex<f64>>::lu). Drop the 3n×3n assembly+LU.
+    3. Per Newton iter: g = (VI⊗I)·rhs (3×3 block mix over the n-blocks, complex); solve real block g_0 with
+       lu_real, complex block g_1 with lu_c; block 2 = conj (free); z = Re[(V⊗I)·w]. Same dz to roundoff →
+       Newton convergence + error estimate unchanged, so results match scipy to Newton tol (already the
+       stated invariant in radau.rs:12).
+    4. Keep the diagonal fast path; gate the decouple on n large enough that complex-LU overhead pays (small
+       n already cheap). Validate: radau conformance suite GREEN + solution matches the current 3n path to
+       ~1e-10 on stiff test systems (Van der Pol, Robertson).
+  LEVER class: any implicit RK / collocation solver factorizing the full (s·n)×(s·n) stage system → decouple
+  by the eigendecomposition of the RK A-matrix into real + complex n×n factors (Hairer-Wanner). ~5x here.
