@@ -15324,3 +15324,23 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   riskier build than the window allows; filed as the next SIMD-special lever (SIMD log/log1p, reusable).
 - VERDICT: CDF-family SIMD partially closed (ndtr done; ndtri no-ship; log_ndtr needs SIMD log). The clean
   SIMD-vectorizable-cheap-kernel surface is EXHAUSTED for single-arg special fns except log_ndtr's log-gated path.
+
+## 2026-07-04 - BlackThrush (cc) - SIMD-special cheap-kernel surface EXHAUSTED: expit already wins (parallel), logit ~parity, log-based CDF fns are NOT SIMD-lane losses (log is the cost, scipy doesn't cheaply vectorize it)
+
+- Closes the SIMD-special hunt after the 7 error/CDF wins (erfcx/erfc/erf/ndtr) + ndtri no-ship. Measured the
+  remaining logistic/CDF single-arg fns vs scipy (n=200k, threads=1, best-of-4; box noisy):
+  - **expit** (sigmoid 1/(1+e⁻ˣ)): fsci 1469us vs scipy 2443 = fsci **1.66x FASTER** already — its `map_real_light`
+    path PARALLELISES at 200k (LIGHT_KERNEL_PAR_MIN), beating scipy's single-thread ufunc. NOT a loss; don't touch.
+  - **logit** (log(p/(1−p))): fsci 1934us vs scipy 2421 = ~PARITY (fsci serial `map_real`, but the libm `ln`
+    dominates and scipy doesn't cheaply SIMD-vectorise `ln`, so no lane gap opens). Not a target.
+- DIAGNOSIS (the rule): the SIMD-lane lever only wins when ALL hold — fsci is SERIAL at the size, the kernel is a
+  CHEAP rational / simple exp, AND scipy SIMD-vectorises that cheap kernel. It bit the error family (cheap Cephes
+  rationals, gated serial to 1<<18-1<<20). It does NOT bite `logit`/`log_ndtr`/`entr`/`xlogy` etc. because their
+  cost is the LOG (expensive, and scipy's log isn't cheaply lane-vectorised in these), so serial fsci is already
+  ~parity — a `simd_log` would not open a clean win there.
+- log_ndtr (1.55x, the one real remaining CDF loss) would need BOTH `simd_log` and `simd_log1p` across its 3
+  branches (log1p for x≥−1, log for −8<x<−1, per-lane asymptotic series for x≤−8), and the erfc part is only ~half
+  the cost — capped, log-dominated upside for a large risky build. DEFERRED (not a clean-window win).
+- VERDICT: SIMD-special cheap-kernel vein CLOSED. Reusable infra shipped: `simd_exp`, `simd_horner`,
+  `erfcx_cephes_real_simd`, `erfc_full_simd_chunk` (error.rs). NEXT genuine gaps are the WALLS — dense cholesky/
+  dtrsv (~2-9× vs LAPACK microkernels), Mathieu specfun (2.26× bisection), pocketfft non-pow2 — not SIMD-lane wins.
