@@ -15786,3 +15786,24 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - LESSON: "densify → cache-bound → pack it" is NOT automatic — a bulge-chase's *moving small window* over a large
   array is already cache-friendly; the residual 2× is elsewhere (tridiagonal QR constants and/or the inherent O(n²)
   rotation count vs SciPy's tuned dsbtrd micro-kernel), NOT the working-set layout. Don't re-attempt storage packing.
+
+## 2026-07-04 - BlackThrush (cc) - ndimage correlate/convolve 2-D SIMD interior — 2.3-2.9x self, 6.2-7.3x vs SciPy
+
+- Implemented the deferred lever (perf_ledger_cc:1019): in `nd_filter_apply`, the interior box's innermost axis is a
+  CONTIGUOUS C-order run, so 8 consecutive interior output pixels gather from 8 contiguous input slots per tap →
+  process them as one `std::simd::Simd<f64,8>` accumulator (`acc += splat(w[k]) * from_slice(input[base..base+8])`).
+  Restructured the per-pixel work loop into a while-loop that, for `ndim==2` interior runs, fans 8-wide + scalar
+  remainder; boundary + non-2D keep the scalar path. Added `#![feature(portable_simd)]` (already used by
+  fsci-linalg/special). BYTE-IDENTICAL: each lane sums the SAME taps in k-order (`+= w*x`, no FMA contraction) —
+  `nd_filter_interior_fast_path_is_byte_identical_to_perpixel` GREEN.
+- MEASURED — **CRITICAL: measure parallel sub-ms ops at COMPUTE-BOUND sizes.** At 256²/512² (sub-ms) the op is
+  thread-spawn/contention-dominated on the loaded 64-core box (0.765ms baseline read as 2-6ms noise post-change) —
+  the manual `[f64;8]` AND `std::simd` both looked like 3-8× REGRESSIONS there, pure artifact. Only a compute-bound
+  1600×1600 same-code-path A/B (stash the SIMD → scalar) revealed the truth: SIMD vs scalar **9×9 68.24→29.59ms =
+  2.31×; 5×5 26.46→8.995ms = 2.94×** self. vs SciPy `scipy.ndimage.correlate` (single-thread C: 1600² 9×9 182.78ms /
+  5×5 65.92ms): fsci SIMD = **6.18× / 7.33× FASTER** (was scalar 2.68× / 2.49×). KEEP — widens an existing win.
+- Benefits `correlate` + `convolve` (both route through `nd_filter_apply`) for any 2-D dense kernel. LEVER (reusable,
+  extends to separable/gaussian col-pass): a per-pixel filter whose interior gather is contiguous along the innermost
+  C-order axis → 8-wide `Simd` over consecutive interior output pixels, byte-identical (lane-independent k-order).
+  GOTCHA that cost this turn: `[f64;8]` does NOT auto-vectorize without `portable_simd` → use `std::simd::Simd`; and
+  NEVER trust a sub-ms parallel-op timing on a loaded box — go compute-bound + same-binary A/B.

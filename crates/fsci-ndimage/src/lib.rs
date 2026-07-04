@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![feature(portable_simd)]
 
 //! N-dimensional image processing for FrankenSciPy.
 //!
@@ -1623,10 +1624,18 @@ fn nd_filter_apply(
         hi[d] = shape[d] as i64 - mx;
     }
     let mut output = NdArray::zeros(shape.clone());
+    // For the common 2-D C-order case the interior box's innermost axis is a
+    // CONTIGUOUS run, so 8 consecutive output pixels gather from 8 contiguous input
+    // slots per tap — process them as one 8-wide accumulator (LLVM auto-vectorizes the
+    // fixed `[f64;8]` k-accumulation). Bit-identical to the scalar interior: each lane
+    // sums the SAME taps in the SAME k-order (`+= w*x`, no FMA contraction).
+    let simd_2d = ndim == 2;
     let work = |start: usize, os: &mut [f64]| {
         let mut out_idx = vec![0i64; ndim];
         let mut in_idx = vec![0i64; ndim];
-        for (li, slot) in os.iter_mut().enumerate() {
+        let len = os.len();
+        let mut li = 0usize;
+        while li < len {
             let p = start + li;
             let mut rem = p;
             let mut interior = true;
@@ -1636,6 +1645,30 @@ fn nd_filter_apply(
                 out_idx[d] = c;
                 if c < lo[d] || c >= hi[d] {
                     interior = false;
+                }
+            }
+            if simd_2d && interior {
+                // Interior cols left in this row and in this chunk (8-runs stay in-row
+                // because `hi[1] <= shape[1]`, so no row wrap within the run).
+                let run = (hi[1] - out_idx[1]).min((len - li) as i64) as usize;
+                let mut lane = 0usize;
+                while lane + 8 <= run {
+                    let pp = p + lane;
+                    // 8 consecutive interior output pixels; each lane independently sums
+                    // its taps in k-order (`+= w*x`, no FMA contraction) ⇒ bit-identical
+                    // to the scalar interior path.
+                    let mut acc = std::simd::Simd::<f64, 8>::splat(0.0);
+                    for (k, &w) in weights.iter().enumerate() {
+                        let base = (pp as i64 + tap_flat[k]) as usize;
+                        acc += std::simd::Simd::splat(w)
+                            * std::simd::Simd::from_slice(&input.data[base..base + 8]);
+                    }
+                    acc.copy_to_slice(&mut os[li + lane..li + lane + 8]);
+                    lane += 8;
+                }
+                if lane > 0 {
+                    li += lane;
+                    continue;
                 }
             }
             let mut sum = 0.0;
@@ -1651,7 +1684,8 @@ fn nd_filter_apply(
                     sum += w * input.get_boundary(&in_idx, mode, cval);
                 }
             }
-            *slot = sum;
+            os[li] = sum;
+            li += 1;
         }
     };
     let nthreads = ndimage_filter_thread_count(total, weights.len());
