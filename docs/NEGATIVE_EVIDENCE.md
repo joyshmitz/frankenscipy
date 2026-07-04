@@ -15768,3 +15768,21 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   values-only path DENSIFIES a structured (band/sparse) matrix then runs a dense O(n³) solver, a structure-preserving
   reduction (Givens bulge-chase for bands) restores the O(n²·structure) cost — and a dense-storage impl that only
   touches the nonzero window keeps the win WITHOUT fiddly packed-storage indexing (validate against the dense oracle).
+
+## 2026-07-04 - BlackThrush (cc) - REJECT: packed band-storage for the eigvals_banded reduction (~0-gain/regression)
+
+- Follow-on attempt to shave the ~2× residual vs SciPy on `eigvals_banded` (184f5aca left it at ~2×). Hypothesis:
+  the dense n×n (18MB) working array in `symmetric_lower_band_to_tridiagonal` is CACHE-bound (strided column access
+  during bulge-chasing), so packing it into a `(2·kd+5)×n` band buffer (fits L2, ~132KB) would restore parity.
+  Implemented it two ways (bounds-checked `Option` idx, then branch-free direct band-index), byte-identical to the
+  dense version (`band_to_tridiagonal_eigenvalues_match_dense` GREEN both times).
+- MEASURED (`eigvals_banded` n=1500, rch `-cc`, cross-run so contention-noisy): bounds-checked packed bw=3 **87.7ms**
+  (WORSE); direct-index packed bw=3 **69.45ms** / bw=7 **106.49ms**; DENSE (committed) bw=3 **61.52ms** / bw=7
+  **90.29ms**. So the dense array is **FASTER at both bandwidths** — the packed version is a ~13-18% REGRESSION.
+- ROOT CAUSE (hypothesis WRONG): the dense reduction is NOT cache-bound. Each bulge-chase touches only a small moving
+  window, and the cold parts of the 18MB array are never re-read within a chase (good temporal locality), so the
+  hardware handles it; meanwhile the band layout's per-access index arithmetic `(i-j+kd2)*n+j` costs more than the
+  dense `i*n+j`. REVERTED to the dense version (184f5aca); the packed wip is preserved in `stash@{0}` (packed-band-wip).
+- LESSON: "densify → cache-bound → pack it" is NOT automatic — a bulge-chase's *moving small window* over a large
+  array is already cache-friendly; the residual 2× is elsewhere (tridiagonal QR constants and/or the inherent O(n²)
+  rotation count vs SciPy's tuned dsbtrd micro-kernel), NOT the working-set layout. Don't re-attempt storage packing.
