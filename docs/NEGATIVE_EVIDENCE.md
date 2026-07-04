@@ -14784,3 +14784,35 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - CAVEAT: the E0514 toolchain-churn cascade (criterion/clap/serde_json dev-deps compiled by an incompatible
   rustc) blocked `cargo test` at commit time; the fsci-odr lib + perf bins build clean and the 15 unit tests
   passed earlier this session pre-churn. Needs a `cargo clean` sweep to re-green the full dev-dep test graph.
+
+## 2026-07-03 - BlackThrush (cc) - parallel FD Jacobian for least_squares/curve_fit (MEASURED WIN, integration-gated on +Sync)
+
+- fsci-opt `finite_diff_jacobian_into` (curvefit.rs) builds the LM finite-difference Jacobian by perturbing
+  each of n params and re-evaluating the full m-residual vector per column, SERIALLY — like scipy's MINPACK
+  leastsq/curve_fit (single-threaded Fortran). The n columns are independent (each = one residual eval over
+  m points), so computing each column's perturbed residual on a worker pool and filling the Jacobian serially
+  afterwards is a "parallel vs single-threaded peer" lever, BYTE-IDENTICAL (`.to_bits()`).
+- MEASURED (standalone rustc prototype, committed as bin `perf_fd_jacobian_parallel`; sin-sum residual,
+  serial mirrors the library, parallel = std::thread::scope over column chunks):
+    n=4  m=2000   0.26x   (LOSS)   mism=0
+    n=6  m=5000   0.75x   (LOSS)   mism=0
+    n=8  m=20000  2.75x   (WIN)    mism=0
+    n=12 m=50000  5.03x   (WIN)    mism=0
+    n=20 m=50000  6.69x   (WIN)    mism=0
+    n=40 m=20000 13.66x   (WIN)    mism=0
+  => real byte-identical win for large least_squares/curve_fit (many params AND/OR many data points); a hard
+  LOSS below ~30K work (thread-spawn floor). GATE for integration: `n>=4 && m>=8192 && n*m>=131072`, and call
+  available_parallelism() only AFTER the gate (per the reduce_axis_2d syscall-tax lesson), cap nthreads=cores.min(n).
+- INTEGRATION BLOCKER (why not landed this tick): parallelising the shared residual closure requires `F: Sync`.
+  The single-solve `least_squares` and `curve_fit` do NOT carry `+ Sync` today (only the `_many` variants do),
+  and `least_squares` is called by `curve_fit` (curvefit.rs:420), the bounded variants (562, 869) and others,
+  so `+ Sync` must propagate through the primary public curve-fit API. In practice every real residual closure
+  is Sync (captures Vec/slices/f64), so this is almost certainly compile-clean — but verifying it needs a full
+  cold fsci-opt build (the shared target dir is under an E0514 toolchain-churn cascade; a fresh dedicated
+  target dir compiles clean but cold). Deferred rather than rush a wide public-bound change unverified.
+- NEXT (ready to execute in a clean worktree + dedicated CARGO_TARGET_DIR): add `+ Sync` to least_squares /
+  curve_fit / least_squares_bounded (+ the 562/869 internal callers), add `finite_diff_jacobian_parallel_into`
+  (gated; serial below the gate = identical to `finite_diff_jacobian_into`), swap the 3 Jacobian call sites in
+  least_squares, `cargo build -p fsci-opt` to confirm the Sync propagation compiles, run the fsci-opt suite,
+  land. LEVER class: any solver building a dense FD Jacobian column-by-column over an independent residual
+  closure with a single-threaded reference peer -> parallel columns + serial fill, work-gated, byte-identical.
