@@ -15147,3 +15147,31 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   the SMALLER of the two big products in tall-pinv. The real (still low-value) lever would be the final
   `(AᵀA)⁻¹Aᵀ` product, but it's widening an existing 7x win. Tall pinv/lstsq is CLOSED (fsci wins). Remaining
   genuine linalg gaps are BLAS walls (spd-solve/cholesky ~9x = dpotrf, dtrsv), not the normal-equations route.
+
+## 2026-07-04 - BlackThrush (cc) - kv fractional order: 96-pt Gauss quadrature → Temme series + CF2 continued fraction — 1.6-1.9x self, narrows scipy gap 2.1-3.0x → 1.17-1.84x
+
+- GAP: `kv_scaled_value` (bessel.rs) routed general non-integer / non-half-integer order K_v(z) at z<30
+  (below the DLMF-asymptotic gate `z≥30 && z≥0.5v²`) through `kv_integral_scaled` = 48-pt Gauss quadrature
+  ×2 intervals = ~96 transcendental integrand evals/point. SciPy/Cephes use Temme's method, so fsci was the
+  "fixed-step quadrature where a self-validating series/CF exists" anti-pattern (same vein as wofz/hyperu/kv-half).
+- FIX (shipped): ported the NR `bessik` K-part — Temme ascending series for z≤2 (with `beschb` Chebyshev
+  Γ₁/Γ₂ so it stays accurate as the reduced order xmu→0), CF2 (Lentz) continued fraction for z>2, then the
+  stable upward order recurrence. Half-integer and integer orders keep their existing closed forms (caught
+  earlier). Kept `kv_integral_scaled` as a defensive fallback on any non-finite (never triggered in tests).
+- VALIDATED vs mpmath 40-dps (NOT scipy) FIRST in Python: worst rel err **4.12e-15** over 19,310 points
+  spanning the full reachable domain (v∈[0.01,40], z∈[0.001,250] minus the asymptotic region and int/half-int).
+  Machine-accurate — far better than the quadrature it replaces, and the probe's per-case acc values are
+  identical OLD vs NEW to the printed digits.
+- MEASURED (bin perf_kv_frac, best-of-3, OPENBLAS/OMP=1; scipy.special.kv same points):
+  | case | OLD quadrature | NEW Temme/CF2 | self | scipy | OLD/scipy | NEW/scipy |
+  | z≤2 (Temme)  | 3720us | 2064us | 1.80x | 1764us | 2.11x | 1.17x |
+  | 2<z<30 (CF2) | 3780us | 2306us | 1.64x | 1254us | 3.01x | 1.84x |
+  | v=12.7 z<30  | 3772us | 2019us | 1.87x | 1571us | 2.40x | 1.28x |
+- VERDICT: KEEP — narrows, does not flip. The kernel is now scipy's OWN algorithm; the residual 1.17-1.84x
+  is fsci's `map_real_input` + `SpecialTensor` dispatch + parallel-map framework overhead per call vs scipy's
+  tight compiled C ufunc, NOT the kernel (the CF/series is now cheaper than 96 integrand evals). CONF:
+  fsci-special lib 1139/0, focused kv/kve 13/13, local scipy-oracle diff_special_bessel_modified 1/0 PASS.
+- LEVER (reconfirmed, 4th time — wofz/hyperu/kv-half/kv-frac): grep `gauss48/simpson/STEPS/for 0..NNN`
+  fixed-step quadrature in special-fn kernels → replace with the self-validating Temme/CF/asymptotic scipy
+  itself uses; prototype + mpmath-validate in Python before the Rust port. Temme `bessik` (beschb Γ Chebyshev
+  + CF2) is now available in bessel.rs for any remaining modified-Bessel quadrature site.
