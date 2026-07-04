@@ -181,6 +181,7 @@ crates/fsci-special/src/bin/
 
 # Stale rch cargo target dirs — created by concurrent `rch` cargo invocations.
 .rch-target/
+.rch-targets/
 .rch-target-*/
 .rch-deploy-root/
 .env
