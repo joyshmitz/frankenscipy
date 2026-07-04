@@ -1,6 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_io::{
-    SAVETXT_FORCE_SERIAL, loadtxt, mmread, mmwrite, savetxt, write_csv, write_json_array,
+    SAVETXT_FORCE_SERIAL, WRITE_JSON_FORCE_SERIAL, loadtxt, mmread, mmwrite, savetxt, write_csv,
+    write_json_array,
 };
 use std::sync::atomic::Ordering;
 
@@ -84,11 +85,35 @@ fn bench_savetxt_parallel_ab(c: &mut Criterion) {
     group.finish();
 }
 
+/// Same-binary A/B for the value-parallel JSON array formatter against the
+/// legacy serial path.
+fn bench_write_json_parallel_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("write_json_parallel_ab");
+    for &n in &[200_000usize, 1_000_000] {
+        let data = matrix(n, 1);
+        group.bench_function(format!("current_parallel/{n}"), |b| {
+            b.iter(|| {
+                WRITE_JSON_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                write_json_array(&data)
+            })
+        });
+        group.bench_function(format!("orig_serial/{n}"), |b| {
+            b.iter(|| {
+                WRITE_JSON_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                write_json_array(&data)
+            })
+        });
+    }
+    WRITE_JSON_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_text_io,
     bench_matrix_market,
     bench_write_helpers,
-    bench_savetxt_parallel_ab
+    bench_savetxt_parallel_ab,
+    bench_write_json_parallel_ab
 );
 criterion_main!(benches);
