@@ -15444,3 +15444,18 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - CONF: full fsci-linalg lib 496/0, 41 LU/inv tests green (incl lu_solve_mixed_precision_matches_f64, byte-identity).
   VERDICT: KEEP (small). LU factorization is now fully parallel (trailing update) + SIMD (panel + U12 solve) in both
   precisions — the dense-LU serial-work levers are EXHAUSTED; residual gap is the dsyrk/dgemm micro-kernel depth wall.
+
+## 2026-07-04 - BlackThrush (cc) - orthogonal_procrustes: route the Aᵀ·B / U·Vᵀ matmuls through par_matmul — ~2-5x self at high k, byte-identical
+
+- Last serial-matmul caller with a scipy peer: `orthogonal_procrustes(a, b)` computes `M = Aᵀ·B` (O(m·k²), the
+  dominant cost for tall high-dimensional inputs — e.g. cross-lingual embedding alignment), `SVD(M)`, then `U·Vᵀ`.
+  Both matmuls were the SERIAL `matmul`. Routed to the byte-identical parallel `par_matmul` (gated small→serial, so
+  typical low-k procrustes is unchanged).
+- MEASURED (bin perf_proc, interleaved A/B m=5000 k=200, byte-identical acc=-0.4897 every round, VERY noisy box):
+  NEW < OLD all 3 rounds — best OLD 196 → NEW 64ms = **~3x** (range 1.1-5.2x under contention; standalone quiet
+  NEW 33.9ms). The Aᵀ·B (2e8 FMAs) fans across cores. VERDICT: KEEP — real win for high-dim procrustes, zero-risk
+  (par_matmul is bit-identical; the gate protects small k). CONF: fsci-linalg lib 496/0, procrustes test 1/0.
+- This completes the fsci-linalg serial-matmul → par_matmul sweep (qr_multiply 9f03173d, reconstruct_qr_matrix,
+  now procrustes). Remaining serial matmul is only the small toeplitz dense fallback (gate keeps it serial). The
+  dense-linalg serial-work levers (trailing-update parallelization, panel SIMD, discarded-matmul elision, serial→
+  par_matmul) are now EXHAUSTED; residual = dsyrk/dgemm micro-kernel depth + eig/svd D&C port walls.

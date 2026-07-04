@@ -16742,9 +16742,11 @@ pub fn orthogonal_procrustes(
     }
     // M = Aᵀ·B  (k×k); SVD M = U Σ Vᵀ; R = U·Vᵀ; scale = Σσ.
     let at = transpose(a);
-    let m_mat = matmul(&at, b)?;
+    // Aᵀ·B is the dominant cost for tall inputs (O(m·k²)); route through the
+    // byte-identical parallel matmul (gated small→serial). U·Vᵀ is only k×k.
+    let m_mat = par_matmul(&at, b)?;
     let SvdResult { u, s, vt } = svd(&m_mat, DecompOptions::default())?;
-    let r = matmul(&u, &vt)?;
+    let r = par_matmul(&u, &vt)?;
     let scale = s.iter().sum();
     Ok((r, scale))
 }
