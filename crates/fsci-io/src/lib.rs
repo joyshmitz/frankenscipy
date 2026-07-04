@@ -2579,6 +2579,12 @@ fn loadtxt_serial(content: &str) -> Result<(usize, usize, Vec<f64>), IoError> {
     Ok((rows, cols, data))
 }
 
+// Runtime switch to force the serial `savetxt` formatter for same-binary A/B
+// benchmarks. Defaults off.
+#[doc(hidden)]
+pub static SAVETXT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Save a matrix as whitespace-delimited text.
 ///
 /// Like `numpy.savetxt`.
@@ -2598,15 +2604,74 @@ pub fn savetxt(rows: usize, cols: usize, data: &[f64], delimiter: &str) -> Resul
             cols
         )));
     }
-    let mut out = String::new();
-    for r in 0..rows {
-        for c in 0..cols {
-            if c > 0 {
-                out.push_str(delimiter);
+    // The f64 Display formatting dominates savetxt and is embarrassingly
+    // parallel across rows. Each worker formats a contiguous range into a
+    // private String; joining in row order reproduces serial output byte-for-byte.
+    const SAVETXT_PAR_GATE: usize = 1 << 16;
+    let n = expected_len;
+    if n < SAVETXT_PAR_GATE || SAVETXT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut out = String::new();
+        for r in 0..rows {
+            for c in 0..cols {
+                if c > 0 {
+                    out.push_str(delimiter);
+                }
+                let _ = write!(out, "{}", data[r * cols + c]);
             }
-            let _ = write!(out, "{}", data[r * cols + c]);
+            out.push('\n');
         }
-        out.push('\n');
+        return Ok(out);
+    }
+
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / 16384)
+        .min(rows)
+        .max(1);
+    if nthreads <= 1 {
+        let mut out = String::new();
+        for r in 0..rows {
+            for c in 0..cols {
+                if c > 0 {
+                    out.push_str(delimiter);
+                }
+                let _ = write!(out, "{}", data[r * cols + c]);
+            }
+            out.push('\n');
+        }
+        return Ok(out);
+    }
+
+    let chunk = rows.div_ceil(nthreads);
+    let mut parts: Vec<String> = (0..nthreads).map(|_| String::new()).collect();
+    std::thread::scope(|scope| {
+        for (t, slot) in parts.iter_mut().enumerate() {
+            let r0 = t * chunk;
+            let r1 = ((t + 1) * chunk).min(rows);
+            scope.spawn(move || {
+                if r0 >= r1 {
+                    return;
+                }
+                let mut local = String::with_capacity((r1 - r0) * cols * 12);
+                for r in r0..r1 {
+                    for c in 0..cols {
+                        if c > 0 {
+                            local.push_str(delimiter);
+                        }
+                        let _ = write!(local, "{}", data[r * cols + c]);
+                    }
+                    local.push('\n');
+                }
+                *slot = local;
+            });
+        }
+    });
+
+    let total: usize = parts.iter().map(String::len).sum();
+    let mut out = String::with_capacity(total);
+    for p in &parts {
+        out.push_str(p);
     }
     Ok(out)
 }
@@ -5726,6 +5791,22 @@ mod tests {
     }
 
     #[test]
+    fn savetxt_parallel_matches_serial_output() {
+        let rows = 4_000;
+        let cols = 20;
+        let data: Vec<f64> = (0..rows * cols)
+            .map(|i| (i as f64 * 0.125) - 500.0)
+            .collect();
+
+        SAVETXT_FORCE_SERIAL.store(true, std::sync::atomic::Ordering::Relaxed);
+        let serial = savetxt(rows, cols, &data, " ").expect("serial savetxt");
+        SAVETXT_FORCE_SERIAL.store(false, std::sync::atomic::Ordering::Relaxed);
+        let parallel = savetxt(rows, cols, &data, " ").expect("parallel savetxt");
+
+        assert_eq!(parallel, serial);
+    }
+
+    #[test]
     fn savetxt_rejects_shape_length_mismatch() {
         let err = savetxt(2, 2, &[1.0, 2.0, 3.0], " ").expect_err("mismatched shape should fail");
         assert_eq!(
@@ -6475,6 +6556,34 @@ mod tests {
             assert!(
                 (got - want).abs() < 1e-10,
                 "data[{i}] got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn savetxt_parallel_is_byte_identical_to_serial_above_gate() {
+        use std::sync::atomic::Ordering;
+        // Above the rows·cols ≥ 2^16 fan-out gate the parallel per-row formatter must be
+        // BYTE-IDENTICAL to the serial loop (each row is formatted independently and the
+        // parts are joined in row order).
+        let (rows, cols) = (5000usize, 20usize); // 100000 > 65536 gate
+        let mut state = 0xABCDu64;
+        let data: Vec<f64> = (0..rows * cols)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (state >> 11) as f64 / (1u64 << 53) as f64 * 200.0 - 100.0
+            })
+            .collect();
+        for delim in [" ", ",", "\t"] {
+            SAVETXT_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = savetxt(rows, cols, &data, delim).expect("serial");
+            SAVETXT_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = savetxt(rows, cols, &data, delim).expect("parallel");
+            assert_eq!(
+                serial, parallel,
+                "delim {delim:?}: parallel savetxt must equal serial"
             );
         }
     }
