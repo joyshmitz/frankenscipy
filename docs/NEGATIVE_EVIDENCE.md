@@ -6,6 +6,48 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - NO-SHIP: mathieu matrix-free Sturm and Fourier characteristic reuse are ~0-gain
+
+- Land-or-dig audit: `.scratch` / `.worktrees` was checked before digging. The
+  only unmerged measured worktree HEAD was still
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), but current `main` already
+  carries the stronger threshold-256 route and the ledger marks that lane
+  superseded. No unlanded measured win was safe to land.
+- Gap attacked: the remaining real `fsci-special` mathieu wall is the
+  characteristic-value cluster around `mathieu_a` / `mathieu_b`, where the
+  shared Sturm bisection dominates. Alien mapping: allocation elision and
+  matrix-free tridiagonal evaluation for Sturm counts, plus common-subexpression
+  reuse between `mathieu_fourier` and the characteristic-value matrix. Both
+  variants were measured and dropped.
+- Command discipline: the requested literal
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench --release -p fsci-special --bench special_bench -- mathieu_characteristic_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`
+  was attempted first and Cargo rejected it with `unexpected argument
+  '--release'`. Runnable rows used the accepted per-crate release-profile
+  spelling:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-special --bench special_bench --profile release -- mathieu_characteristic_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 3 --noplot`.
+- Same-target Criterion artifact evidence under
+  `/data/projects/.rch-targets/scipy-cod/criterion`:
+  - `mathieu_characteristic_gauntlet`: original allocated Sturm median
+    `376529.03 ns`, candidate matrix-free Sturm median `376395.03 ns`, ratio
+    `1.00036x`. Median confidence intervals overlap
+    `[367862.846, 387242.28975]` and `[356323.2273, 441268.7281]`, so this is
+    not a stable win. An earlier local fallback smoke looked like `1.16x`, but
+    the stronger artifact row collapses it to noise.
+  - `mathieu_fourier_gauntlet`: original rebuild-characteristic median
+    `428349.20 ns`, candidate reuse-characteristic median `429518.77 ns`,
+    ratio `0.997x` versus ORIG. This is a small regression.
+- Source disposition: no mathieu source or benchmark changes were committed.
+  The final branch is docs-only for this pass, so the ~0-gain variants are
+  dropped rather than parked.
+- Correctness/conformance: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-special mathieu --lib -- --nocapture`
+  passed 6/6 on `hz2` with only pre-existing warnings. The nearest live SciPy
+  special oracle,
+  `AGENT_NAME=BlackThrush FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-conformance --test diff_special -- --nocapture`,
+  fell back locally due RCH slot pressure and passed 1/1. There is no live
+  mathieu-specific conformance harness in `fsci-conformance`; mathieu coverage
+  lives in the `fsci-special` SciPy-golden unit tests above.
+
 ## 2026-07-04 - BlackThrush (codex) - KEEP: lu_factor/lu_solve use blocked flat LU backend for large dense systems - 1.45x / 2.40x vs ORIG
 
 - Land-or-dig audit: `.scratch` / `.worktrees` was checked before digging. The
