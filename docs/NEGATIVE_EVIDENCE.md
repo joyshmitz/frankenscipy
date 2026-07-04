@@ -6,6 +6,47 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - KEEP: orthogonal_procrustes routes tall cross-covariance through par_matmul - 1.23x / 1.44x vs ORIG
+
+- Land-or-dig audit: the fresh July 4 scratch worktrees checked before digging
+  were either already contained in `origin/main` (`codex/odr-bench-push-a21c338b`
+  included the ODR and finite-difference Jacobian wins) or held measured
+  no-ship evidence (`codex/perf-dig-20260704` DCT fusion reject). The stale
+  `e3b744f4` GEMM threshold worktree remains superseded by current `main`'s
+  stronger threshold route. No measured, unlanded win was safe to land, so this
+  pass dug a new `fsci-linalg` procrustes lever.
+- Alien mapping: vectorized execution / morsel-style parallelism plus
+  cache-aware dense-kernel discipline. `orthogonal_procrustes(A, B)` forms
+  `A^T * B`; for tall inputs that O(m*k^2) product dominates the small SVD.
+  The shipped `par_matmul` already preserves each output element's serial
+  reduction order and gates small products back to serial, so the lever only
+  routes this tall cross-covariance and the tiny `U * V^T` multiply through that
+  existing kernel.
+- Command discipline: the requested literal
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo bench --release -p fsci-linalg --bench linalg_bench -- orthogonal_procrustes_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`
+  was attempted first and Cargo rejected it on `ovh-a` with
+  `unexpected argument '--release'`. All runnable bench rows used the accepted
+  per-crate release-profile spelling:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo bench -p fsci-linalg --bench linalg_bench --profile release -- orthogonal_procrustes_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- Same-process ORIG ratio: because RCH worker pinning was not honored and later
+  workers were unavailable (`RCH local (no admissible workers:
+  critical_pressure=1,insufficient_slots=11)`), the kept Criterion group measures
+  `*_orig` (serial `matmul` reconstruction) and `*_candidate` back-to-back in the
+  same binary. Local RCH fallback row:
+  - 3000x150 ORIG `66.508 ms`, candidate `54.092 ms`, ratio `1.23x`.
+  - 5000x200 ORIG `266.64 ms`, candidate `185.69 ms`, ratio `1.44x`.
+- Earlier routing rows: `vmi1227854` original-only baseline was `78.820 ms` /
+  `194.04 ms`; `hz2` candidate rows were `62.800 ms` / `132.79 ms` and replay
+  `67.310 ms` / `138.79 ms`; `ovh-a` original-only baseline was `56.366 ms` /
+  `124.84 ms`. These are recorded as non-decision routing evidence because they
+  were not same-worker/same-process pairs.
+- Correctness/conformance: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo test -p fsci-linalg orthogonal_procrustes_matches_scipy --lib -- --nocapture`
+  passed 1/1 under RCH local fallback. `AGENT_NAME=BlackThrush FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod cargo test -p fsci-conformance --test diff_linalg -- --nocapture`
+  passed 37/37 locally with SciPy 1.17.1.
+- Source kept: `crates/fsci-linalg/src/lib.rs` now routes the tall procrustes
+  cross-covariance through `par_matmul`; `crates/fsci-linalg/benches/linalg_bench.rs`
+  keeps the ORIG/candidate gauntlet for repeatable ratio checks.
+
 ## 2026-07-04 - BlackThrush (codex) - NO-SHIP: Cholesky packed-SYRK panel-major tile walk is not a stable measured win
 
 - Land-or-dig audit: no measured `.scratch` / `.worktrees` bench worktree win

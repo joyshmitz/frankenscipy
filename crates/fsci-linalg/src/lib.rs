@@ -16740,10 +16740,9 @@ pub fn orthogonal_procrustes(
             detail: "orthogonal_procrustes: A and B must have the same shape".to_string(),
         });
     }
-    // M = Aᵀ·B  (k×k); SVD M = U Σ Vᵀ; R = U·Vᵀ; scale = Σσ.
+    // M = A^T * B dominates tall cases (O(m*k^2)); par_matmul preserves each
+    // output element's serial reduction order while splitting output rows.
     let at = transpose(a);
-    // Aᵀ·B is the dominant cost for tall inputs (O(m·k²)); route through the
-    // byte-identical parallel matmul (gated small→serial). U·Vᵀ is only k×k.
     let m_mat = par_matmul(&at, b)?;
     let SvdResult { u, s, vt } = svd(&m_mat, DecompOptions::default())?;
     let r = par_matmul(&u, &vt)?;

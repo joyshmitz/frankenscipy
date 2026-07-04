@@ -8,8 +8,8 @@ use std::{
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
     DecompOptions, InvOptions, LstsqOptions, MatrixAssumption, PinvOptions, SolveOptions,
-    TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv, lstsq, matmul, pinv,
-    randomized_eigh, solve, solve_banded, solve_triangular,
+    TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv, lstsq, matmul,
+    orthogonal_procrustes, pinv, randomized_eigh, solve, solve_banded, solve_triangular, svd,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -22,6 +22,7 @@ const EIGH_SIZES: &[usize] = &[256, 512];
 const RANDOMIZED_EIGH_CASES: &[(usize, usize)] = &[(256, 16), (512, 24)];
 const DFT_GAUNTLET_SIZES: &[usize] = &[256, 512, 1024];
 const CHO_FACTOR_GAUNTLET_SIZES: &[usize] = &[500, 1000];
+const ORTHOGONAL_PROCRUSTES_CASES: &[(usize, usize)] = &[(3000, 150), (5000, 200)];
 
 /// Diagonally-dominant matrix: guaranteed non-singular, well-conditioned.
 fn make_diag_dominant(n: usize) -> Vec<Vec<f64>> {
@@ -971,6 +972,46 @@ fn bench_cho_factor_gauntlet_scipy(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let cols = a.first().map_or(0, Vec::len);
+    (0..cols)
+        .map(|j| a.iter().map(|row| row[j]).collect())
+        .collect()
+}
+
+fn orthogonal_procrustes_original_bench(a: &[Vec<f64>], b: &[Vec<f64>]) -> (Vec<Vec<f64>>, f64) {
+    let at = bench_transpose(a);
+    let m_mat = matmul(&at, b).unwrap();
+    let svd_result = svd(&m_mat, DecompOptions::default()).unwrap();
+    let r = matmul(&svd_result.u, &svd_result.vt).unwrap();
+    let scale = svd_result.s.iter().sum();
+    (r, scale)
+}
+
+fn bench_orthogonal_procrustes_gauntlet(c: &mut Criterion) {
+    let mut group = c.benchmark_group("orthogonal_procrustes_gauntlet");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    for &(rows, cols) in ORTHOGONAL_PROCRUSTES_CASES {
+        let a = make_matmul_matrix(rows, cols, 0x33aa);
+        let b = make_matmul_matrix(rows, cols, 0x5eed);
+        group.bench_function(format!("{rows}x{cols}_orig"), |bencher| {
+            bencher.iter(|| {
+                black_box(orthogonal_procrustes_original_bench(
+                    black_box(&a),
+                    black_box(&b),
+                ))
+            });
+        });
+        group.bench_function(format!("{rows}x{cols}_candidate"), |bencher| {
+            bencher
+                .iter(|| black_box(orthogonal_procrustes(black_box(&a), black_box(&b)).unwrap()));
+        });
+    }
+    group.finish();
+}
+
 fn bench_baseline_pinv(c: &mut Criterion) {
     use std::sync::atomic::Ordering::Relaxed;
     let mut group = c.benchmark_group("baseline_pinv");
@@ -1080,6 +1121,7 @@ criterion_group!(
     bench_randomized_eigh_gauntlet_scipy,
     bench_dft_gauntlet_scipy,
     bench_cho_factor_gauntlet_scipy,
+    bench_orthogonal_procrustes_gauntlet,
     bench_baseline_pinv
 );
 
