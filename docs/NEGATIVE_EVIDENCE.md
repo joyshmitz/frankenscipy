@@ -15305,3 +15305,22 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   1/0** (the latter re-confirms erf+erfc after the erfc_full_simd_chunk retrofit — extended SIMD coverage holds at
   tol 1e-13). VERDICT: KEEP — flips ndtr to a win. LEVER: any special fn that is an affine-in-argument wrapper of
   erf/erfc (ndtr done; erfi/dawsn already win) → route its vector path through `erfc_full_simd_chunk`/`simd_exp`.
+
+## 2026-07-04 - BlackThrush (cc) - NO-SHIP (reverted): ndtri central-region SIMD — byte-identical but 0.88x SLOWER (log/sqrt tails dominate); log_ndtr scoped (needs SIMD log)
+
+- After the error-family + ndtr SIMD wins, measured the remaining CDF-family single-arg special fns vs scipy
+  (bin perf_cdf, n=200k, threads=1, best-of-3): **ndtri 2562us vs scipy 2046 = 1.25x slower; log_ndtr 4861 vs
+  3146 = 1.55x slower** — both real losses (same scalar-map-vs-SciPy-SIMD-ufunc pattern).
+- ndtri ATTEMPT (reverted): SIMD the central region y∈(e⁻²,1−e⁻²) (~73% of a uniform grid), a pure Cephes
+  rational — proven BIT-IDENTICAL to the scalar kernel (0 mismatches over 2005 pts incl boundaries). But the
+  in-binary A/B was **0.82-0.91x self (SIMD SLOWER)**: ndtri's runtime is dominated by the ~27% log/sqrt TAIL
+  lanes, which stay scalar; the SIMD path additionally computes the central rational for those tail lanes (then
+  discards it for the scalar tail) — wasted work + to_array overhead > the cheap-central saving. DROPPED. Lesson:
+  SIMD-ing only the CHEAP branch of a mixed-cost kernel loses when the EXPENSIVE branch (a) can't be SIMD'd and
+  (b) dominates the time — unlike erf/erfc/ndtr where the SIMD'd branch (exp·rational) WAS the dominant cost.
+- log_ndtr DEFERRED (needs SIMD log): 3 branches — x≥−1 uses `log1p(−ndtr(−x))`, −8<x<−1 uses `ln(½·erfc)`,
+  x≤−8 a per-lane Mills-ratio asymptotic SERIES. The common x≥−1 branch needs a validated SIMD `log1p` (harder
+  than simd_exp), and the deep tail is a variable-length series (not lane-uniform). Real 1.55x gap but a bigger,
+  riskier build than the window allows; filed as the next SIMD-special lever (SIMD log/log1p, reusable).
+- VERDICT: CDF-family SIMD partially closed (ndtr done; ndtri no-ship; log_ndtr needs SIMD log). The clean
+  SIMD-vectorizable-cheap-kernel surface is EXHAUSTED for single-arg special fns except log_ndtr's log-gated path.
