@@ -5344,7 +5344,15 @@ pub fn pagerank(graph: &CsrMatrix, damping: f64, max_iter: usize, tol: f64) -> V
 ///
 /// Uses Floyd-Warshall internally. Returns 0.0 for non-square matrices.
 pub fn graph_diameter(graph: &CsrMatrix) -> f64 {
-    let dist = floyd_warshall(graph);
+    // Diameter = largest finite all-pairs shortest-path distance. Compute the rows via
+    // parallel per-source Dijkstra (O(V·E log V)) rather than O(V³) `floyd_warshall`;
+    // the shortest-path distances (hence the global max) are identical regardless of
+    // algorithm. Fall back to `floyd_warshall` when Dijkstra can't run (negative
+    // weights) — mirrors `eccentricity`.
+    let dist: Vec<Vec<f64>> = match dijkstra_all_pairs(graph) {
+        Ok(ap) => ap.into_iter().map(|r| r.distances).collect(),
+        Err(_) => floyd_warshall(graph),
+    };
     if dist.is_empty() {
         return 0.0;
     }
@@ -5517,7 +5525,14 @@ pub fn betweenness_centrality(graph: &CsrMatrix) -> Vec<f64> {
 /// Compute closeness centrality for each node.
 pub fn closeness_centrality(graph: &CsrMatrix) -> Vec<f64> {
     let n = graph.shape().rows;
-    let dist = floyd_warshall(graph);
+    // Closeness needs every node's finite shortest-path distances (their reciprocal
+    // sum). Compute the all-pairs rows via parallel per-source Dijkstra
+    // (O(V·E log V)) rather than O(V³) `floyd_warshall`; identical distances. Fall
+    // back to `floyd_warshall` when Dijkstra can't run (negative weights).
+    let dist: Vec<Vec<f64>> = match dijkstra_all_pairs(graph) {
+        Ok(ap) => ap.into_iter().map(|r| r.distances).collect(),
+        Err(_) => floyd_warshall(graph),
+    };
     if dist.is_empty() {
         return vec![0.0; n];
     }

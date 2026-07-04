@@ -16152,3 +16152,27 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - GOTCHA logged: single-shot cosm timing (43.34 vs 41.47ms) read as ~0-gain and nearly triggered a wrong revert — only
   the SAME-BINARY interleaved A/B exposed the true 1.42-1.53× (box drift dwarfs the delta otherwise). LEVER: general
   `lu_solve_flat_matrix_rhs` now available for any hot dense multi-RHS solve currently on nalgebra `.lu().solve`.
+
+## 2026-07-04 - BlackThrush (cc) - graph_diameter + closeness_centrality: O(V³) floyd_warshall -> parallel per-source Dijkstra (4.0-4.8x self, grows with n)
+
+- csgraph metric-completion sweep. `eccentricity` was already rewritten to use `dijkstra_all_pairs` (parallel
+  per-source Dijkstra, O(V·E log V)) instead of O(V³) `floyd_warshall`, but TWO sibling all-pairs-distance metrics
+  were MISSED and still ran the dense O(V³) route: `graph_diameter` (max finite all-pairs dist) and
+  `closeness_centrality` (per-node reciprocal-sum of finite dists).
+- FIX (mirrors eccentricity exactly): route both through `match dijkstra_all_pairs(graph) { Ok => rows, Err =>
+  floyd_warshall }` — the shortest-path distances are identical regardless of algorithm; only the per-row/global
+  reduction differs. Fall back to `floyd_warshall` on the Dijkstra-can't-run case (negative weights).
+- SAME-BINARY A/B (old floyd route vs new Dijkstra route, one floyd reused for both metrics; random sparse directed
+  graphs, real weights 0.5-10):
+  - n=400  deg4: floyd 19.40ms -> dijkstra 4.69ms  = **4.1× self**  (ddiam 7.11e-15, dclose 2.78e-17)
+  - n=900  deg5: floyd 65.91ms -> dijkstra 16.53ms = **4.0× self** (ddiam 7.11e-15, dclose 2.78e-17)
+  - n=1600 deg5: floyd 277.15ms -> dijkstra 57.69ms = **4.8× self** (ddiam 0.00e0, dclose 2.08e-17)
+  Speedup GROWS with n (O(V³) serial vs parallel O(V²·deg·logV)). Correctness ~machine-eps (Dijkstra-vs-Floyd path
+  summation reassoc); tolerance tests `graph_metrics_on_path_graph` (diameter <1e-12) +
+  `closeness_betweenness_on_path_graph` (closeness <1e-12) + `dijkstra_all_pairs_matches_floyd_warshall` GREEN.
+- vs ORIG: these now inherit `dijkstra_all_pairs`'s documented advantage over scipy's serial all-pairs
+  (dijkstra_all_pairs is 9.8-35.8× faster than floyd_warshall/scipy serial per ac8d81c9); scipy has no direct
+  diameter/closeness so the ORIG analog is `csgraph.shortest_path(method='FW').max()` = the floyd route replaced here.
+- LEVER (paid out again): any csgraph metric reducing all-pairs shortest-path distances (eccentricity, diameter,
+  closeness, and likely `radius`/Wiener-index if added) belongs on parallel `dijkstra_all_pairs`, NOT O(V³)
+  floyd_warshall. Grep csgraph reducers for a bare `floyd_warshall(graph)` call.
