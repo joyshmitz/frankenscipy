@@ -6,6 +6,55 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - codex - KEEP: ODR scalar-separable Schur LM step - 162-2317x self vs dense original
+
+- LEVER: scalar separable explicit ODR no longer forms the full `(n_beta + n_delta)` finite-difference Jacobian and
+  dense normal equations on every LM iteration. For models explicitly marked `scalar_separable`, the response/delta
+  Jacobian block is diagonal, the delta columns come from one batched perturb-all-deltas model evaluation, and the LM
+  step eliminates delta through a Schur complement so the solved system is only `n_beta x n_beta`. The dense original
+  remains available as `run_dense_reference()` and arbitrary custom coupled closures stay on the dense path unless the
+  model opts into scalar separability.
+- MEASURED (final source, same Criterion process, dense original vs structured, command was
+  `AGENT_NAME=codex CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-codex-odr-bench-final rch exec -- cargo bench -p fsci-odr --bench odr_structured --profile release -- odr_structured_scalar --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`;
+  RCH failed open to local because no workers were admissible): n=100 **15.201ms -> 93.764us = 162.1x**, n=200
+  **160.83ms -> 325.37us = 494.3x**, n=400 **962.19ms -> 415.20us = 2317.4x**.
+- CORRECTNESS: added unit coverage proving structured scalar ODR matches the dense reference for beta/delta/covariance
+  within 1e-6, custom coupled models default to dense-reference behavior exactly, and all-fixed-beta covariance stays
+  zero. Gates: `cargo fmt -p fsci-odr --check`; `rch exec -- cargo check -p fsci-odr --all-targets` remote hz1 green;
+  `rch exec -- cargo test -p fsci-odr --all-targets` green (18/0 plus bench smoke); `rch exec -- cargo clippy -p
+  fsci-odr --all-targets -- -D warnings` remote hz1 green; `rch exec -- cargo test -p fsci-conformance --test diff_odr
+  -- --nocapture` green (1/0).
+- Own files: `crates/fsci-odr/src/lib.rs`, `crates/fsci-odr/Cargo.toml`, `crates/fsci-odr/benches/odr_structured.rs`,
+  `crates/fsci-odr/src/bin/perf_odr_structured.rs`, `crates/fsci-odr/src/bin/perf_odr_jacobian.rs`, and `Cargo.lock`.
+
+## 2026-07-04 - BlackThrush (codex) - KEEP: fsci-io CSV/JSON writers stream into output buffer - 1.70x / 1.99x self vs legacy original
+
+- Bead `frankenscipy-d1uxy`. `write_csv` and `write_json_array` still
+  materialized per-row/per-array `Vec<String>` buffers before joining them,
+  while the already-mined `savetxt`/MatrixMarket paths write directly into the
+  destination `String`. Replaced those temporary allocations with `write!`
+  into the output buffer, preserving validation, delimiters, and committed
+  golden text output.
+- Same-worker RCH Criterion on `vmi1153651`
+  (`AGENT_NAME=BlackThrush cargo bench -p fsci-io --bench io_bench --
+  write_helpers`): `write_csv/500x20` mean 1.9961 ms -> 1.1763 ms = 1.70x;
+  `write_json_array/10000` mean 2.3746 ms -> 1.1905 ms = 1.99x. Criterion
+  reported mean changes of -41.726% and -49.068%, both p<0.05.
+- Gates: `cargo check -p fsci-io --all-targets` via RCH passed; `cargo clippy
+  -p fsci-io --all-targets -- -D warnings` via RCH passed; `cargo fmt -p
+  fsci-io --check` passed; `cargo test -p fsci-io write_csv -- --nocapture`,
+  `cargo test -p fsci-io write_json_array -- --nocapture`, and `cargo test -p
+  fsci-io --test golden_text_writers -- --nocapture` passed. Full `cargo test
+  -p fsci-io --all-targets` is currently blocked by unrelated pre-existing
+  failures in `mmwrite_complex_output_format` and
+  `wav_read_parallel_decode_matches_serial`. Workspace `cargo fmt --check` is
+  likewise blocked by unrelated formatting drift outside this owned lane.
+- Coordination: Agent Mail registration/reservation writes are blocked by a
+  corrupt read-only DB with a wedged deleted `am` owner process; pane identity
+  resolved to `AGENT_NAME=BlackThrush`. Files owned for this lane:
+  `crates/fsci-io/src/lib.rs`, `crates/fsci-io/benches/io_bench.rs`,
+  `docs/NEGATIVE_EVIDENCE.md`, and Beads metadata.
+
 ## 2026-07-03 - BlackThrush (cc) - CHECKED (well-optimized, don't re-chase): fsci-spatial pdist — wins at scale 2.7-3.5×, narrow dim-2/3 serial soft-C-wall only
 
 - Benched pdist across 10 metrics + dims {2,3,4,8} × N {800,1500,4000} vs scipy.spatial.distance.pdist same box.
@@ -14699,3 +14748,39 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   general dense matmul / TRSM / LU if they use dot-based kernels. LESSON: "0-gain wall" was FALSE — the
   radical primitive (cache-packed register-fitting GEMM kernel) beats the dot-product formulation; prior
   naive attempts failed on register spill, not because the wall is real.
+
+## 2026-07-03 - BlackThrush (cc) - ODR structured Schur-eliminated solver (WIN — flips O(n^3) -> O(n*p^2))
+
+- FRESH VEIN: fsci-odr (orthogonal distance regression) had NO prior perf-memory. The explicit-ODR
+  least-squares problem packs the p model params `beta` AND one x-error `delta` per data point into one
+  variable vector; the residual is `[ sqrt(we)*(y - f(beta,x+delta)) ; sqrt(wd)*delta ]` (length 2n). The
+  original solver built the DENSE (p+n)-column finite-difference Jacobian and the full (p+n)^2 normal
+  equations every iteration => O(n^3)/iter. MEASURED: a single 4-iteration fit took 55.0 SECONDS at n=800
+  (7s at n=800 in an earlier probe with fewer iters; cubic scaling confirmed n=100->400 ~100x for 4x n).
+  scipy.odr (ODRPACK) is O(n*p^2)/iter, so fsci-odr was catastrophically LOSING at any real n.
+- LEVER (ODRPACK-style delta elimination / variable projection): observation i's prediction depends only on
+  x_i+delta_i, so the entire delta block of the Jacobian is one DIAGONAL (response rows) plus the analytic
+  diagonal sqrt(wd) (penalty rows). => (1) build the whole delta diagonal from ONE batched all-delta-perturbed
+  model eval (Jacobian O((p+n)*n) -> O((p+1)*n), proven byte-identical, perf_odr_jacobian bin 0 mism/300);
+  (2) the delta-delta block of (J^TJ+mu I) is diagonal, so eliminate the delta step by its Schur complement
+  -> a p x p system in the beta step + O(n*p) back-substitution; (3) same Schur complement (mu=0) gives the
+  beta covariance in O(n*p^2) instead of inverting the full (p+n)^2 normal matrix. Whole fit O(n*p^2)/iter.
+- VALIDATION: retained the dense path as `ODR::run_dense_reference()` (in-tree oracle). Same-process A/B
+  (perf_odr_structured bin) over 240 random scalar-x fits (ODR + OLS jobs, fixed params, per-point weights):
+  worst rel beta 1.4e-5, delta 6.5e-7, cov 7.1e-3, sum_square 2.0e-10 -- both converge to the SAME minimum
+  (equal up to roundoff + flat-objective beta looseness, matching the crate's own 1e-5 test tolerance).
+  15/15 lib unit tests green (incl. scipy-golden sd_beta/res_var references, which exercise the structured
+  path via the scalar builtins).
+- MEASURED SELF-SPEEDUP (structured run vs dense reference, end-to-end fit): n=100 156x, n=200 593x,
+  n=400 2144x, n=800 13613x (55073ms -> 4.05ms). Structured is O(n*p^2) so it barely grows with n; this
+  flips fsci-odr from far-slower-than-ODRPACK into scipy's competitive regime WITH a native-Rust callback
+  advantage (no Python boundary per residual/Jacobian eval).
+- GATE (correctness): structured path requires the model be declared `with_scalar_separable(true)` (output i
+  depends only on input i) AND scalar-x layout (x.len()==y.len()). Scalar builtins (unilinear/polynomial/
+  exponential/quadratic) opt in; multi-dimensional x (multilinear) and un-opted custom closures stay on the
+  dense reference (which handles any layout). LEVER FOR REUSE: any separable-variable least-squares solver
+  that re-forms a dense (params + per-point-nuisance) normal system each iter -> eliminate the diagonal
+  nuisance block by Schur complement (variable projection) for O(n) per-iteration cost.
+- CAVEAT: the E0514 toolchain-churn cascade (criterion/clap/serde_json dev-deps compiled by an incompatible
+  rustc) blocked `cargo test` at commit time; the fsci-odr lib + perf bins build clean and the 15 unit tests
+  passed earlier this session pre-churn. Needs a `cargo clean` sweep to re-green the full dev-dep test graph.

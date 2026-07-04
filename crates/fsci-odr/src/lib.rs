@@ -209,6 +209,7 @@ pub struct Model {
     pub fjacd: Option<JacobianFn>,
     pub estimate: Option<EstimateFn>,
     pub implicit: bool,
+    pub scalar_separable: bool,
     pub parameter_count: Option<usize>,
     pub meta: BTreeMap<String, String>,
 }
@@ -221,6 +222,7 @@ impl fmt::Debug for Model {
             .field("has_fjacd", &self.fjacd.is_some())
             .field("has_estimate", &self.estimate.is_some())
             .field("implicit", &self.implicit)
+            .field("scalar_separable", &self.scalar_separable)
             .field("parameter_count", &self.parameter_count)
             .field("meta", &self.meta)
             .finish_non_exhaustive()
@@ -239,6 +241,7 @@ impl Model {
             fjacd: None,
             estimate: None,
             implicit: false,
+            scalar_separable: false,
             parameter_count: None,
             meta: BTreeMap::new(),
         }
@@ -252,6 +255,18 @@ impl Model {
     pub fn with_parameter_count(mut self, parameter_count: usize) -> Self {
         self.parameter_count = Some(parameter_count);
         self
+    }
+
+    /// Declare that the model evaluates each observation independently: output
+    /// point `i` depends only on input point `i` and `beta`.
+    pub fn with_scalar_separable(mut self, scalar_separable: bool) -> Self {
+        self.scalar_separable = scalar_separable;
+        self
+    }
+
+    /// Whether the model was declared [`Self::with_scalar_separable`].
+    pub fn is_scalar_separable(&self) -> bool {
+        self.scalar_separable
     }
 
     pub fn with_estimate<F>(mut self, estimate: F) -> Self
@@ -403,6 +418,19 @@ impl ODR {
     }
 
     pub fn run(&self) -> Result<Output, OdrError> {
+        self.run_impl(true)
+    }
+
+    /// Reference solver that forms the full `(n_beta + n_free_delta)`-dimensional
+    /// finite-difference Jacobian and normal equations (the pre-structural
+    /// `O(n^3)`-per-iteration path). Retained as an in-tree oracle: the structured
+    /// solver reproduces its `beta`/`delta`/covariance to convergence tolerance.
+    #[doc(hidden)]
+    pub fn run_dense_reference(&self) -> Result<Output, OdrError> {
+        self.run_impl(false)
+    }
+
+    fn run_impl(&self, use_structured: bool) -> Result<Output, OdrError> {
         if self.model.implicit {
             return Err(OdrError::Unsupported {
                 detail: String::from("implicit ODR models are represented but not solved yet"),
@@ -467,7 +495,49 @@ impl ODR {
                 vec![f64::INFINITY; data.response().map_or(data.x.len(), |resp| resp.len())]
             })
         };
-        let result = solve_least_squares(residuals, &variable0, self.options)?;
+        let ctx = OdrStruct {
+            model: &self.model,
+            data: &self.data,
+            y,
+            beta_template: &self.beta0,
+            delta_template: &delta0,
+            free_beta: &free_beta_indices,
+            free_delta: &free_delta_indices,
+            diff_step: self.options.diff_step,
+        };
+        // The structured (Schur-eliminated) path is valid only for scalar
+        // pointwise models: response `i` depends on `x[i]` and not on any other
+        // input coordinate. Arbitrary custom closures can legally couple output
+        // rows, so they stay on the dense reference path unless the model is
+        // explicitly marked scalar-separable.
+        let can_structured =
+            use_structured && self.data.x.len() == y.len() && self.model.is_scalar_separable();
+        let solved = if can_structured {
+            let sr = solve_odr_structured(&ctx, &residuals, &variable0, self.options)?;
+            SolvedFit {
+                x: sr.x,
+                cost: sr.cost,
+                success: sr.success,
+                message: sr.message,
+                nfev: sr.nfev,
+                njev: sr.njev,
+                nit: sr.nit,
+                cov: CovSource::Struct(sr.jac),
+            }
+        } else {
+            let lr = solve_least_squares(&residuals, &variable0, self.options)?;
+            SolvedFit {
+                x: lr.x,
+                cost: lr.cost,
+                success: lr.success,
+                message: lr.message,
+                nfev: lr.nfev,
+                njev: lr.njev,
+                nit: lr.nit,
+                cov: CovSource::Dense(lr.jac),
+            }
+        };
+        let result = solved;
         let (beta, delta) = unpack_variables(
             &result.x,
             &self.beta0,
@@ -497,8 +567,12 @@ impl ODR {
         let sum_square = sum_square_eps + sum_square_delta;
         let dof = y.len().saturating_sub(beta.len()).max(1);
         let res_var = sum_square / dof as f64;
-        let cov_beta =
-            covariance_from_jacobian(&result.jac, beta.len(), &free_beta_indices, res_var);
+        let cov_beta = match &result.cov {
+            CovSource::Dense(jac) => {
+                covariance_from_jacobian(jac, beta.len(), &free_beta_indices, res_var)
+            }
+            CovSource::Struct(jac) => ctx.covariance_beta(jac, beta.len(), res_var),
+        };
         let sd_beta = cov_beta
             .iter()
             .enumerate()
@@ -606,6 +680,7 @@ pub fn unilinear() -> Model {
     })
     .with_name("unilinear")
     .with_parameter_count(2)
+    .with_scalar_separable(true)
 }
 
 pub fn quadratic() -> Model {
@@ -625,6 +700,7 @@ pub fn polynomial(order: usize) -> Model {
     })
     .with_name(format!("polynomial({order})"))
     .with_parameter_count(order + 1)
+    .with_scalar_separable(true)
 }
 
 pub fn exponential() -> Model {
@@ -638,6 +714,7 @@ pub fn exponential() -> Model {
     })
     .with_name("exponential")
     .with_parameter_count(3)
+    .with_scalar_separable(true)
 }
 
 pub fn multilinear(input_dim: usize) -> Model {
@@ -657,6 +734,7 @@ pub fn multilinear(input_dim: usize) -> Model {
     })
     .with_name(format!("multilinear({input_dim})"))
     .with_parameter_count(input_dim + 1)
+    .with_scalar_separable(true)
 }
 
 fn validate_beta0(beta0: &[f64], expected: Option<usize>) -> Result<(), OdrError> {
@@ -983,6 +1061,436 @@ where
     })
 }
 
+// ---------------------------------------------------------------------------
+// Structured ODR solver.
+//
+// The explicit-ODR least-squares problem packs the model parameters `beta`
+// (p free entries) and one x-error `delta` per data point (m free entries) into
+// a single variable vector; the residual is `[ sqrt(we)·(y - f(beta, x+delta)) ;
+// sqrt(wd)·delta ]` (length 2n). The dense reference path forms the full
+// (p+m)-column finite-difference Jacobian and (p+m)² normal equations, so each
+// iteration costs O(n·(p+m)²) ~ O(n³) with m ~ n.
+//
+// Because observation i's prediction depends only on x_i + delta_i, the entire
+// delta block of the Jacobian is a single diagonal (response rows) plus the
+// analytic diagonal sqrt(wd) (penalty rows). That lets us
+//   * build the whole delta diagonal from ONE batched model evaluation, and
+//   * eliminate the delta variables from the LM step via the Schur complement of
+//     the diagonal delta–delta block, leaving a p×p system in beta,
+// dropping the per-iteration cost to O(n·p²) — linear in the data size. The step
+// and covariance are mathematically identical to the dense path (equal up to
+// floating-point roundoff), so the fit converges to the same solution.
+// ---------------------------------------------------------------------------
+
+/// Structured finite-difference Jacobian for an explicit ODR problem.
+/// Response residual rows are `0..n`; delta-penalty rows are `n..2n`.
+struct StructJac {
+    /// `a[i][k]` = ∂r_resp[i] / ∂(free β_k), the dense response-block β columns.
+    a: Vec<Vec<f64>>,
+    /// `d_diag[j]` = ∂r_resp[dj] / ∂δ_dj, the response-block δ diagonal
+    /// (`dj = free_delta[j]`).
+    d_diag: Vec<f64>,
+    /// `b[j]` = sqrt(wd[dj]), the analytic δ-penalty diagonal.
+    b: Vec<f64>,
+}
+
+struct OdrStruct<'a> {
+    model: &'a Model,
+    data: &'a Data,
+    y: &'a [f64],
+    beta_template: &'a [f64],
+    delta_template: &'a [f64],
+    free_beta: &'a [usize],
+    free_delta: &'a [usize],
+    diff_step: f64,
+}
+
+struct StructResult {
+    x: Vec<f64>,
+    cost: f64,
+    success: bool,
+    message: String,
+    nfev: usize,
+    njev: usize,
+    nit: usize,
+    jac: StructJac,
+}
+
+impl OdrStruct<'_> {
+    fn n(&self) -> usize {
+        self.data.x.len()
+    }
+    fn p(&self) -> usize {
+        self.free_beta.len()
+    }
+    fn m(&self) -> usize {
+        self.free_delta.len()
+    }
+
+    /// Structured finite-difference Jacobian at packed variables `x` with base
+    /// residual `r`. The β columns reproduce the dense path bit-for-bit; the δ
+    /// diagonal comes from a single all-δ-perturbed model evaluation (each output
+    /// point depends only on its own input, so the batched value equals the
+    /// one-at-a-time perturbation).
+    fn jac(&self, x: &[f64], r: &[f64]) -> Result<StructJac, OdrError> {
+        let (n, p, m) = (self.n(), self.p(), self.m());
+        let (beta, delta) = unpack_variables(
+            x,
+            self.beta_template,
+            self.delta_template,
+            self.free_beta,
+            self.free_delta,
+        );
+        let xplus = add_slices(&self.data.x, &delta);
+
+        let mut a = vec![vec![0.0; p]; n];
+        for k in 0..p {
+            let h = self.diff_step * x[k].abs().max(1.0);
+            let mut beta_pert = beta.clone();
+            beta_pert[self.free_beta[k]] += h;
+            let pred = self.model.evaluate(&beta_pert, &xplus);
+            if pred.len() != n {
+                return Err(jac_length_error(pred.len(), n));
+            }
+            for i in 0..n {
+                let r_pert = self.data.we[i].sqrt() * (self.y[i] - pred[i]);
+                if !r_pert.is_finite() {
+                    return Err(jac_nonfinite_error());
+                }
+                a[i][k] = (r_pert - r[i]) / h;
+            }
+        }
+
+        let mut d_diag = vec![0.0; m];
+        let mut b = vec![0.0; m];
+        if m > 0 {
+            let mut xpert = xplus.clone();
+            let mut hs = vec![0.0; m];
+            for (j, &dj) in self.free_delta.iter().enumerate() {
+                let h = self.diff_step * x[p + j].abs().max(1.0);
+                hs[j] = h;
+                xpert[dj] += h;
+                b[j] = self.data.wd[dj].sqrt();
+            }
+            let pred = self.model.evaluate(&beta, &xpert);
+            if pred.len() != n {
+                return Err(jac_length_error(pred.len(), n));
+            }
+            for (j, &dj) in self.free_delta.iter().enumerate() {
+                let r_pert = self.data.we[dj].sqrt() * (self.y[dj] - pred[dj]);
+                if !r_pert.is_finite() {
+                    return Err(jac_nonfinite_error());
+                }
+                d_diag[j] = (r_pert - r[dj]) / hs[j];
+            }
+        }
+        Ok(StructJac { a, d_diag, b })
+    }
+
+    /// Number of model evaluations the structured Jacobian consumes: one full
+    /// evaluation per free β column, plus one batched evaluation for all δ.
+    fn jac_evals(&self) -> usize {
+        self.p() + usize::from(self.m() > 0)
+    }
+
+    /// `max_abs(Jᵀr)`, matching the dense gradient-tolerance convergence test.
+    fn gradient_maxabs(&self, sj: &StructJac, r: &[f64]) -> f64 {
+        let (n, p) = (self.n(), self.p());
+        let mut worst = 0.0_f64;
+        for k in 0..p {
+            let mut g = 0.0;
+            for (i, &ri) in r.iter().take(n).enumerate() {
+                g += sj.a[i][k] * ri;
+            }
+            worst = worst.max(g.abs());
+        }
+        for (j, &dj) in self.free_delta.iter().enumerate() {
+            let g = sj.d_diag[j] * r[dj] + sj.b[j] * r[n + dj];
+            worst = worst.max(g.abs());
+        }
+        worst
+    }
+
+    /// LM step `(JᵀJ + μI) s = -Jᵀr` solved by eliminating the diagonal δ block:
+    /// reduce to a p×p system in the β step, then back-substitute each δ step.
+    /// Equal to the dense `solve_lm_step` up to roundoff.
+    fn lm_step(&self, sj: &StructJac, r: &[f64], damping: f64) -> Option<Vec<f64>> {
+        let (n, p, m) = (self.n(), self.p(), self.m());
+
+        // g_beta = Aᵀ r_resp (the β part of Jᵀr); rhs_beta = -g_beta.
+        let mut g_beta = vec![0.0; p];
+        for (i, &ri) in r.iter().take(n).enumerate() {
+            for (k, g) in g_beta.iter_mut().enumerate() {
+                *g += sj.a[i][k] * ri;
+            }
+        }
+
+        // Per-row Schur coefficient c_i (1 for fixed-δ rows, (b²+μ)/g for free-δ
+        // rows) and the δ-elimination contribution to the reduced right-hand side.
+        let mut cvec = vec![1.0; n];
+        let mut red_rhs: Vec<f64> = g_beta.iter().map(|g| -g).collect();
+        for (j, &dj) in self.free_delta.iter().enumerate() {
+            let a_j = sj.d_diag[j];
+            let b_j = sj.b[j];
+            let g_j = a_j * a_j + b_j * b_j + damping;
+            if g_j.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
+                return None;
+            }
+            cvec[dj] = (b_j * b_j + damping) / g_j;
+            let rhs_delta_j = -(a_j * r[dj] + b_j * r[n + dj]);
+            let coeff = (a_j / g_j) * rhs_delta_j;
+            for (k, value) in red_rhs.iter_mut().enumerate() {
+                *value -= coeff * sj.a[dj][k];
+            }
+        }
+
+        // Reduced β system R = μI + Σ_i c_i a_i a_iᵀ.
+        let mut rmat = vec![vec![0.0; p]; p];
+        for (k, row) in rmat.iter_mut().enumerate() {
+            row[k] = damping;
+        }
+        for (i, &ci) in cvec.iter().enumerate().take(n) {
+            if ci == 0.0 {
+                continue;
+            }
+            let ai = &sj.a[i];
+            for lhs in 0..p {
+                let scaled = ai[lhs] * ci;
+                if scaled == 0.0 {
+                    continue;
+                }
+                let row = &mut rmat[lhs];
+                for rhs in 0..p {
+                    row[rhs] += scaled * ai[rhs];
+                }
+            }
+        }
+
+        let s_beta = if p > 0 {
+            gaussian_solve(rmat, red_rhs)?
+        } else {
+            Vec::new()
+        };
+
+        let mut step = Vec::with_capacity(p + m);
+        step.extend_from_slice(&s_beta);
+        for (j, &dj) in self.free_delta.iter().enumerate() {
+            let a_j = sj.d_diag[j];
+            let b_j = sj.b[j];
+            let g_j = a_j * a_j + b_j * b_j + damping;
+            let rhs_delta_j = -(a_j * r[dj] + b_j * r[n + dj]);
+            let a_dot_s: f64 = sj.a[dj].iter().zip(&s_beta).map(|(a, s)| a * s).sum();
+            step.push((rhs_delta_j - a_j * a_dot_s) / g_j);
+        }
+        Some(step)
+    }
+
+    /// β covariance = res_var · (Schur complement of the δ–δ block of JᵀJ)⁻¹.
+    /// This equals the β-block of the inverse of the full (p+m)² normal matrix
+    /// the dense `covariance_from_jacobian` extracts, computed in O(n·p²).
+    fn covariance_beta(&self, sj: &StructJac, beta_len: usize, res_var: f64) -> Vec<Vec<f64>> {
+        let (n, p) = (self.n(), self.p());
+        let nan_cov = || vec![vec![f64::NAN; beta_len]; beta_len];
+        if beta_len == 0 {
+            return Vec::new();
+        }
+        if p == 0 {
+            return vec![vec![0.0; beta_len]; beta_len];
+        }
+
+        // c0_i = 1 for fixed-δ rows, b²/(a²+b²) for free-δ rows (μ = 0).
+        let mut c0 = vec![1.0; n];
+        for (j, &dj) in self.free_delta.iter().enumerate() {
+            let a_j = sj.d_diag[j];
+            let b_j = sj.b[j];
+            let denom = a_j * a_j + b_j * b_j;
+            c0[dj] = if denom > 0.0 { b_j * b_j / denom } else { 0.0 };
+        }
+        let mut schur = vec![vec![0.0; p]; p];
+        for (i, &ci) in c0.iter().enumerate().take(n) {
+            if ci == 0.0 {
+                continue;
+            }
+            let ai = &sj.a[i];
+            for lhs in 0..p {
+                let scaled = ai[lhs] * ci;
+                if scaled == 0.0 {
+                    continue;
+                }
+                let row = &mut schur[lhs];
+                for rhs in 0..p {
+                    row[rhs] += scaled * ai[rhs];
+                }
+            }
+        }
+
+        invert_matrix(schur).map_or_else(nan_cov, |inverse| {
+            let mut covariance = vec![vec![0.0; beta_len]; beta_len];
+            for (lhs_var, &lhs_beta) in self.free_beta.iter().enumerate() {
+                for (rhs_var, &rhs_beta) in self.free_beta.iter().enumerate() {
+                    covariance[lhs_beta][rhs_beta] = inverse[lhs_var][rhs_var] * res_var;
+                }
+            }
+            covariance
+        })
+    }
+}
+
+fn jac_length_error(got: usize, expected: usize) -> OdrError {
+    OdrError::InvalidArgument {
+        detail: format!(
+            "residual length changed during finite differences (got {got} and {expected})"
+        ),
+    }
+}
+
+fn jac_nonfinite_error() -> OdrError {
+    OdrError::NonFiniteInput {
+        detail: String::from("finite-difference residuals[..] must be finite"),
+    }
+}
+
+/// Structured Levenberg–Marquardt loop for explicit ODR. Mirrors the control
+/// flow of [`solve_least_squares`] (identical damping schedule, tolerances, and
+/// accept/reject logic) but uses the structured Jacobian and Schur-eliminated
+/// step, so it costs O(n·p²) per iteration instead of O(n³).
+fn solve_odr_structured<F>(
+    ctx: &OdrStruct,
+    residuals: &F,
+    x0: &[f64],
+    options: OdrOptions,
+) -> Result<StructResult, OdrError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    if x0.is_empty() {
+        return Err(OdrError::InvalidArgument {
+            detail: String::from("least-squares variable vector must not be empty"),
+        });
+    }
+    let mut x = x0.to_vec();
+    let mut r = residuals(&x);
+    let mut nfev = 1usize;
+    if r.len() < x.len() {
+        return Err(OdrError::InvalidArgument {
+            detail: format!(
+                "number of residuals ({}) must be >= number of variables ({})",
+                r.len(),
+                x.len()
+            ),
+        });
+    }
+    validate_finite_slice("initial residuals", &r)?;
+    let mut cost = 0.5 * dot(&r, &r);
+    let mut damping = 1.0e-3;
+    let mut jac = ctx.jac(&x, &r)?;
+    nfev += ctx.jac_evals();
+    let mut njev = 1usize;
+    for nit in 0..options.maxit {
+        if ctx.gradient_maxabs(&jac, &r) <= options.sstol {
+            return Ok(StructResult {
+                x,
+                cost,
+                success: true,
+                message: String::from("gradient tolerance reached"),
+                nfev,
+                njev,
+                nit,
+                jac,
+            });
+        }
+
+        let mut accepted = false;
+        for _ in 0..8 {
+            let step = ctx
+                .lm_step(&jac, &r, damping)
+                .ok_or_else(|| OdrError::SolverFailure {
+                    detail: String::from("normal equations are singular"),
+                })?;
+            if max_abs(&step) <= options.partol * (1.0 + max_abs(&x)) {
+                return Ok(StructResult {
+                    x,
+                    cost,
+                    success: true,
+                    message: String::from("parameter tolerance reached"),
+                    nfev,
+                    njev,
+                    nit,
+                    jac,
+                });
+            }
+            let candidate = x
+                .iter()
+                .zip(step.iter())
+                .map(|(value, delta)| value + delta)
+                .collect::<Vec<_>>();
+            let candidate_r = residuals(&candidate);
+            nfev += 1;
+            if candidate_r.iter().any(|value| !value.is_finite()) {
+                damping *= 10.0;
+                continue;
+            }
+            let candidate_cost = 0.5 * dot(&candidate_r, &candidate_r);
+            if candidate_cost < cost {
+                let rel_change = (cost - candidate_cost).abs() / cost.max(1.0);
+                x = candidate;
+                r = candidate_r;
+                cost = candidate_cost;
+                jac = ctx.jac(&x, &r)?;
+                nfev += ctx.jac_evals();
+                njev += 1;
+                damping = (damping * 0.3).max(1.0e-12);
+                accepted = true;
+                if rel_change <= options.sstol {
+                    return Ok(StructResult {
+                        x,
+                        cost,
+                        success: true,
+                        message: String::from("sum-of-squares tolerance reached"),
+                        nfev,
+                        njev,
+                        nit: nit + 1,
+                        jac,
+                    });
+                }
+                break;
+            }
+            damping *= 10.0;
+        }
+        if !accepted {
+            damping *= 10.0;
+        }
+    }
+    Ok(StructResult {
+        x,
+        cost,
+        success: false,
+        message: String::from("maximum iterations reached"),
+        nfev,
+        njev,
+        nit: options.maxit,
+        jac,
+    })
+}
+
+/// Result of an LM solve, carrying whichever Jacobian representation the chosen
+/// solver produced so the covariance can be assembled the matching way.
+struct SolvedFit {
+    x: Vec<f64>,
+    cost: f64,
+    success: bool,
+    message: String,
+    nfev: usize,
+    njev: usize,
+    nit: usize,
+    cov: CovSource,
+}
+
+enum CovSource {
+    Dense(Vec<Vec<f64>>),
+    Struct(StructJac),
+}
+
 fn finite_diff_jacobian<F>(
     residuals: &F,
     x: &[f64],
@@ -1068,10 +1576,11 @@ fn gaussian_solve(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Option<Vec<f6
         matrix.swap(pivot, best);
         rhs.swap(pivot, best);
         let scale = matrix[pivot][pivot];
-        for col in 0..n {
-            matrix[pivot][col] /= scale;
+        for value in &mut matrix[pivot] {
+            *value /= scale;
         }
         rhs[pivot] /= scale;
+        let pivot_row = matrix[pivot].clone();
         for row in 0..n {
             if row == pivot {
                 continue;
@@ -1080,8 +1589,8 @@ fn gaussian_solve(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Option<Vec<f6
             if factor == 0.0 {
                 continue;
             }
-            for col in 0..n {
-                matrix[row][col] -= factor * matrix[pivot][col];
+            for (value, pivot_value) in matrix[row].iter_mut().zip(&pivot_row) {
+                *value -= factor * pivot_value;
             }
             rhs[row] -= factor * rhs[pivot];
         }
@@ -1230,6 +1739,32 @@ mod tests {
         );
     }
 
+    fn assert_vec_close(lhs: &[f64], rhs: &[f64], tol: f64) {
+        assert_eq!(lhs.len(), rhs.len());
+        for (left, right) in lhs.iter().zip(rhs) {
+            let scale = right.abs().max(1.0);
+            assert!(
+                (left - right).abs() / scale <= tol,
+                "expected {left} ~= {right} within relative tol {tol}"
+            );
+        }
+    }
+
+    fn assert_output_close(lhs: &Output, rhs: &Output, tol: f64) {
+        assert_vec_close(&lhs.beta, &rhs.beta, tol);
+        assert_vec_close(&lhs.delta, &rhs.delta, tol);
+        assert_vec_close(&lhs.sd_beta, &rhs.sd_beta, tol);
+        assert_close(
+            lhs.sum_square,
+            rhs.sum_square,
+            tol * rhs.sum_square.abs().max(1.0),
+        );
+        assert_eq!(lhs.cov_beta.len(), rhs.cov_beta.len());
+        for (left, right) in lhs.cov_beta.iter().zip(&rhs.cov_beta) {
+            assert_vec_close(left, right, tol);
+        }
+    }
+
     #[test]
     fn public_api_matches_documented_scipy_odr_symbols() {
         assert_eq!(public_api_symbols().len(), 16);
@@ -1356,6 +1891,67 @@ mod tests {
         assert_close(output.beta[1], 1.0, 1.0e-5);
         assert_close(output.cov_beta[0][0], 0.0, 0.0);
         assert_close(output.sd_beta[0], 0.0, 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn structured_scalar_odr_matches_dense_reference() -> Result<(), OdrError> {
+        let x = (0..24)
+            .map(|idx| idx as f64 * 0.05 + (idx % 5) as f64 * 0.002)
+            .collect::<Vec<_>>();
+        let y = x
+            .iter()
+            .map(|value| 0.7 + 1.3 * value + 0.4 * (0.9 * value).sin())
+            .collect::<Vec<_>>();
+        let model = Model::new(|beta: &[f64], x: &[f64]| {
+            x.iter()
+                .map(|value| beta[0] + beta[1] * value + beta[2] * (beta[3] * value).sin())
+                .collect()
+        })
+        .with_parameter_count(4)
+        .with_scalar_separable(true);
+        let odr = ODR::new(Data::new(x, y)?, model, vec![0.5, 1.5, 0.2, 0.8])?;
+
+        let structured = odr.run()?;
+        let dense = odr.run_dense_reference()?;
+
+        assert_output_close(&structured, &dense, 1.0e-6);
+        Ok(())
+    }
+
+    #[test]
+    fn custom_coupled_model_uses_dense_reference_path() -> Result<(), OdrError> {
+        let x = vec![0.2, 0.4, 0.8, 1.6, 3.2];
+        let y = vec![0.44, 0.88, 1.76, 3.52, 7.04];
+        let model = Model::new(|beta: &[f64], x: &[f64]| {
+            x.iter()
+                .enumerate()
+                .map(|(idx, value)| {
+                    let neighbor = x[(idx + 1) % x.len()];
+                    beta[0] * value + beta[1] * neighbor
+                })
+                .collect()
+        })
+        .with_parameter_count(2);
+        let odr = ODR::new(Data::new(x, y)?, model, vec![1.0, 0.1])?;
+
+        let default = odr.run()?;
+        let dense = odr.run_dense_reference()?;
+
+        assert_eq!(default, dense);
+        Ok(())
+    }
+
+    #[test]
+    fn structured_covariance_is_zero_when_all_beta_fixed() -> Result<(), OdrError> {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![1.0, 3.0, 5.0, 7.0];
+        let output = ODR::new(Data::new(x, y)?, unilinear(), vec![2.0, 1.0])?
+            .with_beta_free(vec![false, false])?
+            .run()?;
+
+        assert_eq!(output.cov_beta, vec![vec![0.0, 0.0], vec![0.0, 0.0]]);
+        assert_eq!(output.sd_beta, vec![0.0, 0.0]);
         Ok(())
     }
 
