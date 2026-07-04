@@ -8499,7 +8499,7 @@ fn cosm_sinm_blocks(a: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
     let den =
         DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| Complex::new(p_e[(i, j)], -w[(i, j)]));
     let num = DMatrix::<Complex<f64>>::from_fn(n, n, |i, j| Complex::new(p_e[(i, j)], w[(i, j)]));
-    let Some(mut x) = den.lu().solve(&num) else {
+    let Some(x) = den.lu().solve(&num) else {
         // Singular Padé denominator (never seen in practice): fall back to the
         // reference 2n×2n embedding via the real expm kernel.
         let mut b_mat = DMatrix::<f64>::zeros(2 * n, 2 * n);
@@ -8514,12 +8514,20 @@ fn cosm_sinm_blocks(a: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
         let sin = e.view((n, 0), (n, n)).into_owned();
         return (cos, sin);
     };
-    // X = cos(A_s)+i·sin(A_s); square s times to reach cos(A)+i·sin(A).
+    // X = cos(A_s)+i·sin(A_s); square s times to reach cos(A)+i·sin(A). Do the complex
+    // squaring `(P+iQ)² = (P²−Q²) + i(PQ+QP)` via the fast parallel REAL `par_dmatmul`
+    // for each of the four products instead of nalgebra's generic (unblocked, serial)
+    // complex GEMM — this scaling/squaring loop was the cosm/sinm bottleneck.
+    let mut cos = DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].re);
+    let mut sin = DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].im);
     for _ in 0..s {
-        x = &x * &x;
+        let pp = par_dmatmul(&cos, &cos);
+        let qq = par_dmatmul(&sin, &sin);
+        let pq = par_dmatmul(&cos, &sin);
+        let qp = par_dmatmul(&sin, &cos);
+        cos = pp - qq;
+        sin = pq + qp;
     }
-    let cos = DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].re);
-    let sin = DMatrix::<f64>::from_fn(n, n, |i, j| x[(i, j)].im);
     (cos, sin)
 }
 

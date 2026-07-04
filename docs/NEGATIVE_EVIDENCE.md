@@ -16110,3 +16110,23 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - CONCLUSION: the special-fn KERNEL-gap vein is EXHAUSTED (spence + pbdv were the two losses, both now fixed —
   b447e010 / codex 8b6c7306). Everything else wins 1.25–50×. STOP sweeping special-fn kernels. Frontier = documented
   WALLS (dense LAPACK dsyevd/dgesdd, FFT pocketfft cache kernel, Mathieu specfun continued-fraction port).
+
+## 2026-07-04 - BlackThrush (cc) - cosm/sinm complex scaling/squaring: nalgebra generic complex GEMM -> par_dmatmul (2.04x self, flips 2.4x LOSS -> parity)
+
+- fsci-linalg matrix-function dig (uncontested crate). PINNED scipy (OPENBLAS_NUM_THREADS=1, n=256): cosm 37.1ms,
+  expm 10.2ms, logm 49.7ms, sqrtm 25.6ms (UNPINNED scipy is ~39x oversubscription-inflated — always pin for dense
+  LAPACK peers). fsci pre-change: cosm 88.47ms (2.4x SLOWER = REAL LOSS), expm 14.07ms, logm 14.02ms (3.5x FASTER),
+  sqrtm 13.74ms (1.86x FASTER). logm/sqrtm already WIN (Schur-based); cosm/sinm were the gap.
+- ROOT CAUSE: `cosm_sinm_blocks` already collapses the deg-13 Pade to real n-by-n polys via the B^2=A^2 block-scalar
+  trick (6 fast `par_dmatmul` real M-powers), BUT the scaling/squaring loop `for _ in 0..s { x = &x * &x }` used
+  nalgebra's GENERIC complex GEMM (unblocked, SERIAL, no SIMD) on the n-by-n complex X. At n=256 the one-norm forces
+  s=3 squarings -> 3 slow serial complex matmuls dominated.
+- FIX: square via `(P+iQ)^2 = (P^2-Q^2) + i(PQ+QP)`, each of the 4 real products through the fast parallel
+  `par_dmatmul` (carry Re/Im as two real DMatrix, no per-iter complex<->real conversion). cosm 88.47 -> 43.34ms =
+  **2.04x self**, flips the **2.4x LOSS -> 1.17x ~parity** vs pinned scipy 37.1ms. sinm shares the kernel (same win).
+  cosm + sinm proptests (vs scipy reference) GREEN. NOT byte-identical (par_dmatmul reassoc) but within matrix-fn tol.
+- RESIDUAL / NEXT LEVER: the remaining ~6ms gap is the ONE complex solve `den.lu().solve(&num)` (nalgebra generic
+  complex LU, serial). Convert the n-by-n complex system to the 2n-by-2n REAL block `[[Pe,W],[-W,Pe]][Xr;Xi]=[Pe;W]`
+  and route through fsci's parallel blocked LU (2x flops but 64-core parallel vs nalgebra serial) -> would flip cosm
+  to a clean WIN. LEVER: grep nalgebra generic `.lu()`/`*` on COMPLEX DMatrix in hot matrix-fn paths -> replace with
+  par_dmatmul real-product decomposition (complex GEMM = 3-4 real par_dmatmuls) / 2n real block solve.
