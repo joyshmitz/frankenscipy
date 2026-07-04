@@ -6,6 +6,38 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - KEEP: fsci-io savetxt row-parallel formatter - 3.25x / 3.62x vs ORIG serial path
+
+- Gap attacked: `savetxt` still formatted each output cell serially into one
+  `String`, so large text dumps were dominated by independent `f64` Display
+  formatting. The new path keeps the small-matrix serial route, then formats
+  contiguous row ranges in scoped worker threads and joins the private buffers in
+  row order. The hidden `SAVETXT_FORCE_SERIAL` switch keeps a same-binary ORIG
+  serial path for A/B proof.
+- Short per-crate bench command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-io --bench io_bench --profile release -- savetxt_parallel_ab --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+  RCH selected `ovh-b`; Cargo rejects the requested literal `cargo bench
+  --release` form, so the runnable release bench used `--profile release`.
+
+  | case | current parallel median | ORIG serial median | speedup |
+  |---|---:|---:|---:|
+  | 10000x20 | 7.0135 ms | 22.808 ms | 3.25x |
+  | 50000x20 | 31.925 ms | 115.65 ms | 3.62x |
+
+- Correctness: new `savetxt_parallel_matches_serial_output` unit test forces the
+  serial path, runs the default parallel path on a 4000x20 matrix above the gate,
+  and asserts byte-identical output. RCH `ovh-b`:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo test -j 1 -p fsci-io savetxt_parallel_matches_serial_output --lib -- --nocapture`
+  passed 1/0.
+- Gates: `cargo check -j 1 -p fsci-io --all-targets` passed on RCH `ovh-a`;
+  `cargo clippy -j 1 -p fsci-io --all-targets -- -D warnings` passed on RCH
+  `ovh-b` after fixing pre-existing `chunks_exact` clippy sites in the same
+  file; `cargo fmt -p fsci-io --check` and `git diff --check` passed locally.
+  `ubs crates/fsci-io/src/bin/probe_savetxt.rs` passed with 0 critical/0
+  warnings. Full changed-file UBS remains nonzero on broad pre-existing
+  `fsci-io/src/lib.rs` heuristic inventory, including test-name equality false
+  positives unrelated to this formatter lane.
+
 ## 2026-07-04 - BlackThrush (codex) - KEEP: factor-17 FFT enters iterative odd-tail path - 2.43-3.33x vs ORIG recursive combine
 
 - Land-or-dig audit: `.scratch` / `.worktrees` was checked before digging. The
