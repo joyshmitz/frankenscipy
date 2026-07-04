@@ -1153,7 +1153,7 @@ fn odd_power_tail_factorization(mut n: usize) -> Option<(Vec<usize>, usize)> {
             break;
         }
         let p = smallest_prime_factor(odd_part);
-        if p != 3 && p != 5 && p != 7 && p != 11 && p != 13 {
+        if p != 3 && p != 5 && p != 7 && p != 11 && p != 13 && p != 17 {
             return None;
         }
         factors.push(p);
@@ -1531,8 +1531,57 @@ fn mixed_radix_combine_stage(
             out6[r] = (a6.0 + b6.1, a6.1 - b6.0);
             out7[r] = (a6.0 - b6.1, a6.1 + b6.0);
         }
+    } else if p == 17 {
+        let twp = get_or_compute_twiddles(17, inverse);
+        mixed_radix_combine_stage_conj_pairs::<17>(out, m, twn, &twp);
     } else {
-        unreachable!("iterative odd-tail FFT supports only radix 3/5/7/11/13 stages")
+        unreachable!("iterative odd-tail FFT supports only radix 3/5/7/11/13/17 stages")
+    }
+}
+
+fn mixed_radix_combine_stage_conj_pairs<const P: usize>(
+    out: &mut [Complex64],
+    m: usize,
+    twn: &[Complex64],
+    twp: &[Complex64],
+) {
+    debug_assert_eq!(P % 2, 1);
+    debug_assert!(P >= 3);
+    debug_assert_eq!(out.len(), P * m);
+    debug_assert!(twp.len() >= P);
+    let half = P / 2;
+    for r in 0..m {
+        let mut t = [(0.0, 0.0); P];
+        t[0] = out[r];
+        for j in 1..P {
+            let (xr, xi) = out[j * m + r];
+            let (wr, wi) = twn[j * r];
+            t[j] = (xr * wr - xi * wi, xr * wi + xi * wr);
+        }
+
+        let mut dc = t[0];
+        for j in 1..=half {
+            dc.0 += t[j].0 + t[P - j].0;
+            dc.1 += t[j].1 + t[P - j].1;
+        }
+        out[r] = dc;
+
+        for u in 1..=half {
+            let mut a = t[0];
+            let mut b = (0.0, 0.0);
+            for j in 1..=half {
+                let pair_sum = (t[j].0 + t[P - j].0, t[j].1 + t[P - j].1);
+                let pair_diff = (t[j].0 - t[P - j].0, t[j].1 - t[P - j].1);
+                let (c, s_signed) = twp[(j * u) % P];
+                let s = -s_signed;
+                a.0 += c * pair_sum.0;
+                a.1 += c * pair_sum.1;
+                b.0 += s * pair_diff.0;
+                b.1 += s * pair_diff.1;
+            }
+            out[u * m + r] = (a.0 + b.1, a.1 - b.0);
+            out[(P - u) * m + r] = (a.0 - b.1, a.1 + b.0);
+        }
     }
 }
 
@@ -6320,6 +6369,41 @@ mod tests {
                 .map(|(&(a, b), &(c, d))| ((a - c).powi(2) + (b - d).powi(2)).sqrt())
                 .fold(0.0_f64, f64::max);
             assert!(maxerr < 1e-7, "n={n} fft maxerr {maxerr} vs naive DFT");
+        }
+    }
+
+    #[test]
+    fn mixed_radix_factor17_iterative_matches_naive() {
+        let naive_dft = |x: &[Complex64]| -> Vec<Complex64> {
+            let n = x.len();
+            (0..n)
+                .map(|k| {
+                    let mut acc = (0.0, 0.0);
+                    for (j, &(re, im)) in x.iter().enumerate() {
+                        let a = -2.0 * std::f64::consts::PI * (k * j % n) as f64 / n as f64;
+                        let (c, s) = (a.cos(), a.sin());
+                        acc.0 += re * c - im * s;
+                        acc.1 += re * s + im * c;
+                    }
+                    acc
+                })
+                .collect()
+        };
+        for &n in &[17usize, 34, 51, 68, 85, 289] {
+            let x: Vec<Complex64> = (0..n)
+                .map(|i| ((i as f64 * 0.3).sin(), (i as f64 * 0.11).cos()))
+                .collect();
+            let got = fft(&x, &FftOptions::default()).expect("fft");
+            let want = naive_dft(&x);
+            let maxerr = got
+                .iter()
+                .zip(&want)
+                .map(|(&(a, b), &(c, d))| ((a - c).powi(2) + (b - d).powi(2)).sqrt())
+                .fold(0.0_f64, f64::max);
+            assert!(
+                maxerr < 1e-7,
+                "n={n} factor-17 fft maxerr {maxerr} vs naive DFT"
+            );
         }
     }
 
