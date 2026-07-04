@@ -3587,12 +3587,14 @@ pub fn pbwa_many(a: f64, x: &[f64]) -> Vec<(f64, f64)> {
 /// Vectorized generalized exponential integral E_n(x) for fixed order `n`; see [`fresnel_many`].
 #[must_use]
 pub fn expn_many(n: usize, x: &[f64]) -> Vec<f64> {
-    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(expn(n, x[i]))).expect("expn is infallible")
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(expn(n, x[i])))
+        .expect("expn is infallible")
 }
 /// Vectorized Pochhammer symbol (x)_a for fixed `a`; see [`fresnel_many`].
 #[must_use]
 pub fn poch_many(x: &[f64], a: f64) -> Vec<f64> {
-    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(poch(x[i], a))).expect("poch is infallible")
+    par_map_indices(x.len(), |i| Ok::<f64, SpecialError>(poch(x[i], a)))
+        .expect("poch is infallible")
 }
 /// Vectorized integral of the Struve function H_0, `∫₀ˣ H_0(t) dt`; see [`fresnel_many`].
 #[must_use]
@@ -3618,8 +3620,10 @@ pub fn it2struve0_many(x: &[f64]) -> Vec<f64> {
 /// order-preserving parallel fan is a large win. Bit-identical to a serial map.
 #[must_use]
 pub fn besselpoly_many(a: &[f64], lambda: f64, nu: f64) -> Vec<f64> {
-    par_map_indices(a.len(), |i| Ok::<f64, SpecialError>(besselpoly(a[i], lambda, nu)))
-        .expect("besselpoly is infallible")
+    par_map_indices(a.len(), |i| {
+        Ok::<f64, SpecialError>(besselpoly(a[i], lambda, nu))
+    })
+    .expect("besselpoly is infallible")
 }
 /// Vectorized prolate-spheroidal characteristic value `pro_cv(m, n, c)` over many
 /// `c` for a fixed `(m, n)`; see [`fresnel_many`]. Each `pro_cv` diagonalises a
@@ -4290,12 +4294,81 @@ pub fn spence(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     )
 }
 
+/// Cephes `spence.c` rational-approximation coefficients (numerator A, denominator B;
+/// degree 7). `scipy.special.spence` uses this exact form.
+const SPENCE_A: [f64; 8] = [
+    4.651_285_860_739_900_5e-5,
+    7.315_890_452_380_947_1e-3,
+    1.338_476_395_783_090_2e-1,
+    8.796_913_117_545_303e-1,
+    2.711_498_511_965_534_7e0,
+    4.256_971_560_081_218e0,
+    3.297_713_409_852_251e0,
+    1.000_000_000_000_000_1e0,
+];
+const SPENCE_B: [f64; 8] = [
+    6.909_904_889_125_533e-4,
+    2.540_437_639_325_444e-2,
+    2.829_748_606_025_681e-1,
+    1.411_725_977_518_310_7e0,
+    3.638_005_333_451_371e0,
+    5.032_788_801_433_170e0,
+    3.547_713_409_852_251e0,
+    9.999_999_999_999_999e-1,
+];
+
+#[inline]
+fn spence_polevl(x: f64, c: &[f64; 8]) -> f64 {
+    let mut acc = c[0];
+    for &ci in &c[1..] {
+        acc = acc * x + ci;
+    }
+    acc
+}
+
+/// Spence's function `spence(x) = Li₂(1 − x)` for `x ≥ 0` via the Cephes rational
+/// approximation: a fixed pair of degree-7 polynomials with argument reduction, instead
+/// of the naïve ~50-term Li₂ power series (`dilog_real`). Validated against that series
+/// path (`spence_cephes_matches_series_path`) to < 1e-11 over x ∈ (0, 60].
+fn spence_cephes(x: f64) -> f64 {
+    if x == 1.0 {
+        return 0.0;
+    }
+    if x == 0.0 {
+        return PI_SQUARED_OVER_SIX;
+    }
+    let mut x = x;
+    let mut flag = 0u8;
+    if x > 2.0 {
+        x = 1.0 / x;
+        flag |= 2;
+    }
+    let w = if x > 1.5 {
+        flag |= 2;
+        1.0 / x - 1.0
+    } else if x < 0.5 {
+        flag |= 1;
+        -x
+    } else {
+        x - 1.0
+    };
+    let mut y = -w * spence_polevl(w, &SPENCE_A) / spence_polevl(w, &SPENCE_B);
+    if flag & 1 != 0 {
+        y = PI_SQUARED_OVER_SIX - x.ln() * (1.0 - x).ln() - y;
+    }
+    if flag & 2 != 0 {
+        let z = x.ln();
+        y = -0.5 * z * z - y;
+    }
+    y
+}
+
 #[must_use]
 pub fn spence_scalar(x: f64) -> f64 {
     if x.is_nan() || x.is_infinite() || x < 0.0 {
         return f64::NAN;
     }
-    dilog_real(1.0 - x)
+    spence_cephes(x)
 }
 
 /// Complex dilogarithm Li₂(z), principal branch (cut on the real axis for
@@ -5991,8 +6064,10 @@ pub fn voigt_profile(x: f64, sigma: f64, gamma: f64) -> f64 {
 /// it across cores is a clean win. `out[i]` is bit-identical to `voigt_profile(xs[i], sigma, gamma)`;
 /// parallel above 1<<14 points (the wofz kernel amortises the spawn floor well below that for huge arrays).
 pub fn voigt_profile_many(xs: &[f64], sigma: f64, gamma: f64) -> Vec<f64> {
-    par_map_indices_gated(xs.len(), 1 << 14, |i| Ok(voigt_profile(xs[i], sigma, gamma)))
-        .expect("voigt_profile is infallible")
+    par_map_indices_gated(xs.len(), 1 << 14, |i| {
+        Ok(voigt_profile(xs[i], sigma, gamma))
+    })
+    .expect("voigt_profile is infallible")
 }
 
 /// Voigt profile V(x; σ, γ) on the real axis at γ = 0.
@@ -8287,7 +8362,9 @@ mod tests {
     #[test]
     fn ndtr_simd_matches_scalar_within_tol() {
         // ndtr SIMD vector path vs the scalar kernel across the useful CDF range.
-        let mut xs: Vec<f64> = (0..2000).map(|i| -8.0 + 16.0 * (i as f64) / 2000.0).collect();
+        let mut xs: Vec<f64> = (0..2000)
+            .map(|i| -8.0 + 16.0 * (i as f64) / 2000.0)
+            .collect();
         for b in [-1.5, 1.5, -0.5, 0.5, 0.0, -37.0, 37.0] {
             xs.push(b);
         }
@@ -8299,7 +8376,10 @@ mod tests {
         for (k, &x) in xs.iter().enumerate() {
             max_abs = max_abs.max((simd[k] - ndtr_scalar(x)).abs());
         }
-        assert!(max_abs < 1e-15, "ndtr simd max abs diff vs scalar = {max_abs:e}");
+        assert!(
+            max_abs < 1e-15,
+            "ndtr simd max abs diff vs scalar = {max_abs:e}"
+        );
     }
 
     #[test]
@@ -8562,6 +8642,25 @@ mod tests {
         assert!(
             (spence_scalar(2.0) - -0.822_467_033_424_114_2).abs() < 1e-13,
             "spence(2)=-pi^2/12"
+        );
+    }
+
+    #[test]
+    fn spence_cephes_matches_series_path() {
+        // The Cephes rational-approx port must reproduce the known-correct Li₂-series
+        // path (`dilog_real`, itself validated vs scipy) across the whole domain — this
+        // validates the ported A[8]/B[8] coefficients.
+        let mut worst = 0.0f64;
+        for i in 0..4000 {
+            let x = 1e-5 + (i as f64) * 0.015; // x ∈ (0, 60]
+            let c = super::spence_cephes(x);
+            let s = super::dilog_real(1.0 - x);
+            let rel = (c - s).abs() / s.abs().max(1e-12);
+            worst = worst.max(rel);
+        }
+        assert!(
+            worst < 1e-11,
+            "spence cephes vs series worst rel err = {worst}"
         );
     }
 
@@ -10352,7 +10451,6 @@ mod tests {
             );
         }
     }
-
 
     /// Cl₂ accuracy after the truncation+stop fix (frankenscipy-cho22).
     ///
@@ -13986,7 +14084,6 @@ mod tests {
             );
         }
     }
-
 
     #[test]
     fn modstruve_at_zero_handles_v_minus_one() {
