@@ -15815,3 +15815,17 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   COMPUTE-bound, not memory-bound, and 8-wide SIMD wins cleanly. The ratio being kernel-size-dependent (5×5 2.75× >
   9×9 2.22×, bigger kernel = more memory pressure = closer to the bandwidth wall) is the physical signature of a real
   compute-bound win, not contention noise.
+
+## 2026-07-04 - BlackThrush (cc) - generalize correlate/convolve SIMD interior to N-D (3-D volumes) — 1.29x self small-kernel
+
+- Follow-on to f15fc05b: the innermost-axis 8-wide SIMD interior was gated `ndim == 2`, so 3-D volumes fell to the
+  scalar path. Generalized the gate to `ndim >= 2 && strides[ndim-1] == 1` (any C-order innermost-contiguous array)
+  and indexed the run by the LAST axis (`hi[ndim-1]`/`out_idx[ndim-1]`). 2-D behavior UNCHANGED (for ndim==2 the gate
+  and index are identical to before — 2-D win preserved). Byte-identical: added `nd_filter_3d_simd_interior_is_byte_
+  identical_to_perpixel` (3-D volume, 3 modes × 3 kernels incl. asymmetric) GREEN; the 2-D oracle still GREEN.
+- MEASURED same-binary A/B (`ND_FILTER_FORCE_SCALAR`, 128³): **3×3×3 SIMD 18.11ms vs scalar 23.36ms = 1.29x self**
+  (vs scipy 43.06ms: fsci 2.38× faster, up from scalar's 1.84×); **5×5×5 SIMD 265.7 vs scalar 271.8ms = 1.02x**
+  (~0-gain — 5 planes × 128²×8B ≈ 640KB exceed L2 ⇒ MEMORY-bound, so SIMD can't help, but never regresses). KEEP:
+  net-positive generalization (helps the common small-kernel 3-D case, neutral for large kernels, preserves 2-D).
+- CONFIRMS the compute-vs-memory boundary of this lever: 2-D (K rows ≈ 115KB, L2-resident) and small-kernel 3-D
+  (3 planes) are COMPUTE-bound ⇒ SIMD wins 1.3-2.8×; large-kernel 3-D (5+ planes > L2) is MEMORY-bound ⇒ ~1×.

@@ -1629,12 +1629,13 @@ fn nd_filter_apply(
         hi[d] = shape[d] as i64 - mx;
     }
     let mut output = NdArray::zeros(shape.clone());
-    // For the common 2-D C-order case the interior box's innermost axis is a
-    // CONTIGUOUS run, so 8 consecutive output pixels gather from 8 contiguous input
-    // slots per tap — process them as one 8-wide accumulator (LLVM auto-vectorizes the
-    // fixed `[f64;8]` k-accumulation). Bit-identical to the scalar interior: each lane
-    // sums the SAME taps in the SAME k-order (`+= w*x`, no FMA contraction).
-    let simd_2d = ndim == 2
+    // For any C-order array (2-D image, 3-D volume, …) the interior box's INNERMOST
+    // axis is a CONTIGUOUS run, so 8 consecutive output pixels gather from 8 contiguous
+    // input slots per tap — process them as one 8-wide `Simd` accumulator. Bit-identical
+    // to the scalar interior: each lane sums the SAME taps in the SAME k-order (`+= w*x`,
+    // no FMA contraction). Requires innermost stride == 1 (standard C-order).
+    let simd_last = ndim >= 2
+        && strides[ndim - 1] == 1
         && !ND_FILTER_FORCE_SCALAR.load(std::sync::atomic::Ordering::Relaxed);
     let work = |start: usize, os: &mut [f64]| {
         let mut out_idx = vec![0i64; ndim];
@@ -1653,10 +1654,11 @@ fn nd_filter_apply(
                     interior = false;
                 }
             }
-            if simd_2d && interior {
-                // Interior cols left in this row and in this chunk (8-runs stay in-row
-                // because `hi[1] <= shape[1]`, so no row wrap within the run).
-                let run = (hi[1] - out_idx[1]).min((len - li) as i64) as usize;
+            if simd_last && interior {
+                // Interior positions left along the innermost axis in this chunk (8-runs
+                // stay in-line because `hi[last] <= shape[last]`, so no line wrap).
+                let last = ndim - 1;
+                let run = (hi[last] - out_idx[last]).min((len - li) as i64) as usize;
                 let mut lane = 0usize;
                 while lane + 8 <= run {
                     let pp = p + lane;
@@ -12061,6 +12063,42 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn nd_filter_3d_simd_interior_is_byte_identical_to_perpixel() {
+        // The generalized (ndim>=2) innermost-axis SIMD interior must match the per-pixel
+        // reference bit-for-bit on a 3-D volume (innermost axis long enough for 8-runs).
+        let arr = NdArray::new(
+            (0..11 * 9 * 17)
+                .map(|i| ((i * 6151) % 733) as f64 / 70.0 - 5.0)
+                .collect(),
+            vec![11, 9, 17],
+        )
+        .unwrap();
+        for mode in [
+            BoundaryMode::Reflect,
+            BoundaryMode::Constant,
+            BoundaryMode::Nearest,
+        ] {
+            for ks in [[3usize, 3, 3], [1, 1, 5], [2, 3, 4]] {
+                let w = NdArray::new(
+                    (0..ks[0] * ks[1] * ks[2])
+                        .map(|k| (k as f64 * 0.27 - 0.9).cos())
+                        .collect(),
+                    ks.to_vec(),
+                )
+                .unwrap();
+                let origin = vec![0i64; 3];
+                let got = correlate_with_origins(&arr, &w, &origin, mode, 0.4).unwrap();
+                let want = nd_filter_perpixel_ref(&arr, &w, &origin, mode, 0.4, false).unwrap();
+                assert_eq!(
+                    got.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    want.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    "3d mode={mode:?} ks={ks:?}"
+                );
             }
         }
     }
