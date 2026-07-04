@@ -8,10 +8,12 @@ use std::{
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
     DecompOptions, InvOptions, LstsqOptions, MatrixAssumption, PinvOptions, SolveOptions,
-    TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv, lstsq, lu_factor, matmul,
-    orthogonal_procrustes, pinv, randomized_eigh, solve, solve_banded, solve_triangular, svd,
+    TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv, lstsq, lu_factor, lu_solve,
+    matmul, orthogonal_procrustes, pinv, randomized_eigh, solve, solve_banded, solve_triangular,
+    svd,
 };
 use fsci_runtime::RuntimeMode;
+use nalgebra::{DMatrix, DVector, Dyn, LU};
 
 // Per SPEC §17, baseline sizes for dense solve family.
 // SIZES: quick smoke tests; BASELINE_SIZES: full p50/p95/p99 capture
@@ -24,6 +26,7 @@ const DFT_GAUNTLET_SIZES: &[usize] = &[256, 512, 1024];
 const CHO_FACTOR_GAUNTLET_SIZES: &[usize] = &[500, 1000];
 const LU_FACTOR_GAUNTLET_SIZES: &[usize] = &[1000];
 const ORTHOGONAL_PROCRUSTES_CASES: &[(usize, usize)] = &[(3000, 150), (5000, 200)];
+const LU_FACTOR_SOLVE_CASES: &[usize] = &[1000, 1500];
 
 /// Diagonally-dominant matrix: guaranteed non-singular, well-conditioned.
 fn make_diag_dominant(n: usize) -> Vec<Vec<f64>> {
@@ -113,6 +116,108 @@ fn make_matmul_matrix(rows: usize, cols: usize, seed: usize) -> Vec<Vec<f64>> {
                 .map(|j| ((i * 31 + j * 17 + seed) % 97) as f64 * 0.01)
                 .collect()
         })
+        .collect()
+}
+
+fn bench_dmatrix_from_rows(rows: &[Vec<f64>]) -> DMatrix<f64> {
+    let m = rows.len();
+    let n = rows.first().map_or(0, Vec::len);
+    let mut data = Vec::with_capacity(m * n);
+    for col in 0..n {
+        for row in rows {
+            data.push(row[col]);
+        }
+    }
+    DMatrix::from_vec(m, n, data)
+}
+
+fn bench_matrix_norm1(matrix: &DMatrix<f64>) -> f64 {
+    let mut max_col_sum = 0.0_f64;
+    for col in 0..matrix.ncols() {
+        let mut sum = 0.0_f64;
+        for row in 0..matrix.nrows() {
+            let value = matrix[(row, col)].abs();
+            if !value.is_finite() {
+                return f64::NAN;
+            }
+            sum += value;
+        }
+        max_col_sum = max_col_sum.max(sum);
+    }
+    max_col_sum
+}
+
+fn bench_solve_lu_transpose(
+    lu: &LU<f64, Dyn, Dyn>,
+    u_t: &DMatrix<f64>,
+    l_t: &DMatrix<f64>,
+    b: &DVector<f64>,
+) -> Option<DVector<f64>> {
+    let y = u_t.solve_lower_triangular(b)?;
+    let z = l_t.solve_upper_triangular(&y)?;
+    let mut x = z;
+    lu.p().inv_permute_rows(&mut x);
+    Some(x)
+}
+
+fn bench_fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, a_norm: f64, n: usize) -> f64 {
+    if n == 0 {
+        return 1.0;
+    }
+    if a_norm == 0.0 || !a_norm.is_finite() {
+        return 0.0;
+    }
+
+    let mut x = DVector::from_element(n, 1.0 / (n as f64));
+    let mut inv_a_norm = 0.0;
+    let u_t = lu.u().transpose();
+    let l_t = lu.l().transpose();
+
+    for _ in 0..5 {
+        let sign_x = x.map(|value| if value >= 0.0 { 1.0 } else { -1.0 });
+        let Some(w) = bench_solve_lu_transpose(lu, &u_t, &l_t, &sign_x) else {
+            return 0.0;
+        };
+        let sign_w = w.map(|value| if value >= 0.0 { 1.0 } else { -1.0 });
+        let Some(x_new) = lu.solve(&sign_w) else {
+            return 0.0;
+        };
+
+        let new_norm = x_new.lp_norm(1);
+        let direction_delta = x_new
+            .iter()
+            .zip(x.iter())
+            .map(|(&new, &old)| (new - old).abs())
+            .sum::<f64>();
+        if (new_norm - inv_a_norm).abs() <= 1e-10 * new_norm {
+            inv_a_norm = new_norm;
+            break;
+        }
+        inv_a_norm = new_norm;
+        x = x_new;
+
+        if direction_delta <= f64::EPSILON * new_norm {
+            break;
+        }
+    }
+
+    if inv_a_norm <= 0.0 {
+        return 0.0;
+    }
+    let rcond = 1.0 / (a_norm * inv_a_norm);
+    if rcond.is_nan() { 0.0 } else { rcond.min(1.0) }
+}
+
+fn lu_factor_solve_original_nalgebra(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+    let matrix = bench_dmatrix_from_rows(a);
+    let a_norm = bench_matrix_norm1(&matrix);
+    let lu = matrix.lu();
+    black_box(bench_fast_rcond_from_lu(&lu, a_norm, a.len()));
+    let rhs = DVector::from_column_slice(b);
+    lu.solve(&rhs)
+        .expect("original nalgebra lu solve")
+        .iter()
+        .copied()
         .collect()
 }
 
@@ -393,6 +498,29 @@ fn bench_baseline_inv(c: &mut Criterion) {
         let a = make_diag_dominant(n);
         group.bench_function(format!("{n}x{n}"), |bencher| {
             bencher.iter(|| inv(&a, InvOptions::default()).unwrap());
+        });
+    }
+    group.finish();
+}
+
+fn bench_lu_factor_solve_gauntlet(c: &mut Criterion) {
+    let mut group = c.benchmark_group("lu_factor_solve_gauntlet");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(2));
+    group.warm_up_time(Duration::from_secs(1));
+    for &n in LU_FACTOR_SOLVE_CASES {
+        let a = make_diag_dominant(n);
+        let b = make_rhs(n);
+        group.bench_function(format!("{n}x{n}_original_nalgebra"), |bencher| {
+            bencher.iter(|| lu_factor_solve_original_nalgebra(black_box(&a), black_box(&b)));
+        });
+        group.bench_function(format!("{n}x{n}_current_public"), |bencher| {
+            bencher.iter(|| {
+                let factor = lu_factor(black_box(&a), DecompOptions::default()).expect("lu_factor");
+                lu_solve(black_box(&factor), black_box(&b))
+                    .expect("lu_solve")
+                    .x
+            });
         });
     }
     group.finish();
@@ -1148,6 +1276,7 @@ criterion_group!(
     bench_cho_factor_gauntlet_scipy,
     bench_lu_factor_gauntlet,
     bench_orthogonal_procrustes_gauntlet,
+    bench_lu_factor_solve_gauntlet,
     bench_baseline_pinv
 );
 

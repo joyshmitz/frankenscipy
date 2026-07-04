@@ -6,6 +6,49 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-04 - BlackThrush (codex) - KEEP: lu_factor/lu_solve use blocked flat LU backend for large dense systems - 1.45x / 2.40x vs ORIG
+
+- Land-or-dig audit: `.scratch` / `.worktrees` was checked before digging. The
+  only unmerged measured worktree HEAD was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), but current `main` already
+  carries the stronger `MATMUL_FLAT_WORKSPACE_MIN_DIM = 256` route. No measured
+  unlanded win was safe to land, so this pass dug a fresh `fsci-linalg` gap.
+- Alien mapping: cache-aware dense blocking plus a solve-preserving Higham
+  reciprocal-condition estimator. Public `lu()` already had a flat blocked LU
+  factorization path, while `lu_factor` / `lu_solve` still paid nalgebra
+  allocation and factorization costs for large dense systems. The shipped lever
+  reuses the flat blocked factors for finite square matrices at the existing
+  solve threshold and keeps the nalgebra backend for small, non-finite, or
+  singular fallback cases.
+- Command discipline: the requested literal
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo bench --release -p fsci-linalg --bench linalg_bench -- lu_factor_solve_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`
+  was attempted first and Cargo rejected it on `vmi1152480` with
+  `unexpected argument '--release'`. The runnable per-crate release-profile
+  command was
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo bench -p fsci-linalg --bench linalg_bench --profile release -- lu_factor_solve_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- Same-process ORIG ratio: RCH fell back locally for the kept A/B group, so the
+  Criterion binary measured the old nalgebra `lu_factor` + rcond + solve path
+  and the current public `lu_factor` + `lu_solve` path back-to-back:
+  - 1000x1000 ORIG median `309.74 ms`, current median `213.08 ms`, ratio
+    `1.45x`.
+  - 1500x1500 ORIG median `1.3409 s`, current median `558.97 ms`, ratio
+    `2.40x`.
+- Correctness/conformance: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo test -p fsci-linalg lu_factor --lib -- --nocapture`
+  passed 4/4 under RCH local fallback. `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo test -p fsci-conformance --test diff_linalg_lu_factor_lu_solve -- --nocapture`
+  passed 1/1 under RCH local fallback. `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod rch exec -- cargo check -p fsci-linalg --all-targets`
+  passed on `hz2`.
+- Gate notes: `git diff --check -- crates/fsci-linalg/src/lib.rs
+  crates/fsci-linalg/benches/linalg_bench.rs` passed. Crate-wide
+  `cargo fmt -p fsci-linalg --check` and `cargo clippy -p fsci-linalg
+  --all-targets --no-deps -- -D warnings` are still blocked by existing
+  unrelated fsci-linalg formatting and lint debt; this commit leaves that debt
+  untouched.
+- Source kept: `crates/fsci-linalg/src/lib.rs` gives `LuFactorResult` a private
+  flat/nalgebra backend, uses flat blocked LU for large finite `lu_factor`, and
+  dispatches `lu_solve` accordingly. `crates/fsci-linalg/benches/linalg_bench.rs`
+  keeps the same-process ORIG/current gauntlet.
+
 ## 2026-07-04 - BlackThrush (codex) - KEEP: orthogonal_procrustes routes tall cross-covariance through par_matmul - 1.23x / 1.44x vs ORIG
 
 - Land-or-dig audit: the fresh July 4 scratch worktrees checked before digging
