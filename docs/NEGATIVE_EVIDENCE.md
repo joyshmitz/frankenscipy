@@ -15362,3 +15362,21 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   prime-cube losses are rare sizes behind the cache-thrash wall. Don't re-attempt radix-11 (already shipped).
   Frontier now firmly = the documented WALLS (dense cholesky/dtrsv microkernel, pocketfft cache-blocking, Mathieu
   specfun CF) — each needs a heavy, different lever, not a SIMD-lane or add-a-radix quick win.
+
+## 2026-07-04 - BlackThrush (cc) - cholesky "9x wall" DEBUNKED (true gap ~1.5-2x, thread artifact) + panel-TRSM parallelization ~0-gain (reverted)
+
+- Re-measured the believed-biggest gap (dense cholesky ~9x) cleanly. fsci cholesky (own thread::scope parallelism)
+  vs scipy.linalg.cholesky (bin perf_chol + oracle, SPD A=MᵀM+nI):
+  - vs scipy PINNED 1-thread: n=512 **2.37x**, n=1024 **1.70x**, n=2048 **0.97x (PARITY)** — gap SHRINKS with n.
+  - vs scipy DEFAULT multicore (fair): n=512 1.96x, n=1024 2.13x, n=2048 **1.47x** (fsci 105-114ms vs scipy 77.5ms).
+  So the "9x" is a THREAD-OVERSUBSCRIPTION ARTIFACT (confirms [[perf_dense_lapack_thread_oversubscription_artifact]]);
+  the true competitive gap is ~1.5-2x (fsci ~25 vs scipy ~37 GFLOP/s at n=2048) — a microkernel/parallel-scaling gap.
+- LEVER TRIED + REVERTED (~0-gain): the blocked cholesky's PANEL TRSM (`for i in kb..n` in cholesky_lower_blocked)
+  was SERIAL — an apparent O(n²·NB) Amdahl bottleneck while the trailing SYRK is already parallel. Parallelized it
+  across independent trailing rows (byte-close, cholesky_lower_blocked_matches_unblocked + 15 chol tests GREEN,
+  acc bit-identical). MEASURED: interleaved A/B n=2048 OLD 104.30ms ≈ NEW 105ms = **~0 gain** (the first "114→105
+  =1.08x" was noise). Root cause: the TRSM parallelizes PER BLOCK (16 blocks at n=2048) so thread-spawn overhead ×16
+  cancels the saving, and the parallel SYRK microkernel already dominates the time. DROPPED per drop-~0-gain.
+- VERDICT: cholesky is NOT a huge gap (1.5-2x fair, parity-to-1.7x at the pinned single-thread bar most agents use)
+  and the residual is the SYRK/GEMM microkernel + parallel-scaling wall (the ongoing "SYRK campaign", diminishing).
+  Don't chase the phantom 9x. Re-measure dense-LAPACK gaps BOTH-multicore before believing a big ratio.
