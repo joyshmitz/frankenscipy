@@ -382,7 +382,37 @@ pub fn rel_entr(
 ///
 /// Matches `scipy.special.ndtr(x)`.
 pub fn ndtr(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    // ndtr(x) = ½·erfc(−x/√2); the scalar-per-element map lost to SciPy's SIMD ndtr
+    // ufunc. Reuse the full-domain SIMD erfc chunk (byte-identical for |−x/√2| < 1,
+    // a few ulp on the tail — far inside ndtr's tolerance). Below the 1<<20 gate.
+    if let SpecialTensor::RealVec(values) = x_tensor {
+        if (64..(1 << 20)).contains(&values.len()) {
+            return Ok(SpecialTensor::RealVec(ndtr_real_vec_simd(values)));
+        }
+    }
     map_real_wg("ndtr", x_tensor, mode, |x| Ok(ndtr_scalar(x)))
+}
+
+/// 8-wide ndtr: `½·erfc(−x/√2)` via the shared SIMD erfc chunk.
+fn ndtr_real_vec_simd(values: &[f64]) -> Vec<f64> {
+    use std::simd::Simd;
+    const LANES: usize = 8;
+    let scale = Simd::<f64, LANES>::splat(-FRAC_1_SQRT_2);
+    let mut out = vec![0.0f64; values.len()];
+    let mut i = 0;
+    while i + LANES <= values.len() {
+        let x = Simd::<f64, LANES>::from_slice(&values[i..i + LANES]);
+        let erfc = crate::error::erfc_full_simd_chunk(x * scale);
+        for j in 0..LANES {
+            out[i + j] = 0.5 * erfc[j];
+        }
+        i += LANES;
+    }
+    while i < values.len() {
+        out[i] = ndtr_scalar(values[i]);
+        i += 1;
+    }
+    out
 }
 
 #[must_use]
@@ -8167,6 +8197,24 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ndtr_simd_matches_scalar_within_tol() {
+        // ndtr SIMD vector path vs the scalar kernel across the useful CDF range.
+        let mut xs: Vec<f64> = (0..2000).map(|i| -8.0 + 16.0 * (i as f64) / 2000.0).collect();
+        for b in [-1.5, 1.5, -0.5, 0.5, 0.0, -37.0, 37.0] {
+            xs.push(b);
+        }
+        let simd = match ndtr(&SpecialTensor::RealVec(xs.clone()), RuntimeMode::Strict).unwrap() {
+            SpecialTensor::RealVec(v) => v,
+            _ => unreachable!(),
+        };
+        let mut max_abs = 0.0f64;
+        for (k, &x) in xs.iter().enumerate() {
+            max_abs = max_abs.max((simd[k] - ndtr_scalar(x)).abs());
+        }
+        assert!(max_abs < 1e-15, "ndtr simd max abs diff vs scalar = {max_abs:e}");
+    }
 
     #[test]
     fn erfi_dawsn_form_matches_scipy() {

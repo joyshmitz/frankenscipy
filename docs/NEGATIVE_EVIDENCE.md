@@ -15289,3 +15289,19 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - VERDICT: KEEP — error family (erf/erfc/erfcx) now all FLIPPED to wins/parity via SIMD, the only serial single-arg
   losses the 2a032a74 sweep found. SIMD-vectorizable serial special-fn surface EXHAUSTED. `simd_exp`+`simd_horner`+
   `erfcx_cephes_real_simd` remain reusable for erfi/dawsn/ndtr should a workload need them (same exp·rational shape).
+
+## 2026-07-04 - BlackThrush (cc) - ndtr (normal CDF) SIMD via shared erfc chunk — 1.46x self, FLIPS scipy 1.28x-slower → 1.13x FASTER
+
+- EXTENDS the error-family SIMD lever to ndtr = `½·erfc(−x/√2)` (ubiquitous normal CDF), whose vector path was
+  scalar-per-element (calling erfc_scalar) and lost to SciPy's SIMD ndtr ufunc.
+- Refactored erfc's SIMD into a shared full-domain `error::erfc_full_simd_chunk(u)` (byte-identical `1−erf` for
+  |u|<1; `exp(−u²)·erfcx_cephes(|u|)` for u>0 / `2−…` for u<0 on the 1≤|u|<25 tail; scalar for |u|≥25). erfc's own
+  vector path now routes through it (so its SIMD coverage extends to x<1 and x<0, not just [1,25)); ndtr's SIMD path
+  is `0.5·erfc_full_simd_chunk(−x/√2)`. ndtr_scalar/erfc_scalar untouched. Gate 64≤n<1<<20.
+- ACCURACY: ndtr SIMD max abs diff vs ndtr_scalar = **1.1e-16** (unit test <1e-15); |−x/√2|<1 lanes byte-identical.
+- MEASURED (bin check_erfcx_simd A/B, domain 0.2-20.2, same box/moment, threads=1): ndtr SIMD 1975us vs scalar
+  2863us = **1.46x self**; scipy ndtr 2240us (fresh same-box), so scalar 1.28x-slower → **SIMD 1.13x FASTER (flip)**.
+- CONF: full fsci-special lib suite **1143/0**; local scipy-oracle **diff_special_ndtr 1/0** AND **diff_special_error
+  1/0** (the latter re-confirms erf+erfc after the erfc_full_simd_chunk retrofit — extended SIMD coverage holds at
+  tol 1e-13). VERDICT: KEEP — flips ndtr to a win. LEVER: any special fn that is an affine-in-argument wrapper of
+  erf/erfc (ndtr done; erfi/dawsn already win) → route its vector path through `erfc_full_simd_chunk`/`simd_exp`.

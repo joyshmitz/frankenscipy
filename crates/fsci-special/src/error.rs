@@ -161,22 +161,44 @@ pub fn erfc(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 /// majority (SIMD exp × SIMD rational), scalar `erfc_scalar` for x < 1 / x ≥ 25 /
 /// negatives. Accurate to a few ulp vs the scalar map (simd_exp ~4 ulp + the
 /// pre-divided rational), far inside erfc's 1e-13 conformance tolerance.
+/// 8-wide erfc over ALL real u. `|u| < 1`: `1 − erf(u)` (byte-identical to
+/// `erfc_scalar`, which takes the same branch). `1 ≤ |u| < 25`: `exp(−u²)·erfcx_cephes(|u|)`
+/// for u > 0, else `2 − …` (a few ulp via `simd_exp`). `|u| ≥ 25`: scalar (0 or 2).
+/// Shared by erfc's and ndtr's SIMD vector paths.
+pub(crate) fn erfc_full_simd_chunk(u: Simd<f64, 8>) -> [f64; 8] {
+    let z = u * u;
+    let erf_rat =
+        (u * simd_horner(z, &CEPHES_ERF_T, 0.0) / simd_horner(z, &CEPHES_ERF_U, 1.0)).to_array();
+    let ez = simd_exp(-z).to_array();
+    let cx = erfcx_cephes_real_simd(u.abs()); // valid for the |u| ≥ 1 lanes
+    let uarr = u.to_array();
+    let mut out = [0.0f64; 8];
+    for j in 0..8 {
+        let uj = uarr[j];
+        let uaj = uj.abs();
+        out[j] = if uaj < 1.0 {
+            1.0 - erf_rat[j]
+        } else if uaj < 25.0 {
+            let tail = ez[j] * cx[j];
+            if uj > 0.0 {
+                tail
+            } else {
+                2.0 - tail
+            }
+        } else {
+            erfc_scalar(uj)
+        };
+    }
+    out
+}
+
 fn erfc_real_vec_simd(values: &[f64]) -> Vec<f64> {
     const LANES: usize = 8;
     let mut out = vec![0.0f64; values.len()];
     let mut i = 0;
     while i + LANES <= values.len() {
-        let x = Simd::<f64, LANES>::from_slice(&values[i..i + LANES]);
-        let z = simd_exp(-(x * x)).to_array();
-        let pq = erfcx_cephes_real_simd(x);
-        for j in 0..LANES {
-            let xj = values[i + j];
-            out[i + j] = if (1.0..25.0).contains(&xj) {
-                z[j] * pq[j]
-            } else {
-                erfc_scalar(xj)
-            };
-        }
+        let chunk = erfc_full_simd_chunk(Simd::<f64, LANES>::from_slice(&values[i..i + LANES]));
+        out[i..i + LANES].copy_from_slice(&chunk);
         i += LANES;
     }
     while i < values.len() {
