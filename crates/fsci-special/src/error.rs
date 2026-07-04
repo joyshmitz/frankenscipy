@@ -2,7 +2,7 @@
 
 use std::f64::consts::PI;
 use std::simd::num::SimdFloat;
-use std::simd::Simd;
+use std::simd::{Simd, StdFloat};
 
 use fsci_runtime::RuntimeMode;
 
@@ -87,6 +87,17 @@ pub fn erf(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 }
 
 pub fn erfc(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    // The scalar-per-element serial map lost ~1.4x to SciPy's SIMD-vectorized ufunc
+    // (broad sweep 2a032a74). erfc(x) = exp(−x²)·(P/Q or R/S) for 1 ≤ x < 25, so both
+    // the Cephes rational (byte-identical SIMD Horner) and the exp (`simd_exp`, ≤4 ulp
+    // vs libm, well inside the 1e-13 erfc conformance tol) vectorise 8-wide; the x<1
+    // (1−erf) and x≥25 (underflow) minority stay scalar. Below the parallel gate — the
+    // serial regime where the loss lived.
+    if let SpecialTensor::RealVec(values) = z {
+        if (64..(1 << 20)).contains(&values.len()) {
+            return Ok(SpecialTensor::RealVec(erfc_real_vec_simd(values)));
+        }
+    }
     map_unary_input_rp(
         "erfc",
         z,
@@ -95,6 +106,35 @@ pub fn erfc(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         |value| Ok(erfc_complex_scalar(value)),
         1 << 20, // work-gated: serial small, par_map_indices for huge arrays (>=1M)
     )
+}
+
+/// 8-wide erfc over a real slice: `exp(−x²)·erfcx_cephes(x)` for the `1 ≤ x < 25`
+/// majority (SIMD exp × SIMD rational), scalar `erfc_scalar` for x < 1 / x ≥ 25 /
+/// negatives. Accurate to a few ulp vs the scalar map (simd_exp ~4 ulp + the
+/// pre-divided rational), far inside erfc's 1e-13 conformance tolerance.
+fn erfc_real_vec_simd(values: &[f64]) -> Vec<f64> {
+    const LANES: usize = 8;
+    let mut out = vec![0.0f64; values.len()];
+    let mut i = 0;
+    while i + LANES <= values.len() {
+        let x = Simd::<f64, LANES>::from_slice(&values[i..i + LANES]);
+        let z = simd_exp(-(x * x)).to_array();
+        let pq = erfcx_cephes_real_simd(x);
+        for j in 0..LANES {
+            let xj = values[i + j];
+            out[i + j] = if (1.0..25.0).contains(&xj) {
+                z[j] * pq[j]
+            } else {
+                erfc_scalar(xj)
+            };
+        }
+        i += LANES;
+    }
+    while i < values.len() {
+        out[i] = erfc_scalar(values[i]);
+        i += 1;
+    }
+    out
 }
 
 pub fn erfinv(y: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -436,6 +476,47 @@ fn simd_horner(x: Simd<f64, 8>, coef: &[f64], init: f64) -> Simd<f64, 8> {
         acc = acc * x + Simd::splat(c);
     }
     acc
+}
+
+// Cephes `exp` rational constants (exp.c). Not bit-identical to libm `exp`, but the
+// same algorithm SciPy's own transcendental loop uses — < 1 ulp over the reduced
+// range, validated against `f64::exp` in `check_simd_exp`.
+const SIMD_EXP_LOG2E: f64 = std::f64::consts::LOG2_E;
+const SIMD_EXP_C1: f64 = 6.931_457_519_531_25e-1; // ln2 Cody-Waite: truncated high part …
+const SIMD_EXP_C2: f64 = 1.428_606_820_309_417_232_12e-6; // … + low correction (C1+C2 = ln2)
+const SIMD_EXP_P: [f64; 3] = [
+    1.261_771_930_748_105_908_8e-4,
+    3.029_944_077_074_419_613_0e-2,
+    9.999_999_999_999_999_999_1e-1,
+];
+const SIMD_EXP_Q: [f64; 4] = [
+    3.001_985_051_386_644_550_4e-6,
+    2.524_483_403_496_841_041_9e-3,
+    2.272_655_482_081_550_287_7e-1,
+    2.000_000_000_000_000_000_1e0,
+];
+
+/// 8-wide `exp` via the Cephes rational: Cody-Waite range reduction `x = r + n·ln2`
+/// (n = round(x/ln2)), the degree-2/3 rational on the reduced `r`, and `·2^n` by
+/// exponent-bit construction. ~1 ulp; the caller keeps `n` in `[-1022, 1023]` (for
+/// erfc, `x = −xᵢ² ∈ [−625, −1]` on the `1 ≤ xᵢ < 25` gate → `n ∈ [−901, −1]`).
+fn simd_exp(x: Simd<f64, 8>) -> Simd<f64, 8> {
+    let n = (Simd::splat(SIMD_EXP_LOG2E) * x + Simd::splat(0.5)).floor();
+    let xr = x - n * Simd::splat(SIMD_EXP_C1) - n * Simd::splat(SIMD_EXP_C2);
+    let xx = xr * xr;
+    let px = xr * simd_horner(xx, &SIMD_EXP_P, 0.0);
+    let qx = simd_horner(xx, &SIMD_EXP_Q, 0.0);
+    let frac = px / (qx - px);
+    let mantissa = (Simd::splat(1.0) + Simd::splat(2.0) * frac).to_array();
+    // ldexp(mantissa, n): scale by 2^n via the biased-exponent bits (cheap scalar
+    // lane loop; the rational above — the expensive part — stayed SIMD).
+    let n = n.to_array();
+    let mut out = [0.0f64; 8];
+    for k in 0..8 {
+        let ni = n[k] as i64;
+        out[k] = mantissa[k] * f64::from_bits(((ni + 1023) as u64) << 52);
+    }
+    Simd::from_array(out)
 }
 
 /// 8-wide [`erfcx_cephes_real`]: per lane bit-identical to the scalar kernel (same
@@ -788,6 +869,55 @@ fn inv_norm_cdf_scalar(p: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erfc_simd_matches_scalar_within_tol() {
+        // erfc's SIMD vector path vs the scalar kernel across every branch boundary.
+        let mut xs: Vec<f64> = (0..2000).map(|i| -1.0 + 27.0 * (i as f64) / 2000.0).collect();
+        for b in [1.0, 8.0, 25.0, 0.9999999, 24.9999999, -3.0, 2.0, 0.0] {
+            xs.push(b);
+        }
+        let simd = match erfc(&SpecialTensor::RealVec(xs.clone()), RuntimeMode::Strict).unwrap() {
+            SpecialTensor::RealVec(v) => v,
+            _ => unreachable!(),
+        };
+        let mut max_rel = 0.0f64;
+        for (k, &x) in xs.iter().enumerate() {
+            let s = erfc_scalar(x);
+            let rel = if s.abs() > 0.0 {
+                (simd[k] - s).abs() / s.abs()
+            } else {
+                (simd[k] - s).abs()
+            };
+            max_rel = max_rel.max(rel);
+        }
+        assert!(max_rel < 1e-14, "erfc simd max rel diff vs scalar = {max_rel:e}");
+    }
+
+    #[test]
+    fn simd_exp_matches_libm_within_a_few_ulp() {
+        // erfc's SIMD path uses simd_exp for the arg range [-625, -1]; validate the
+        // whole [-708, 0] against f64::exp (both positive → bit distance == ulp).
+        let mut xs: Vec<f64> = Vec::new();
+        let mut t = -708.0_f64;
+        while t <= 0.0 {
+            xs.push(t);
+            t += 0.0007;
+        }
+        while xs.len() % 8 != 0 {
+            xs.push(0.0);
+        }
+        let mut max_ulp = 0i64;
+        for chunk in xs.chunks_exact(8) {
+            let got = simd_exp(Simd::<f64, 8>::from_slice(chunk)).to_array();
+            for (k, &xv) in chunk.iter().enumerate() {
+                let want = xv.exp();
+                let ulp = ((got[k].to_bits() as i64) - (want.to_bits() as i64)).abs();
+                max_ulp = max_ulp.max(ulp);
+            }
+        }
+        assert!(max_ulp <= 4, "simd_exp max ulp vs libm = {max_ulp}");
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy

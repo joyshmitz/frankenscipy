@@ -15248,3 +15248,26 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - LEVER: cheap cephes-rational special-fn vector paths (erf/erfc need a validated SIMD exp, harder) →
   SIMD `simd_horner` (byte-identical) + scalar fallback for minority branches. `simd_horner` +
   `erfcx_cephes_real_simd` now available in error.rs.
+
+## 2026-07-04 - BlackThrush (cc) - erfc SIMD (simd_exp + SIMD rational) — 1.47x self, FLIPS scipy 1.34x-slower → 1.10x FASTER (max rel 4.9e-16)
+
+- FOLLOW-ON to the erfcx SIMD win (a73edb6c) and the 2a032a74 sweep: erfc was 1.44x slower because scipy
+  SIMD-vectorizes BOTH the cephes rational AND the exp across lanes. Since `erfc(x) = exp(−x²)·erfcx_cephes(x)`
+  for 1≤x<25, this reuses `erfcx_cephes_real_simd` and adds a SIMD exp.
+- NEW `simd_exp` (error.rs): 8-wide Cephes-rational exp — Cody-Waite range reduction `x=r+n·ln2`, degree-2/3
+  rational on r, `·2^n` by exponent bits (cheap scalar lane loop, the rational stays SIMD). NOT bit-identical to
+  libm (it's scipy's own algorithm family) but VALIDATED **≤4 ulp vs f64::exp over [-708,0]** (unit test
+  `simd_exp_matches_libm_within_a_few_ulp`). Reusable primitive for other exp-heavy special-fn vector paths.
+- erfc vector path SIMDs the 1≤x<25 majority (`simd_exp(-x²)·erfcx_cephes_real_simd`), scalar-falls-back x<1
+  (1−erf) and x≥25 (underflow). NOT byte-identical (simd_exp ~4 ulp + pre-divided rational) but **max rel diff
+  vs erfc_scalar = 4.9e-16** (unit test `erfc_simd_matches_scalar_within_tol` <1e-14), FAR inside erfc's 1e-13
+  conformance tol. erfc_scalar UNCHANGED, so the many stats distributions that call it (norm/lognorm/ndtr/…) are
+  untouched — only direct erfc(RealVec) uses the SIMD path.
+- MEASURED (bin check_erfcx_simd in-binary A/B, sweep domain 0.2-20.2, same box/moment, threads=1): erfc SIMD
+  1730us vs scalar 2551us = **1.47x self**; scipy erfc 1910us (fresh same-box), so scalar was 1.34x-slower →
+  **SIMD 1.10x FASTER (a flip, not just a narrowing)**. (erfcx from a73edb6c re-confirmed 1.32x self same run.)
+- VERDICT: KEEP — flips erfc to a win. CONF: full fsci-special lib suite **1141/0** (incl the two new accuracy
+  asserts: erfc_simd_matches_scalar <1e-14 and simd_exp ≤4 ulp). diff_special_error (tol 1e-13) not re-run this
+  turn, but the 4.9e-16 max-rel margin is 5 orders inside it and erfc_scalar is untouched (all its callers —
+  norm/lognorm/ndtr/… — unaffected). LEVER: `simd_exp` now enables erf/erfi/dawsn/ndtr vector-path SIMD (same
+  exp·rational shape) — the reusable transcendental SIMD primitive the sweep scoped.
