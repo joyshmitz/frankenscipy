@@ -14992,3 +14992,24 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   The diagonal-J fast path is untouched; only dense-Jacobian stiff systems (where the 3n×3n LU dominated) are
   affected. LEVER (done, reusable): implicit-RK/collocation solver factorizing the full (s·n)×(s·n) stage
   system → decouple by the RK A-matrix eigendecomposition into real + complex n×n factors (Hairer-Wanner).
+
+## 2026-07-03 - BlackThrush (cc) - solve_toeplitz 1.6-1.8x SLOWER than scipy (measured gap; Levinson const-factor soft-wall); solve_circulant WINS
+
+- MEASURE-DON'T-ASSUME payoff: I believed fsci's structured linalg solvers were "already optimal" (Levinson,
+  FFT). A same-box fsci-vs-scipy sweep (bin perf_structured_solvers + scipy) OVERTURNED that for solve_toeplitz.
+- MEASURED (µs, well-conditioned random Toeplitz/circulant, matched n):
+    solve_toeplitz  fsci vs scipy:  n=64 8.4/32.9=3.9x WIN | n=256 133.7/101.4=0.76x (1.3x LOSS) |
+      n=512 537/332=0.62x (1.6x LOSS) | n=1024 2121/1245=0.59x (1.7x LOSS) | n=2048 8836/4844=0.55x (1.8x LOSS)
+    solve_circulant fsci vs scipy:  n=64 2.8/38.5=13.8x | n=512 13/53=4.1x | n=2048 64.9/104=1.6x — all WIN
+  So solve_circulant (FFT, O(n log n)) already beats scipy 1.6-13.8x — DON'T chase. solve_toeplitz LOSES
+  1.6-1.8x at n>=256 and the gap GROWS with n (constant-factor, both are O(n²) Levinson-Durbin). scipy's C
+  Levinson has a ~1.8x better inner-loop constant than fsci's pure-Rust recursion.
+- DROPPED variant (~0-gain, don't retry): SIMD the Levinson dots. The recursion mixes ONE forward dot
+  (eb = Σ row[j+1]·bk[j]) with TWO reversed dots (ef = Σ c[m-j]·f[j], ex = Σ c[m-j]·x[j]). fsci has a safe
+  8-wide simd_dot, but the reversed access blocks it and `unsafe_code = "forbid"` rules out a shuffle-load;
+  reversing f/x into a scratch each step is an O(m) copy that negates the SIMD gain (~1.15-1.25x est, < the
+  1.8x needed). Whichever storage orientation you pick, one dot is always reversed.
+- NEXT-TIER LEVER (radical, delicate — deferred): a SUPERFAST O(n log²n) Toeplitz solver (generalized Schur /
+  displacement-structure) would beat scipy's O(n²) dramatically at large n (n=2048: scipy 4844µs → ~hundreds
+  of µs). Numerically delicate (stability for non-symmetric/indefinite), a multi-tick implementation, not a
+  bounded win. solve_toeplitz_many already reuses the predictor recursion + parallel per-RHS (prior win).
