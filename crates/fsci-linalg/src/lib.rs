@@ -9104,12 +9104,13 @@ fn solve_triangular_internal(
     let mat = mat_storage.as_ref();
 
     let mut x = vec![0.0; n];
+    // The substitution's running dot Σ_j mat[i][j]·x[j] is over a contiguous row
+    // prefix/suffix and the already-solved x prefix/suffix, so it vectorises with
+    // `simd_dot` (the scalar loop did not — this was the bulk of the cost vs BLAS
+    // dtrsv). The 8-wide reduction reassociates, so results match to roundoff.
     if is_lower {
         for i in 0..n {
-            let mut sum = 0.0;
-            for (j, xj) in x.iter().enumerate().take(i) {
-                sum += mat[i][j] * *xj;
-            }
+            let sum = simd_dot(&mat[i][..i], &x[..i]);
             let diag = if unit_diagonal { 1.0 } else { mat[i][i] };
             if diag == 0.0 {
                 return Err(LinalgError::SingularMatrix);
@@ -9118,10 +9119,7 @@ fn solve_triangular_internal(
         }
     } else {
         for i in (0..n).rev() {
-            let mut sum = 0.0;
-            for (j, xj) in x.iter().enumerate().skip(i + 1) {
-                sum += mat[i][j] * *xj;
-            }
+            let sum = simd_dot(&mat[i][(i + 1)..n], &x[(i + 1)..n]);
             let diag = if unit_diagonal { 1.0 } else { mat[i][i] };
             if diag == 0.0 {
                 return Err(LinalgError::SingularMatrix);
@@ -9148,36 +9146,23 @@ fn compute_backward_error_dense(a: &[Vec<f64>], x: &[f64], b: &[f64]) -> f64 {
     }
     let m = if a.is_empty() { 0 } else { a[0].len() };
 
+    // Vectorised: each row's `A·x` and the ‖A‖/‖x‖/‖b‖ sums-of-squares are
+    // contiguous dot products, so `simd_dot` replaces the scalar loops (this
+    // O(n²) certificate — which SciPy's triangular solve does not compute at all —
+    // dominates the call). The 8-wide reduction reassociates → matches to roundoff.
+    let mm = m.min(x.len());
     let mut residual_sum_sq = 0.0;
-    for i in 0..n {
-        let mut ax_i = 0.0;
-        for (j, &xj) in x.iter().enumerate().take(m) {
-            ax_i += a[i][j] * xj;
-        }
+    for (i, row) in a.iter().take(n).enumerate() {
+        let ax_i = simd_dot(&row[..mm], &x[..mm]);
         let res_i = ax_i - b[i];
         residual_sum_sq += res_i * res_i;
     }
     let residual_norm = residual_sum_sq.sqrt();
 
-    let mut a_sum_sq = 0.0;
-    for row in a {
-        for &val in row {
-            a_sum_sq += val * val;
-        }
-    }
+    let a_sum_sq: f64 = a.iter().map(|row| simd_dot(row, row)).sum();
     let a_norm = a_sum_sq.sqrt();
-
-    let mut x_sum_sq = 0.0;
-    for &val in x {
-        x_sum_sq += val * val;
-    }
-    let x_norm = x_sum_sq.sqrt();
-
-    let mut b_sum_sq = 0.0;
-    for &val in b {
-        b_sum_sq += val * val;
-    }
-    let b_norm = b_sum_sq.sqrt();
+    let x_norm = simd_dot(x, x).sqrt();
+    let b_norm = simd_dot(b, b).sqrt();
 
     let denom = a_norm * x_norm + b_norm;
     if !residual_norm.is_finite() || !denom.is_finite() {

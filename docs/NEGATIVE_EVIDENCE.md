@@ -15032,3 +15032,22 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   scipy-match + proptests. simd_dot + reciprocal-multiply reassociate → not byte-identical to the prior
   code, validated to scipy tolerance instead. LEVER: descending-band dot → forward-window of a
   precomputed reversed array + simd_dot; boundary-peel + reciprocal-multiply branchy per-step update loops.
+
+## 2026-07-04 - BlackThrush (cc) - solve_triangular SIMD: 1.4-2.6x self, gap 5-9.5x->3x vs scipy (soft-wall = backward-error certificate); solve_banded/solveh_banded WIN
+
+- MEASURE-DON'T-ASSUME (bin perf_band_tri + scipy): solve_banded fsci WINS scipy 1.36-7.3x, solveh_banded
+  WINS 4x+ — no gap, don't chase. But solve_triangular was 5.1x(n=256)→9.5x(n=1024)→5.3x(n=2048) SLOWER.
+- ROOT CAUSE: solve_triangular ran (a) a SCALAR substitution dot and (b) `compute_backward_error_dense` —
+  a FULL O(n²) matvec `Ax` + O(n²) `‖A‖_F` on EVERY solve — which SciPy's dtrtrs/dtrsv does NOT compute.
+  Substitution SIMD alone barely moved it (backward-error is ~90% of the cost).
+- FIX (shipped): simd_dot the substitution row-dot AND vectorise compute_backward_error_dense (each row's
+  Ax and the ‖A‖/‖x‖/‖b‖ sums-of-squares are contiguous dots → simd_dot; benefits ALL 5 callers). MEASURED
+  self 1.79x(n=256)/2.18x(n=512)/2.57x(n=1024); vs scipy now 2.9x(n=256)/3.7x(n=1024) slower (was 5-9.5x).
+  Conf 496/0 GREEN (simd reassociates → scipy-tolerance, backward_error tol tests still pass).
+- SOFT WALL (residual ~3x, NOT removable): the O(n²) backward-error certificate is a REQUIRED fsci feature —
+  destructured (lib.rs:1448), asserted (<1e-14, lib.rs:19966), and consumed by the runtime solver-portfolio
+  calibrator + evidence/conformance. SciPy computes NO certificate, so fsci intrinsically does ~2×O(n²) extra
+  work. Making it optional would break those consumers/tests. NEXT-TIER (deferred): compute the residual
+  INCREMENTALLY during substitution (O(n), the row `sum` is already in hand) to drop one of the two O(n²)
+  passes → ~2x slower (still the ‖A‖ norm remains); fragile on unit_diagonal/improper-input edge cases vs the
+  generic helper, so not done. LEVER: scalar substitution/matvec/norm over contiguous rows → simd_dot.
