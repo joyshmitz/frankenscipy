@@ -6,6 +6,28 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-05 - BlackThrush (cc) - KEEP: acf FFT (Wiener–Khinchin) — O(n·lags)→O(n log n), 9-40x self at large lags
+
+- DIG (radically different primitive: SPECTRAL). `acf(data, max_lag)` evaluated each lag's autocovariance as an
+  independent O(n) dot (parallel across lags) = O(n·lags) total — quadratic for a full correlogram (max_lag→n).
+  Replaced (gated) with Wiener–Khinchin: `autocov = IFFT(|FFT(centered, zero-padded to next-pow2 ≥ 2n−1)|²)`,
+  `acf[k]=autocov[k]/var`. Zero-padding makes the circular correlation equal the linear one. O(n log n).
+- IMPL: new dep `fsci-fft` (workspace; fsci-signal already deps it). `acf_via_fft` uses `fsci_fft::rfft` →
+  power spectrum → `fsci_fft::irfft` (Some(npad)); falls back to the direct path on any backend error.
+  Toggle `ACF_FFT_DISABLE` (same-binary A/B). GATE `acf_fft_enabled`: `n·last_lag ≥ 2^19 && last_lag ≥ 64`
+  — so the exact tolerance tests (n=30, lag≤15) AND the existing bench `acf/4096x64` (work 262k < 2^19) stay on
+  the bit-exact direct path; FFT engages only where it dominates. NO regression at the benched size.
+- MEASURED (same-binary A/B, best-of-2, `-cc`): n=4096 lag=64 **0.99x** (below gate, stays direct); lag=512
+  1.433→0.157ms **9.14x**; n=8192 lag=2048 3.341→0.268ms **12.5x**; n=16384 lag=8191 13.585→0.603ms **22.5x**;
+  n=65536 lag=32767 109.8→2.74ms **40.1x**. Win grows with lags (the O(n²)→O(n log n) gap). pacf inherits (it
+  calls acf via Durbin–Levinson).
+- ACCURACY: not bit-identical (FFT reassociates) but ~1e-13 relative; acf conformance is tolerance-based (scipy-ref
+  1e-6, naive-match 1e-12 both on tiny lags = direct path). New test `acf_fft_matches_direct_within_tolerance`
+  (n=8192, lag∈{64,512,8191}, worst abs diff <1e-11) + full fsci-stats lib suite (2016+) GREEN incl. pacf.
+- LEVER: any O(n·k) "correlate/convolve the signal against k shifts of itself/another" reduction → FFT
+  (Wiener–Khinchin / overlap) once k is large; gate on work so small-k stays on the exact direct path. Candidates:
+  ccf/cross-correlation, `signal`-side lag sweeps not yet FFT'd. `fsci-fft` rfft/irfft are the tools.
+
 ## 2026-07-05 - BlackThrush (cc) - KEEP: wasserstein/energy/ks_2samp radix VALUE sort — 1.18-1.28x self, BYTE-IDENTICAL
 
 - DIG (extends the proven non-comparison-radix primitive to VALUE sorts). The benched distance/GOF fns

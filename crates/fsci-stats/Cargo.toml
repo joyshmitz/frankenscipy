@@ -9,6 +9,7 @@ fsci-runtime = { workspace = true }
 fsci-special = { workspace = true }
 fsci-opt = { workspace = true }
 fsci-integrate = { workspace = true }
+fsci-fft = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]

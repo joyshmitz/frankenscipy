@@ -48910,6 +48910,52 @@ pub fn durbin_watson(residuals: &[f64]) -> f64 {
 /// Compute the autocorrelation function of a time series.
 ///
 /// Returns autocorrelation at lags 0, 1, ..., max_lag.
+/// Same-binary A/B toggle for the FFT (Wiener–Khinchin) autocorrelation path.
+/// When true, `acf` always takes the direct O(n·lags) dot path.
+pub static ACF_FFT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Engage the FFT autocorrelation once the direct work `n·lags` is large enough
+/// that O(n log n) clearly beats it (and above the exact tolerance-test sizes).
+#[inline]
+fn acf_fft_enabled(n: usize, last_lag: usize) -> bool {
+    const ACF_FFT_MIN_WORK: u64 = 1 << 19;
+    (n as u64).saturating_mul(last_lag as u64) >= ACF_FFT_MIN_WORK
+        && last_lag >= 64
+        && !ACF_FFT_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Autocorrelation of a pre-centered series via Wiener–Khinchin:
+/// `autocov = IFFT(|FFT(centered, zero-padded to ≥2n−1)|²)`, then `acf[k]=autocov[k]/var`.
+/// Returns `None` if the FFT backend errors (caller falls back to the direct path).
+fn acf_via_fft(centered: &[f64], var: f64, last_lag: usize) -> Option<Vec<f64>> {
+    let n = centered.len();
+    // Zero-pad to a power of two ≥ 2n−1 so the circular correlation equals the
+    // linear one (no wraparound between the highest and lowest lags).
+    let mut npad = 1usize;
+    while npad < 2 * n - 1 {
+        npad <<= 1;
+    }
+    let mut padded = centered.to_vec();
+    padded.resize(npad, 0.0);
+
+    let opts = fsci_fft::FftOptions::default();
+    let spectrum = fsci_fft::rfft(&padded, &opts).ok()?;
+    // Power spectrum |X|² (real, imaginary part zero).
+    let power: Vec<(f64, f64)> = spectrum
+        .iter()
+        .map(|&(re, im)| (re * re + im * im, 0.0))
+        .collect();
+    let autocov = fsci_fft::irfft(&power, Some(npad), &opts).ok()?;
+
+    let inv_var = 1.0 / var;
+    Some(
+        (0..=last_lag)
+            .map(|lag| autocov[lag] * inv_var)
+            .collect(),
+    )
+}
+
 pub fn acf(data: &[f64], max_lag: usize) -> Vec<f64> {
     let n = data.len();
     if n < 2 {
@@ -48928,6 +48974,19 @@ pub fn acf(data: &[f64], max_lag: usize) -> Vec<f64> {
     }
 
     let last_lag = max_lag.min(n - 1);
+
+    // Wiener–Khinchin: the whole autocovariance sequence is IFFT(|FFT(centered)|²).
+    // Direct evaluation is O(n·lags); the FFT route is O(n log n) — a large win once
+    // many lags are requested (correlogram / full acf). Zero-padding to ≥ 2n−1
+    // makes the circular correlation equal the linear one. Not bit-identical to the
+    // direct dot (FFT reassociates), but ~1e-12 relative and acf conformance is
+    // tolerance-based; gated well above the exact-test sizes.
+    if acf_fft_enabled(n, last_lag) {
+        if let Some(r) = acf_via_fft(&centered, var, last_lag) {
+            return r;
+        }
+    }
+
     // Each lag's autocovariance is an independent O(n) dot of the centered series
     // against its shifted self, so the lags fan out across threads in contiguous
     // chunks (one spawn-set). Each lag's inner sum stays sequential (same order),
@@ -56208,6 +56267,33 @@ mod tests {
 
         // Constant input → all 1.0 (var == 0 branch).
         assert_eq!(acf(&[5.0; 10], 4), vec![1.0; 5]);
+    }
+
+    #[test]
+    fn acf_fft_matches_direct_within_tolerance() {
+        use std::sync::atomic::Ordering;
+        // Above the FFT gate: the Wiener–Khinchin path must agree with the direct
+        // O(n·lags) dot to ~1e-11 (FFT reassociation only), for every lag.
+        let n = 8192usize;
+        let series: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 * 0.01;
+                (t).sin() + 0.4 * (2.3 * t).cos() + 0.1 * (((i * 2654435761usize) % 97) as f64) - 3.0
+            })
+            .collect();
+        for &max_lag in &[64usize, 512, n - 1] {
+            ACF_FFT_DISABLE.store(true, Ordering::Relaxed);
+            let direct = acf(&series, max_lag);
+            ACF_FFT_DISABLE.store(false, Ordering::Relaxed);
+            let fftr = acf(&series, max_lag);
+            assert_eq!(direct.len(), fftr.len(), "len max_lag={max_lag}");
+            let mut worst = 0.0f64;
+            for (a, b) in fftr.iter().zip(&direct) {
+                worst = worst.max((a - b).abs());
+            }
+            assert!(worst < 1e-11, "acf fft vs direct max_lag={max_lag}: worst abs diff {worst:.2e}");
+        }
+        ACF_FFT_DISABLE.store(false, Ordering::Relaxed);
     }
 
     #[test]

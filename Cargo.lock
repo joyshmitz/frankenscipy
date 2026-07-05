@@ -1043,6 +1043,7 @@ name = "fsci-stats"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "fsci-fft",
  "fsci-integrate",
  "fsci-opt",
  "fsci-runtime",
