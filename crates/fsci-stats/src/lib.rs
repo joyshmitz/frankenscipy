@@ -26577,8 +26577,8 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
     // The two-pointer variant runs in O(N + M).
     let mut u_sorted = u.to_vec();
     let mut v_sorted = v.to_vec();
-    u_sorted.sort_unstable_by(|a, b| a.total_cmp(b));
-    v_sorted.sort_unstable_by(|a, b| a.total_cmp(b));
+    sort_f64_total(&mut u_sorted);
+    sort_f64_total(&mut v_sorted);
 
     let nu = u.len() as f64;
     let nv = v.len() as f64;
@@ -26748,9 +26748,9 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
     // the sort dominates, so this is ~2× on the hot path. Byte-identical: same
     // total_cmp order feeds the same closed-form sums.
     let mut su: Vec<f64> = u.to_vec();
-    su.sort_unstable_by(|a, b| a.total_cmp(b));
+    sort_f64_total(&mut su);
     let mut sv: Vec<f64> = v.to_vec();
-    sv.sort_unstable_by(|a, b| a.total_cmp(b));
+    sort_f64_total(&mut sv);
 
     // E|X-Y|: mean of |u_i - v_j| over all pairs, via the O((N+M)) sweep on the
     // sorted inputs (frankenscipy-ggmrw). For each sorted u_i with c = #{v_j ≤ u_i}
@@ -30721,6 +30721,53 @@ fn radix_argsort_f64(data: &[f64]) -> (Vec<u32>, Vec<u64>) {
 fn rankdata_radix_enabled(n: usize) -> bool {
     n >= RANKDATA_RADIX_MIN
         && !RANKDATA_RADIX_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// In-place NON-COMPARISON sort of f64 VALUES, byte-identical (as a sorted
+/// sequence) to `sort_unstable_by(total_cmp)`. Sorts the `total_cmp`-order keys
+/// (8×8-bit LSD, constant-byte passes skipped) then writes the values back via
+/// the inverse transform — only 8-byte keys move (no carried index), so it is
+/// lighter than the argsort. `data` must be NaN-free (callers guard).
+fn radix_sort_f64_values(data: &mut [f64]) {
+    let n = data.len();
+    let mut keys: Vec<u64> = data.iter().map(|&x| f64_radix_key(x)).collect();
+    let mut keys_tmp = vec![0u64; n];
+    for shift in (0..64).step_by(8) {
+        let mut count = [0usize; 256];
+        for &k in &keys {
+            count[((k >> shift) & 0xff) as usize] += 1;
+        }
+        if count.iter().any(|&c| c == n) {
+            continue;
+        }
+        let mut sum = 0usize;
+        for c in count.iter_mut() {
+            let t = *c;
+            *c = sum;
+            sum += t;
+        }
+        for &k in &keys {
+            let b = ((k >> shift) & 0xff) as usize;
+            keys_tmp[count[b]] = k;
+            count[b] += 1;
+        }
+        std::mem::swap(&mut keys, &mut keys_tmp);
+    }
+    for (d, &k) in data.iter_mut().zip(keys.iter()) {
+        *d = f64_from_radix_key(k);
+    }
+}
+
+/// Sort f64 values into `total_cmp` order: the non-comparison radix value sort
+/// above the radix gate (byte-identical sorted sequence, wins ~1.3-2x at n≥2^14),
+/// else pdqsort. Shares the `RANKDATA_RADIX_DISABLE` A/B switch.
+#[inline]
+fn sort_f64_total(data: &mut [f64]) {
+    if rankdata_radix_enabled(data.len()) {
+        radix_sort_f64_values(data);
+    } else {
+        data.sort_unstable_by(|a, b| a.total_cmp(b));
+    }
 }
 
 /// Compute ranks with average tie-breaking.
@@ -36919,8 +36966,8 @@ pub fn ks_2samp(data1: &[f64], data2: &[f64]) -> GoodnessOfFitResult {
 
     let mut sorted1 = data1.to_vec();
     let mut sorted2 = data2.to_vec();
-    sorted1.sort_unstable_by(|a, b| a.total_cmp(b));
-    sorted2.sort_unstable_by(|a, b| a.total_cmp(b));
+    sort_f64_total(&mut sorted1);
+    sort_f64_total(&mut sorted2);
 
     // Walk both sorted arrays, computing max |F1(x) - F2(x)|
     let n1f = n1 as f64;
@@ -36981,8 +37028,8 @@ pub fn ks_2samp_alternative(
 
     let mut sorted1 = data1.to_vec();
     let mut sorted2 = data2.to_vec();
-    sorted1.sort_unstable_by(|a, b| a.total_cmp(b));
-    sorted2.sort_unstable_by(|a, b| a.total_cmp(b));
+    sort_f64_total(&mut sorted1);
+    sort_f64_total(&mut sorted2);
 
     let n1f = n1 as f64;
     let n2f = n2 as f64;
@@ -61269,6 +61316,52 @@ mod tests {
                 assert_eq!(r.to_bits(), c.to_bits(), "method {method} idx {i}: {r} vs {c}");
             }
         }
+        RANKDATA_RADIX_DISABLE.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn radix_value_sort_and_consumers_match_comparison_bit_for_bit() {
+        use std::sync::atomic::Ordering;
+        // (1) radix_sort_f64_values == sort_unstable_by(total_cmp) BIT-for-BIT as a
+        //     sorted sequence, incl. ±0.0/±inf/subnormals/heavy ties.
+        let n = 20_000usize;
+        let specials = [0.0_f64, -0.0, f64::INFINITY, f64::NEG_INFINITY, 5e-324, -5e-324];
+        let base: Vec<f64> = (0..n)
+            .map(|i| match i % 9 {
+                0..=5 => specials[i % 6],
+                6 => ((i * 2654435761usize) % 41) as f64,
+                7 => -(((i * 40503usize) % 53) as f64),
+                _ => (((i as u64).wrapping_mul(0x9e3779b1) >> 8) as f64) * 1e-6 - 2.0,
+            })
+            .collect();
+        let mut ref_sorted = base.clone();
+        ref_sorted.sort_unstable_by(|a, b| a.total_cmp(b));
+        let mut radix_sorted = base.clone();
+        super::radix_sort_f64_values(&mut radix_sorted);
+        for (i, (&r, &c)) in radix_sorted.iter().zip(&ref_sorted).enumerate() {
+            assert_eq!(r.to_bits(), c.to_bits(), "value-sort idx {i}: {r} vs {c}");
+        }
+
+        // (2) The consumers (wasserstein/energy/ks_2samp) must be BIT-identical with
+        //     the radix value sort on vs off.
+        let u: Vec<f64> = (0..n).map(|i| ((i * 7 % 200) as f64) - 100.0 + (i as f64) * 1e-7).collect();
+        let v: Vec<f64> = (0..n).map(|i| ((i * 13 % 200) as f64) - 90.0).collect();
+        for (name, f) in [
+            ("wasserstein", &wasserstein_distance as &dyn Fn(&[f64], &[f64]) -> f64),
+            ("energy", &energy_distance as &dyn Fn(&[f64], &[f64]) -> f64),
+        ] {
+            RANKDATA_RADIX_DISABLE.store(true, Ordering::Relaxed);
+            let a = f(&u, &v);
+            RANKDATA_RADIX_DISABLE.store(false, Ordering::Relaxed);
+            let b = f(&u, &v);
+            assert_eq!(a.to_bits(), b.to_bits(), "{name} radix on/off: {a} vs {b}");
+        }
+        RANKDATA_RADIX_DISABLE.store(true, Ordering::Relaxed);
+        let ks_a = ks_2samp(&u, &v);
+        RANKDATA_RADIX_DISABLE.store(false, Ordering::Relaxed);
+        let ks_b = ks_2samp(&u, &v);
+        assert_eq!(ks_a.statistic.to_bits(), ks_b.statistic.to_bits(), "ks_2samp stat radix on/off");
+        assert_eq!(ks_a.pvalue.to_bits(), ks_b.pvalue.to_bits(), "ks_2samp pval radix on/off");
         RANKDATA_RADIX_DISABLE.store(false, Ordering::Relaxed);
     }
 

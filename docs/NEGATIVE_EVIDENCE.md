@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-05 - BlackThrush (cc) - KEEP: wasserstein/energy/ks_2samp radix VALUE sort — 1.18-1.28x self, BYTE-IDENTICAL
+
+- DIG (extends the proven non-comparison-radix primitive to VALUE sorts). The benched distance/GOF fns
+  `wasserstein_distance`, `energy_distance`, `ks_2samp` each `sort_unstable_by(total_cmp)` two large f64 VALUE
+  arrays then sweep them SEQUENTIALLY (two-pointer merge / closed-form L1 sums). Added `radix_sort_f64_values`
+  (in-place 8×8-bit LSD over the f64→u64 total_cmp key, constant-byte passes skipped, values written back via
+  the inverse transform) + a `sort_f64_total` dispatcher (radix ≥2^14 else pdqsort, shares the
+  `RANKDATA_RADIX_DISABLE` A/B switch). VALUE-only (no carried index) ⇒ 8 B/elt moved vs the argsort's 12,
+  lighter, and the sequential consumers have NO gather penalty.
+- BYTE-IDENTICAL sorted SEQUENCE: the key transform reproduces total_cmp EXACTLY (−0.0 key < +0.0 key, all
+  zeros contiguous), duplicates are indistinguishable, inverse recovers exact bits incl. ±0.0. New test
+  `radix_value_sort_and_consumers_match_comparison_bit_for_bit` GREEN (sorted seq bit-eq incl.
+  ±0/±inf/subnormals/ties; wasserstein/energy/ks_2samp statistic+pvalue bit-eq radix on-vs-off) + full
+  fsci-stats lib suite GREEN.
+- MEASURED (same-binary A/B, atomic RANKDATA_RADIX_DISABLE, best-of-2, `-cc`, gate n≥2^14):
+  n=50k W **1.23x** / E **1.25x** / KS **1.18x**; n=200k **1.21/1.28/1.26x**; n=1M **1.21/1.27/1.21x**.
+  Consistent (no taper — two sorts per call keep the sort fraction high, downstream is O(n) cheap). These are
+  benched (`wasserstein`, `energy`, `ks_2samp_200k`) and already scipy-winners → this widens them.
+- LEVER: `sort_f64_total` is now the drop-in for any `sort_unstable_by(total_cmp)` on a large f64 VALUE array
+  whose consumer reads sorted values sequentially (cramervonmises_2samp, epps_singleton, trimmed/winsorized
+  stats, CDF/quantile builders). mannwhitneyu/kruskal already ride the rankdata argsort (rank engine). NEG this
+  turn: mode-via-radix and parallel-sort are BOTH softly rejected in this ledger (10185 "radix/parallel-sort
+  ~parity for mode"; 8735 "no safe parallel sort lever") — did NOT re-try. Related: the rankdata argsort entry below.
+
 ## 2026-07-05 - BlackThrush (cc) - KEEP: rankdata non-comparison radix argsort — 1.15-1.79x self, BYTE-IDENTICAL
 
 - DIG (radical primitive: NON-COMPARISON sort). `rankdata`/`rankdata_ties`/`rankdata_ordinal` (the rank engine
