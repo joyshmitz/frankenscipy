@@ -23,6 +23,9 @@ ledger above so the project has one source of truth.
   best-of-2 interleaved A/B, `-cc` box, A scaled to spectral-radius~1):
   - n=1024: base **48.5ms** vs strassen **123.0ms** = **0.394x (2.5x SLOWER)**
   - n=2048: base **377.2ms** vs strassen **1240.0ms** = **0.304x (3.3x SLOWER)** — WORSE with more levels.
+- Codex RCH confirmation, same-binary Criterion on `hz2`:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-linalg --bench linalg_bench --profile release -- strassen_winograd_ab --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`
+  measured `matrix_power(1024x1024, 8)` candidate **257.64ms** vs ORIG **93.696ms** = **0.36x**.
 - WHY IT LOSES: the classical base kernel is nalgebra→matrixmultiply AVX2, measured **~180 GFLOPS**
   (2·2048³/94ms) and effectively memory-bound at this efficiency. The naive recursive Winograd allocates ~18
   half-size temporaries per level + does the 15 block add/subs through SERIAL nalgebra `+`/`-` on views (each a
