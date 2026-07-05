@@ -30642,6 +30642,87 @@ enum RankTieMethod {
     Dense,
 }
 
+/// Same-binary A/B toggle for the radix-argsort fast path in the rank engine.
+/// When true, `rankdata_ties`/`rankdata_ordinal` fall back to the comparison sort.
+pub static RANKDATA_RADIX_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Minimum length at which the rank engine switches from the comparison
+/// `sort_unstable` to the O(n·passes) LSD radix argsort. Below this, pdqsort's
+/// excellent constants win; above it the radix passes (each a single linear
+/// sweep) amortize.
+const RANKDATA_RADIX_MIN: usize = 1 << 14;
+
+/// Map an f64 to a u64 whose unsigned order equals `f64::total_cmp` order:
+/// negative/`-0.0` values flip all bits, non-negative flip only the sign bit.
+/// (NaN is never fed here — the rank engine returns all-NaN on any NaN input.)
+#[inline]
+fn f64_radix_key(x: f64) -> u64 {
+    let b = x.to_bits();
+    let mask = ((b as i64 >> 63) as u64) | 0x8000_0000_0000_0000;
+    b ^ mask
+}
+
+/// Inverse of [`f64_radix_key`] — recovers the original f64 bits from a sortable
+/// key. A key whose top bit is set came from a non-negative value (sign-bit flip);
+/// otherwise from a negative value (all-bits flip). Recovers ±0.0 distinctly.
+#[inline]
+fn f64_from_radix_key(k: u64) -> f64 {
+    let mask = if k & 0x8000_0000_0000_0000 != 0 {
+        0x8000_0000_0000_0000
+    } else {
+        u64::MAX
+    };
+    f64::from_bits(k ^ mask)
+}
+
+/// Stable LSD radix argsort (8 passes × 8 bits) over the `total_cmp`-order keys of
+/// `data`. Returns `(perm, sorted_keys)` where `data[perm[0]] ≤ … ≤ data[perm[n-1]]`
+/// (equal `total_cmp` keys keep ascending original index) and `sorted_keys[p]` is
+/// the key of the p-th smallest — CONTIGUOUS, so callers reconstruct the sorted
+/// values sequentially via [`f64_from_radix_key`] with no gather. Passes whose byte
+/// column is constant are skipped (narrow-range inputs cost far fewer than 8 sweeps).
+/// `n` must fit in u32.
+fn radix_argsort_f64(data: &[f64]) -> (Vec<u32>, Vec<u64>) {
+    let n = data.len();
+    let mut keys: Vec<u64> = data.iter().map(|&x| f64_radix_key(x)).collect();
+    let mut idx: Vec<u32> = (0..n as u32).collect();
+    let mut keys_tmp = vec![0u64; n];
+    let mut idx_tmp = vec![0u32; n];
+    for shift in (0..64).step_by(8) {
+        let mut count = [0usize; 256];
+        for &k in &keys {
+            count[((k >> shift) & 0xff) as usize] += 1;
+        }
+        // Skip a pass whose byte is identical across all elements (order unchanged).
+        if count.iter().any(|&c| c == n) {
+            continue;
+        }
+        let mut sum = 0usize;
+        for c in count.iter_mut() {
+            let t = *c;
+            *c = sum;
+            sum += t;
+        }
+        for i in 0..n {
+            let b = ((keys[i] >> shift) & 0xff) as usize;
+            let pos = count[b];
+            count[b] += 1;
+            keys_tmp[pos] = keys[i];
+            idx_tmp[pos] = idx[i];
+        }
+        std::mem::swap(&mut keys, &mut keys_tmp);
+        std::mem::swap(&mut idx, &mut idx_tmp);
+    }
+    (idx, keys)
+}
+
+#[inline]
+fn rankdata_radix_enabled(n: usize) -> bool {
+    n >= RANKDATA_RADIX_MIN
+        && !RANKDATA_RADIX_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Compute ranks with average tie-breaking.
 fn rankdata_average(data: &[f64]) -> Vec<f64> {
     rankdata_ties(data, RankTieMethod::Average)
@@ -30651,6 +30732,40 @@ fn rankdata_ties(data: &[f64], method: RankTieMethod) -> Vec<f64> {
     let n = data.len();
     if data.iter().any(|v| v.is_nan()) {
         return vec![f64::NAN; n];
+    }
+
+    // Radix argsort (non-comparison, O(n·passes)) for large n. The tie groups are
+    // delimited by value `==` (so ±0.0 group together) exactly as below; the
+    // radix key preserves `total_cmp` order (−0.0 before +0.0, all zeros
+    // contiguous), so the grouping and every written tie-rank are byte-identical.
+    if rankdata_radix_enabled(n) {
+        let (perm, sorted_keys) = radix_argsort_f64(data);
+        // Reconstruct the sorted VALUES contiguously (sequential, no gather) so the
+        // tie-grouping scan streams — the comparison-sort path below keeps values
+        // inline in the sorted pairs; this matches that cache behaviour.
+        let sorted_vals: Vec<f64> = sorted_keys.iter().map(|&k| f64_from_radix_key(k)).collect();
+        let mut ranks = vec![0.0; n];
+        let mut i = 0;
+        let mut dense_rank = 1.0;
+        while i < n {
+            let vi = sorted_vals[i];
+            let mut j = i + 1;
+            while j < n && sorted_vals[j] == vi {
+                j += 1;
+            }
+            let tie_rank = match method {
+                RankTieMethod::Average => (i + 1 + j) as f64 / 2.0,
+                RankTieMethod::Min => (i + 1) as f64,
+                RankTieMethod::Max => j as f64,
+                RankTieMethod::Dense => dense_rank,
+            };
+            for &p in &perm[i..j] {
+                ranks[p as usize] = tie_rank;
+            }
+            i = j;
+            dense_rank += 1.0;
+        }
+        return ranks;
     }
 
     let mut indexed: Vec<(f64, usize)> = data
@@ -30698,6 +30813,19 @@ fn rankdata_ordinal(data: &[f64]) -> Vec<f64> {
     if data.iter().any(|v| v.is_nan()) {
         return vec![f64::NAN; n];
     }
+    // Radix argsort for large n. Stable LSD with indices seeded 0..n yields the
+    // (value, original-index) order — identical to the `total_cmp.then(index)`
+    // comparator below (equal `total_cmp` keys ⇒ identical bits ⇒ ascending index
+    // via stability). Byte-identical ranks.
+    if rankdata_radix_enabled(n) {
+        let (perm, _keys) = radix_argsort_f64(data);
+        let mut ranks = vec![0.0; n];
+        for (rank, &p) in perm.iter().enumerate() {
+            ranks[p as usize] = (rank + 1) as f64;
+        }
+        return ranks;
+    }
+
     let mut indexed: Vec<(f64, usize)> = data
         .iter()
         .copied()
@@ -61112,6 +61240,36 @@ mod tests {
         }
         assert!(rankdata_axis_2d(&x, Some("average"), 9).is_err());
         assert!(rankdata_axis_2d(&x, Some("nope"), -1).is_err());
+    }
+
+    #[test]
+    fn rankdata_radix_matches_comparison_sort_bit_for_bit() {
+        use std::sync::atomic::Ordering;
+        // n above the radix gate (2^14) with heavy ties, ±0.0, ±inf, negatives,
+        // subnormals — the radix path must reproduce the comparison-sort ranks
+        // BIT-for-BIT for every method.
+        let n = 20_000usize;
+        let specials = [0.0_f64, -0.0, f64::INFINITY, f64::NEG_INFINITY, 5e-324, -5e-324];
+        let data: Vec<f64> = (0..n)
+            .map(|i| match i % 11 {
+                0..=5 => specials[i % 6],
+                6 => ((i * 2654435761usize) % 37) as f64, // dense ties
+                7 => -(((i * 40503usize) % 53) as f64),
+                _ => (((i as u64).wrapping_mul(0x9e3779b1) >> 8) as f64) * 1e-6 - 3.0,
+            })
+            .collect();
+
+        for method in ["average", "min", "max", "dense", "ordinal"] {
+            RANKDATA_RADIX_DISABLE.store(true, Ordering::Relaxed);
+            let reference = rankdata(&data, Some(method)).expect("rankdata comparison");
+            RANKDATA_RADIX_DISABLE.store(false, Ordering::Relaxed);
+            let radix = rankdata(&data, Some(method)).expect("rankdata radix");
+            assert_eq!(reference.len(), radix.len());
+            for (i, (&r, &c)) in radix.iter().zip(&reference).enumerate() {
+                assert_eq!(r.to_bits(), c.to_bits(), "method {method} idx {i}: {r} vs {c}");
+            }
+        }
+        RANKDATA_RADIX_DISABLE.store(false, Ordering::Relaxed);
     }
 
     #[test]

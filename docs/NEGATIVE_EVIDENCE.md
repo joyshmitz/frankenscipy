@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-05 - BlackThrush (cc) - KEEP: rankdata non-comparison radix argsort — 1.15-1.79x self, BYTE-IDENTICAL
+
+- DIG (radical primitive: NON-COMPARISON sort). `rankdata`/`rankdata_ties`/`rankdata_ordinal` (the rank engine
+  behind mannwhitneyu/kruskal/spearman) sorted `(f64,index)` pairs with pdqsort `sort_unstable_by(total_cmp)` —
+  O(n log n) comparisons. Replaced with a STABLE LSD radix argsort over the f64→u64 total_cmp-order transform
+  (negative→!bits, non-negative→flip sign bit): 8×8-bit passes, each a single linear histogram+scatter, with
+  constant-byte passes SKIPPED (narrow-range inputs cost far fewer than 8 sweeps). O(n·passes), no comparisons.
+- BYTE-IDENTICAL: the key transform reproduces `total_cmp` order exactly (−0.0 key 0x7FFF..F < +0.0 key
+  0x8000..0, all zeros contiguous), and the tie-grouping loop still delimits groups by value `==` (so ±0.0 group
+  together, as before). Ordinal (stable + index-seeded) == the old `total_cmp.then(index)`. New test
+  `rankdata_radix_matches_comparison_sort_bit_for_bit` GREEN (all 5 methods; ±0.0/±inf/subnormals/heavy ties,
+  n=20k) + full fsci-stats lib suite GREEN.
+- KEY FIX (first cut LOST 0.74x on average/ties): the comparison sort keeps values INLINE in the sorted pairs so
+  the tie-scan streams; radix returned only a permutation → the tie-scan GATHERED `data[perm[j]]` (cache-hostile).
+  Fixed by returning the sorted KEYS too and reconstructing sorted values SEQUENTIALLY via the inverse transform
+  (0 gathers) → flipped average from 0.74x LOSS to 1.15-1.28x WIN. Lesson: a permutation-only argsort penalizes
+  any downstream pass that reads values in sorted order; carry (or cheaply reconstruct) the sorted values.
+- MEASURED (same-binary A/B, atomic `RANKDATA_RADIX_DISABLE`, best-of-2 interleaved, `-cc`; gate n≥2^14):
+  n=50k avg **1.15x** / ord **1.55x**; n=200k **1.24x / 1.65x**; n=1M **1.28x / 1.79x**; n=4M avg **0.99x** (parity,
+  memory-bound) / ord **1.28x**. rankdata (default=average) already ~3.8x faster than scipy at 1M (35→~27ms self
+  earlier; ledger 10155) → this widens it further; ordinal gains most (no tie-scan).
+- LEVER: any hot f64 sort where downstream needs SORTED ORDER (not the pairs) → stable LSD radix on the
+  total_cmp-bit-transform beats pdqsort ~1.2-1.8x at n≥50k, EXACT/byte-identical, with constant-byte-pass skip;
+  reconstruct sorted values from the sorted keys (inverse transform) to keep the consumer's streaming access.
+  Candidates: spearmanr/weightedtau/other argsort consumers, multi-quantile sort path. Reuses `radix_argsort_f64`.
+
 ## 2026-07-05 - BlackThrush (cc) - REJECT: Strassen–Winograd GEMM in par_dmatmul — 0.39x/0.30x (2.5-3.3x SLOWER), REVERTED
 
 - DIG (radical primitive, explicitly attacking the strategic note @~2026-06-27 that declared the dense-GEMM
