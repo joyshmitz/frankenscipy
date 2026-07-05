@@ -7,10 +7,10 @@ use std::{
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
-    DecompOptions, InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption,
-    PinvOptions, SolveOptions, TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv,
-    lstsq, lu_factor, lu_solve, matmul, orthogonal_procrustes, pinv, randomized_eigh, solve,
-    solve_banded, solve_triangular, svd,
+    DecompOptions, HELMERT_FORCE_SERIAL, InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions,
+    MatrixAssumption, PinvOptions, SolveOptions, TriangularSolveOptions, cho_factor, cho_solve,
+    det, dft, eigh, inv, lstsq, lu_factor, lu_solve, matmul, orthogonal_procrustes, pinv,
+    randomized_eigh, solve, solve_banded, solve_triangular, svd,
 };
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
@@ -1235,6 +1235,41 @@ fn bench_khatri_rao_parallel_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_helmert_parallel_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("helmert_parallel_ab");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    for &n in &[1000usize, 2000usize] {
+        group.bench_function(format!("current_sub_n{n}"), |bencher| {
+            bencher.iter(|| {
+                HELMERT_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                black_box(fsci_linalg::helmert(black_box(n)))
+            });
+        });
+        group.bench_function(format!("orig_sub_n{n}"), |bencher| {
+            bencher.iter(|| {
+                HELMERT_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                black_box(fsci_linalg::helmert(black_box(n)))
+            });
+        });
+        group.bench_function(format!("current_full_n{n}"), |bencher| {
+            bencher.iter(|| {
+                HELMERT_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                black_box(fsci_linalg::helmert_full(black_box(n)))
+            });
+        });
+        group.bench_function(format!("orig_full_n{n}"), |bencher| {
+            bencher.iter(|| {
+                HELMERT_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                black_box(fsci_linalg::helmert_full(black_box(n)))
+            });
+        });
+    }
+    HELMERT_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_baseline_pinv(c: &mut Criterion) {
     use std::sync::atomic::Ordering::Relaxed;
     let mut group = c.benchmark_group("baseline_pinv");
@@ -1348,6 +1383,7 @@ criterion_group!(
     bench_det_gauntlet,
     bench_orthogonal_procrustes_gauntlet,
     bench_khatri_rao_parallel_ab,
+    bench_helmert_parallel_ab,
     bench_lu_factor_solve_gauntlet,
     bench_baseline_pinv
 );

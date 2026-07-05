@@ -34,10 +34,11 @@ ledger above so the project has one source of truth.
 - Correctness: `helmert_parallel_is_byte_identical_to_serial_above_gate` forces
   ORIG and compares full/default outputs bit-for-bit above the parallel gate.
   `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-linalg helmert --lib -- --nocapture`
-  passed 5/0 on `vmi1149989`. `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-conformance --test diff_linalg_special_matrices_extra -- --nocapture`
+  passed 5/0 on `vmi1149989`, then passed 5/0 again on `hz2` after the
+  clippy-equivalent assertion cleanup. `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-conformance --test diff_linalg_special_matrices_extra -- --nocapture`
   passed 1/0 after RCH fell open to local. `cargo check -p fsci-linalg --all-targets`
-  passed on RCH `ovh-a`; `cargo fmt -p fsci-linalg --check` and `git diff --check`
-  passed.
+  passed on RCH `ovh-a` and again on `ovh-b`; `cargo fmt -p fsci-linalg --check`
+  and `git diff --check` passed.
 - Hygiene: `ubs crates/fsci-linalg/src/lib.rs crates/fsci-linalg/benches/linalg_bench.rs`
   found 0 critical issues and its internal fmt/check/test probes were clean.
   Focused `cargo clippy -p fsci-linalg --lib --tests -- -D warnings` remains

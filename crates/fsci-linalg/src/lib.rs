@@ -16225,12 +16225,20 @@ pub fn hankel(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
 ///
 /// Resolves [frankenscipy-3t31o].
 pub fn helmert(n: usize) -> Vec<Vec<f64>> {
-    let full = helmert_full(n);
-    if full.len() <= 1 {
+    if n <= 1 {
         return Vec::new();
     }
-    full.into_iter().skip(1).collect()
+    if HELMERT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return helmert_full_serial(n).into_iter().skip(1).collect();
+    }
+    helmert_rows(n, 1, n)
 }
+
+/// Runtime switch to force the original serial `helmert`/`helmert_full` build
+/// for same-binary A/B benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static HELMERT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Helmert matrix in the `(n, n)` "full" form, including the first
 /// row of constant `1/√n` entries.
@@ -16241,6 +16249,13 @@ pub fn helmert_full(n: usize) -> Vec<Vec<f64>> {
     if n == 0 {
         return vec![];
     }
+    if HELMERT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return helmert_full_serial(n);
+    }
+    helmert_rows(n, 0, n)
+}
+
+fn helmert_full_serial(n: usize) -> Vec<Vec<f64>> {
     let mut h = vec![vec![0.0; n]; n];
 
     // First row: all 1/√n
@@ -16259,6 +16274,49 @@ pub fn helmert_full(n: usize) -> Vec<Vec<f64>> {
     }
 
     h
+}
+
+fn helmert_row(n: usize, i: usize) -> Vec<f64> {
+    let mut row = vec![0.0; n];
+    if i == 0 {
+        let inv_sqrt_n = 1.0 / (n as f64).sqrt();
+        row.fill(inv_sqrt_n);
+    } else {
+        let scale = 1.0 / ((i * (i + 1)) as f64).sqrt();
+        for item in row.iter_mut().take(i) {
+            *item = scale;
+        }
+        row[i] = -(i as f64) * scale;
+    }
+    row
+}
+
+fn helmert_rows(n: usize, start: usize, end: usize) -> Vec<Vec<f64>> {
+    let rows = end.saturating_sub(start);
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(rows.max(1));
+    if cores <= 1 || rows.saturating_mul(n) < (1 << 18) {
+        return (start..end).map(|i| helmert_row(n, i)).collect();
+    }
+    let chunk = rows.div_ceil(cores);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..cores)
+            .filter_map(|t| {
+                let i0 = start + t * chunk;
+                if i0 >= end {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(end);
+                Some(scope.spawn(move || (i0..i1).map(|i| helmert_row(n, i)).collect::<Vec<_>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("helmert worker panicked"))
+            .collect()
+    })
 }
 
 /// Create a matrix with ones on the specified diagonal.
@@ -19159,6 +19217,8 @@ mod tests {
     // Matrix reconstruction/parity checks legitimately index by (i, j); golden
     // fixtures occasionally coincide with named constants like 1/√2.
     #![allow(clippy::needless_range_loop, clippy::approx_constant)]
+    use std::sync::atomic::Ordering;
+
     use super::*;
 
     #[test]
@@ -29218,6 +29278,34 @@ mod tests {
     }
 
     #[test]
+    fn helmert_parallel_is_byte_identical_to_serial_above_gate() {
+        let n = 640usize;
+        HELMERT_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial_full = helmert_full(n);
+        let serial_sub = helmert(n);
+        HELMERT_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel_full = helmert_full(n);
+        let parallel_sub = helmert(n);
+
+        let mut mism = 0usize;
+        for (a, b) in serial_full
+            .iter()
+            .flatten()
+            .zip(parallel_full.iter().flatten())
+        {
+            mism += usize::from(a.to_bits() != b.to_bits());
+        }
+        for (a, b) in serial_sub
+            .iter()
+            .flatten()
+            .zip(parallel_sub.iter().flatten())
+        {
+            mism += usize::from(a.to_bits() != b.to_bits());
+        }
+        assert_eq!(mism, 0, "parallel helmert must be byte-identical to serial");
+    }
+
+    #[test]
     fn convolution_matrix_full() {
         let m = convolution_matrix(&[1.0, 2.0, 3.0], 4, "full");
         assert_eq!(m.len(), 6); // 4 + 3 - 1
@@ -32160,7 +32248,7 @@ mod proptest_tests {
 
             if let Some(packet) = queue.pop() {
                 assert!(
-                    packet.frontier_row >= packet.pivot + 1,
+                    packet.frontier_row > packet.pivot,
                     "bulge packet frontier must trail the rotation pivot"
                 );
                 apply_adjacent_rotation_envelope_diagonal_lanes(
