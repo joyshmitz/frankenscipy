@@ -6,6 +6,28 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-05 - BlackThrush (cc) - REJECT: cholesky block-size (NB) tuning + ecdf radix value-sort — both REVERTED
+
+- DIG on the biggest documented dense gap (cholesky ~2-3.6x slower than scipy dpotrf). Two attempts, both reverted.
+- (1) CHOLESKY PANEL WIDTH `NB` SWEEP. Hypothesis: the right-looking trailing SYRK contracts over `k=NB=128`
+  (small ⇒ low arithmetic intensity, memory-bound); a larger NB → fewer panels, larger-k SYRK. Made NB
+  runtime-tunable (`CHOL_NB_OVERRIDE`) and swept {128,160,192,224}. A SINGLE-SHOT sweep showed NB=192 @1024
+  44.4→28.0ms "1.59x" — but that was BOX-LOAD NOISE: a clean INTERLEAVED best-of-9 A/B shows NB=128 already
+  near-optimal — NB=192 = **1.02x @1024, 1.09x @1536, 0.94x @2048** (REGRESSES at 2048); no NB wins across
+  sizes. REVERTED (const NB=128 restored bit-for-bit). LESSON: single-shot cholesky timings drift ±25% under
+  load — the earlier "3.65x vs scipy" gap probe was ALSO inflated; clean interleaved best-of-9 puts fsci at
+  **25.9ms @1024 / 160ms @2048 vs scipy 9.7/77ms = ~2.1-2.7x** (matches the older "true gap 1.5-2x" note, not
+  3.6x). Block size is NOT the cholesky lever; the residual is the AVX2-vs-AVX512 per-FLOP + serial-panel wall
+  (panel-TRSM parallel already rejected; Strassen rejected [[perf_linalg_matrix_function_pade]]). ALWAYS
+  interleaved-best-of for dense-linalg A/B — sequential single-shots are worthless here.
+- (2) ecdf → `sort_f64_total` (radix value-sort, the proven ff9bfe34 primitive). MEASURED (best-of-2): n=50k
+  **0.87x LOSS**, 200k 1.47x, 1M 1.32x. Unlike wasserstein/energy/ks_2samp (which sort TWO arrays and win at
+  50k), ecdf sorts ONE array + does 512 fixed partition_point lookups, so radix's build/reconstruct overhead
+  doesn't amortize until ~200k — the 2^14 gate is too low for the single-sort case, giving a 50k regression.
+  REVERTED (not worth an ecdf-specific higher gate; ecdf's bench is n=4096, below any radix gate anyway).
+  LESSON: the radix VALUE-sort crossover depends on the CONSUMER — multi-sort + O(n) sweep amortizes at 2^14,
+  but single-sort + small-fixed-downstream needs ~2^17-2^18. Tune the gate per call-site, don't blanket-apply.
+
 ## 2026-07-05 - BlackThrush (cc) - KEEP: acf FFT (Wiener–Khinchin) — O(n·lags)→O(n log n), 9-40x self at large lags
 
 - DIG (radically different primitive: SPECTRAL). `acf(data, max_lag)` evaluated each lag's autocovariance as an
