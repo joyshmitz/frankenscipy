@@ -250,6 +250,8 @@ pub use convenience::{
     powm1,
     pro_ang1_many,
     pro_cv_many,
+    pro_rad1_many,
+    pro_rad2_many,
     powm1_scalar,
     pseudo_huber,
     rad2deg,

@@ -6,6 +6,74 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-05 - BlackThrush (codex) - KEEP: fsci-linalg Helmert row-direct parallel build - 2.18-3.39x vs ORIG serial/full-build path
+
+- LAND-OR-DIG audit: checkout started on `main` with no commit-ready local work
+  from this agent. `.scratch`/`.worktrees` had no unlanded measured win; the
+  only non-ancestor scratch head found was `e3b744f4` (`MATMUL_FLAT_WORKSPACE_MIN_DIM=768`),
+  already superseded on `main` by the stronger threshold-256 GEMM route. Dug a
+  new lever from the open `helmert_full` dense-constructor gap.
+- Gap attacked: `helmert(n)` previously built the full `n x n` matrix, then
+  dropped row 0; `helmert_full(n)` also filled rows serially. The new path
+  materializes exactly the requested row range (`1..n` for `helmert`, `0..n`
+  for `helmert_full`) and fans large row-independent builds across scoped
+  worker threads. `HELMERT_FORCE_SERIAL` keeps the literal ORIG path for
+  same-binary A/B proof.
+- Short per-crate bench command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-linalg --bench linalg_bench --profile release -- helmert_parallel_ab --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+  RCH selected `ovh-a`. This Cargo rejects the requested literal `cargo bench
+  --release` form, so the runnable release bench used `--profile release`.
+
+  | case | current median | ORIG median | speedup |
+  |---|---:|---:|---:|
+  | `helmert(1000)` | 1.4361 ms | 3.1378 ms | 2.18x |
+  | `helmert_full(1000)` | 0.90014 ms | 3.0540 ms | 3.39x |
+  | `helmert(2000)` | 4.7518 ms | 13.682 ms | 2.88x |
+  | `helmert_full(2000)` | 4.7804 ms | 13.615 ms | 2.85x |
+
+- Correctness: `helmert_parallel_is_byte_identical_to_serial_above_gate` forces
+  ORIG and compares full/default outputs bit-for-bit above the parallel gate.
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-linalg helmert --lib -- --nocapture`
+  passed 5/0 on `vmi1149989`. `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-conformance --test diff_linalg_special_matrices_extra -- --nocapture`
+  passed 1/0 after RCH fell open to local. `cargo check -p fsci-linalg --all-targets`
+  passed on RCH `ovh-a`; `cargo fmt -p fsci-linalg --check` and `git diff --check`
+  passed.
+- Hygiene: `ubs crates/fsci-linalg/src/lib.rs crates/fsci-linalg/benches/linalg_bench.rs`
+  found 0 critical issues and its internal fmt/check/test probes were clean.
+  Focused `cargo clippy -p fsci-linalg --lib --tests -- -D warnings` remains
+  blocked by pre-existing non-Helmert lint debt in `src/bin/probe_eig_resid.rs`,
+  `src/bin/perf_toeplitz_cols_ab.rs`, `src/cossin.rs`, and two old
+  `useless_vec` test fixtures; not folded into this one-lever perf commit.
+
+## 2026-07-05 - BlackThrush (cc) - pro_rad1_many / pro_rad2_many vectorized gapfill — 2.9-6.8x vs scipy ARRAY ufunc + 1.3-6.5x self (BYTE-IDENTICAL)
+
+- DIG: the PROLATE-spheroidal RADIAL functions `pro_rad1`/`pro_rad2` had scalar kernels + public cv-taking
+  variants `pro_rad1_cv`/`pro_rad2_cv` and `pro_cv` (== `spheroidal_cv(m,n,c,true)`), plus the char-value
+  `pro_cv_many` and angular `pro_ang1_many` `_many` siblings — but NO `pro_rad{1,2}_many`, while the OBLATE
+  radial `obl_rad{1,2}_many` shipped 2026-07-04 (12.7-28.7x vs scipy). A clean sibling gapfill.
+- OVERTURNS the obl_rad ledger note "pro_rad1/pro_rad2 ARE fast ~18ns/call → deliberately NOT wrapped, would
+  lose like pbdv." MEASURED: fsci scalar `pro_rad1(1,2,1.0,x)` is actually ~5.4µs/call (43.2 ms serial-map @
+  8000), NOT 18ns — the char-value solve dominates just like obl_rad. So the wrap is a genuine win, not a loss.
+- FIX (mirror of `obl_rad{1,2}_many`, cv-HOISTED from the start): `pro_rad{1,2}_many` compute the x-INVARIANT
+  `pro_cv(m,n,c)` ONCE and `par_map_indices` `pro_rad{1,2}_cv(m,n,c,cv,x[i])` over x. Bit-identical to a serial
+  map of `pro_rad{1,2}` (pro_cv == the internal cv; `pro_rad*_cv` share the driver + `n<m` NaN guard). Touched
+  ONLY convenience.rs (2 fns + test) + lib.rs (2 exports) — NOT the codex-occupied orthopoly.rs / linalg files.
+- MEASURED (m=1 n=2 c=1.0, ξ≥1, reps=5, `-cc` box):
+  - SELF (fsci `_many` parallel+hoist vs fsci naive serial map, which re-solves cv per element like scipy):
+    len=500 pro_rad1 1.36x / pro_rad2 1.29x; len=2000 3.47x / 6.46x; len=8000 3.13x / 3.97x. **bitmism=0 everywhere.**
+  - vs SCIPY `scipy.special.pro_rad{1,2}(1,2,1.0, ARRAY)` (1.17.1): len=8000 pro_rad1 40.49→13.81 ms **2.93x**,
+    pro_rad2 39.64→5.83 ms **6.80x**; len=2000 **2.61x / 5.88x**; len=500 **1.13x / 1.60x**. Win = fsci's faster
+    per-call kernel × cv-hoist × parallel fan (scipy's specfun re-solves the spheroidal eigenproblem per element).
+- CONF: new `pro_rad_many_match_serial_bit_for_bit` test GREEN (par==serial bit-for-bit, value+deriv, ξ≥1, incl.
+  empty input); scalar `pro_rad*_matches_scipy_clean_cases` goldens unaffected (pure wrappers). clippy `-p
+  fsci-special --lib -D warnings` clean.
+- COLLISION: shared checkout had codex's uncommitted fsci-linalg lib.rs + linalg_bench.rs edits (tri-xnorm /
+  procrustes) — staged ONLY my 2 special files, left codex's untouched. perf_pro_rad.rs is gitignored
+  (`crates/fsci-special/src/bin/` — local only, per the obl_rad convention).
+- LEVER: grep for `obl_*` `_many` whose PROLATE `pro_*` sibling is missing (or vice-versa) — spheroidal families
+  are symmetric; a shipped oblate `_many` implies a free prolate one (public cv variants already exist). Verify
+  the scalar is genuinely cv-dominated (µs/call) FIRST — don't trust stale "it's cheap" notes; re-measure.
+
 ## 2026-07-04 - BlackThrush (codex) - KEEP: fsci-linalg khatri_rao row-major parallel fill - 2.74x / 4.03x vs ORIG strided fill
 
 - Gap attacked: `khatri_rao`'s original implementation filled the row-major

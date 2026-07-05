@@ -3699,6 +3699,37 @@ pub fn obl_rad2_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
     .expect("obl_rad2_cv is infallible")
 }
 
+/// Vectorized prolate-spheroidal radial function of the first kind `pro_rad1(m, n, c, x)`
+/// (value and derivative) over many `x` at a fixed `(m, n, c)`; the prolate sibling of
+/// [`obl_rad1_many`]. SciPy's specfun `pro_rad1` ufunc re-solves the spheroidal
+/// eigenproblem for every element, so a parallel fan over fsci's faster kernel — with the
+/// x-invariant characteristic value hoisted out — is a large win. Bit-identical to a
+/// serial map of [`pro_rad1`](crate::pro_rad1).
+#[must_use]
+pub fn pro_rad1_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    // `pro_cv == spheroidal_cv(m,n,c,true)` — exactly the cv `pro_rad1` computes
+    // internally — is x-INVARIANT; hoist it out of the per-element loop and fan only the
+    // cheap per-x radial series across threads (bit-identical to a serial `pro_rad1` map).
+    let cv = crate::orthopoly::pro_cv(m, n, c);
+    par_map_indices(x.len(), |i| {
+        Ok::<(f64, f64), SpecialError>(crate::orthopoly::pro_rad1_cv(m, n, c, cv, x[i]))
+    })
+    .expect("pro_rad1_cv is infallible")
+}
+
+/// Vectorized prolate-spheroidal radial function of the second kind `pro_rad2(m, n, c, x)`
+/// (value and derivative) over many `x` at a fixed `(m, n, c)`; see [`pro_rad1_many`].
+/// Bit-identical to a serial map of [`pro_rad2`](crate::pro_rad2) (`pro_rad2_cv` shares its
+/// `n<m` guard and driver).
+#[must_use]
+pub fn pro_rad2_many(m: u32, n: u32, c: f64, x: &[f64]) -> Vec<(f64, f64)> {
+    let cv = crate::orthopoly::pro_cv(m, n, c);
+    par_map_indices(x.len(), |i| {
+        Ok::<(f64, f64), SpecialError>(crate::orthopoly::pro_rad2_cv(m, n, c, cv, x[i]))
+    })
+    .expect("pro_rad2_cv is infallible")
+}
+
 /// Vectorized even periodic Mathieu function `mathieu_cem(m, q, x)` (value and
 /// derivative) over many `x` (degrees) at a fixed `(m, q)`. The Fourier
 /// coefficients (an x-invariant matrix solve) are computed ONCE and the cheap
@@ -14686,6 +14717,28 @@ mod tests {
         }
         assert!(super::obl_rad1_many(m, n, c, &[]).is_empty());
         assert!(super::obl_rad2_many(m, n, c, &[]).is_empty());
+    }
+
+    #[test]
+    fn pro_rad_many_match_serial_bit_for_bit() {
+        // Order-preserving parallel fan (with the x-invariant cv hoisted) must equal a
+        // serial map of the scalar prolate radial functions bit-for-bit (value + deriv).
+        // Prolate radial coordinate ξ ≥ 1.
+        let (m, n, c) = (1u32, 2u32, 1.0f64);
+        let xs: Vec<f64> = (0..95).map(|i| 1.0 + i as f64 * 0.05).collect(); // ξ ≥ 1
+        let r1 = super::pro_rad1_many(m, n, c, &xs);
+        let r2 = super::pro_rad2_many(m, n, c, &xs);
+        assert_eq!(r1.len(), xs.len());
+        for (idx, &x) in xs.iter().enumerate() {
+            let (s1v, s1d) = crate::orthopoly::pro_rad1(m, n, c, x);
+            assert_eq!(r1[idx].0.to_bits(), s1v.to_bits(), "pro_rad1 val at x={x}");
+            assert_eq!(r1[idx].1.to_bits(), s1d.to_bits(), "pro_rad1 der at x={x}");
+            let (s2v, s2d) = crate::orthopoly::pro_rad2(m, n, c, x);
+            assert_eq!(r2[idx].0.to_bits(), s2v.to_bits(), "pro_rad2 val at x={x}");
+            assert_eq!(r2[idx].1.to_bits(), s2d.to_bits(), "pro_rad2 der at x={x}");
+        }
+        assert!(super::pro_rad1_many(m, n, c, &[]).is_empty());
+        assert!(super::pro_rad2_many(m, n, c, &[]).is_empty());
     }
 
     #[test]
