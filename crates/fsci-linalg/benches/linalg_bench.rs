@@ -8,9 +8,10 @@ use std::{
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
     DecompOptions, HELMERT_FORCE_SERIAL, InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions,
-    MatrixAssumption, PinvOptions, SolveOptions, TriangularSolveOptions, cho_factor, cho_solve,
-    det, dft, eigh, inv, lstsq, lu_factor, lu_solve, matmul, orthogonal_procrustes, pinv,
-    randomized_eigh, solve, solve_banded, solve_triangular, svd,
+    MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions, SolveOptions, TriangularSolveOptions,
+    cho_factor, cho_solve, det, dft, eigh, inv, lstsq, lu_factor, lu_solve, matmul,
+    orthogonal_procrustes, pascal, pinv, randomized_eigh, solve, solve_banded, solve_triangular,
+    svd,
 };
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
@@ -1270,6 +1271,29 @@ fn bench_helmert_parallel_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_pascal_symmetric_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pascal_symmetric_ab");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    for &n in &[192usize, 384usize] {
+        group.bench_function(format!("current_quadratic_n{n}"), |bencher| {
+            bencher.iter(|| {
+                PASCAL_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                black_box(pascal(black_box(n), true))
+            });
+        });
+        group.bench_function(format!("orig_gram_n{n}"), |bencher| {
+            bencher.iter(|| {
+                PASCAL_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                black_box(pascal(black_box(n), true))
+            });
+        });
+    }
+    PASCAL_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_baseline_pinv(c: &mut Criterion) {
     use std::sync::atomic::Ordering::Relaxed;
     let mut group = c.benchmark_group("baseline_pinv");
@@ -1384,6 +1408,7 @@ criterion_group!(
     bench_orthogonal_procrustes_gauntlet,
     bench_khatri_rao_parallel_ab,
     bench_helmert_parallel_ab,
+    bench_pascal_symmetric_ab,
     bench_lu_factor_solve_gauntlet,
     bench_baseline_pinv
 );

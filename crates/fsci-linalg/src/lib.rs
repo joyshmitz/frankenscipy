@@ -15685,6 +15685,17 @@ pub fn block_diag(blocks: &[Vec<Vec<f64>>]) -> Vec<Vec<f64>> {
 ///
 /// Matches `scipy.linalg.pascal`.
 pub fn pascal(n: usize, symmetric: bool) -> Vec<Vec<f64>> {
+    if symmetric && !PASCAL_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return pascal_symmetric_quadratic(n);
+    }
+    pascal_serial(n, symmetric)
+}
+
+#[doc(hidden)]
+pub static PASCAL_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn pascal_serial(n: usize, symmetric: bool) -> Vec<Vec<f64>> {
     // Lower-triangular Pascal matrix: L[i][j] = C(i, j) for j <= i
     let mut l = vec![vec![0.0; n]; n];
     for i in 0..n {
@@ -15708,6 +15719,21 @@ pub fn pascal(n: usize, symmetric: bool) -> Vec<Vec<f64>> {
     } else {
         l
     }
+}
+
+fn pascal_symmetric_quadratic(n: usize) -> Vec<Vec<f64>> {
+    // Symmetric Pascal has S[i][j] = C(i + j, i), and therefore obeys the same
+    // Pascal recurrence over the matrix grid: S[i][j] = S[i - 1][j] + S[i][j - 1].
+    let mut s = vec![vec![1.0; n]; n];
+    for i in 1..n {
+        let (before, current_and_after) = s.split_at_mut(i);
+        let prev = &before[i - 1];
+        let row = &mut current_and_after[0];
+        for j in 1..n {
+            row[j] = prev[j] + row[j - 1];
+        }
+    }
+    s
 }
 
 /// Inverse of an `n × n` Pascal matrix.
@@ -28750,6 +28776,33 @@ mod tests {
         assert_eq!(p[0], vec![1.0, 1.0, 1.0]);
         assert_eq!(p[1], vec![1.0, 2.0, 3.0]);
         assert_eq!(p[2], vec![1.0, 3.0, 6.0]);
+    }
+
+    #[test]
+    fn pascal_symmetric_quadratic_matches_serial_reference() {
+        use std::sync::atomic::Ordering;
+
+        for n in [0usize, 1, 2, 5, 8] {
+            PASCAL_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = pascal(n, true);
+            PASCAL_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let current = pascal(n, true);
+            assert_eq!(current, serial, "pascal symmetric n={n}");
+        }
+
+        PASCAL_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = pascal(32, true);
+        PASCAL_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let current = pascal(32, true);
+        for (i, (current_row, serial_row)) in current.iter().zip(serial.iter()).enumerate() {
+            for (j, (&actual, &expected)) in current_row.iter().zip(serial_row.iter()).enumerate() {
+                let tolerance = expected.abs().max(1.0) * 1e-12;
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "pascal symmetric n=32 cell ({i},{j}): {actual} vs {expected}"
+                );
+            }
+        }
     }
 
     #[test]

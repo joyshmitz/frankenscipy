@@ -6,6 +6,46 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-05 - BlackThrush (codex) - KEEP: fsci-linalg pascal symmetric O(n^2) recurrence - 181.37-359.82x vs ORIG cubic Gram
+
+- LAND-OR-DIG audit: checkout started clean on `main`; no unstaged work was
+  present to commit first. The already-recorded `.scratch`/`.worktrees` audit
+  had no safe unlanded measured win beyond the superseded old GEMM-threshold
+  head, so this dug a new structured-matrix lever from the remaining
+  `pascal(n, kind='symmetric')` cubic constructor gap.
+- Gap attacked: ORIG built the lower Pascal matrix, then formed the symmetric
+  matrix as `L * L^T` with an O(n^3) triple loop. The new symmetric path uses
+  the matrix recurrence `S[i][j] = S[i - 1][j] + S[i][j - 1]`, preserving the
+  SciPy-observable binomial matrix while reducing construction to O(n^2).
+  `PASCAL_FORCE_SERIAL` keeps the literal ORIG Gram path for same-binary A/B.
+- Dropped variant: a direct multiplicative closed-form row builder was rejected
+  before landing because the focused serial-reference test exposed ulp drift at
+  `n=8`; it was not benchmarked or kept.
+- Short per-crate bench command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-linalg --bench linalg_bench --profile release -- pascal_symmetric_ab --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+  RCH selected `hz2`. This Cargo rejects the requested literal `cargo bench
+  --release` form, so the runnable release bench used `--profile release`.
+
+  | case | current median | ORIG median | speedup |
+  |---|---:|---:|---:|
+  | `pascal(192, symmetric=true)` | 129.65 us | 23.514 ms | 181.37x |
+  | `pascal(384, symmetric=true)` | 526.10 us | 189.30 ms | 359.82x |
+
+- Correctness: `pascal_symmetric_quadratic_matches_serial_reference` forces
+  ORIG and checks exact equality for `n <= 8`, then tolerance-equivalence at
+  `n=32`. `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo test -j 1 -p fsci-linalg pascal --lib -- --nocapture`
+  passed 4/0 on `hz2`.
+- Conformance: the same focused `fsci-conformance` test first built on RCH
+  `hz2` but failed before comparison because that worker cannot import
+  `scipy`. Local oracle environment has SciPy 1.17.1, and
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 cargo test -j 1 -p fsci-conformance --test diff_linalg_special_matrices_extra -- --nocapture`
+  passed 1/0.
+- Hygiene: `cargo fmt -p fsci-linalg --check`, `git diff --check`, and
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo check -j 1 -p fsci-linalg --all-targets`
+  passed. `ubs crates/fsci-linalg/src/lib.rs crates/fsci-linalg/benches/linalg_bench.rs`
+  found 0 critical issues and reported fmt/check/clippy clean for the scanned
+  files, with only the existing linalg warning inventory.
+
 ## 2026-07-05 - BlackThrush (codex) - KEEP: fsci-linalg Helmert row-direct parallel build - 2.18-3.39x vs ORIG serial/full-build path
 
 - LAND-OR-DIG audit: checkout started on `main` with no commit-ready local work
