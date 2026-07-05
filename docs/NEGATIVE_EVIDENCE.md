@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-05 - BlackThrush (cc) - REJECT: Strassen–Winograd GEMM in par_dmatmul — 0.39x/0.30x (2.5-3.3x SLOWER), REVERTED
+
+- DIG (radical primitive, explicitly attacking the strategic note @~2026-06-27 that declared the dense-GEMM
+  gap a "no readily-available different-primitive" ceiling): that note framed the wall as "AVX-512 makes each
+  FLOP faster (fsci is AVX2-under-forbid-unsafe)". Strassen–Winograd attacks it from the ORTHOGONAL axis — do
+  FEWER FLOPs (O(n^2.807), (7/8)^levels multiplies), independent of SIMD width. Not in the rejected ledger.
+- IMPL: `par_dmatmul` (the internal GEMM behind expm/cosm/sinm/sqrtm/matrix_power scaling-squaring) split into
+  a dispatcher + classical `par_dmatmul_base`; a recursive `strassen_winograd_dmatmul` (7 half-size products via
+  the Golub&VanLoan 15-add Winograd schedule, sub-products recurse so n≥2·MIN nests multiple levels, odd dims
+  zero-padded+cropped). Gated n≥1024 (all of m,k,n) so every golden/conformance size (all <512) stays on the
+  bit-exact classical kernel. Same-binary A/B via `STRASSEN_DISABLE`.
+- CORRECTNESS OK, SPEED LOSS DECISIVE. Schedule verified algebraically (all 4 quadrants) + numerically:
+  strassen vs classical maxreldiff **4.70e-10** @1024 (normal Strassen error growth — looser than classical
+  ~1e-13, would itself pressure tight tolerances). MEASURED (matrix_power(A,8) = 4 pure par_dmatmul, no solve;
+  best-of-2 interleaved A/B, `-cc` box, A scaled to spectral-radius~1):
+  - n=1024: base **48.5ms** vs strassen **123.0ms** = **0.394x (2.5x SLOWER)**
+  - n=2048: base **377.2ms** vs strassen **1240.0ms** = **0.304x (3.3x SLOWER)** — WORSE with more levels.
+- WHY IT LOSES: the classical base kernel is nalgebra→matrixmultiply AVX2, measured **~180 GFLOPS**
+  (2·2048³/94ms) and effectively memory-bound at this efficiency. The naive recursive Winograd allocates ~18
+  half-size temporaries per level + does the 15 block add/subs through SERIAL nalgebra `+`/`-` on views (each a
+  fresh 2MB+ alloc + 3×n²/4 traffic) + zeroes and re-copies the output quadrants — that ADDED Ω(n²) memory
+  traffic exceeds the ~12%/23% multiply saving on a bandwidth-bound box. More levels (n=2048) compound the
+  overhead faster than the FLOP saving grows. Textbook "Strassen doesn't beat a well-tuned GEMM until enormous
+  n, and a naive-temporary formulation never does under memory bandwidth" — now with a concrete fsci number.
+- VERDICT: REVERTED (par_dmatmul restored bit-for-bit to HEAD; equiv test removed, A/B bin inert). A win would
+  need an in-place minimal-temporary Winograd with PARALLEL/SIMD block-adds AND n≥4096 (not a benched fsci size
+  — matrix functions bench n≤512), i.e. large effort for a few-percent ceiling. DON'T RETRY the naive-temporary
+  form. LEVER for any future FLOP-reducing GEMM primitive here: the base kernel is already ~180 GFLOPS and
+  memory-bound, so the primitive must add ZERO extra n² traffic (fuse adds into the multiply accumulate, reuse
+  buffers) — else the traffic tax dominates the FLOP saving. Related: [[perf_linalg_matrix_function_pade]].
+
 ## 2026-07-05 - BlackThrush (codex) - KEEP: fsci-linalg pascal symmetric O(n^2) recurrence - 181.37-359.82x vs ORIG cubic Gram
 
 - LAND-OR-DIG audit: checkout started clean on `main`; no unstaged work was
