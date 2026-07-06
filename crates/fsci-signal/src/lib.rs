@@ -4334,6 +4334,47 @@ pub fn short_time_energy(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<f64
     energies
 }
 
+/// Same-binary A/B toggle for the FFT (Wiener–Khinchin) autocorrelation path.
+/// When true, [`autocorrelation`] always takes the direct O(n·lags) dot path.
+pub static AUTOCORR_FFT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Engage the FFT autocorrelation once the direct work `n·lags` is large enough
+/// that O(n log n) clearly beats it (and above the exact tolerance-test sizes).
+#[inline]
+fn autocorr_fft_enabled(n: usize, last_lag: usize) -> bool {
+    const AUTOCORR_FFT_MIN_WORK: u64 = 1 << 19;
+    (n as u64).saturating_mul(last_lag as u64) >= AUTOCORR_FFT_MIN_WORK
+        && last_lag >= 64
+        && !AUTOCORR_FFT_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Autocorrelation of a pre-centered series via Wiener–Khinchin:
+/// `autocov = IFFT(|FFT(centered, zero-padded to ≥2n−1)|²)`, then `r[k]=autocov[k]/var`.
+/// Returns `None` if the FFT backend errors (caller falls back to the direct path).
+fn autocorr_via_fft(centered: &[f64], var: f64, last_lag: usize) -> Option<Vec<f64>> {
+    let n = centered.len();
+    // Zero-pad to a power of two ≥ 2n−1 so the circular correlation equals the
+    // linear one (no wraparound between the highest and lowest lags).
+    let mut npad = 1usize;
+    while npad < 2 * n - 1 {
+        npad <<= 1;
+    }
+    let mut padded = centered.to_vec();
+    padded.resize(npad, 0.0);
+
+    let opts = fsci_fft::FftOptions::default();
+    let spectrum = fsci_fft::rfft(&padded, &opts).ok()?;
+    let power: Vec<(f64, f64)> = spectrum
+        .iter()
+        .map(|&(re, im)| (re * re + im * im, 0.0))
+        .collect();
+    let autocov = fsci_fft::irfft(&power, Some(npad), &opts).ok()?;
+
+    let inv_var = 1.0 / var;
+    Some((0..=last_lag).map(|lag| autocov[lag] * inv_var).collect())
+}
+
 /// Compute the autocorrelation of a signal.
 ///
 /// Returns the normalized autocorrelation for lags 0 to max_lag.
@@ -4355,7 +4396,18 @@ pub fn autocorrelation(x: &[f64], max_lag: usize) -> Vec<f64> {
         return vec![1.0; max_lag + 1];
     }
 
-    (0..=max_lag.min(n - 1))
+    let last_lag = max_lag.min(n - 1);
+    // Wiener–Khinchin: the whole autocovariance sequence is IFFT(|FFT(centered)|²),
+    // O(n log n) vs the direct O(n·lags) dot sweep — a large win for a full
+    // correlogram. Zero-padding makes the circular correlation equal the linear
+    // one. Not bit-identical (FFT reassociates, ~1e-12); gated above the exact tests.
+    if autocorr_fft_enabled(n, last_lag) {
+        if let Some(r) = autocorr_via_fft(&centered, var, last_lag) {
+            return r;
+        }
+    }
+
+    (0..=last_lag)
         .map(|lag| {
             let sum: f64 = centered[..n - lag]
                 .iter()
@@ -28088,6 +28140,33 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn autocorrelation_fft_matches_direct_within_tolerance() {
+        use std::sync::atomic::Ordering;
+        // Above the FFT gate: the Wiener–Khinchin path must agree with the direct
+        // O(n·lags) dot to ~1e-11 (FFT reassociation only), for every lag.
+        let n = 8192usize;
+        let x: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 * 0.01;
+                t.sin() + 0.4 * (2.3 * t).cos() + 0.1 * (((i * 2654435761usize) % 97) as f64) - 3.0
+            })
+            .collect();
+        for &max_lag in &[64usize, 512, n - 1] {
+            AUTOCORR_FFT_DISABLE.store(true, Ordering::Relaxed);
+            let direct = autocorrelation(&x, max_lag);
+            AUTOCORR_FFT_DISABLE.store(false, Ordering::Relaxed);
+            let fftr = autocorrelation(&x, max_lag);
+            assert_eq!(direct.len(), fftr.len(), "len max_lag={max_lag}");
+            let mut worst = 0.0f64;
+            for (a, b) in fftr.iter().zip(&direct) {
+                worst = worst.max((a - b).abs());
+            }
+            assert!(worst < 1e-11, "autocorr fft vs direct max_lag={max_lag}: worst {worst:.2e}");
+        }
+        AUTOCORR_FFT_DISABLE.store(false, Ordering::Relaxed);
     }
 
     // ── Cross-correlation tests ──────────────────────────────────────

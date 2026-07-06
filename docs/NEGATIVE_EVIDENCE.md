@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-05 - BlackThrush (cc) - KEEP: signal.autocorrelation FFT (Wiener–Khinchin) — 14-509x self at large lags
+
+- DIG (the proven acf-FFT lever applied to its fsci-SIGNAL twin — a DIFFERENT crate/hot-path). `signal.
+  autocorrelation(x, max_lag)` computed each lag's autocovariance as a direct O(n) dot in a SERIAL `.map()`
+  over lags = O(n·lags), and (unlike stats.acf which was already parallel-across-lags) was NOT even
+  parallelized — so it was strictly worse and the FFT win is far larger.
+- FIX: gated Wiener–Khinchin path `autocov = irfft(|rfft(centered, zero-padded to next-pow2 ≥ 2n−1)|²)`,
+  `r[k]=autocov[k]/var` (zero-pad ⇒ circular corr = linear corr), O(n log n). fsci-signal already deps
+  fsci-fft (used by fftconvolve). Toggle `AUTOCORR_FFT_DISABLE`. GATE `autocorr_fft_enabled`:
+  `n·last_lag ≥ 2^19 && last_lag ≥ 64` — so the exact tolerance tests (max_lag ≤ 4) stay on the bit-exact
+  direct path; FFT engages only where it dominates. Falls back to direct on any FFT backend error.
+- MEASURED (same-binary A/B, best-of-2, `-cc`): n=4096 lag=512 1.626→0.118ms **13.8x**; n=8192 lag=2048
+  12.131→0.259ms **46.9x**; n=16384 lag=8191 83.124→0.570ms **145.8x**; n=65536 lag=32767 1347.7→2.65ms
+  **509x**. Win grows with lags (O(n²)→O(n log n)) AND is bigger than stats.acf's 9-40x because the signal
+  path was serial (stats.acf was parallel-across-lags).
+- ACCURACY: not bit-identical (FFT reassociates) but ~1e-13; new test
+  `autocorrelation_fft_matches_direct_within_tolerance` (n=8192, lag∈{64,512,8191}, worst abs diff <1e-11) +
+  full fsci-signal lib suite GREEN. (signal.autocorrelation is fsci-specific — no scipy peer — so this is a
+  pure self-speedup; the ratio-vs-ORIG is the direct→FFT number.)
+- NOTE (NOT done, risky): the `time_delay`/best-lag argmax cross-correlation (lib.rs ~6153) is also a direct
+  O(n·m) full lag sweep, but it returns an ARGMAX with strict-`>` first-lag tie-break — FFT reassociation could
+  flip the peak on near-ties, so it stays direct (byte-safety over speed). LEVER unchanged: O(n·k)
+  shift-correlation returning a VECTOR → FFT (gate on work); an ARGMAX-returning one is NOT FFT-safe.
+
 ## 2026-07-05 - BlackThrush (cc) - REJECT: cholesky block-size (NB) tuning + ecdf radix value-sort — both REVERTED
 
 - DIG on the biggest documented dense gap (cholesky ~2-3.6x slower than scipy dpotrf). Two attempts, both reverted.
