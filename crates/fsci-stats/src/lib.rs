@@ -35796,7 +35796,7 @@ fn anderson_ksamp_statistic_midrank(
 
     for (sample, &sample_n) in samples.iter().zip(n.iter()) {
         let mut sorted = sample.clone();
-        sorted.sort_by(f64::total_cmp);
+        sorted.sort_unstable_by(f64::total_cmp);
         let right_counts: Vec<usize> = unique
             .iter()
             .map(|&value| sorted.partition_point(|x| *x <= value))
@@ -35853,7 +35853,7 @@ fn anderson_ksamp_statistic_right(
     let mut statistic = 0.0;
     for (sample, &sample_n) in samples.iter().zip(n.iter()) {
         let mut sorted = sample.clone();
-        sorted.sort_by(f64::total_cmp);
+        sorted.sort_unstable_by(f64::total_cmp);
         let mij: Vec<f64> = unique_prefix
             .iter()
             .map(|&value| sorted.partition_point(|x| *x <= value) as f64)
@@ -35883,7 +35883,7 @@ fn anderson_ksamp_statistic_continuous(
 
     for (sample, &sample_n) in samples.iter().zip(n.iter()) {
         let mut sorted = sample.clone();
-        sorted.sort_by(f64::total_cmp);
+        sorted.sort_unstable_by(f64::total_cmp);
         let mij: Vec<f64> = pooled[..pooled.len().saturating_sub(1)]
             .iter()
             .map(|&value| sorted.partition_point(|x| *x <= value) as f64)
@@ -35990,7 +35990,7 @@ pub fn anderson_ksamp(
         .iter()
         .flat_map(|sample| sample.iter().copied())
         .collect();
-    pooled.sort_by(f64::total_cmp);
+    pooled.sort_unstable_by(f64::total_cmp);
     let mut unique = pooled.clone();
     unique.dedup_by(|a, b| a.total_cmp(b).is_eq());
     if unique.len() < 2 {
@@ -39931,11 +39931,11 @@ fn somers_from_rankings(x: &[f64], y: &[f64]) -> Result<Vec<Vec<f64>>, StatsErro
     }
 
     let mut x_levels = x.to_vec();
-    x_levels.sort_by(f64::total_cmp);
+    x_levels.sort_unstable_by(f64::total_cmp);
     x_levels.dedup_by(|a, b| a.total_cmp(b).is_eq());
 
     let mut y_levels = y.to_vec();
-    y_levels.sort_by(f64::total_cmp);
+    y_levels.sort_unstable_by(f64::total_cmp);
     y_levels.dedup_by(|a, b| a.total_cmp(b).is_eq());
 
     let mut table = vec![vec![0.0; y_levels.len()]; x_levels.len()];
@@ -43896,7 +43896,7 @@ pub fn probplot_quantiles(n: usize) -> Vec<f64> {
 /// quantiles and the sorted transformed values (the `r` of a normal prob plot).
 fn normplot_ppcc(transformed: &[f64], osm: &[f64]) -> f64 {
     let mut zs = transformed.to_vec();
-    zs.sort_by(f64::total_cmp);
+    zs.sort_unstable_by(f64::total_cmp);
     pearsonr(osm, &zs).statistic
 }
 
@@ -44002,7 +44002,7 @@ pub fn ppcc_plot(x: &[f64], a: f64, b: f64, n: usize) -> Result<(Vec<f64>, Vec<f
     }
     let probs = uniform_order_medians(x.len());
     let mut osr = x.to_vec();
-    osr.sort_by(f64::total_cmp);
+    osr.sort_unstable_by(f64::total_cmp);
     let svals: Vec<f64> = (0..n)
         .map(|i| a + (b - a) * i as f64 / (n - 1).max(1) as f64)
         .collect();
@@ -44025,7 +44025,7 @@ pub fn ppcc_max(x: &[f64], brack: (f64, f64)) -> f64 {
     }
     let probs = uniform_order_medians(x.len());
     let mut osr = x.to_vec();
-    osr.sort_by(f64::total_cmp);
+    osr.sort_unstable_by(f64::total_cmp);
     let tempfunc = |c: f64| 1.0 - tukeylambda_ppcc(&osr, &probs, c);
     let (xa, _, xc, _, _, _) = fsci_opt::bracket(&tempfunc, brack.0, brack.1);
     let (lo, hi) = (xa.min(xc), xa.max(xc));
@@ -44064,7 +44064,7 @@ pub fn probplot(x: &[f64]) -> ProbplotResult {
         .map(|&p| fsci_special::ndtri_scalar(p))
         .collect();
     let mut osr = x.to_vec();
-    osr.sort_by(f64::total_cmp);
+    osr.sort_unstable_by(f64::total_cmp);
     let fit = linregress(&osm, &osr);
     ProbplotResult {
         osm,

@@ -6,6 +6,21 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-06 - BlackThrush (cc) - KEEP (marginal, byte-id) + MEMORY CORRECTION: 10× sort_by(f64::total_cmp)→sort_unstable_by in stats
+
+- Converted 10 stable `Vec<f64>.sort_by(f64::total_cmp)` sites (anderson_ksamp pooled/sorted, ppcc/probplot
+  order-stat buffers `osr`, somersd x/y levels, z-buffers) to `sort_unstable_by` — pure value sorts, so
+  stability is irrelevant (identical bits are indistinguishable; `total_cmp` is a strict total order otherwise)
+  ⇒ BYTE-IDENTICAL sorted sequence. Full fsci-stats lib suite **2016/0 GREEN**.
+- MEASURED (fresh same-box micro-bench, best-of-12/4): sort_by→sort_unstable on a `Vec<f64>` is only
+  **1.01x @50k, 1.03x @500k, 1.10x @5M** — MARGINAL (real only at multi-M n; parity at the sizes these
+  functions actually run). Kept anyway: sort_unstable is the correct idiom for a value sort, never a regression.
+- ⚠ MEMORY CORRECTION (supersedes the f8d2d3e3 "sort_by→sort_unstable = 1.3-1.7x" expectation): that 1.3-1.7x
+  was for sorting `(f64, usize)` TUPLES (rankdata_ordinal) where stable-tuple carries real overhead; for PLAIN
+  f64 VALUE arrays Rust's stable sort ≈ pdqsort (~1.0-1.1x). So the `.sort_by(total_cmp)→.sort_unstable_by`
+  lever is a WIN only on TUPLE/pair sorts, NOT value sorts — don't chase value-sort `sort_by` sites for perf
+  (the real value-sort win is the RADIX primitive `sort_f64_total`, gated 2^14; see below).
+
 ## 2026-07-06 - BlackThrush (cc) - KEEP: cramervonmises_2samp radix value-sort — 1.41-1.57x self, BYTE-IDENTICAL
 
 - Smallest already-validated lever: routed `cramervonmises_2samp`'s two per-sample sorts (`xa`,`ya`) through
