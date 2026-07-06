@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-06 - BlackThrush (cc) - KEEP: solve() mid-n mixed-precision LU gate 1000→128 — 5.8-7.9x, FLIPS a 7.6x scipy LOSS to a WIN
+
+- FOUND by a FAIR single-thread dense-decomp profile (scipy OMP_NUM_THREADS=1 to dodge the OpenBLAS
+  oversubscription artifact @ledger 11823): at n=512 fsci **solve was 7.58x SLOWER** (44.2 vs scipy 5.83ms) —
+  the standout, and NOT a D&C/AVX wall: fsci `solve` (44ms) was 2.3x its OWN `lu_factor` (19ms), when solve
+  should be ≈ LU + cheap O(n²) triangular solves. Root cause: `solve`'s fast mixed-precision blocked-LU path
+  was gated at `FLAT_LU_SOLVE_MIN_DIM = 1000`, so every n<1000 general solve fell to the SLOW PORTFOLIO path
+  (re-does an O(n³) factor + f64 iterative refinement + rcond/diagnostics = 6-8x the work).
+- FIX: split a `solve`-specific gate `SOLVE_FLAT_MIN_DIM = 128` (det/lu_factor/cholesky keep 1000). The fast
+  route = f32 blocked LU + a few f64 refinement steps (`lu_solve_mixed_precision`, falls back to f64
+  `lu_solve_blocked` on ill-conditioning) — the classic mixed-precision iterative-refinement primitive,
+  extended to its proper domain. Runtime override `SOLVE_FLAT_MIN_OVERRIDE` for same-binary A/B.
+- MEASURED (A/B portfolio vs fast, best-of-2, `-cc`): n=128 0.90→0.16ms **5.79x**; n=192 **5.78x**; n=256
+  5.21→0.83ms **6.30x**; n=384 **7.02x**; n=512 37.16→5.25ms **7.08x**; n=768 112.6→14.3ms **7.88x**. Below
+  128 stays portfolio (sub-ms, no change). fsci solve@512 now **5.25ms < scipy-1thr 5.83ms** — the 7.58x LOSS
+  is now a WIN (and faster still on all cores).
+- ACCURACY: fast x matches the portfolio x to **~1e-12..1e-14** (mixed-precision refinement is f64-accurate);
+  solve conformance is tolerance-based. Full fsci-linalg lib suite **506/0 GREEN** (the certificate:None the
+  fast path returns — already the case for n≥1000 — extends to n≥128 with no test breakage).
+- LEVER: PROFILE FAIRLY (scipy single-thread) then look for an op whose gap EXCEEDS its own sub-step cost — a
+  mis-gated fast path or redundant portfolio work, not a wall. Mixed-precision iterative refinement (solve in
+  f32, refine in f64) is a WIN from n≈128 up; its default gate was 8x too high. NEXT: check inv/lstsq/det for
+  the same mis-gated-portfolio pattern (FLAT_LU_*_MIN_DIM = 1000/1024 may be too high post-refinement-tuning).
+
 ## 2026-07-06 - BlackThrush (cc) - KEEP: signal.autocorrelation DIRECT path parallel-across-lags — 4.8-7.7x, BYTE-IDENTICAL
 
 - Completes last turn's autocorrelation FFT (c9ad4654): the FFT path covers large lags (n·lag≥2^19, lag≥64),

@@ -750,7 +750,7 @@ pub fn solve(a: &[Vec<f64>], b: &[f64], options: SolveOptions) -> Result<SolveRe
     // assumptions, transposition) keep their exact behavior; a singular pivot or any
     // unmet precondition falls through to the portfolio solver unchanged.
     let n = a.len();
-    if n >= FLAT_LU_SOLVE_MIN_DIM
+    if n >= solve_flat_min()
         && options.mode == RuntimeMode::Strict
         && !options.transposed
         && matches!(options.assume_a, None | Some(MatrixAssumption::General))
@@ -780,7 +780,7 @@ pub fn solve(a: &[Vec<f64>], b: &[f64], options: SolveOptions) -> Result<SolveRe
     // Cholesky (parallel trailing update). A non-positive pivot (not actually PD)
     // returns None and falls through to the portfolio solver, which preserves the
     // exact `assume_a = pos` rejection behavior.
-    if n >= FLAT_LU_SOLVE_MIN_DIM
+    if n >= solve_flat_min()
         && options.mode == RuntimeMode::Strict
         && !options.transposed
         && options.assume_a == Some(MatrixAssumption::PositiveDefinite)
@@ -17376,6 +17376,23 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
 /// 1000x1000 profiled gate; inverse stays higher because the 256x256 gate regressed.
 const FLAT_LU_SOLVE_MIN_DIM: usize = 1000;
 const FLAT_LU_INV_MIN_DIM: usize = 1024;
+
+/// Dimension gate for `solve`'s fast path (mixed-precision blocked LU + refinement).
+/// MUCH lower than [`FLAT_LU_SOLVE_MIN_DIM`] (used by det/lu_factor/cholesky) because
+/// the general-`solve` PORTFOLIO fallback is 6-8x slower than the fast LU route from
+/// n≈128 up (measured: it re-does an O(n³) factor + f64 refinement + diagnostics),
+/// while the fast route (f32 LU + a few f64 refinement steps) matches it to ~1e-12.
+const SOLVE_FLAT_MIN_DIM: usize = 128;
+
+/// Runtime override for [`SOLVE_FLAT_MIN_DIM`] (0 ⇒ default). Same-binary A/B switch.
+pub static SOLVE_FLAT_MIN_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[inline]
+fn solve_flat_min() -> usize {
+    let o = SOLVE_FLAT_MIN_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if o == 0 { SOLVE_FLAT_MIN_DIM } else { o }
+}
 
 #[derive(Clone)]
 struct LuFactorsFlat {
