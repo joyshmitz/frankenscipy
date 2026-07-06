@@ -36910,8 +36910,8 @@ pub fn cramervonmises_2samp_with_method(
 
     let mut xa = x.to_vec();
     let mut ya = y.to_vec();
-    xa.sort_unstable_by(|a, b| a.total_cmp(b));
-    ya.sort_unstable_by(|a, b| a.total_cmp(b));
+    sort_f64_total(&mut xa);
+    sort_f64_total(&mut ya);
 
     let mut pooled = xa.clone();
     pooled.extend_from_slice(&ya);

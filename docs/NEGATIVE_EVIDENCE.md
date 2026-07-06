@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-06 - BlackThrush (cc) - KEEP: cramervonmises_2samp radix value-sort — 1.41-1.57x self, BYTE-IDENTICAL
+
+- Smallest already-validated lever: routed `cramervonmises_2samp`'s two per-sample sorts (`xa`,`ya`) through
+  the landed `sort_f64_total` radix value-sort (ff9bfe34). The pooled `rankdata_average` already rode the radix
+  argsort (f6dcd6b2), so with both sample sorts on radix the WHOLE non-comparison-sort path is engaged.
+- BYTE-IDENTICAL: sort_f64_total reproduces the `total_cmp` sorted sequence exactly, so the sorted xa/ya → the
+  same pooled ranks → the same statistic/pvalue. Verified in-bin `bitid=true` (statistic+pvalue bit-eq, radix
+  on-vs-off) at 50k/200k/1M; existing cramervonmises tests (small n < 2^14 gate ⇒ pdqsort path) GREEN.
+- MEASURED (same-binary A/B, atomic RANKDATA_RADIX_DISABLE = the shared radix master switch, best-of-2, `-cc`):
+  n=50k 6.65→4.47ms **1.49x**; n=200k 30.32→19.34ms **1.57x**; n=1M 159.1→112.6ms **1.41x**. This is the full
+  radix path (2 value-sorts + pooled argsort) vs the all-pdqsort baseline; bigger than wasserstein/energy's
+  1.2-1.28x because cramervonmises also ranks the 2n-pooled set. (The pooled-argsort portion was already landed
+  f6dcd6b2; this commit adds the two value-sorts on top — net function is 1.41-1.57x faster than all-pdqsort.)
+- LEVER (unchanged): `sort_f64_total` is the drop-in for any large-f64 value sort whose consumer streams the
+  sorted values. GUARD (ledger, do NOT re-try): single-sort + small-fixed-downstream (ecdf) regresses at 50k
+  (gate 2^14 too low there); two-sort/pooled-rank sites amortize at 2^14.
+
 ## 2026-07-05 - BlackThrush (cc) - KEEP: signal.autocorrelation FFT (Wiener–Khinchin) — 14-509x self at large lags
 
 - DIG (the proven acf-FFT lever applied to its fsci-SIGNAL twin — a DIFFERENT crate/hot-path). `signal.
