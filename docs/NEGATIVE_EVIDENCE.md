@@ -6,6 +6,29 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-06 - BlackThrush (cc) - KEEP: signal.autocorrelation DIRECT path parallel-across-lags — 4.8-7.7x, BYTE-IDENTICAL
+
+- Completes last turn's autocorrelation FFT (c9ad4654): the FFT path covers large lags (n·lag≥2^19, lag≥64),
+  but the DIRECT O(n·lags) dot path (SMALL lags, where the dot sweep beats the O(n log n) full-spectrum FFT)
+  was still fully SERIAL — a plain `.map()` over lags (stats.acf already parallelized this; signal did not).
+- FIX: fan the independent per-lag dots across threads in contiguous chunks (each lag's inner sum stays
+  left-to-right ⇒ BIT-IDENTICAL to the serial map, bitmism=0). Toggle `AUTOCORR_PAR_DISABLE`.
+- GATE TUNING (first cut lost 0.78x @n=100k): each parallel lag does ~n mul-adds, so gate on **n** (per-lag
+  work), NOT n·lags — at small n the ~nlags workers over-subscribe. `n < 2^18 || nlags < 4` ⇒ serial. First
+  cut used total-work `n·lag ≥ 2^18` and over-spawned 63 workers on 100k-op lags → 0.78x; the n-based gate
+  fixes it to 1.00x (serial) there.
+- MEASURED (same-binary A/B, FFT forced off to exercise the direct path, best-of-2, `-cc`): n=100k lag=63
+  **1.00x** (below gate, serial — no regression); n=300k lag=63 13.45→2.53ms **5.31x**; n=500k lag=40
+  14.17→2.94ms **4.82x**; n=1M lag=32 22.80→4.78ms **4.77x**; n=1M lag=63 43.04→5.59ms **7.70x**. bitmism=0
+  everywhere. Full fsci-signal lib suite GREEN.
+- REGIME: this is the large-n / FEW-lags case (lag<64, the FFT gate deliberately leaves it to direct because
+  direct O(n·lag) < FFT O(n log n) there) — e.g. AR(1) lag-1..40 on a long signal. FFT (large lag) + parallel
+  (large-n small lag) now jointly cover autocorrelation.
+- CONTEXT (dense-linalg frontier = documented WALLS, surfaced not chased): scipy dense eig/schur measured
+  165ms/1.4s @256/512 but that's the OpenBLAS thread-OVER-subscription artifact (ledger 11823), not a real
+  gap; true single-thread eigh/svd gap is the ~3x LAPACK divide-and-conquer wall (dsyevd/dgesdd/MRRR port =
+  multi-tick, not a 60m ship). lstsq QR-fast-path is API-blocked (LstsqResult requires singular_values).
+
 ## 2026-07-06 - BlackThrush (cc) - KEEP (marginal, byte-id) + MEMORY CORRECTION: 10× sort_by(f64::total_cmp)→sort_unstable_by in stats
 
 - Converted 10 stable `Vec<f64>.sort_by(f64::total_cmp)` sites (anderson_ksamp pooled/sorted, ppcc/probplot

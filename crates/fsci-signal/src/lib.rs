@@ -4339,6 +4339,11 @@ pub fn short_time_energy(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<f64
 pub static AUTOCORR_FFT_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Same-binary A/B toggle for the parallel-across-lags direct autocorrelation path.
+/// When true, the direct dot sweep stays single-threaded.
+pub static AUTOCORR_PAR_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Engage the FFT autocorrelation once the direct work `n·lags` is large enough
 /// that O(n log n) clearly beats it (and above the exact tolerance-test sizes).
 #[inline]
@@ -4407,16 +4412,52 @@ pub fn autocorrelation(x: &[f64], max_lag: usize) -> Vec<f64> {
         }
     }
 
-    (0..=last_lag)
-        .map(|lag| {
-            let sum: f64 = centered[..n - lag]
-                .iter()
-                .zip(centered[lag..].iter())
-                .map(|(&a, &b)| a * b)
-                .sum();
-            sum / var
-        })
-        .collect()
+    // Direct O(n·lags) path (below the FFT gate — small lags where the dot sweep
+    // beats the O(n log n) full-spectrum FFT). Each lag's dot is independent, so
+    // fan the lags across threads in contiguous chunks (one spawn-set) — the inner
+    // sum stays left-to-right, so each per-lag value is BIT-IDENTICAL to the serial
+    // map. Gated so small work stays serial (no spawn tax). Mirrors stats.acf.
+    let acf_lag = |lag: usize| -> f64 {
+        let sum: f64 = centered[..n - lag]
+            .iter()
+            .zip(centered[lag..].iter())
+            .map(|(&a, &b)| a * b)
+            .sum();
+        sum / var
+    };
+    // Each parallel lag does ~n multiply-adds, so gate on n (per-lag work), not
+    // n·lags: at small n the spawn tax over-subscribes across the ~nlags workers.
+    const AUTOCORR_PAR_MIN_N: usize = 1 << 18;
+    let nlags = last_lag + 1;
+    let nthreads = if n < AUTOCORR_PAR_MIN_N
+        || nlags < 4
+        || AUTOCORR_PAR_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nlags)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..=last_lag).map(acf_lag).collect();
+    }
+    let mut result = vec![0.0; nlags];
+    let chunk = nlags.div_ceil(nthreads);
+    let acf_lag = &acf_lag;
+    std::thread::scope(|scope| {
+        for (ci, out_chunk) in result.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (li, slot) in out_chunk.iter_mut().enumerate() {
+                    *slot = acf_lag(base + li);
+                }
+            });
+        }
+    });
+    result
 }
 
 fn has_invalid_paired_spectral_bins(magnitudes: &[f64], freqs: &[f64]) -> bool {
