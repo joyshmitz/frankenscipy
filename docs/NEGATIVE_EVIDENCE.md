@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-07 - BlackThrush (cc) - REJECT: det() blocked-LU gate 1000→128 — MIXED (0.57-1.35x), REVERTED
+
+- The last un-lowered gate in the mis-gated vein (after solve/inv/lu_factor all won). Hypothesis: det via the
+  parallel+SIMD blocked LU (`det_flat_lu_product` = `sign(P)·∏Uᵢᵢ`) beats nalgebra's scalar `.lu()` det from
+  n≈128, like lu_factor did. Added `DET_FLAT_MIN_DIM=128` + `DET_FLAT_MIN_OVERRIDE` and A/B'd.
+- MEASURED (nalgebra vs blocked, best-of-2, `-cc`): n=128 0.19→0.22ms **0.85x LOSS**; n=256 1.46→1.43ms
+  **1.02x** (parity); n=384 4.53→3.87ms 1.17x; n=512 13.30→9.89ms 1.35x; n=768 38.21→**67.03ms 0.57x LOSS**
+  (reldiff=NaN — the random-matrix det is inf for BOTH, and the blocked path hit an anomalous ~2x-slow case).
+- WHY IT DIFFERS FROM lu_factor (clean 1.4-1.7x): det is factor + an O(n) diagonal product, but (a) the product
+  overflows to ±inf for large random dets (n≳600) — a degenerate regime where the timing is noisy/unreliable,
+  and (b) below ~384 the blocked-LU spin-up doesn't amortize on the lighter det work (loss@128, parity@256).
+  Net: NOT a clean monotone win (unlike lu_factor's factor-only path). REVERTED (det restored to the shared
+  `FLAT_LU_SOLVE_MIN_DIM=1000`; lib.rs bit-for-bit HEAD, A/B bin inert).
+- LEVER CLOSED: the FLAT_LU_*_MIN_DIM mis-gated vein is DONE — solve(128,mixed-prec)/inv(256,blocked)/lu_factor
+  (128,blocked) all landed wins; det is the one that does NOT transfer (overflow + light-work). Don't re-try
+  det gate lowering. cholesky_lower_factor gate 1000 remains (already SIMD-tuned; measure separately if revisited).
+
 ## 2026-07-07 - BlackThrush (cc) - KEEP: lu_factor() blocked-LU gate 1000→128 (1.39-1.70x mid-n)
 
 - Third op in the mis-gated-fast-path vein (after solve 1000→128 @31a206e9, inv 1024→256 @a1379ccf). The fair
