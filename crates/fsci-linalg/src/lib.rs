@@ -953,7 +953,7 @@ pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError
     // Restricted to the plain Strict / General case; a singular pivot or any unmet
     // precondition falls through to the portfolio inverse (diagnostics preserved).
     let n = a.len();
-    if n >= FLAT_LU_INV_MIN_DIM
+    if n >= inv_flat_min()
         && options.mode == RuntimeMode::Strict
         && matches!(options.assume_a, None | Some(MatrixAssumption::General))
         && rows_are_rectangular(a, n)
@@ -17392,6 +17392,24 @@ pub static SOLVE_FLAT_MIN_OVERRIDE: std::sync::atomic::AtomicUsize =
 fn solve_flat_min() -> usize {
     let o = SOLVE_FLAT_MIN_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
     if o == 0 { SOLVE_FLAT_MIN_DIM } else { o }
+}
+
+/// `inv` fast-path gate — the in-house PARALLEL blocked LU (factor once, solve the
+/// identity columns on all cores) beats the portfolio `nalgebra try_inverse` from
+/// n≈256 up (measured 1.9-3.7x). MUCH lower than [`FLAT_LU_INV_MIN_DIM`]=1024: the old
+/// "256 regressed" gate note predated the blocked LU's parallel+SIMD trailing-update
+/// tuning; a fresh best-of-2 A/B shows a clean 2.07x @256 → 3.69x @768.
+const INV_FLAT_MIN_DIM: usize = 256;
+
+/// Runtime override for [`INV_FLAT_MIN_DIM`] (0 ⇒ default). Same-binary A/B switch
+/// for the `inv` parallel-blocked-LU fast path vs the portfolio inverse.
+pub static INV_FLAT_MIN_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[inline]
+fn inv_flat_min() -> usize {
+    let o = INV_FLAT_MIN_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if o == 0 { INV_FLAT_MIN_DIM } else { o }
 }
 
 #[derive(Clone)]

@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-07 - BlackThrush (cc) - KEEP: inv() mid-n parallel-blocked-LU gate 1024→256 (1.9-3.7x) + SPD-solve win confirmation
+
+- Continues the mis-gated-fast-path vein (after the solve() 1000→128 win 31a206e9). Two findings:
+- (1) **inv() gate 1024→256.** For n<1024, `inv` fell to the PORTFOLIO path (`nalgebra try_inverse`, serial
+  scalar f64); its in-house PARALLEL blocked-LU inverse (factor once, solve the identity columns on all cores)
+  was gated at `FLAT_LU_INV_MIN_DIM=1024`. Split a fast `INV_FLAT_MIN_DIM=256` (override `INV_FLAT_MIN_OVERRIDE`).
+  The const's old "256×256 gate regressed" note is STALE — it predates the blocked LU's parallel+SIMD
+  trailing-update tuning. A/B (portfolio vs blocked, best-of-2, `-cc`): n=256 12.47→6.03ms **2.07x**;
+  n=384 37.2→19.7ms **1.89x**; n=512 92.9→28.4ms **3.28x**; n=640 167.6→46.5ms **3.60x**; n=768 284→76.9ms
+  **3.69x**. Byte-tolerant (maxdiff ~1e-12..1e-13, both f64, LU-roundoff order; inv conformance is tolerance).
+  Full fsci-linalg lib suite GREEN (blocked path returns certificate:None — already true for n≥1024, extends
+  to n≥256). vs scipy(1thr) inv@512 10.62ms — fsci 28.4ms still ~2.7x (dgetri AVX wall) but was ~8.7x on the
+  portfolio path, so a big cut.
+- (2) **SPD-solve confirmation (bonus win from 31a206e9, was under-documented):** last turn's solve gate 1000→128
+  also lowered the assume_a=PositiveDefinite fast path (cholesky_solve_blocked). A/B verifies it's NOT a
+  regression — it's **7.0-9.4x** (n=128 7.38x → n=768 9.35x) and BYTE-IDENTICAL (maxdiff ~1e-18, pure f64, no
+  mixed-precision), so 31a206e9 improved general AND SPD solve.
+- LEVER (reconfirmed): FLAT_LU_*_MIN_DIM gates set on OLD kernel speed go stale as the blocked/parallel kernels
+  improve — re-A/B them. det still uses FLAT_LU_SOLVE_MIN_DIM=1000 (det = ∏U_ii, no refinement/parallel-RHS
+  help → likely a wall, unmeasured this turn). MEASURE the gate, don't trust the stale const comment.
+
 ## 2026-07-06 - BlackThrush (cc) - KEEP: solve() mid-n mixed-precision LU gate 1000→128 — 5.8-7.9x, FLIPS a 7.6x scipy LOSS to a WIN
 
 - FOUND by a FAIR single-thread dense-decomp profile (scipy OMP_NUM_THREADS=1 to dodge the OpenBLAS
