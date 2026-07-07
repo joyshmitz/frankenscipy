@@ -3379,7 +3379,7 @@ pub fn lu(a: &[Vec<f64>], options: DecompOptions) -> Result<LuResult, LinalgErro
 ///
 /// Matches `scipy.linalg.lu_factor(a)`.
 pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResult, LinalgError> {
-    lu_factor_with_flat_threshold(a, options, FLAT_LU_SOLVE_MIN_DIM)
+    lu_factor_with_flat_threshold(a, options, lu_factor_flat_min())
 }
 
 fn lu_factor_with_flat_threshold(
@@ -17410,6 +17410,22 @@ pub static INV_FLAT_MIN_OVERRIDE: std::sync::atomic::AtomicUsize =
 fn inv_flat_min() -> usize {
     let o = INV_FLAT_MIN_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
     if o == 0 { INV_FLAT_MIN_DIM } else { o }
+}
+
+/// Public `lu_factor` blocked-LU gate — the in-house parallel+SIMD blocked LU beats
+/// nalgebra's scalar `.lu()` from n≈128 up (measured 1.39-1.70x), and its L/U match
+/// nalgebra's to roundoff (same partial-pivot GEPP). MUCH lower than the shared
+/// [`FLAT_LU_SOLVE_MIN_DIM`]=1000 (which was set on the old blocked-LU speed).
+const LU_FACTOR_FLAT_MIN_DIM: usize = 128;
+
+/// Runtime override for [`LU_FACTOR_FLAT_MIN_DIM`] (0 ⇒ default). Same-binary A/B switch.
+pub static LU_FACTOR_FLAT_MIN_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[inline]
+fn lu_factor_flat_min() -> usize {
+    let o = LU_FACTOR_FLAT_MIN_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if o == 0 { LU_FACTOR_FLAT_MIN_DIM } else { o }
 }
 
 #[derive(Clone)]

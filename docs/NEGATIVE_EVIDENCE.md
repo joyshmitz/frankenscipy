@@ -6,6 +6,24 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-07 - BlackThrush (cc) - KEEP: lu_factor() blocked-LU gate 1000→128 (1.39-1.70x mid-n)
+
+- Third op in the mis-gated-fast-path vein (after solve 1000→128 @31a206e9, inv 1024→256 @a1379ccf). The fair
+  single-thread profile flagged `lu_factor` 3.91x slower than scipy @n=512 (fsci 19.2 vs 4.91ms): for n<1000 it
+  used nalgebra's SCALAR `.lu()`, while the in-house PARALLEL+SIMD blocked LU (same partial-pivot GEPP, L/U
+  match nalgebra to roundoff) was gated at the shared `FLAT_LU_SOLVE_MIN_DIM=1000`.
+- FIX: split a `lu_factor`-specific `LU_FACTOR_FLAT_MIN_DIM=128` (override `LU_FACTOR_FLAT_MIN_OVERRIDE`).
+  A/B (nalgebra vs blocked, best-of-2, `-cc`): n=128 0.39→0.27ms **1.47x**; n=256 2.36→1.53ms **1.54x**;
+  n=384 6.79→4.15ms **1.64x**; n=512 16.71→12.00ms **1.39x**; n=768 46.42→27.34ms **1.70x**. Byte-close (blocked
+  L/U match nalgebra to roundoff — existing lu_factor conformance validates); full fsci-linalg lib suite GREEN.
+- Modest vs solve/inv (1.4-1.7x vs 2-8x) because lu_factor is JUST the factor — no portfolio redundancy to
+  cut; the win is purely the parallel+SIMD blocked kernel vs nalgebra scalar. Still ~2.4x vs scipy dgetrf @512
+  (AVX-512 wall) but was 3.9x on nalgebra, so a real narrowing.
+- VEIN STATUS: solve/inv/lu_factor gates all lowered (mixed-precision LU refinement for solve; parallel blocked
+  LU for inv/lu_factor). REMAINING: `det` FLAT_LU_SOLVE_MIN_DIM=1000 uses `det_flat_lu_product` (blocked LU +
+  ∏U_ii) at n≥1000 — likely the same blocked-vs-nalgebra 1.4-1.7x below 1000; cholesky_lower_factor gate 1000
+  (already SIMD-tuned). LEVER: gates set on OLD kernel speed go stale as kernels gain parallel/SIMD — re-A/B.
+
 ## 2026-07-07 - BlackThrush (cc) - KEEP: inv() mid-n parallel-blocked-LU gate 1024→256 (1.9-3.7x) + SPD-solve win confirmation
 
 - Continues the mis-gated-fast-path vein (after the solve() 1000→128 win 31a206e9). Two findings:
