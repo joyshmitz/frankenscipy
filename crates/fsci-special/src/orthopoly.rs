@@ -22,9 +22,24 @@
 //! - `roots_jacobi(n, alpha, beta)` — Gauss-Jacobi nodes and weights
 
 use std::f64::consts::PI;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use fsci_integrate::{QuadOptions, quad};
 use fsci_runtime::RuntimeMode;
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct MathieuFourierCacheKey {
+    m: u32,
+    q_bits: u64,
+    even: bool,
+}
+
+static MATHIEU_PERIODIC_FOURIER_CACHE: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<MathieuFourierCacheKey, (Vec<f64>, u32)>>,
+> = std::sync::OnceLock::new();
+
+#[doc(hidden)]
+pub static MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH: AtomicBool = AtomicBool::new(false);
 
 /// Evaluate the Legendre polynomial P_n(x) of degree n at point x.
 ///
@@ -959,6 +974,31 @@ fn mathieu_fourier(m: u32, q: f64, even: bool) -> (Vec<f64>, u32) {
     (v, k0)
 }
 
+fn mathieu_periodic_fourier(m: u32, q: f64, even: bool) -> (Vec<f64>, u32) {
+    if MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH.load(Ordering::Relaxed) || !q.is_finite() {
+        return mathieu_fourier(m, q, even);
+    }
+
+    let key = MathieuFourierCacheKey {
+        m,
+        q_bits: q.to_bits(),
+        even,
+    };
+    let cache = MATHIEU_PERIODIC_FOURIER_CACHE
+        .get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+    if let Some(hit) = cache.read().unwrap().get(&key) {
+        return hit.clone();
+    }
+
+    let computed = mathieu_fourier(m, q, even);
+    let mut guard = cache.write().unwrap();
+    if let Some(hit) = guard.get(&key) {
+        return hit.clone();
+    }
+    guard.insert(key, computed.clone());
+    computed
+}
+
 /// Even periodic Mathieu function `ce_m(x, q)` and its derivative (w.r.t. the
 /// argument in radians), matching `scipy.special.mathieu_cem(m, q, x)`.
 ///
@@ -968,7 +1008,7 @@ fn mathieu_fourier(m: u32, q: f64, even: bool) -> (Vec<f64>, u32) {
 /// in radians.
 #[must_use]
 pub fn mathieu_cem(m: u32, q: f64, x: f64) -> (f64, f64) {
-    let (a, k0) = mathieu_fourier(m, q, true);
+    let (a, k0) = mathieu_periodic_fourier(m, q, true);
     mathieu_series_eval(&a, k0, x, true)
 }
 
@@ -1002,7 +1042,7 @@ pub fn mathieu_series_many(m: u32, q: f64, xs: &[f64], even: bool) -> Vec<(f64, 
     if !even && m == 0 {
         return vec![(0.0, 0.0); xs.len()];
     }
-    let (a, k0) = mathieu_fourier(m, q, even);
+    let (a, k0) = mathieu_periodic_fourier(m, q, even);
     let npts = xs.len();
     let nthreads = if npts < 512 {
         1
@@ -1045,7 +1085,7 @@ pub fn mathieu_sem(m: u32, q: f64, x: f64) -> (f64, f64) {
     if m == 0 {
         return (0.0, 0.0);
     }
-    let (b, k0) = mathieu_fourier(m, q, false);
+    let (b, k0) = mathieu_periodic_fourier(m, q, false);
     mathieu_series_eval(&b, k0, x, false)
 }
 

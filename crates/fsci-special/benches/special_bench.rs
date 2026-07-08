@@ -1,14 +1,16 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialTensor, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, gamma, gammainc,
-    gammaln, hyperu, hyperu_scalar, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv, ndtri, pbdv,
-    pbdv_many, rgamma, spence_scalar, y0, zeta, zeta_scalar,
+    MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH, SpecialTensor, beta, ellipe, ellipeinc, ellipk,
+    ellipkinc, erf, erfc, erfinv, gamma, gammainc, gammaln, hyperu, hyperu_scalar, j0, j1,
+    jn_zeros, jnjnp_zeros, jnp_zeros, jv, mathieu_cem, mathieu_sem, ndtri, pbdv, pbdv_many, rgamma,
+    spence_scalar, y0, zeta, zeta_scalar,
 };
 use std::f64::consts::PI;
 use std::hint::black_box;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 fn scalar(x: f64) -> SpecialTensor {
@@ -1059,8 +1061,69 @@ fn bench_ncfdtr(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_mathieu_periodic_cache_gauntlet(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mathieu_periodic_cache_gauntlet");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+
+    let xs: Vec<f64> = (0..256).map(|i| (i as f64) * 180.0 / 255.0).collect();
+    let cases: &[(&str, u32, f64, bool)] = &[
+        ("cem_m3_q10", 3, 10.0, true),
+        ("cem_m4_q50", 4, 50.0, true),
+        ("sem_m3_q50", 3, 50.0, false),
+        ("sem_m4_q20", 4, 20.0, false),
+    ];
+
+    for &(name, m, q, even) in cases {
+        MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH.store(false, Ordering::Relaxed);
+        for &x in xs.iter().take(4) {
+            let _ = if even {
+                mathieu_cem(m, q, x)
+            } else {
+                mathieu_sem(m, q, x)
+            };
+        }
+
+        group.bench_function(BenchmarkId::new("cached", name), |b| {
+            MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH.store(false, Ordering::Relaxed);
+            b.iter(|| {
+                let mut acc = 0.0_f64;
+                for &x in &xs {
+                    let (value, deriv) = if even {
+                        mathieu_cem(black_box(m), black_box(q), black_box(x))
+                    } else {
+                        mathieu_sem(black_box(m), black_box(q), black_box(x))
+                    };
+                    acc += value + deriv;
+                }
+                black_box(acc);
+            });
+        });
+        group.bench_function(BenchmarkId::new("orig_recompute", name), |b| {
+            MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH.store(true, Ordering::Relaxed);
+            b.iter(|| {
+                let mut acc = 0.0_f64;
+                for &x in &xs {
+                    let (value, deriv) = if even {
+                        mathieu_cem(black_box(m), black_box(q), black_box(x))
+                    } else {
+                        mathieu_sem(black_box(m), black_box(q), black_box(x))
+                    };
+                    acc += value + deriv;
+                }
+                black_box(acc);
+            });
+        });
+    }
+
+    MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_mathieu_periodic_cache_gauntlet,
     bench_spence_cephes_gauntlet,
     bench_pbdv_integer_gauntlet,
     bench_ncfdtr,

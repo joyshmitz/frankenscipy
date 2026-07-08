@@ -4,6 +4,37 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-08 - BlackThrush (codex) - KEEP: cache Mathieu periodic Fourier coefficients for repeated scalar `cem/sem` loops (9.7-13.3x vs ORIG)
+
+Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Did not retry the rejected July 4 matrix-free
+Sturm / matrix-reuse micro-levers, and recent `.scratch` / worktree heads checked for safe measured wins were already
+ancestors of `origin/main` or superseded. Dug the live Mathieu specfun wall instead.
+
+Rejected first sub-lever: periodic `cem/sem` loose shift bisection (`200 -> 64` iterations only for the inverse-
+iteration shift, leaving `mathieu_a/b` exact) was GREEN on focused Mathieu tests but NOT a clean win. Same-worker
+`vmi1227854` release Criterion medians vs ORIG exact shift: `cem_m3_q10_x70` 3.8827->3.7937 us = 1.02x,
+`cem_m4_q50_x45` 6.8358->6.7287 us = 1.02x, `cem_m6_q50_x30` 6.2924->6.5793 us = 0.96x,
+`sem_m3_q50_x45` 5.1276->5.5270 us = 0.93x, `sem_m4_q20_x60` 4.5081->5.0849 us = 0.89x. Reverted; do not retry
+shift-count loosening without a new profile.
+
+Kept lever: exact memoization of periodic Fourier coefficients by `(m, q.to_bits(), even)` for `mathieu_cem`,
+`mathieu_sem`, and `mathieu_series_many`. This is the scalar-call analogue of the already-shipped batched
+`mathieu_cem_many/sem_many` invariant-hoist: first call computes the same eigenvector as before; cache hits clone the
+stored `(Vec<f64>, k0)` and evaluate the trig series only. Non-finite `q` bypasses the cache.
+
+Same-binary A/B bench switch: `MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH` forces the original recompute path.
+`cargo bench --release` was attempted literally and rejected by Cargo (`unexpected argument '--release'`), so the
+runnable equivalent used `--profile release`:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-special --bench special_bench --profile release -- mathieu_periodic_cache_gauntlet --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+
+MEASURED on RCH worker `hz1`, median of 10 Criterion samples, 256 scalar calls per row: `cem_m3_q10` cached 109.69 us
+vs ORIG recompute 1.0685 ms = 9.74x; `cem_m4_q50` 144.46 us vs 1.9145 ms = 13.25x; `sem_m3_q50` 151.06 us vs
+1.5622 ms = 10.34x; `sem_m4_q20` 122.85 us vs 1.4741 ms = 12.00x.
+
+Correctness: focused Mathieu suite GREEN via RCH (`cargo test -p fsci-special mathieu --lib -- --nocapture`):
+coefficient, characteristic-value, `cem/sem`, modified Mathieu, and batched-series SciPy golden tests all passed. The
+cache stores exact recompute results and returns clones, so tolerance contracts and caller mutability are unchanged.
+
 ## 2026-06-27 - frankenscipy-cod-a-spsolve-spd-cg-guard - KEEP (modest, prevents failed-CG fallback): sparse spsolve SPD-CG threshold/tolerance tune
 
 Main advanced during the session to `9a1523f0`, which landed the broader guarded
