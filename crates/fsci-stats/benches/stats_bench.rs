@@ -135,7 +135,7 @@ fn bench_distribution_batch(c: &mut Criterion) {
     use fsci_stats::{
         BetaBinomial, BetaDist, Binomial, Chi, ChiSquared, ContinuousDistribution,
         DiscreteDistribution, FDistribution, GammaDist, GenGamma, GenNorm, Hypergeometric,
-        InverseGamma, Nakagami, NegBinomial, StudentT, VonMises,
+        InverseGamma, Nakagami, NegBinomial, Poisson, StudentT, VonMises,
     };
     let n = 4096usize;
     let mut group = c.benchmark_group("distribution_batch");
@@ -279,6 +279,21 @@ fn bench_distribution_batch(c: &mut Criterion) {
     group.bench_function("hypergeom/pmf_many", |b| b.iter(|| h.pmf_many(&ks)));
     group.bench_function("hypergeom/map_pmf", |b| {
         b.iter(|| ks.iter().map(|&k| h.pmf(k)).collect::<Vec<_>>())
+    });
+
+    // Poisson log-pmf: ln(mu) hoisted over a full count-data support sweep.
+    let poisson = Poisson::new(37.0);
+    let poisson_ks: Vec<u64> = (0..n as u64).collect();
+    group.bench_function("poisson/logpmf_many", |b| {
+        b.iter(|| poisson.logpmf_many(&poisson_ks))
+    });
+    group.bench_function("poisson/map_logpmf", |b| {
+        b.iter(|| {
+            poisson_ks
+                .iter()
+                .map(|&k| poisson.logpmf(k))
+                .collect::<Vec<_>>()
+        })
     });
 
     group.finish();

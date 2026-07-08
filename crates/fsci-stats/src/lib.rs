@@ -9180,6 +9180,20 @@ impl Poisson {
         })
     }
 
+    /// Log probability mass at many outcomes, hoisting `ln(μ)` out of the
+    /// per-`k` loop. Byte-identical to mapping `logpmf`: same `k·ln_mu - μ -
+    /// lnΓ(k+1)` operation order and the same μ==0 special case.
+    #[must_use]
+    pub fn logpmf_many(&self, ks: &[u64]) -> Vec<f64> {
+        let ln_mu = self.mu.ln();
+        par_discrete_map(ks, |k| {
+            if self.mu == 0.0 {
+                return if k == 0 { 0.0 } else { f64::NEG_INFINITY };
+            }
+            k as f64 * ln_mu - self.mu - ln_gamma(k as f64 + 1.0)
+        })
+    }
+
     /// Cumulative distribution at many points, computed by a mode-anchored pmf recurrence + prefix
     /// sum (O(max_k) cheap mults) instead of a per-point regularized-gamma evaluation. Anchoring at
     /// the mode (pmf computed once via lnΓ) avoids the pmf(0)=exp(-mu) underflow for large mu.
@@ -62234,6 +62248,18 @@ mod tests {
         let pm = p.pmf_many(&ks);
         for (i, &k) in ks.iter().enumerate() {
             assert_eq!(pm[i], p.pmf(k), "pmf_many != pmf at k={k}");
+        }
+    }
+
+    #[test]
+    fn poisson_logpmf_many_matches_logpmf() {
+        // Batch logpmf_many (ln(mu) hoisted) byte-identical to per-k logpmf.
+        for p in [Poisson::new(3.7), Poisson { mu: 0.0 }] {
+            let ks: Vec<u64> = (0..=15).collect();
+            let lpm = p.logpmf_many(&ks);
+            for (i, &k) in ks.iter().enumerate() {
+                assert_eq!(lpm[i], p.logpmf(k), "logpmf_many != logpmf at k={k}");
+            }
         }
     }
 

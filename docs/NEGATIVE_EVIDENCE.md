@@ -6,6 +6,40 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-08 - BlackThrush (codex) - KEEP: Poisson logpmf_many hoists ln(mu) over batch (1.30x vs scalar-map ORIG)
+
+- LAND/DIG: no unlanded `.scratch` win remained; checked the open scratch worktrees
+  and the recent ledger first, then avoided stale already-done beads (`0rfb7`,
+  `7nlc4`, `b0khs`, stats distribution batch APIs). Dug the existing stats
+  batch-distribution primitive vein instead.
+- Lever: add `Poisson::logpmf_many(&[u64])`, hoisting `ln(mu)` once across a
+  count-data batch. The per-k formula and operation order remain the scalar
+  `logpmf` formula (`k*ln_mu - mu - ln_gamma(k+1)`), including the public
+  `Poisson { mu: 0.0 }` special case.
+- Per-crate bench request: `cargo bench --release` was tried exactly and Cargo
+  rejected it (`unexpected argument '--release'`). Runnable equivalent used:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench -j 1 -p fsci-stats --bench stats_bench --profile release -- distribution_batch/poisson --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- SAME-BINARY A/B on RCH `ovh-a`:
+  - NEW `distribution_batch/poisson/logpmf_many`: mean **46.087 us**
+  - ORIG `distribution_batch/poisson/map_logpmf`: mean **59.764 us**
+  - Ratio vs ORIG: **0.771x time / 1.30x faster**.
+- Correctness / conformance:
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 rch exec -- cargo test -j 1 -p fsci-stats poisson_logpmf_many_matches_logpmf --lib -- --nocapture`
+    (`1 passed; 0 failed`) verifies byte identity against scalar `logpmf`.
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -j 1 -p fsci-conformance --test diff_stats_poisson -- --nocapture`
+    (`1 passed; 0 failed`) against local SciPy 1.17.1. The same RCH conformance
+    command on worker `hz2` was blocked by missing SciPy (`ModuleNotFoundError:
+    No module named 'scipy'`), so local oracle was used for the green gate.
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod CARGO_BUILD_JOBS=1 cargo check -j 1 -p fsci-stats --all-targets`.
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo fmt -p fsci-stats --check`.
+  - BLOCKED: `cargo clippy -j 1 -p fsci-stats --all-targets -- -D warnings`
+    stops in existing `fsci-opt` dependency lints before this patch
+    (`neg_cmp_op_on_partial_ord`, `needless_range_loop`).
+- Negative evidence: do not reopen the old Poisson `pmf_many` bead; that API
+  already existed. The live keep is specifically the log-pmf batch sibling.
+  Remaining distribution-batch work should be verified by source first because
+  many open P3 batch-hoist beads are stale.
+
 ## 2026-07-07 - BlackThrush (cc) - REJECT: det() blocked-LU gate 1000→128 — MIXED (0.57-1.35x), REVERTED
 
 - The last un-lowered gate in the mis-gated vein (after solve/inv/lu_factor all won). Hypothesis: det via the
