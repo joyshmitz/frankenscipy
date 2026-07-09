@@ -4,6 +4,42 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-09 - BlackThrush (codex) - REJECT: sparse-spread COO `sum_duplicates` fused validation/histogram cursor
+
+Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided rejected sparse `spsolve` BTreeMap/order
+levers, COO broad-radix on sparse-spread inputs, dense eig/SVD gate work, and Cholesky/LU threshold repeats. The
+required profiling pass was the short `fsci-sparse` bench:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-sparse --bench sparse_bench --profile release -- --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+On `vmi1264463`, `sparse_coo_sum_duplicates` remained the hot row:
+`current_n100000_nnz2000000` 225.93 ms, `legacy_original_n100000_nnz2000000` 224.44 ms,
+`current_n20000_nnz2000000` 197.00 ms, `legacy_original_n20000_nnz2000000` 225.84 ms. Next tier was
+COO-to-CSR/CSC at roughly 146-184 ms, so the new probe stayed on sparse-spread COO coalescing rather than moving into
+already-mined dense linalg or graph kernels.
+
+Rejected primitive: a fused sparse-spread COO counting coalescer. It validated rows while building the row histogram,
+kept the original row-before-column error priority, validated columns in the second pass, then used `row_ptr` itself as
+the stable scatter cursor (`row_ptr[r]` becomes that row's end) instead of allocating/copying a separate `next` cursor.
+This was the cache/partition idea from the dig pass, but deliberately did not widen the existing dense-duplicate radix
+gate.
+
+Correctness during the experiment: added a temporary hidden A/B switch and `coo_sum_duplicates_counting_fused_matches_legacy_bits`;
+RCH release test on `vmi1227854` passed (`1 passed`) and compared rows, cols, and `f64::to_bits()` values against the
+old counting fallback with optimized paths disabled.
+
+Final same-binary A/B command:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-sparse --bench sparse_bench --profile release -- sparse_coo_sum_duplicates --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+On `vmi1149989`: sparse-spread target `current_n100000_nnz2000000` 111.84 ms vs ORIG
+`legacy_original_n100000_nnz2000000` 111.74 ms = 1.001x time / 0.999x speed, so no win. Dense duplicate
+`current_n20000_nnz2000000` 117.21 ms vs ORIG 121.95 ms = 1.04x faster, but that came from the already-landed radix
+path, not this fused counting primitive.
+
+Outcome: reverted all code/bench/test changes and kept this docs-only rejection. Do not retry fused row validation plus
+histogram counting, or the row-pointer-as-cursor scatter trick, for sparse-spread COO `sum_duplicates` unless a new
+profile shows a materially different distribution or a bottleneck outside the validation/count/scatter passes.
+Post-revert conformance GREEN:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo test -p fsci-conformance --test e2e_sparse --profile release -- --nocapture`
+passed 24/24, including `e2e_019_sparse_helper_oracle_match` against the local SciPy oracle.
+
 ## 2026-07-08 - BlackThrush (codex) - KEEP: cache Mathieu periodic Fourier coefficients for repeated scalar `cem/sem` loops (9.7-13.3x vs ORIG)
 
 Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Did not retry the rejected July 4 matrix-free

@@ -6,6 +6,38 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (codex) - REJECT: sparse-spread COO `sum_duplicates` fused histogram cursor (0.999x vs ORIG)
+
+- Dig audit: consulted this ledger first and did not retry rejected sparse
+  `spsolve` BTreeMap/order levers, sparse COO broad-radix gating, dense
+  eig/SVD gate work, or Cholesky/LU threshold levers. Profiled with the short
+  `fsci-sparse` bench before editing: hottest rows were
+  `sparse_coo_sum_duplicates` (`current_n100000_nnz2000000` 225.93 ms,
+  `legacy_original_n100000_nnz2000000` 224.44 ms on `vmi1264463`), then
+  COO-to-CSR/CSC at roughly 146-184 ms.
+- Lever tried: a sparse-spread COO coalescer that fused row validation with the
+  row histogram and reused the histogram as the scatter cursor, removing the
+  extra `next` vector and one row-index pass. This was intentionally separate
+  from the dense-duplicate radix path and did not broaden the radix gate.
+- Correctness during the experiment: focused bit-parity test passed
+  (`coo_sum_duplicates_counting_fused_matches_legacy_bits`, 1 passed) against
+  the old counting fallback with radix and fused paths disabled.
+- Same-binary A/B command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-sparse --bench sparse_bench --profile release -- sparse_coo_sum_duplicates --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- MEASURED on RCH worker `vmi1149989`: sparse-spread target
+  `current_n100000_nnz2000000` 111.84 ms vs ORIG
+  `legacy_original_n100000_nnz2000000` 111.74 ms = **1.001x time / 0.999x
+  speed**, no gain. Dense row `current_n20000_nnz2000000` 117.21 ms vs ORIG
+  121.95 ms = 1.04x faster, but that is the already-landed radix gate, not the
+  fused histogram cursor.
+- Result: code fully reverted; docs-only rejection. Do not retry fused
+  validation+histogram counting or row-pointer-as-cursor for sparse-spread COO
+  `sum_duplicates` unless a new profile shows a different row distribution or a
+  different bottleneck than validation/count/scatter overhead.
+- Post-revert conformance: PASS
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo test -p fsci-conformance --test e2e_sparse --profile release -- --nocapture`
+  (`24 passed`, including `e2e_019_sparse_helper_oracle_match`).
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: dense-duplicate COO `sum_duplicates` stable radix coalescer (1.12x vs ORIG)
 
 - Dig audit: consulted this ledger first and did not retry prior dense-eigh,
