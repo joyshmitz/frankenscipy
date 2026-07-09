@@ -6,6 +6,39 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-08 - BlackThrush (cc) - KEEP: `solve(assume_a=Symmetric/Hermitian)` Cholesky-then-LU fast path (3.35x vs ORIG portfolio)
+
+- Dig audit: consulted this ledger first; avoided the rejected det gate,
+  Strassen GEMM, ecdf/cholesky-NB tuning, and parallel-sort levers. This
+  extends the freshly-proven "assumption hint routes to the SLOW portfolio =
+  a bug" lever (same one that just won inv(assume_a=pos), commit 02ec9d94).
+- PROFILED per-assumption-arm: `solve(assume_a=Symmetric)` was **3.3x SLOWER**
+  than `solve(General)` on the SAME symmetric matrix (n=512: 18.14ms vs 5.70ms;
+  n=256: 2.90ms vs 0.87ms), maxdiff General-vs-Sym 8e-16 (both valid). The
+  `Symmetric`/`Hermitian` arms fell through both fast paths (General LU at
+  line 756, pos Cholesky at 786) into the generic portfolio, even though LU
+  with partial pivoting is fully valid for any symmetric matrix.
+- FIX: added a Symmetric/Hermitian fast branch (gated n>=solve_flat_min()=128,
+  Strict, untransposed, finite) that tries `cholesky_solve_blocked` first (if
+  the matrix is also PD, ~2x cheaper), else a non-positive pivot returns None
+  and it falls to `lu_solve_mixed_precision`, else `lu_solve_blocked`; if all
+  three are None (singular) it falls through to the portfolio unchanged,
+  preserving exact singular detection (same contract the General fast path
+  already relies on). Real input => Hermitian == Symmetric, so both share it.
+- MEASURED vs LEGACY ORIGINAL (interleaved best-of-4, new binary
+  `perf_solve_sym`, `CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cc`):
+  - PD symmetric (Cholesky path): n=256 **3.22x** (2.90->0.90ms), n=512
+    **3.35x** (18.14->5.41ms) vs old portfolio; also 1.17-1.26x faster than
+    even solve(General) LU.
+  - Indefinite symmetric (LU fallback): **maxdiff=0.0 BYTE-IDENTICAL to
+    solve(General) LU**, ~parity with General, ~2.4x vs old portfolio.
+- Conformance: fsci-linalg lib suite **506 passed / 0 failed** GREEN.
+- LEVER (reinforced): grep any solver/factorization whose `assume_a`/structure
+  hint routes to a generic portfolio instead of the specialized fast kernel;
+  a hint that makes an op SLOWER is a bug. Remaining arms without a fast path:
+  Diagonal/Banded/TriDiagonal (have dedicated solvers already), Upper/Lower
+  Triangular (solve_triangular).
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: `find_peaks_cwt` sliding noise-percentile window (2.52x vs ORIG)
 
 - Dig audit: consulted this ledger first. Avoided the rejected `find_peaks_cwt`

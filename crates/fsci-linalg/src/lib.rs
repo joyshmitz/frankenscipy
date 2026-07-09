@@ -806,6 +806,43 @@ pub fn solve(a: &[Vec<f64>], b: &[f64], options: SolveOptions) -> Result<SolveRe
             certificate: None,
         });
     }
+    // Fast path for large symmetric / Hermitian systems (real input ⇒ Hermitian == Symmetric).
+    // LU with partial pivoting is valid for any symmetric matrix; if the matrix also happens
+    // to be positive definite, blocked Cholesky (~2x cheaper) takes it, otherwise a
+    // non-positive pivot returns None and we fall to mixed-precision LU. Any singular pivot or
+    // unmet precondition leaves all three as None and falls through to the portfolio unchanged
+    // (preserving its exact singular-detection behavior, as the General fast path already does).
+    if n >= solve_flat_min()
+        && options.mode == RuntimeMode::Strict
+        && !options.transposed
+        && matches!(
+            options.assume_a,
+            Some(MatrixAssumption::Symmetric) | Some(MatrixAssumption::Hermitian)
+        )
+        && b.len() == n
+        && rows_are_rectangular(a, n)
+        && a.iter().flatten().all(|v| v.is_finite())
+        && b.iter().all(|v| v.is_finite())
+        && let Some(x) = cholesky_solve_blocked(a, b)
+            .or_else(|| lu_solve_mixed_precision(a, b))
+            .or_else(|| lu_solve_blocked(a, b))
+    {
+        let backward_error = compute_backward_error_dense(a, &x, b);
+        emit_trace(LinalgTrace {
+            operation: "solve",
+            matrix_size: (n, n),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return Ok(SolveResult {
+            x,
+            warning: None,
+            backward_error: Some(backward_error),
+            certificate: None,
+        });
+    }
     let mut portfolio = SolverPortfolio::new(options.mode, 1);
     solve_with_portfolio_internal(a, b, options, &mut portfolio, "solve", false)
 }
