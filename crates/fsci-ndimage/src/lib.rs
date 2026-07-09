@@ -7159,6 +7159,13 @@ pub fn find_objects(labels: &NdArray, num_labels: usize) -> Vec<Option<(Vec<usiz
         .collect()
 }
 
+/// Same-binary A/B toggle: when `true`, `center_of_mass`/`sum_axis`/`pad_constant` recompute
+/// the per-element multi-index with `input.unravel(flat)` (a `Vec` heap-alloc per element)
+/// instead of the in-place row-major odometer. Byte-identical output; A/B timing only.
+#[doc(hidden)]
+pub static NDIMAGE_UNRAVEL_ODOMETER_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Center of mass for each labeled region.
 ///
 /// Matches `scipy.ndimage.center_of_mass`.
@@ -7177,14 +7184,35 @@ pub fn center_of_mass(
     let mut weighted_sums = vec![vec![0.0; ndim]; num_labels + 1];
     let mut total_weights = vec![0.0; num_labels + 1];
 
+    // The multi-index is tracked with an in-place ROW-MAJOR odometer instead of
+    // `input.unravel(flat)` — the latter heap-allocates a `Vec<usize>` for EVERY element
+    // (`input.size()` allocations). BYTE-IDENTICAL: the odometer holds exactly
+    // `unravel(flat)` at step `flat`, so `idx[d]` and the flat-order accumulation are unchanged.
+    let full_mode = NDIMAGE_UNRAVEL_ODOMETER_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let mut idx = vec![0usize; ndim];
     for flat in 0..input.size() {
         let lbl = labels.data[flat] as usize;
         if lbl > 0 && lbl <= num_labels {
-            let idx = input.unravel(flat);
+            let full_idx;
+            let coords: &[usize] = if full_mode {
+                full_idx = input.unravel(flat);
+                &full_idx
+            } else {
+                &idx
+            };
             let w = input.data[flat];
             total_weights[lbl] += w;
             for d in 0..ndim {
-                weighted_sums[lbl][d] += w * idx[d] as f64;
+                weighted_sums[lbl][d] += w * coords[d] as f64;
+            }
+        }
+        if !full_mode {
+            for d in (0..ndim).rev() {
+                idx[d] += 1;
+                if idx[d] < input.shape[d] {
+                    break;
+                }
+                idx[d] = 0;
             }
         }
     }
@@ -10285,16 +10313,44 @@ pub fn sum_axis(input: &NdArray, axis: usize) -> Result<NdArray, NdimageError> {
 
     let mut result = NdArray::zeros(new_shape);
 
+    // Row-major odometer instead of a per-element `unravel` + `out_idx.clone()` (two heap allocs
+    // per element). BYTE-IDENTICAL: `out_flat` is built from the same multi-index and strides, and
+    // each output cell accumulates its inputs in the same flat order.
+    let full_mode = NDIMAGE_UNRAVEL_ODOMETER_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let ndim = input.ndim();
+    let mut idx = vec![0usize; ndim];
     for flat in 0..input.size() {
-        let idx = input.unravel(flat);
-        let mut out_idx: Vec<usize> = idx.clone();
-        out_idx.remove(axis);
-        let out_flat = out_idx
-            .iter()
-            .zip(result.strides.iter())
-            .map(|(&i, &s)| i * s)
-            .sum::<usize>();
+        let out_flat = if full_mode {
+            let uidx = input.unravel(flat);
+            let mut out_idx: Vec<usize> = uidx.clone();
+            out_idx.remove(axis);
+            out_idx
+                .iter()
+                .zip(result.strides.iter())
+                .map(|(&i, &s)| i * s)
+                .sum::<usize>()
+        } else {
+            // Σ_{d≠axis} idx[d]·result.strides[d'] — same value as removing `axis` then dotting.
+            let mut acc = 0usize;
+            let mut si = 0usize;
+            for d in 0..ndim {
+                if d != axis {
+                    acc += idx[d] * result.strides[si];
+                    si += 1;
+                }
+            }
+            acc
+        };
         result.data[out_flat] += input.data[flat];
+        if !full_mode {
+            for d in (0..ndim).rev() {
+                idx[d] += 1;
+                if idx[d] < input.shape[d] {
+                    break;
+                }
+                idx[d] = 0;
+            }
+        }
     }
 
     Ok(result)
@@ -10333,21 +10389,43 @@ pub fn pad_constant(
         *v = constant;
     }
 
-    // Copy input data to padded region
+    // Copy input data to padded region. Row-major odometer instead of a per-element `unravel` +
+    // `padded_idx` (two heap allocs per element). BYTE-IDENTICAL: `out_flat` is the same
+    // `Σ (idx[d]+before_d)·stride_d`, and each output cell is assigned once.
     let result_strides = compute_strides(&new_shape);
+    let full_mode = NDIMAGE_UNRAVEL_ODOMETER_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let ndim = input.ndim();
+    let mut idx = vec![0usize; ndim];
     for flat in 0..input.size() {
-        let idx = input.unravel(flat);
-        let padded_idx: Vec<usize> = idx
-            .iter()
-            .zip(pad_width.iter())
-            .map(|(&i, &(before, _))| i + before)
-            .collect();
-        let out_flat: usize = padded_idx
-            .iter()
-            .zip(result_strides.iter())
-            .map(|(&i, &s)| i * s)
-            .sum();
+        let out_flat: usize = if full_mode {
+            let uidx = input.unravel(flat);
+            let padded_idx: Vec<usize> = uidx
+                .iter()
+                .zip(pad_width.iter())
+                .map(|(&i, &(before, _))| i + before)
+                .collect();
+            padded_idx
+                .iter()
+                .zip(result_strides.iter())
+                .map(|(&i, &s)| i * s)
+                .sum()
+        } else {
+            let mut acc = 0usize;
+            for d in 0..ndim {
+                acc += (idx[d] + pad_width[d].0) * result_strides[d];
+            }
+            acc
+        };
         result.data[out_flat] = input.data[flat];
+        if !full_mode {
+            for d in (0..ndim).rev() {
+                idx[d] += 1;
+                if idx[d] < input.shape[d] {
+                    break;
+                }
+                idx[d] = 0;
+            }
+        }
     }
 
     Ok(result)
@@ -18625,6 +18703,40 @@ mod tests {
                     assert_eq!(a.0.to_bits(), b.0.to_bits(), "re {shape:?} shift={shift}");
                     assert_eq!(a.1.to_bits(), b.1.to_bits(), "im {shape:?} shift={shift}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn unravel_odometer_matches_full_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The row-major odometer must be BYTE-IDENTICAL to the per-element `unravel` path for
+        // center_of_mass, sum_axis and pad_constant, across ndim 1/2/3 and even/odd shapes.
+        let shapes: &[Vec<usize>] = &[vec![23], vec![7, 9], vec![4, 5, 3]];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let data: Vec<f64> = (0..total).map(|k| (k as f64 * 0.37).sin() + 1.5).collect();
+            let arr = NdArray::new(data.clone(), shape.clone()).unwrap();
+            let labels_data: Vec<f64> = (0..total).map(|k| ((k % 4) + 1) as f64).collect();
+            let labels = NdArray::new(labels_data, shape.clone()).unwrap();
+            let pad: Vec<(usize, usize)> = shape.iter().map(|&s| (1, 2.min(s))).collect();
+            let variants = |full: bool| {
+                NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(full, Ordering::Relaxed);
+                let com = center_of_mass(&arr, &labels, 4).unwrap();
+                let sa = sum_axis(&arr, 0).unwrap();
+                let pc = pad_constant(&arr, &pad, -3.0).unwrap();
+                (com, sa, pc)
+            };
+            let (com_f, sa_f, pc_f) = variants(true);
+            let (com_o, sa_o, pc_o) = variants(false);
+            for (a, b) in com_f.iter().flatten().zip(com_o.iter().flatten()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "center_of_mass {shape:?}");
+            }
+            for (a, b) in sa_f.data.iter().zip(sa_o.data.iter()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "sum_axis {shape:?}");
+            }
+            for (a, b) in pc_f.data.iter().zip(pc_o.data.iter()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "pad_constant {shape:?}");
             }
         }
     }

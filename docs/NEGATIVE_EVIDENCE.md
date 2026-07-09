@@ -66,6 +66,26 @@ ledger above so the project has one source of truth.
 - Negative evidence: do not retry full `n*n` GCV Gram/lhs storage or dense
   GCV input expansion for this path. Future attempts must change arithmetic or
   algorithm selection with a separate byte/parity proof.
+## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `center_of_mass`/`sum_axis`/`pad_constant` per-element unravel→row-major odometer (1.8-11.4x self, BYTE-IDENTICAL)
+
+- Applies ndimage's OWN proven "kill the per-element `unravel` heap-alloc" lever (already done for
+  convolution taps / spline eval, comments at lib.rs ~1627/3454) to three functions that still did it.
+  Each `for flat in 0..size { let idx = input.unravel(flat); … }` heap-allocated a `Vec<usize>` per
+  element (sum_axis/pad_constant alloc TWO — `unravel` + a derived `out_idx`/`padded_idx`), for pure
+  index arithmetic. Replace with an in-place ROW-MAJOR odometer (`idx[d]+=1; carry`), O(1) amortized,
+  ZERO allocs; the output flat index is summed directly from `idx` (skip-axis for sum_axis, +before
+  for pad_constant) instead of via the intermediate Vec.
+- BYTE-IDENTICAL: the odometer holds exactly `unravel(flat)` at step `flat`; `out_flat` is the same
+  integer from the same strides; sum_axis accumulates each output cell in the same flat order; both
+  others assign once. `to_bits` test (center_of_mass + sum_axis + pad_constant, ndim 1/2/3, even+odd).
+- Same-binary A/B `NDIMAGE_UNRAVEL_ODOMETER_DISABLE`. MEASURED 1024² (best-of-4, same=true):
+  center_of_mass **1.79x** (14.4→8.06ms, 1 alloc/labeled elt), **sum_axis 11.42x** (21.6→1.89ms —
+  2 allocs/elt over pure-add work = almost all alloc overhead), pad_constant **4.78x** (19.2→4.02ms).
+  fsci-ndimage **259/0**.
+- LEVER: grep `for flat in 0..size { … input.unravel(flat) … }` (or any per-element multi-index
+  rebuild that heap-allocs) → in-place row-major odometer + direct stride dot. Remaining sibling:
+  `binary_dilation_with_structure_once` (~9655) also unravels per foreground element + allocs
+  `out_idx` per offset — deferred (nested-offset structure, separate shape).
 
 ## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `fourier_shift`/`fourier_ellipsoid` per-axis arithmetic precompute (1.22-1.29x self, BYTE-IDENTICAL)
 
