@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: pdist_seuclidean dim==4 whitening picks up the dim-4 Euclidean kernel (~5.7-7.1x)
+
+- Dig audit: consulted ledger first. Follow-on to the seuclidean whitening KEEP below.
+  Confirmed already-optimal this turn (didn't re-chase): fft rfft (half-size pack), DCT-II
+  (Makhoul N-point), DST-I (real pack), dctn (parallel fibers); io loadtxt/read_csv
+  (parallel + std Eisel-Lemire parse). DCT-IV uses a 2N-point complex FFT (N-point method
+  exists) but is niche+intricate — deferred.
+- PROFILED small-d seuclidean (my whitening was gated dim≥8): pdist(Euclidean) has a
+  dedicated dim-4 SoA kernel (`pdist_fill_euclidean4`) that pdist_seuclidean lacked, so
+  whitening a 4-D standardized-Euclidean pdist routes into it. MEASURED (A/B, best-of-4):
+  pdist **d4 5.68-7.10x**; but d5 1.3x / d6 0.80x (regress) / d3,d7 ~1.0x → NOT a clean
+  5≤d≤7 win. cdist d4 LOSES 0.91x (cdist Euclidean has no equivalent dim-4 speedup edge).
+- SHIPPED: pdist_seuclidean gate widened dim≥8 → **`dim == 4 || dim >= 8`** (the two proven
+  win regions, no regression); cdist_seuclidean stays dim≥8. max-rel ~1e-15, 229/0 GREEN.
+- SUB-REJECT (documented): uniform small-d whitening (dim≥2) — cdist d4/d6 regress 0.90x,
+  pdist d6 regresses 0.80x. Only pdist dim==4 is an unambiguous win. Clean crate, no dance.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: (c/p)dist_seuclidean whitened-Euclidean fast path (1.3-2.0x)
 
 - Dig audit: consulted ledger first. Applied the layout lesson from the GEMM REJECT

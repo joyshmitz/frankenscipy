@@ -653,8 +653,10 @@ pub fn pdist_seuclidean(x: &[Vec<f64>], v: &[f64]) -> Result<Vec<f64>, SpatialEr
         }
     }
     // Whitened-Euclidean fast path (see `cdist_seuclidean`): scale by 1/√vₖ once, then it's a
-    // plain Euclidean pdist with no per-pair divide/`v≤0` mask. ~1e-15 agreement.
-    if dim >= 8
+    // plain Euclidean pdist with no per-pair divide/`v≤0` mask. ~1e-15 agreement. dim==4 also
+    // picks up pdist(Euclidean)'s dedicated dim-4 SoA kernel (measured ~7x); 5≤dim≤7 is a wash
+    // (measured d6 regressed), so gate on the two proven win regions.
+    if (dim == 4 || dim >= 8)
         && !SPATIAL_SEUCLIDEAN_PRESCALE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
         && v.iter().all(|&vk| vk > 0.0)
     {
