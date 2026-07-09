@@ -10768,6 +10768,34 @@ pub fn fourier_shift(input: &[Complex64], shape: &[usize], shift: &[f64]) -> Vec
 
     let mut output = input.to_vec();
 
+    // The phase is a SUM over axes (`phase = −Σ_d 2π·freq_d·shift_d`), so `exp(iφ)` does NOT factor
+    // byte-exactly — the `sin_cos` stays per element. But the per-axis phase contribution
+    // `2π·freq_d(i)·shift_d` (a `freq` branch+divide + two mults) depends ONLY on the axis index, so
+    // precompute the `ndim` 1-D tables once and reduce the inner loop to a subtraction. BYTE-IDENTICAL:
+    // each `pc[d][i]` is the identical expression and the sum runs in the SAME reverse-axis order.
+    let full_mode =
+        NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let pc: Vec<Vec<f64>> = if full_mode {
+        Vec::new()
+    } else {
+        shape
+            .iter()
+            .enumerate()
+            .map(|(d, &n)| {
+                (0..n)
+                    .map(|i| {
+                        let freq = if i <= n / 2 {
+                            i as f64 / n as f64
+                        } else {
+                            (i as f64 - n as f64) / n as f64
+                        };
+                        2.0 * PI * freq * shift[d]
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+
     for (idx, val) in output.iter_mut().enumerate() {
         let mut phase = 0.0;
         let mut remaining = idx;
@@ -10776,12 +10804,16 @@ pub fn fourier_shift(input: &[Complex64], shape: &[usize], shift: &[f64]) -> Vec
             let i = remaining % n;
             remaining /= n;
 
-            let freq = if i <= n / 2 {
-                i as f64 / n as f64
+            if full_mode {
+                let freq = if i <= n / 2 {
+                    i as f64 / n as f64
+                } else {
+                    (i as f64 - n as f64) / n as f64
+                };
+                phase -= 2.0 * PI * freq * shift[d];
             } else {
-                (i as f64 - n as f64) / n as f64
-            };
-            phase -= 2.0 * PI * freq * shift[d];
+                phase -= pc[d][i];
+            }
         }
 
         let (sin_p, cos_p) = phase.sin_cos();
@@ -10812,6 +10844,34 @@ pub fn fourier_ellipsoid(input: &[Complex64], shape: &[usize], size: &[f64]) -> 
     let ndim = shape.len();
     let mut output = input.to_vec();
 
+    // The filter is a function of the COMBINED radius `r=√Σ_d(freq_d·size_d)²`, so the transcendental
+    // stays per element — but each per-axis squared term `(freq_d(i)·size_d)²` (a `freq` branch+divide
+    // + two mults) depends ONLY on the axis index, so precompute the `ndim` 1-D tables and reduce the
+    // inner loop to an add. BYTE-IDENTICAL: same expression, same reverse-axis accumulation order.
+    let full_mode =
+        NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let sq: Vec<Vec<f64>> = if full_mode {
+        Vec::new()
+    } else {
+        shape
+            .iter()
+            .enumerate()
+            .map(|(d, &n)| {
+                (0..n)
+                    .map(|i| {
+                        let freq = if i <= n / 2 {
+                            i as f64 / n as f64
+                        } else {
+                            (i as f64 - n as f64) / n as f64
+                        };
+                        let normalized = freq * size[d];
+                        normalized * normalized
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+
     for (idx, val) in output.iter_mut().enumerate() {
         let mut sum_sq = 0.0;
         let mut remaining = idx;
@@ -10820,13 +10880,17 @@ pub fn fourier_ellipsoid(input: &[Complex64], shape: &[usize], size: &[f64]) -> 
             let i = remaining % n;
             remaining /= n;
 
-            let freq = if i <= n / 2 {
-                i as f64 / n as f64
+            if full_mode {
+                let freq = if i <= n / 2 {
+                    i as f64 / n as f64
+                } else {
+                    (i as f64 - n as f64) / n as f64
+                };
+                let normalized = freq * size[d];
+                sum_sq += normalized * normalized;
             } else {
-                (i as f64 - n as f64) / n as f64
-            };
-            let normalized = freq * size[d];
-            sum_sq += normalized * normalized;
+                sum_sq += sq[d][i];
+            }
         }
 
         let r = sum_sq.sqrt();
@@ -18524,6 +18588,42 @@ mod tests {
                 for (a, b) in full.iter().zip(sep.iter()) {
                     assert_eq!(a.0.to_bits(), b.0.to_bits(), "re {shape:?} gaussian={gaussian}");
                     assert_eq!(a.1.to_bits(), b.1.to_bits(), "im {shape:?} gaussian={gaussian}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fourier_shift_ellipsoid_separable_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The per-axis arithmetic precompute (phase-contribution / squared-freq) must be
+        // BYTE-IDENTICAL to the per-element recompute for fourier_shift and fourier_ellipsoid.
+        let cases: &[(&[usize], &[f64])] = &[
+            (&[17], &[2.4]),
+            (&[16, 12], &[3.5, -2.0]),
+            (&[8, 9, 5], &[1.5, 4.0, -3.0]),
+        ];
+        for &(shape, params) in cases {
+            let total: usize = shape.iter().product();
+            let input: Vec<Complex64> = (0..total)
+                .map(|k| ((k as f64 * 0.3).sin(), (k as f64 * 0.7).cos()))
+                .collect();
+            for shift in [true, false] {
+                NDIMAGE_FOURIER_SEPARABLE_DISABLE.store(true, Ordering::Relaxed);
+                let full = if shift {
+                    fourier_shift(&input, shape, params)
+                } else {
+                    fourier_ellipsoid(&input, shape, params)
+                };
+                NDIMAGE_FOURIER_SEPARABLE_DISABLE.store(false, Ordering::Relaxed);
+                let sep = if shift {
+                    fourier_shift(&input, shape, params)
+                } else {
+                    fourier_ellipsoid(&input, shape, params)
+                };
+                for (a, b) in full.iter().zip(sep.iter()) {
+                    assert_eq!(a.0.to_bits(), b.0.to_bits(), "re {shape:?} shift={shift}");
+                    assert_eq!(a.1.to_bits(), b.1.to_bits(), "im {shape:?} shift={shift}");
                 }
             }
         }

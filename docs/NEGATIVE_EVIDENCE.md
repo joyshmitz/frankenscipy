@@ -6,6 +6,24 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `fourier_shift`/`fourier_ellipsoid` per-axis arithmetic precompute (1.22-1.29x self, BYTE-IDENTICAL)
+
+- COMPLETES the fourier-filter family (gaussian/uniform separable landed same day). These two are NOT
+  transcendental-separable — `fourier_shift`'s phase is a SUM over axes (`−Σ_d 2π·freq_d·shift_d` →
+  one `sin_cos`/element) and `fourier_ellipsoid` filters the COMBINED radius `r=√Σ(freq_d·size_d)²`
+  (one sinc/element) — so the transcendental STAYS per element. But each recomputed the per-axis
+  ARITHMETIC (`freq` = a branch + int→f64 + divide, plus 2 mults) at every element. Precompute the
+  `ndim` 1-D tables (`pc[d][i]=2π·freq·shift_d`, `sq[d][i]=(freq·size_d)²`) once → inner loop is a
+  bare add/sub. BYTE-IDENTICAL: identical expressions, SAME reverse-axis accumulation order (`to_bits`
+  test ndim 1/2/3).
+- Reuses `NDIMAGE_FOURIER_SEPARABLE_DISABLE`. MEASURED (best-of-4, same=true): shift 512² **1.27x**,
+  1024² **1.29x**; ellipsoid 512² **1.22x**, 1024² **1.26x**. Smaller than gaussian/uniform (4-7.5×)
+  because the transcendental is retained — the win is purely the freq branch+divide (which rivals the
+  `sin_cos`/`sinc` cost, hence ~25%). fsci-ndimage **258/0**.
+- Fourier-filter family now COMPLETE. LEVER (refined): even when the transcendental can't be factored
+  out, a per-element flat-index-unravel loop that recomputes per-axis ARITHMETIC (freq/divide/mult) is
+  worth precomputing into 1-D tables — the branch+divide alone is ~25% here.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `fourier_gaussian`/`fourier_uniform` separable per-axis factor precompute (4.0-7.5x self, BYTE-IDENTICAL)
 
 - FRESH hot path (fourier-domain filters, no prior ledger entry), uncontested region of ndimage
