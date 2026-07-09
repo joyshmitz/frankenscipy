@@ -1,10 +1,10 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_stats::{
-    HaltonSampler, SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
-    binned_statistic_dd, centered_discrepancy, ecdf, energy_distance, histogram, kendalltau,
-    kruskal, ks_2samp, l2_star_discrepancy, mannkendall, mannwhitneyu, mixture_discrepancy, pacf,
-    psd_welch, rand_index, siegelslopes, somersd, theilslopes, wasserstein_distance,
-    wraparound_discrepancy, BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE,
+    BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, HaltonSampler, SobolSampler, SomersDInput, acf,
+    argsort, binned_statistic, binned_statistic_2d, binned_statistic_dd, centered_discrepancy,
+    ecdf, energy_distance, histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy,
+    mannkendall, mannwhitneyu, mixture_discrepancy, pacf, psd_welch, rand_index, siegelslopes,
+    somersd, theilslopes, wasserstein_distance, wraparound_discrepancy,
 };
 use std::hint::black_box;
 
@@ -617,11 +617,7 @@ fn bench_skellam_cdf(c: &mut Criterion) {
             .map(|i| (mean + (i as f64 - 128.0) / 256.0 * 6.0 * std).max(0.0) as u64)
             .collect();
         group.bench_function(BenchmarkId::new("cdf", format!("mu{mu1}_{mu2}")), |b| {
-            b.iter(|| {
-                ks.iter()
-                    .map(|&k| sk.cdf(black_box(k)))
-                    .sum::<f64>()
-            })
+            b.iter(|| ks.iter().map(|&k| sk.cdf(black_box(k))).sum::<f64>())
         });
         group.bench_function(BenchmarkId::new("sf", format!("mu{mu1}_{mu2}")), |b| {
             b.iter(|| ks.iter().map(|&k| sk.sf(black_box(k))).sum::<f64>())
@@ -678,7 +674,9 @@ fn bench_discrete_entropy(c: &mut Criterion) {
     // pmf-ratio recurrence (mode-anchored) makes each term one ln. Scales with n.
     for &n in &[200_u64, 1000] {
         let d = BetaBinomial::new(n, 2.0, 3.0);
-        group.bench_function(BenchmarkId::new("betabinom", n), |b| b.iter(|| black_box(d.entropy())));
+        group.bench_function(BenchmarkId::new("betabinom", n), |b| {
+            b.iter(|| black_box(d.entropy()))
+        });
     }
     let bnb = BetaNegativeBinomial::new(10, 3.0, 3.0);
     group.bench_function(BenchmarkId::new("betanbinom", 10_u64), |b| {
@@ -686,7 +684,9 @@ fn bench_discrete_entropy(c: &mut Criterion) {
     });
     for &n in &[1000_u64, 10000] {
         let d = Binomial::new(n, 0.5);
-        group.bench_function(BenchmarkId::new("binomial", n), |b| b.iter(|| black_box(d.entropy())));
+        group.bench_function(BenchmarkId::new("binomial", n), |b| {
+            b.iter(|| black_box(d.entropy()))
+        });
     }
     for &mu in &[100.0_f64, 900.0] {
         let d = Poisson::new(mu);
@@ -727,17 +727,31 @@ fn bench_neghypergeom_cdf(c: &mut Criterion) {
 
 fn bench_betanbinom_cdf(c: &mut Criterion) {
     use criterion::BenchmarkId;
-    use fsci_stats::{BetaNegativeBinomial, DiscreteDistribution};
+    use fsci_stats::{BETANBINOM_CDF_MANY_DISABLE, BetaNegativeBinomial};
+    use std::sync::atomic::Ordering;
     let mut group = c.benchmark_group("betanbinom_cdf");
     // Default cdf sums pmf(0..=k) at ~6 ln_gamma/pmf; the pmf-ratio recurrence
-    // (mode=0, anchor at pmf(0)) makes each term one multiply. Cost scales with k.
+    // (mode=0, anchor at pmf(0)) makes each term one multiply. The batch path
+    // builds the prefix once; the legacy row maps scalar cdf for every query.
     let d = BetaNegativeBinomial::new(10, 3.0, 3.0);
     for &kmax in &[100_u64, 500, 2000] {
         let ks: Vec<u64> = (0..=kmax).collect();
-        group.bench_function(BenchmarkId::new("cdf", kmax), |b| {
-            b.iter(|| ks.iter().map(|&k| d.cdf(black_box(k))).sum::<f64>())
+        group.bench_function(BenchmarkId::new("current_cdf_many", kmax), |b| {
+            b.iter(|| {
+                BETANBINOM_CDF_MANY_DISABLE.store(false, Ordering::Relaxed);
+                d.cdf_many(black_box(&ks)).iter().sum::<f64>()
+            })
+        });
+        group.bench_function(BenchmarkId::new("legacy_original_scalar_cdf", kmax), |b| {
+            b.iter(|| {
+                BETANBINOM_CDF_MANY_DISABLE.store(true, Ordering::Relaxed);
+                let total = d.cdf_many(black_box(&ks)).iter().sum::<f64>();
+                BETANBINOM_CDF_MANY_DISABLE.store(false, Ordering::Relaxed);
+                total
+            })
         });
     }
+    BETANBINOM_CDF_MANY_DISABLE.store(false, Ordering::Relaxed);
     group.finish();
 }
 

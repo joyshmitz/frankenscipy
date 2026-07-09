@@ -4636,8 +4636,7 @@ impl ContinuousDistribution for GenGamma {
         let a = self.a;
         let c = self.c;
         let reuse = !GENGAMMA_LN_REUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
-        let ln_pdf =
-            c.abs().ln() + gengamma_shape_term(x, c, c * a - 1.0, reuse) - ln_gamma(a);
+        let ln_pdf = c.abs().ln() + gengamma_shape_term(x, c, c * a - 1.0, reuse) - ln_gamma(a);
         ln_pdf.exp()
     }
 
@@ -6089,7 +6088,11 @@ impl ContinuousDistribution for NormInvGauss {
                 |t| self.pdf(t),
                 x - window,
                 x,
-                fsci_integrate::QuadOptions { epsabs: 0.0, epsrel: 1e-10, limit: 100 },
+                fsci_integrate::QuadOptions {
+                    epsabs: 0.0,
+                    epsrel: 1e-10,
+                    limit: 100,
+                },
             )
             .map(|r| r.integral)
             .unwrap_or(0.0)
@@ -6100,7 +6103,11 @@ impl ContinuousDistribution for NormInvGauss {
             |t| self.pdf(t),
             bulk_lower,
             upper,
-            fsci_integrate::QuadOptions { epsabs: 1e-13, epsrel: 1e-10, limit: 100 },
+            fsci_integrate::QuadOptions {
+                epsabs: 1e-13,
+                epsrel: 1e-10,
+                limit: 100,
+            },
         )
         .map(|r| r.integral)
         .unwrap_or(0.0)
@@ -10451,6 +10458,12 @@ pub struct BetaNegativeBinomial {
     pub b: f64,
 }
 
+/// Same-binary A/B toggle for [`BetaNegativeBinomial::cdf_many`]. When `true`,
+/// the batch API maps the legacy scalar `cdf(k)` per query; when `false`, it
+/// builds one prefix table up to `max(k)` and indexes it.
+pub static BETANBINOM_CDF_MANY_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl BetaNegativeBinomial {
     #[must_use]
     pub fn new(n: u64, a: f64, b: f64) -> Self {
@@ -10462,6 +10475,43 @@ impl BetaNegativeBinomial {
     fn entropy_tail_estimate(a: f64, k: u64, p: f64, logp: f64) -> f64 {
         let x = k as f64;
         p * x * ((-logp) / a + (a + 1.0) / (a * a))
+    }
+
+    /// Cumulative distribution at many integer outcomes.
+    ///
+    /// The scalar `cdf(k)` walks the pmf recurrence from 0 to `k` for every
+    /// query. A batch of monotone or repeated queries can instead materialize
+    /// the recurrence prefix once, then answer each query by table lookup. Each
+    /// table entry is accumulated in the identical order as the scalar path, so
+    /// `cdf_many(&ks)[i] == cdf(ks[i])` bit-for-bit while the budget gate holds.
+    #[must_use]
+    pub fn cdf_many(&self, ks: &[u64]) -> Vec<f64> {
+        if ks.is_empty() {
+            return Vec::new();
+        }
+        if BETANBINOM_CDF_MANY_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            return ks.iter().map(|&k| self.cdf(k)).collect();
+        }
+        let max_k = *ks.iter().max().expect("non-empty ks");
+        const MAX_PREFIX_K: u64 = 1_000_000;
+        if max_k > MAX_PREFIX_K {
+            return ks.iter().map(|&k| self.cdf(k)).collect();
+        }
+
+        let nf = self.n as f64;
+        let (a, b) = (self.a, self.b);
+        let mut table = Vec::with_capacity(max_k as usize + 1);
+        let mut p = self.pmf(0);
+        let mut total = p;
+        table.push(total.min(1.0));
+        for i in 0..max_k {
+            let fi = i as f64;
+            p *= (nf + fi) * (b + fi) / ((fi + 1.0) * (a + nf + b + fi));
+            total += p;
+            table.push(total.min(1.0));
+        }
+
+        ks.iter().map(|&k| table[k as usize]).collect()
     }
 }
 
@@ -30526,7 +30576,9 @@ pub fn differential_entropy_axis_2d(
     base: Option<f64>,
     axis: isize,
 ) -> Result<Vec<f64>, StatsError> {
-    reduce_axis_2d(x, axis, |line| differential_entropy(line, window_length, base))
+    reduce_axis_2d(x, axis, |line| {
+        differential_entropy(line, window_length, base)
+    })
 }
 
 /// `tmean` (trimmed mean) across one axis — matches `scipy.stats.tmean(x, limits, inclusive, axis)`.
@@ -30601,7 +30653,11 @@ pub fn mode_axis_2d(x: &[Vec<f64>], axis: isize) -> Result<Vec<f64>, StatsError>
 
 /// `entropy` (Shannon entropy of a discrete distribution) across one axis —
 /// matches `scipy.stats.entropy(pk, base=base, axis=axis)`.
-pub fn entropy_axis_2d(x: &[Vec<f64>], base: Option<f64>, axis: isize) -> Result<Vec<f64>, StatsError> {
+pub fn entropy_axis_2d(
+    x: &[Vec<f64>],
+    base: Option<f64>,
+    axis: isize,
+) -> Result<Vec<f64>, StatsError> {
     reduce_axis_2d(x, axis, |line| entropy(line, base))
 }
 
@@ -30705,12 +30761,20 @@ where
 
 /// `zscore` (z-score standardization) along one axis — matches `scipy.stats.zscore(x, axis, ddof)`.
 /// One transformed value per element; BIT-IDENTICAL to the per-line 1-D [`zscore_ddof`].
-pub fn zscore_axis_2d(x: &[Vec<f64>], ddof: usize, axis: isize) -> Result<Vec<Vec<f64>>, StatsError> {
+pub fn zscore_axis_2d(
+    x: &[Vec<f64>],
+    ddof: usize,
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, StatsError> {
     map_axis_2d(x, axis, |line| zscore_ddof(line, ddof))
 }
 
 /// `gzscore` (geometric z-score) along one axis — matches `scipy.stats.gzscore(x, axis, ddof)`.
-pub fn gzscore_axis_2d(x: &[Vec<f64>], ddof: usize, axis: isize) -> Result<Vec<Vec<f64>>, StatsError> {
+pub fn gzscore_axis_2d(
+    x: &[Vec<f64>],
+    ddof: usize,
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, StatsError> {
     map_axis_2d(x, axis, |line| gzscore_ddof(line, ddof))
 }
 
@@ -30739,7 +30803,9 @@ pub fn zmap_axis_2d(
     }
     let rows = scores.len();
     match axis {
-        -1 | 1 => Ok(par_produce_lines(rows, cols, |i| zmap_ddof(&scores[i], &compare[i], ddof))),
+        -1 | 1 => Ok(par_produce_lines(rows, cols, |i| {
+            zmap_ddof(&scores[i], &compare[i], ddof)
+        })),
         0 => {
             let tcols = par_produce_lines(cols, rows, |j| {
                 let sc: Vec<f64> = scores.iter().map(|r| r[j]).collect();
@@ -30845,8 +30911,7 @@ fn radix_argsort_f64(data: &[f64]) -> (Vec<u32>, Vec<u64>) {
 
 #[inline]
 fn rankdata_radix_enabled(n: usize) -> bool {
-    n >= RANKDATA_RADIX_MIN
-        && !RANKDATA_RADIX_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    n >= RANKDATA_RADIX_MIN && !RANKDATA_RADIX_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// In-place NON-COMPARISON sort of f64 VALUES, byte-identical (as a sorted
@@ -38257,9 +38322,8 @@ impl GaussianKde {
 
         let inv_bw = 1.0 / bandwidth;
         let norm = (1.0 / bandwidth) / (n as f64 * (2.0 * std::f64::consts::PI).sqrt());
-        let use_simd =
-            !GAUSSIAN_KDE_SIMD_EXP_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
-                && kept_terms >= KDE_SIMD_BATCH_MIN_WORK;
+        let use_simd = !GAUSSIAN_KDE_SIMD_EXP_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+            && kept_terms >= KDE_SIMD_BATCH_MIN_WORK;
         if kept_terms < 1 << 18 || m < 4 {
             return Some(
                 points
@@ -38392,9 +38456,8 @@ fn gaussian_kde_evaluate_window_simd(
     let mut i = lo;
     while i + 2 * KDE_SIMD_LANES <= hi {
         let z0 = (xv - Simd::from_slice(&dataset[i..i + KDE_SIMD_LANES])) * inv;
-        let z1 = (xv
-            - Simd::from_slice(&dataset[i + KDE_SIMD_LANES..i + 2 * KDE_SIMD_LANES]))
-            * inv;
+        let z1 =
+            (xv - Simd::from_slice(&dataset[i + KDE_SIMD_LANES..i + 2 * KDE_SIMD_LANES])) * inv;
         acc0 += kde_simd_exp_nonpos(minus_half * z0 * z0);
         acc1 += kde_simd_exp_nonpos(minus_half * z1 * z1);
         i += 2 * KDE_SIMD_LANES;
@@ -39619,9 +39682,7 @@ where
 /// `out.1[i][j] ==` its p-value (bit-identical on the upper triangle). SciPy has NO vectorized all-pairs
 /// form — pairwise distribution comparison (a common multiple-comparison workflow) means looping
 /// `scipy.stats.ks_2samp` in Python; this runs the O(n log n) per-pair kernel in parallel across pairs.
-pub fn ks_2samp_matrix(
-    samples: &[Vec<f64>],
-) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+pub fn ks_2samp_matrix(samples: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
     all_pairs_two_symmetric_matrices(samples, |a, b| {
         let r = ks_2samp(a, b);
         (r.statistic, r.pvalue)
@@ -39720,9 +39781,7 @@ where
 /// with `out.0[i][j] == ranksums(samples[i], samples[j]).statistic` (the signed z — ANTI-symmetric,
 /// `[j][i] == −[i][j]`) and `out.1[i][j] ==` its (symmetric) p-value. SciPy has NO vectorized all-pairs
 /// form — users loop `scipy.stats.ranksums` in Python; this runs every ordered pair in parallel.
-pub fn ranksums_matrix(
-    samples: &[Vec<f64>],
-) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+pub fn ranksums_matrix(samples: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
     all_pairs_two_full_matrices(samples, |a, b| {
         let r = ranksums(a, b);
         (r.statistic, r.pvalue)
@@ -39841,14 +39900,23 @@ where
         });
         out
     };
-    let stat = flat.chunks(k).map(|r| r.iter().map(|p| p.0).collect()).collect();
-    let pval = flat.chunks(k).map(|r| r.iter().map(|p| p.1).collect()).collect();
+    let stat = flat
+        .chunks(k)
+        .map(|r| r.iter().map(|p| p.0).collect())
+        .collect();
+    let pval = flat
+        .chunks(k)
+        .map(|r| r.iter().map(|p| p.1).collect())
+        .collect();
     Ok((stat, pval))
 }
 
 /// Cross all-pairs Wasserstein-1 distance: `m × k` with `out[i][j] = wasserstein_distance(a[i], b[j])`.
 /// SciPy makes you double-loop two groups in Python; this fans out across all pairs.
-pub fn wasserstein_distance_cross(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+pub fn wasserstein_distance_cross(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+) -> Result<Vec<Vec<f64>>, StatsError> {
     all_pairs_cross_matrix(a, b, wasserstein_distance)
 }
 
@@ -48155,11 +48223,10 @@ fn parallel_minmax(data: &[f64]) -> (f64, f64) {
             .map(|h| h.join().unwrap())
             .collect()
     });
-    parts
-        .into_iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(amn, amx), (mn, mx)| {
-            (amn.min(mn), amx.max(mx))
-        })
+    parts.into_iter().fold(
+        (f64::INFINITY, f64::NEG_INFINITY),
+        |(amn, amx), (mn, mx)| (amn.min(mn), amx.max(mx)),
+    )
 }
 
 /// Parallel per-thread bin histograms (count/sum/min/max/has_nan) merged once.
@@ -49558,11 +49625,7 @@ fn acf_via_fft(centered: &[f64], var: f64, last_lag: usize) -> Option<Vec<f64>> 
     let autocov = fsci_fft::irfft(&power, Some(npad), &opts).ok()?;
 
     let inv_var = 1.0 / var;
-    Some(
-        (0..=last_lag)
-            .map(|lag| autocov[lag] * inv_var)
-            .collect(),
-    )
+    Some((0..=last_lag).map(|lag| autocov[lag] * inv_var).collect())
 }
 
 pub fn acf(data: &[f64], max_lag: usize) -> Vec<f64> {
@@ -50343,11 +50406,7 @@ fn collect_theil_slopes_in_interval(
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
-    let threads = if work >= (1 << 18) {
-        cores.min(16)
-    } else {
-        1
-    };
+    let threads = if work >= (1 << 18) { cores.min(16) } else { 1 };
     if threads <= 1 {
         let (below, slopes) =
             collect_theil_interval_range(x, y, lower_open, upper_closed, limit, 0, 1)?;
@@ -50884,7 +50943,10 @@ mod tests {
                 (x - expected).abs() <= 1e-7 * expected.abs().max(1.0),
                 "nig({a},{b}).ppf({q}) = {x}, expected {expected}"
             );
-            assert!((d.cdf(x) - q).abs() <= 1e-7, "nig ppf round-trip a={a} b={b} q={q}");
+            assert!(
+                (d.cdf(x) - q).abs() <= 1e-7,
+                "nig ppf round-trip a={a} b={b} q={q}"
+            );
         }
     }
 
@@ -50939,7 +51001,10 @@ mod tests {
         for i in 0..=40 {
             let x = -std::f64::consts::PI + (i as f64 / 40.0) * 2.0 * std::f64::consts::PI;
             let c = d.cdf(x);
-            assert!(c >= prev - 1e-12 && (0.0..=1.0).contains(&c), "vonmises cdf mono/bounds");
+            assert!(
+                c >= prev - 1e-12 && (0.0..=1.0).contains(&c),
+                "vonmises cdf mono/bounds"
+            );
             prev = c;
         }
     }
@@ -50950,7 +51015,14 @@ mod tests {
         // scipy.stats.nct (1.17.1), 1e-9; ppf round-trips confirm the fast path.
         let cases = [
             (5.0, 2.0, 3.0, 0.731109843508, 2.85281874, 0.268890156492),
-            (10.0, -1.5, -0.5, 0.842844772015, -0.9879203989, 0.157155227985),
+            (
+                10.0,
+                -1.5,
+                -0.5,
+                0.842844772015,
+                -0.9879203989,
+                0.157155227985,
+            ),
             (3.0, 4.0, 5.0, 0.586262542102, 5.913638328, 0.413737457898),
             (20.0, 0.5, 1.0, 0.684953979825, 1.044466948, 0.315046020175),
             (6.0, 1.5, 8.0, 0.99765891690, 0.0, 0.00234108309917),
@@ -50975,7 +51047,10 @@ mod tests {
                 (p - ppf07).abs() <= 1e-6 * ppf07.abs().max(1.0),
                 "nct({df},{nc}).ppf(0.7) = {p}, expected {ppf07}"
             );
-            assert!((d.cdf(p) - 0.7).abs() <= 1e-7, "nct ppf round-trip {df},{nc}");
+            assert!(
+                (d.cdf(p) - 0.7).abs() <= 1e-7,
+                "nct ppf round-trip {df},{nc}"
+            );
         }
     }
 
@@ -56887,7 +56962,8 @@ mod tests {
         let series: Vec<f64> = (0..n)
             .map(|i| {
                 let t = i as f64 * 0.01;
-                (t).sin() + 0.4 * (2.3 * t).cos() + 0.1 * (((i * 2654435761usize) % 97) as f64) - 3.0
+                (t).sin() + 0.4 * (2.3 * t).cos() + 0.1 * (((i * 2654435761usize) % 97) as f64)
+                    - 3.0
             })
             .collect();
         for &max_lag in &[64usize, 512, n - 1] {
@@ -56900,7 +56976,10 @@ mod tests {
             for (a, b) in fftr.iter().zip(&direct) {
                 worst = worst.max((a - b).abs());
             }
-            assert!(worst < 1e-11, "acf fft vs direct max_lag={max_lag}: worst abs diff {worst:.2e}");
+            assert!(
+                worst < 1e-11,
+                "acf fft vs direct max_lag={max_lag}: worst abs diff {worst:.2e}"
+            );
         }
         ACF_FFT_DISABLE.store(false, Ordering::Relaxed);
     }
@@ -61592,31 +61671,71 @@ mod tests {
 
         // (label, 2-D result, per-line 1-D fn)
         let checks: Vec<(&str, Vec<f64>, Box<dyn Fn(&[f64]) -> f64>)> = vec![
-            ("skew", skew_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| skew(l))),
-            ("kurt", kurtosis_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| kurtosis(l))),
+            (
+                "skew",
+                skew_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| skew(l)),
+            ),
+            (
+                "kurt",
+                kurtosis_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| kurtosis(l)),
+            ),
             (
                 "mad",
                 median_abs_deviation_axis_2d(&x, 1.0, -1).unwrap(),
                 Box::new(|l: &[f64]| median_abs_deviation(l, 1.0)),
             ),
-            ("iqr", iqr_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| iqr(l))),
-            ("var", variation_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| variation(l))),
+            (
+                "iqr",
+                iqr_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| iqr(l)),
+            ),
+            (
+                "var",
+                variation_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| variation(l)),
+            ),
             (
                 "trim",
                 trim_mean_axis_2d(&x, 0.1, -1).unwrap(),
                 Box::new(|l: &[f64]| trim_mean(l, 0.1)),
             ),
-            ("sem", sem_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| sem(l))),
-            ("gmean", gmean_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| gmean(l))),
-            ("hmean", hmean_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| hmean(l))),
-            ("gstd", gstd_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| gstd(l))),
-            ("kstat2", kstat_axis_2d(&x, 2, -1).unwrap(), Box::new(|l: &[f64]| kstat(l, 2))),
+            (
+                "sem",
+                sem_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| sem(l)),
+            ),
+            (
+                "gmean",
+                gmean_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| gmean(l)),
+            ),
+            (
+                "hmean",
+                hmean_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| hmean(l)),
+            ),
+            (
+                "gstd",
+                gstd_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| gstd(l)),
+            ),
+            (
+                "kstat2",
+                kstat_axis_2d(&x, 2, -1).unwrap(),
+                Box::new(|l: &[f64]| kstat(l, 2)),
+            ),
             (
                 "kstatvar2",
                 kstatvar_axis_2d(&x, 2, -1).unwrap(),
                 Box::new(|l: &[f64]| kstatvar(l, 2)),
             ),
-            ("moment4", moment_axis_2d(&x, 4, -1).unwrap(), Box::new(|l: &[f64]| moment(l, 4))),
+            (
+                "moment4",
+                moment_axis_2d(&x, 4, -1).unwrap(),
+                Box::new(|l: &[f64]| moment(l, 4)),
+            ),
             (
                 "dentropy",
                 differential_entropy_axis_2d(&x, None, None, -1).unwrap(),
@@ -61652,21 +61771,41 @@ mod tests {
                 tmax_axis_2d(&x, 1.3, true, -1).unwrap(),
                 Box::new(|l: &[f64]| tmax(l, 1.3, true)),
             ),
-            ("mode", mode_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| mode(l))),
+            (
+                "mode",
+                mode_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| mode(l)),
+            ),
             (
                 "entropy",
                 entropy_axis_2d(&x, None, -1).unwrap(),
                 Box::new(|l: &[f64]| entropy(l, None)),
             ),
-            ("circmean", circmean_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| circmean(l))),
-            ("circvar", circvar_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| circvar(l))),
-            ("circstd", circstd_axis_2d(&x, -1).unwrap(), Box::new(|l: &[f64]| circstd(l))),
+            (
+                "circmean",
+                circmean_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| circmean(l)),
+            ),
+            (
+                "circvar",
+                circvar_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| circvar(l)),
+            ),
+            (
+                "circstd",
+                circstd_axis_2d(&x, -1).unwrap(),
+                Box::new(|l: &[f64]| circstd(l)),
+            ),
         ];
         for (label, par, f) in &checks {
             for (r, row) in x.iter().enumerate() {
                 // Bit-identical to the per-line 1-D call (to_bits so NaN on a
                 // negative line, e.g. gmean/gstd, still compares equal).
-                assert_eq!(par[r].to_bits(), f(row).to_bits(), "{label} axis=-1 row {r}");
+                assert_eq!(
+                    par[r].to_bits(),
+                    f(row).to_bits(),
+                    "{label} axis=-1 row {r}"
+                );
             }
         }
         // axis = 0 (columns) for one representative
@@ -61686,12 +61825,20 @@ mod tests {
         let x: Vec<Vec<f64>> = (0..rows)
             .map(|r| {
                 (0..cols)
-                    .map(|c| (((r * 71 + c * 13) % 311) as f64) * 0.017 + 0.5 + (c as f64 * 0.3).sin().abs())
+                    .map(|c| {
+                        (((r * 71 + c * 13) % 311) as f64) * 0.017
+                            + 0.5
+                            + (c as f64 * 0.3).sin().abs()
+                    })
                     .collect()
             })
             .collect();
         let cmp: Vec<Vec<f64>> = (0..rows)
-            .map(|r| (0..cols).map(|c| (((r * 17 + c * 29) % 197) as f64) * 0.021 + 0.5).collect())
+            .map(|r| {
+                (0..cols)
+                    .map(|c| (((r * 17 + c * 29) % 197) as f64) * 0.021 + 0.5)
+                    .collect()
+            })
             .collect();
 
         // ---- axis = -1 (rows) ----
@@ -61703,8 +61850,16 @@ mod tests {
             let g1 = gzscore_ddof(&x[r], 1);
             let m1 = zmap_ddof(&x[r], &cmp[r], 0);
             for c in 0..cols {
-                assert_eq!(zr[r][c].to_bits(), z1[c].to_bits(), "zscore row {r} col {c}");
-                assert_eq!(gr[r][c].to_bits(), g1[c].to_bits(), "gzscore row {r} col {c}");
+                assert_eq!(
+                    zr[r][c].to_bits(),
+                    z1[c].to_bits(),
+                    "zscore row {r} col {c}"
+                );
+                assert_eq!(
+                    gr[r][c].to_bits(),
+                    g1[c].to_bits(),
+                    "gzscore row {r} col {c}"
+                );
                 assert_eq!(mr[r][c].to_bits(), m1[c].to_bits(), "zmap row {r} col {c}");
             }
         }
@@ -61718,8 +61873,16 @@ mod tests {
             let z1 = zscore_ddof(&col, 0);
             let m1 = zmap_ddof(&col, &ccol, 0);
             for r in 0..rows {
-                assert_eq!(z0[r][c].to_bits(), z1[r].to_bits(), "zscore axis0 row {r} col {c}");
-                assert_eq!(m0[r][c].to_bits(), m1[r].to_bits(), "zmap axis0 row {r} col {c}");
+                assert_eq!(
+                    z0[r][c].to_bits(),
+                    z1[r].to_bits(),
+                    "zscore axis0 row {r} col {c}"
+                );
+                assert_eq!(
+                    m0[r][c].to_bits(),
+                    m1[r].to_bits(),
+                    "zmap axis0 row {r} col {c}"
+                );
             }
         }
         assert!(zscore_axis_2d(&x, 0, 9).is_err());
@@ -61786,7 +61949,8 @@ mod tests {
                         if v == 3 {
                             ((i / 7) as f64) // heavily tied column
                         } else {
-                            (((i * (v + 2) + v * 5) % 53) as f64) * 0.31 - (i as f64 * 0.2 + v as f64).sin()
+                            (((i * (v + 2) + v * 5) % 53) as f64) * 0.31
+                                - (i as f64 * 0.2 + v as f64).sin()
                         }
                     })
                     .collect()
@@ -61807,7 +61971,11 @@ mod tests {
                     expected.to_bits(),
                     "kendalltau_matrix[{i}][{j}] != kendalltau().statistic"
                 );
-                assert_eq!(mat[i][j].to_bits(), mat[j][i].to_bits(), "not symmetric at {i},{j}");
+                assert_eq!(
+                    mat[i][j].to_bits(),
+                    mat[j][i].to_bits(),
+                    "not symmetric at {i},{j}"
+                );
             }
         }
         // ragged input rejected
@@ -61825,7 +61993,11 @@ mod tests {
                     expected.to_bits(),
                     "weightedtau_matrix[{i}][{j}] != weightedtau()"
                 );
-                assert_eq!(wm[i][j].to_bits(), wm[j][i].to_bits(), "weightedtau not symmetric {i},{j}");
+                assert_eq!(
+                    wm[i][j].to_bits(),
+                    wm[j][i].to_bits(),
+                    "weightedtau not symmetric {i},{j}"
+                );
             }
         }
         assert!(weightedtau_matrix(&bad).is_err());
@@ -61851,10 +62023,22 @@ mod tests {
             for j in i..m {
                 let we = wasserstein_distance(&samples[i], &samples[j]);
                 let ee = energy_distance(&samples[i], &samples[j]);
-                assert_eq!(wm[i][j].to_bits(), we.to_bits(), "wasserstein_matrix[{i}][{j}]");
+                assert_eq!(
+                    wm[i][j].to_bits(),
+                    we.to_bits(),
+                    "wasserstein_matrix[{i}][{j}]"
+                );
                 assert_eq!(em[i][j].to_bits(), ee.to_bits(), "energy_matrix[{i}][{j}]");
-                assert_eq!(wm[i][j].to_bits(), wm[j][i].to_bits(), "wasserstein not symmetric {i},{j}");
-                assert_eq!(em[i][j].to_bits(), em[j][i].to_bits(), "energy not symmetric {i},{j}");
+                assert_eq!(
+                    wm[i][j].to_bits(),
+                    wm[j][i].to_bits(),
+                    "wasserstein not symmetric {i},{j}"
+                );
+                assert_eq!(
+                    em[i][j].to_bits(),
+                    em[j][i].to_bits(),
+                    "energy not symmetric {i},{j}"
+                );
             }
         }
         let mut bad = samples.clone();
@@ -61868,10 +62052,26 @@ mod tests {
         for i in 0..m {
             for j in i..m {
                 let r = ks_2samp(&samples[i], &samples[j]);
-                assert_eq!(ksstat[i][j].to_bits(), r.statistic.to_bits(), "ks stat[{i}][{j}]");
-                assert_eq!(kspval[i][j].to_bits(), r.pvalue.to_bits(), "ks pval[{i}][{j}]");
-                assert_eq!(ksstat[i][j].to_bits(), ksstat[j][i].to_bits(), "ks stat not symmetric {i},{j}");
-                assert_eq!(kspval[i][j].to_bits(), kspval[j][i].to_bits(), "ks pval not symmetric {i},{j}");
+                assert_eq!(
+                    ksstat[i][j].to_bits(),
+                    r.statistic.to_bits(),
+                    "ks stat[{i}][{j}]"
+                );
+                assert_eq!(
+                    kspval[i][j].to_bits(),
+                    r.pvalue.to_bits(),
+                    "ks pval[{i}][{j}]"
+                );
+                assert_eq!(
+                    ksstat[i][j].to_bits(),
+                    ksstat[j][i].to_bits(),
+                    "ks stat not symmetric {i},{j}"
+                );
+                assert_eq!(
+                    kspval[i][j].to_bits(),
+                    kspval[j][i].to_bits(),
+                    "ks pval not symmetric {i},{j}"
+                );
             }
         }
         assert!(ks_2samp_matrix(&bad).is_err());
@@ -61881,10 +62081,22 @@ mod tests {
         for i in 0..m {
             for j in i..m {
                 let r = mannwhitneyu(&samples[i], &samples[j]);
-                assert_eq!(mwu[i][j].to_bits(), r.statistic.to_bits(), "mwu U[{i}][{j}]");
+                assert_eq!(
+                    mwu[i][j].to_bits(),
+                    r.statistic.to_bits(),
+                    "mwu U[{i}][{j}]"
+                );
                 assert_eq!(mwp[i][j].to_bits(), r.pvalue.to_bits(), "mwu p[{i}][{j}]");
-                assert_eq!(mwu[i][j].to_bits(), mwu[j][i].to_bits(), "mwu U not symmetric {i},{j}");
-                assert_eq!(mwp[i][j].to_bits(), mwp[j][i].to_bits(), "mwu p not symmetric {i},{j}");
+                assert_eq!(
+                    mwu[i][j].to_bits(),
+                    mwu[j][i].to_bits(),
+                    "mwu U not symmetric {i},{j}"
+                );
+                assert_eq!(
+                    mwp[i][j].to_bits(),
+                    mwp[j][i].to_bits(),
+                    "mwu p not symmetric {i},{j}"
+                );
             }
         }
         assert!(mannwhitneyu_matrix(&bad).is_err());
@@ -61896,10 +62108,22 @@ mod tests {
         for i in 0..m {
             for j in 0..m {
                 let rr = ranksums(&samples[i], &samples[j]);
-                assert_eq!(rsz[i][j].to_bits(), rr.statistic.to_bits(), "ranksums z[{i}][{j}]");
-                assert_eq!(rsp[i][j].to_bits(), rr.pvalue.to_bits(), "ranksums p[{i}][{j}]");
+                assert_eq!(
+                    rsz[i][j].to_bits(),
+                    rr.statistic.to_bits(),
+                    "ranksums z[{i}][{j}]"
+                );
+                assert_eq!(
+                    rsp[i][j].to_bits(),
+                    rr.pvalue.to_bits(),
+                    "ranksums p[{i}][{j}]"
+                );
                 let bb = brunnermunzel(&samples[i], &samples[j]);
-                assert_eq!(bmw[i][j].to_bits(), bb.statistic.to_bits(), "bm W[{i}][{j}]");
+                assert_eq!(
+                    bmw[i][j].to_bits(),
+                    bb.statistic.to_bits(),
+                    "bm W[{i}][{j}]"
+                );
                 assert_eq!(bmp[i][j].to_bits(), bb.pvalue.to_bits(), "bm p[{i}][{j}]");
             }
         }
@@ -61908,8 +62132,12 @@ mod tests {
 
         // CROSS matrices: rectangular m×k, out[i][j] bit-identical to pair_stat(a[i], b[j]); groups and
         // samples may differ in length (distances/tests accept ragged inputs).
-        let ga: Vec<Vec<f64>> = (0..4).map(|s| (0..30).map(|t| ((s * 7 + t) as f64).sin()).collect()).collect();
-        let gb: Vec<Vec<f64>> = (0..3).map(|s| (0..25).map(|t| ((s * 5 + t + 1) as f64).cos()).collect()).collect();
+        let ga: Vec<Vec<f64>> = (0..4)
+            .map(|s| (0..30).map(|t| ((s * 7 + t) as f64).sin()).collect())
+            .collect();
+        let gb: Vec<Vec<f64>> = (0..3)
+            .map(|s| (0..25).map(|t| ((s * 5 + t + 1) as f64).cos()).collect())
+            .collect();
         let wc = wasserstein_distance_cross(&ga, &gb).unwrap();
         let ec = energy_distance_cross(&ga, &gb).unwrap();
         let (ksc_s, ksc_p) = ks_2samp_cross(&ga, &gb).unwrap();
@@ -61918,14 +62146,38 @@ mod tests {
         assert_eq!(wc[0].len(), 3);
         for i in 0..ga.len() {
             for j in 0..gb.len() {
-                assert_eq!(wc[i][j].to_bits(), wasserstein_distance(&ga[i], &gb[j]).to_bits(), "wass cross {i},{j}");
-                assert_eq!(ec[i][j].to_bits(), energy_distance(&ga[i], &gb[j]).to_bits(), "energy cross {i},{j}");
+                assert_eq!(
+                    wc[i][j].to_bits(),
+                    wasserstein_distance(&ga[i], &gb[j]).to_bits(),
+                    "wass cross {i},{j}"
+                );
+                assert_eq!(
+                    ec[i][j].to_bits(),
+                    energy_distance(&ga[i], &gb[j]).to_bits(),
+                    "energy cross {i},{j}"
+                );
                 let kr = ks_2samp(&ga[i], &gb[j]);
-                assert_eq!(ksc_s[i][j].to_bits(), kr.statistic.to_bits(), "ks cross stat {i},{j}");
-                assert_eq!(ksc_p[i][j].to_bits(), kr.pvalue.to_bits(), "ks cross p {i},{j}");
+                assert_eq!(
+                    ksc_s[i][j].to_bits(),
+                    kr.statistic.to_bits(),
+                    "ks cross stat {i},{j}"
+                );
+                assert_eq!(
+                    ksc_p[i][j].to_bits(),
+                    kr.pvalue.to_bits(),
+                    "ks cross p {i},{j}"
+                );
                 let mr = mannwhitneyu(&ga[i], &gb[j]);
-                assert_eq!(mwc_s[i][j].to_bits(), mr.statistic.to_bits(), "mwu cross stat {i},{j}");
-                assert_eq!(mwc_p[i][j].to_bits(), mr.pvalue.to_bits(), "mwu cross p {i},{j}");
+                assert_eq!(
+                    mwc_s[i][j].to_bits(),
+                    mr.statistic.to_bits(),
+                    "mwu cross stat {i},{j}"
+                );
+                assert_eq!(
+                    mwc_p[i][j].to_bits(),
+                    mr.pvalue.to_bits(),
+                    "mwu cross p {i},{j}"
+                );
             }
         }
         let emptyrow: Vec<Vec<f64>> = vec![vec![1.0, 2.0], vec![]];
@@ -61933,16 +62185,32 @@ mod tests {
         assert!(ks_2samp_cross(&ga, &emptyrow).is_err());
 
         // CROSS correlation (equal-length paired groups): bit-identical to per-pair kendalltau/weightedtau.
-        let ca: Vec<Vec<f64>> = (0..4).map(|s| (0..40).map(|t| ((s * 3 + t) as f64).sin()).collect()).collect();
-        let cb: Vec<Vec<f64>> = (0..3).map(|s| (0..40).map(|t| ((s * 2 + t + 1) as f64 * 0.5).cos()).collect()).collect();
+        let ca: Vec<Vec<f64>> = (0..4)
+            .map(|s| (0..40).map(|t| ((s * 3 + t) as f64).sin()).collect())
+            .collect();
+        let cb: Vec<Vec<f64>> = (0..3)
+            .map(|s| {
+                (0..40)
+                    .map(|t| ((s * 2 + t + 1) as f64 * 0.5).cos())
+                    .collect()
+            })
+            .collect();
         let kc = kendalltau_cross(&ca, &cb).unwrap();
         let wtc = weightedtau_cross(&ca, &cb).unwrap();
         assert_eq!(kc.len(), 4);
         assert_eq!(kc[0].len(), 3);
         for i in 0..ca.len() {
             for j in 0..cb.len() {
-                assert_eq!(kc[i][j].to_bits(), kendalltau(&ca[i], &cb[j]).statistic.to_bits(), "kendall cross {i},{j}");
-                assert_eq!(wtc[i][j].to_bits(), weightedtau(&ca[i], &cb[j]).to_bits(), "wtau cross {i},{j}");
+                assert_eq!(
+                    kc[i][j].to_bits(),
+                    kendalltau(&ca[i], &cb[j]).statistic.to_bits(),
+                    "kendall cross {i},{j}"
+                );
+                assert_eq!(
+                    wtc[i][j].to_bits(),
+                    weightedtau(&ca[i], &cb[j]).to_bits(),
+                    "wtau cross {i},{j}"
+                );
             }
         }
         assert!(kendalltau_cross(&ca, &emptyrow).is_err());
@@ -61976,7 +62244,10 @@ mod tests {
                 let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
                 let ranked = rankdata(&column, Some(method)).expect("rankdata col");
                 for (r, &value) in ranked.iter().enumerate() {
-                    assert_eq!(par0[r][col], value, "rankdata axis=0 {method} col {col} row {r}");
+                    assert_eq!(
+                        par0[r][col], value,
+                        "rankdata axis=0 {method} col {col} row {r}"
+                    );
                 }
             }
         }
@@ -61991,7 +62262,14 @@ mod tests {
         // subnormals — the radix path must reproduce the comparison-sort ranks
         // BIT-for-BIT for every method.
         let n = 20_000usize;
-        let specials = [0.0_f64, -0.0, f64::INFINITY, f64::NEG_INFINITY, 5e-324, -5e-324];
+        let specials = [
+            0.0_f64,
+            -0.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            5e-324,
+            -5e-324,
+        ];
         let data: Vec<f64> = (0..n)
             .map(|i| match i % 11 {
                 0..=5 => specials[i % 6],
@@ -62008,7 +62286,11 @@ mod tests {
             let radix = rankdata(&data, Some(method)).expect("rankdata radix");
             assert_eq!(reference.len(), radix.len());
             for (i, (&r, &c)) in radix.iter().zip(&reference).enumerate() {
-                assert_eq!(r.to_bits(), c.to_bits(), "method {method} idx {i}: {r} vs {c}");
+                assert_eq!(
+                    r.to_bits(),
+                    c.to_bits(),
+                    "method {method} idx {i}: {r} vs {c}"
+                );
             }
         }
         RANKDATA_RADIX_DISABLE.store(false, Ordering::Relaxed);
@@ -62020,7 +62302,14 @@ mod tests {
         // (1) radix_sort_f64_values == sort_unstable_by(total_cmp) BIT-for-BIT as a
         //     sorted sequence, incl. ±0.0/±inf/subnormals/heavy ties.
         let n = 20_000usize;
-        let specials = [0.0_f64, -0.0, f64::INFINITY, f64::NEG_INFINITY, 5e-324, -5e-324];
+        let specials = [
+            0.0_f64,
+            -0.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            5e-324,
+            -5e-324,
+        ];
         let base: Vec<f64> = (0..n)
             .map(|i| match i % 9 {
                 0..=5 => specials[i % 6],
@@ -62039,10 +62328,15 @@ mod tests {
 
         // (2) The consumers (wasserstein/energy/ks_2samp) must be BIT-identical with
         //     the radix value sort on vs off.
-        let u: Vec<f64> = (0..n).map(|i| ((i * 7 % 200) as f64) - 100.0 + (i as f64) * 1e-7).collect();
+        let u: Vec<f64> = (0..n)
+            .map(|i| ((i * 7 % 200) as f64) - 100.0 + (i as f64) * 1e-7)
+            .collect();
         let v: Vec<f64> = (0..n).map(|i| ((i * 13 % 200) as f64) - 90.0).collect();
         for (name, f) in [
-            ("wasserstein", &wasserstein_distance as &dyn Fn(&[f64], &[f64]) -> f64),
+            (
+                "wasserstein",
+                &wasserstein_distance as &dyn Fn(&[f64], &[f64]) -> f64,
+            ),
             ("energy", &energy_distance as &dyn Fn(&[f64], &[f64]) -> f64),
         ] {
             RANKDATA_RADIX_DISABLE.store(true, Ordering::Relaxed);
@@ -62055,8 +62349,16 @@ mod tests {
         let ks_a = ks_2samp(&u, &v);
         RANKDATA_RADIX_DISABLE.store(false, Ordering::Relaxed);
         let ks_b = ks_2samp(&u, &v);
-        assert_eq!(ks_a.statistic.to_bits(), ks_b.statistic.to_bits(), "ks_2samp stat radix on/off");
-        assert_eq!(ks_a.pvalue.to_bits(), ks_b.pvalue.to_bits(), "ks_2samp pval radix on/off");
+        assert_eq!(
+            ks_a.statistic.to_bits(),
+            ks_b.statistic.to_bits(),
+            "ks_2samp stat radix on/off"
+        );
+        assert_eq!(
+            ks_a.pvalue.to_bits(),
+            ks_b.pvalue.to_bits(),
+            "ks_2samp pval radix on/off"
+        );
         RANKDATA_RADIX_DISABLE.store(false, Ordering::Relaxed);
     }
 
@@ -65017,9 +65319,7 @@ mod tests {
             })
             .collect();
         let kde = GaussianKde::new(&data);
-        let points: Vec<f64> = (0..4096)
-            .map(|i| -5.0 + i as f64 * 10.0 / 4096.0)
-            .collect();
+        let points: Vec<f64> = (0..4096).map(|i| -5.0 + i as f64 * 10.0 / 4096.0).collect();
         let inv_bw = 1.0 / kde.bandwidth();
         let norm = inv_bw / (data.len() as f64 * (2.0 * std::f64::consts::PI).sqrt());
         let got: Vec<f64> = points
@@ -65045,9 +65345,7 @@ mod tests {
             })
             .collect();
         let kde = GaussianKde::new(&data);
-        let points: Vec<f64> = (0..4096)
-            .map(|i| -5.0 + i as f64 * 10.0 / 4096.0)
-            .collect();
+        let points: Vec<f64> = (0..4096).map(|i| -5.0 + i as f64 * 10.0 / 4096.0).collect();
 
         let windowed = kde
             .evaluate_many_tail_window(&points)
@@ -71053,7 +71351,14 @@ mod tests {
         for &a in &[1.05_f64, 1.3, 2.0, 3.5] {
             for &n in &[10_u32, 200, 5000] {
                 let d = Zipfian::new(a, n);
-                for &k in &[1_u64, 2, (n as u64) / 3, (n as u64) - 1, n as u64, n as u64 + 5] {
+                for &k in &[
+                    1_u64,
+                    2,
+                    (n as u64) / 3,
+                    (n as u64) - 1,
+                    n as u64,
+                    n as u64 + 5,
+                ] {
                     let got = d.cdf(k);
                     let want = sum_cdf(a, n, k);
                     assert!(
@@ -71065,16 +71370,25 @@ mod tests {
                 let mut prev = 0.0;
                 for k in 0..=(n as u64 + 2) {
                     let c = d.cdf(k);
-                    assert!((0.0..=1.0).contains(&c) && c >= prev - 1e-12, "monotone a={a} n={n} k={k}");
+                    assert!(
+                        (0.0..=1.0).contains(&c) && c >= prev - 1e-12,
+                        "monotone a={a} n={n} k={k}"
+                    );
                     prev = c;
                 }
-                assert!((d.cdf(n as u64) - 1.0).abs() <= 1e-12, "cdf(n)=1 a={a} n={n}");
+                assert!(
+                    (d.cdf(n as u64) - 1.0).abs() <= 1e-12,
+                    "cdf(n)=1 a={a} n={n}"
+                );
             }
         }
         // a<=1 fallback path still correct (uses the partial sum).
         let d = Zipfian::new(0.5, 50);
         assert!((d.cdf(50) - 1.0).abs() <= 1e-12, "a<=1 cdf(n)=1");
-        assert!((d.cdf(25) - sum_cdf(0.5, 50, 25)).abs() <= 1e-12, "a<=1 matches sum");
+        assert!(
+            (d.cdf(25) - sum_cdf(0.5, 50, 25)).abs() <= 1e-12,
+            "a<=1 matches sum"
+        );
     }
 
     #[test]
@@ -78866,15 +79180,24 @@ mod tests {
             (19, 9.980_237_154_150e-1),
         ] {
             let got = bb.cdf(k);
-            assert!((got - want).abs() <= 1e-12, "betabinom(20,2,3).cdf({k}) = {got}, want {want}");
+            assert!(
+                (got - want).abs() <= 1e-12,
+                "betabinom(20,2,3).cdf({k}) = {got}, want {want}"
+            );
         }
         // k ≥ n ⇒ 1.0; large n; deep left tail.
         assert_eq!(BetaBinomial::new(20, 2.0, 3.0).cdf(20), 1.0);
         let big = BetaBinomial::new(1000, 2.0, 3.0);
-        assert!((big.cdf(500) - 6.878_744_386_230e-1).abs() <= 1e-9, "betabinom(1000,2,3).cdf(500)");
+        assert!(
+            (big.cdf(500) - 6.878_744_386_230e-1).abs() <= 1e-9,
+            "betabinom(1000,2,3).cdf(500)"
+        );
         let tail = BetaBinomial::new(1000, 50.0, 1.0);
         let g = tail.cdf(100);
-        assert!((g - 1.746_855_178_992e-46).abs() <= 1e-9 * 1.746_855_178_992e-46, "deep tail cdf(100)");
+        assert!(
+            (g - 1.746_855_178_992e-46).abs() <= 1e-9 * 1.746_855_178_992e-46,
+            "deep tail cdf(100)"
+        );
     }
 
     #[test]
@@ -78902,7 +79225,9 @@ mod tests {
             "betanbinom(20,5,4).entropy() = {bnb_20_5_4}"
         );
         assert!((NegHypergeometric::new(20, 7, 3).entropy() - 1.571_080_643_983).abs() <= 1e-10);
-        assert!((NegHypergeometric::new(900, 400, 450).entropy() - 3.505_555_116_320).abs() <= 1e-9);
+        assert!(
+            (NegHypergeometric::new(900, 400, 450).entropy() - 3.505_555_116_320).abs() <= 1e-9
+        );
         assert!((NegHypergeometric::new(200, 50, 75).entropy() - 2.821_387_090_436).abs() <= 1e-10);
         // Binomial entropy override (mode-anchored joint pmf/ln-pmf recurrence).
         assert!((Binomial::new(100, 0.5).entropy() - 3.028_367_940_137).abs() <= 1e-10);
@@ -78931,8 +79256,30 @@ mod tests {
             (200, 3, 1.5, 2.0, 9.950_844_954_130e-1),
         ] {
             let got = BetaNegativeBinomial::new(n, a, b).cdf(k);
-            assert!((got - want).abs() <= 1e-12, "betanbinom({n},{a},{b}).cdf({k}) = {got}, want {want}");
+            assert!(
+                (got - want).abs() <= 1e-12,
+                "betanbinom({n},{a},{b}).cdf({k}) = {got}, want {want}"
+            );
         }
+    }
+
+    #[test]
+    fn betanbinom_cdf_many_matches_scalar_bit_for_bit() {
+        use std::sync::atomic::Ordering;
+
+        let d = BetaNegativeBinomial::new(10, 3.0, 3.0);
+        let ks = [0_u64, 1, 2, 7, 31, 64, 128, 255, 512, 2000];
+        BETANBINOM_CDF_MANY_DISABLE.store(false, Ordering::Relaxed);
+        let got = d.cdf_many(&ks);
+        for (i, &k) in ks.iter().enumerate() {
+            assert_eq!(got[i].to_bits(), d.cdf(k).to_bits(), "cdf_many({k})");
+        }
+
+        BETANBINOM_CDF_MANY_DISABLE.store(true, Ordering::Relaxed);
+        let legacy = d.cdf_many(&ks);
+        BETANBINOM_CDF_MANY_DISABLE.store(false, Ordering::Relaxed);
+        assert_eq!(got, legacy);
+        assert!(d.cdf_many(&[]).is_empty());
     }
 
     #[test]
@@ -79712,11 +80059,16 @@ mod tests {
         // tail (the existing test only pins cdf(5) at n=7). Golden values from
         // scipy.stats.nhypergeom(M,n,r).cdf(k) 1.17.1.
         assert!((NegHypergeometric::new(50, 10, 5).cdf(5) - 9.980_128_068_319e-1).abs() <= 1e-10);
-        assert!((NegHypergeometric::new(500, 50, 100).cdf(25) - 9.999_870_190_111e-1).abs() <= 1e-10);
+        assert!(
+            (NegHypergeometric::new(500, 50, 100).cdf(25) - 9.999_870_190_111e-1).abs() <= 1e-10
+        );
         // Top of support sums to 1.0 up to accumulated f64 rounding (~2e-13).
         assert!((NegHypergeometric::new(1000, 400, 500).cdf(400) - 1.0).abs() <= 1e-9);
         let tail = NegHypergeometric::new(1000, 400, 500).cdf(200);
-        assert!((tail - 2.626_855_007_1e-29).abs() <= 1e-10 * 2.626_855_007_1e-29, "deep tail");
+        assert!(
+            (tail - 2.626_855_007_1e-29).abs() <= 1e-10 * 2.626_855_007_1e-29,
+            "deep tail"
+        );
     }
 
     #[test]
@@ -83840,10 +84192,7 @@ mod tests {
         for b in 0..bins {
             assert_eq!(count1[b], rc[b], "1D count bin {b}");
             if rc[b] > 0.0 {
-                assert!(
-                    (mean1[b] - rs[b] / rc[b]).abs() < 1e-12,
-                    "1D mean bin {b}"
-                );
+                assert!((mean1[b] - rs[b] / rc[b]).abs() < 1e-12, "1D mean bin {b}");
             }
         }
 

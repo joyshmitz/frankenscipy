@@ -4,6 +4,65 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: BetaNegativeBinomial `cdf_many` prefix table (38-351x vs ORIG)
+
+Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided
+already rejected/exhausted families: dense LU/Cholesky/BLAS-wall retreads,
+sparse COO `sum_duplicates` fused cursor/validation, KDE scalar-constant and
+grid-recurrence retries, KDE-ND whitening-buffer/unroll rejects, rank-test sort
+retreads, robust-slope build parallelism, and already-landed binned-statistic,
+QMC, and special-function prefix paths.
+
+Profiling pass:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench -- --sample-size 10 --warm-up-time 0.2 --measurement-time 0.5 --noplot`.
+The broad stats pass was stopped once it had enough routing signal, with
+`betanbinom_cdf/cdf/2000` already at a multi-ms median and no unclosed hotter
+family available under the negative-evidence constraints. A filtered KDE-ND
+check measured `gaussian_kde_nd/d3_eval5k` near 9.78 ms on RCH `ovh-a`, but
+the ledger already marks the obvious KDE-ND buffer/unroll vein rejected. The
+clean residual was repeated beta-negative-binomial CDF queries: scalar
+`cdf(k)` restarts the identical pmf recurrence from 0 for each query.
+
+Kept primitive: `BetaNegativeBinomial::cdf_many(&[k])` builds the recurrence
+prefix once up to `max(k)`, then returns table lookups. Each table entry is the
+same scalar computation for that `k`: one `pmf(0)`, the identical pmf ratio,
+the identical add order, and the same `min(1.0)` clamp. That gives bit-exact
+parity for all queries while the memory budget gate holds. For pathological
+sparse huge queries (`max(k) > 1_000_000`), the batch API falls back to scalar
+`cdf(k)`. The same-binary A/B switch `BETANBINOM_CDF_MANY_DISABLE` maps
+`cdf_many` back to the legacy scalar loop for ORIG rows.
+
+Same-worker A/B command:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench betanbinom_cdf -- --sample-size 10 --warm-up-time 0.2 --measurement-time 0.5 --noplot`.
+On RCH `ovh-a`, same binary:
+
+| row | current | legacy original | ratio |
+| --- | ---: | ---: | ---: |
+| `betanbinom_cdf/current_cdf_many/100` vs `legacy_original_scalar_cdf/100` | 533.73 ns | 20.439 us | **38.3x faster vs ORIG** |
+| `betanbinom_cdf/current_cdf_many/500` vs `legacy_original_scalar_cdf/500` | 2.0938 us | 227.79 us | **108.8x faster vs ORIG** |
+| `betanbinom_cdf/current_cdf_many/2000` vs `legacy_original_scalar_cdf/2000` | 7.9434 us | 2.7853 ms | **350.6x faster vs ORIG** |
+
+Correctness / conformance:
+- PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 rch exec -- cargo test --profile release -p fsci-stats betanbinom_cdf_many_matches_scalar_bit_for_bit --lib -- --nocapture`
+  on RCH `ovh-a` (`1 passed`) checks bit-for-bit scalar parity and the legacy
+  toggle path. Post-rebase rerun also passed on RCH `vmi1293453`.
+- PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 rch exec -- cargo test --profile release -p fsci-conformance stats_packet_runner_passes -- --nocapture`
+  on RCH `vmi1149989` (`stats_packet_runner_passes ... ok`). Post-rebase
+  rerun also passed on RCH `vmi1293453`.
+- PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 rch exec -- cargo check --profile release -p fsci-stats --all-targets`
+  on RCH `hz1`.
+- PASS: `cargo fmt --check -p fsci-stats`.
+- PASS: `git diff --check`.
+- PASS: `ubs $(git diff --name-only)` reported 0 critical issues; warnings
+  are broad existing inventory in the large stats source/bench surfaces. UBS
+  cargo fmt/clippy/check/test-build subchecks were clean.
+
+Negative evidence: do not retry per-query scalar beta-negative-binomial CDF
+for batches. The prefix table closes the repeated-query case; future work
+should only revisit this family for a different distribution or for a
+pathological sparse-huge-query representation that does not allocate
+`O(max(k))`.
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: smoothing-spline GCV compact fixed-band storage (2.00x hot row vs ORIG)
 
 Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided the

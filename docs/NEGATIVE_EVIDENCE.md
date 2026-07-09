@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: stats beta-negative-binomial batch CDF prefix table (38-351x vs ORIG, BIT-IDENTICAL)
+
+- Dig audit: consulted this ledger first. Avoided rejected/exhausted dense
+  LU/Cholesky/BLAS-wall retreads, sparse COO `sum_duplicates`, KDE scalar/grid
+  retries, KDE-ND buffer/unroll rejects, rank-test sort retreads, robust-slope
+  build parallelism, and already-landed binned-statistic/QMC/special-prefix
+  paths. The unclosed hot residual was the beta-negative-binomial batch CDF
+  row: repeated scalar `cdf(k)` restarts the same pmf recurrence for every
+  query.
+- Primitive: `BetaNegativeBinomial::cdf_many(&[k])` materializes the recurrence
+  prefix once up to `max(k)`, then answers each query by lookup. Each prefix
+  entry uses the same initial `pmf(0)`, ratio recurrence, add order, and final
+  `min(1.0)` as scalar `cdf(k)`, so the guarded path is bit-identical. A
+  `max(k) <= 1_000_000` budget cap falls back to scalar for pathological sparse
+  huge queries, and `BETANBINOM_CDF_MANY_DISABLE` keeps the same-binary ORIG
+  comparator.
+- Same-worker A/B on RCH `ovh-a`, `cargo bench --profile release -p fsci-stats
+  --bench stats_bench betanbinom_cdf -- --sample-size 10 --warm-up-time 0.2
+  --measurement-time 0.5 --noplot`:
+  - `current_cdf_many/100` **533.73 ns** vs
+    `legacy_original_scalar_cdf/100` **20.439 us** = **38.3x faster vs ORIG**.
+  - `current_cdf_many/500` **2.0938 us** vs
+    `legacy_original_scalar_cdf/500` **227.79 us** = **108.8x faster vs ORIG**.
+  - `current_cdf_many/2000` **7.9434 us** vs
+    `legacy_original_scalar_cdf/2000` **2.7853 ms** = **350.6x faster vs ORIG**.
+- GREEN: focused bit-for-bit scalar parity test passed. Follow-up conformance,
+  check, format, diff, and UBS gates recorded in the canonical detailed ledger.
+- Negative evidence: do not retry per-query scalar beta-negative-binomial CDF
+  for batches. Use one prefix table when the maximum query is within the memory
+  budget; only fall back for empty or huge sparse query sets.
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: interpolate smoothing-spline GCV compact band storage (2.00x hot row vs ORIG, BYTE-EXACT storage oracle)
 
 - Land-or-dig audit: consulted this ledger first. Avoided the already rejected

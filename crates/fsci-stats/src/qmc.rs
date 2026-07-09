@@ -2760,8 +2760,16 @@ mod tests {
             let loop_val = radical_inverse_base2(i);
             HALTON_BASE2_BITREV_DISABLE.store(false, Ordering::Relaxed);
             let rev_val = radical_inverse_base2(i);
-            assert_eq!(loop_val.to_bits(), rev_val.to_bits(), "base2 mismatch at index {i}");
-            assert_eq!(rev_val.to_bits(), radical_inverse_const::<2>(i).to_bits(), "const2 mismatch at {i}");
+            assert_eq!(
+                loop_val.to_bits(),
+                rev_val.to_bits(),
+                "base2 mismatch at index {i}"
+            );
+            assert_eq!(
+                rev_val.to_bits(),
+                radical_inverse_const::<2>(i).to_bits(),
+                "const2 mismatch at {i}"
+            );
         }
     }
 
