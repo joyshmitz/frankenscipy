@@ -4,6 +4,67 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: GaussianKde sorted 8σ tail-window skips negligible kernels atop SIMD (1.60x vs ORIG)
+
+Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided the
+rejected 1-D KDE scalar constant-hoist, the KDE-ND whitening-buffer/unroll
+rejects, dense eig/SVD and Strassen families, rank-test sort retreads, and the
+harvested reuse-transcendental stats density vein. The profiling pass was the
+short stats bench:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-stats --bench stats_bench --profile release -- --sample-size 10 --warm-up-time 0.2 --measurement-time 0.5 --noplot`.
+On RCH `ovh-a`, `gaussian_kde/evaluate_many/5000` was the hottest remaining row
+at **18.301 ms**; next rows were `rank_tests/kruskal_200k` 16.323 ms,
+`mgc/n80_reps100` 15.996 ms, `robust_slopes/theilslopes/4000` 14.855 ms, and
+`rank_tests/mannwhitneyu_200k` 14.080 ms.
+
+Rejected first probe: a uniform-grid exponential recurrence for the benchmark's
+evenly spaced query vector. It replaced one `exp` per `(query,data)` with one
+rebased `exp` per data/block plus loop-carried multiplies. Correctness was fine,
+but the speed was not: same-binary A/B on RCH `ovh-a` measured current
+`gaussian_kde/evaluate_many/5000` **15.641 ms** vs legacy
+`evaluate_many_legacy_original/5000` **15.807 ms** = **1.01x**, effectively
+parity. Root cause: the recurrence broke the direct kernel's vectorizable shape
+and became dependency/memory-bound. It was removed before landing; do not retry
+this grid-recurrence primitive unless using a genuinely vector-lane recurrence
+with measured proof.
+
+Kept primitive: a sorted tail-window evaluator for large 1-D KDE batches. Each
+`GaussianKde` now stores the original dataset plus a value-sorted copy. For
+finite batches with `points >= 4096` and `dataset >= 512`, the fast path binary
+searches the sorted slice for `x ± 8*bandwidth`, then sums only that window with
+the current SIMD exp kernel when the retained work is large. It falls back when
+fewer than 10% of terms would be skipped, and all small/irregular/non-finite
+calls keep the direct map. At 8 bandwidths, the omitted normalized Gaussian tail
+is below the test tolerance budget while preserving the numerical API's
+tolerance contract.
+
+Rebase note: while this commit was in flight, upstream landed a portable-SIMD
+`evaluate_many` exp batch on the same path. The final code composes the two
+primitives: tail-window work reduction first, then the SIMD exp kernel inside
+retained windows; disabling the tail gives the current-main SIMD comparator,
+and disabling both tail and SIMD gives the legacy-original scalar/threaded
+comparator.
+
+Final same-binary bench command:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-stats --bench stats_bench --profile release -- gaussian_kde --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+On RCH `hz1`, hot row `gaussian_kde/evaluate_many/5000` median was
+**26.845 ms** (`[26.280 ms 26.845 ms 27.477 ms]`); current-main SIMD comparator
+`gaussian_kde/evaluate_many_tail_disabled/5000` was **38.561 ms**
+(`[37.638 ms 38.561 ms 40.114 ms]`) = **1.44x faster than current-main SIMD**;
+ORIG comparator `gaussian_kde/evaluate_many_legacy_original/5000` was
+**43.000 ms** (`[40.762 ms 43.000 ms 45.133 ms]`) = **1.60x faster vs ORIG**.
+The `1000` rows are below the fast-path gate and remain fallback/noise context.
+
+Correctness/conformance: RCH release test
+`cargo test -p fsci-stats gaussian_kde --profile release --lib -- --nocapture`
+passed on `hz1` (`9 passed; 0 failed; 2011 filtered out`), including explicit
+SIMD-vs-scalar and tail-window-vs-direct tolerance guards. RCH conformance
+`cargo test -p fsci-conformance stats_packet_runner_passes --profile release -- --nocapture`
+passed on `hz2` (`1 passed; 210 filtered out`). Full
+`cargo fmt --check` is not currently usable as a workspace signal because
+unrelated pre-existing rustfmt drift spans multiple crates and old perf helper
+bins; this change was kept to the stats source, bench, and ledger files.
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: GaussianKde `evaluate_many` portable-SIMD exp batch (2.321x vs ORIG)
 
 Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided

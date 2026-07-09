@@ -433,7 +433,10 @@ fn bench_kde_nd(c: &mut Criterion) {
 }
 
 fn bench_kde(c: &mut Criterion) {
-    use fsci_stats::GaussianKde;
+    use fsci_stats::{
+        GAUSSIAN_KDE_SIMD_EXP_DISABLE, GAUSSIAN_KDE_TAIL_WINDOW_DISABLE, GaussianKde,
+    };
+    use std::sync::atomic::Ordering;
     let mut group = c.benchmark_group("gaussian_kde");
     for &n in &[1000usize, 5000] {
         let data: Vec<f64> = (0..n)
@@ -445,9 +448,32 @@ fn bench_kde(c: &mut Criterion) {
         let kde = GaussianKde::new(&data);
         let pts: Vec<f64> = (0..n).map(|i| -5.0 + i as f64 * 10.0 / n as f64).collect();
         group.bench_function(BenchmarkId::new("evaluate_many", n), |b| {
-            b.iter(|| kde.evaluate_many(&pts))
+            GAUSSIAN_KDE_TAIL_WINDOW_DISABLE.store(false, Ordering::Relaxed);
+            GAUSSIAN_KDE_SIMD_EXP_DISABLE.store(false, Ordering::Relaxed);
+            b.iter(|| kde.evaluate_many(black_box(&pts)))
+        });
+        group.bench_function(BenchmarkId::new("evaluate_many_tail_disabled", n), |b| {
+            b.iter(|| {
+                GAUSSIAN_KDE_TAIL_WINDOW_DISABLE.store(true, Ordering::Relaxed);
+                GAUSSIAN_KDE_SIMD_EXP_DISABLE.store(false, Ordering::Relaxed);
+                let values = kde.evaluate_many(black_box(&pts));
+                GAUSSIAN_KDE_TAIL_WINDOW_DISABLE.store(false, Ordering::Relaxed);
+                values
+            })
+        });
+        group.bench_function(BenchmarkId::new("evaluate_many_legacy_original", n), |b| {
+            b.iter(|| {
+                GAUSSIAN_KDE_TAIL_WINDOW_DISABLE.store(true, Ordering::Relaxed);
+                GAUSSIAN_KDE_SIMD_EXP_DISABLE.store(true, Ordering::Relaxed);
+                let values = kde.evaluate_many(black_box(&pts));
+                GAUSSIAN_KDE_TAIL_WINDOW_DISABLE.store(false, Ordering::Relaxed);
+                GAUSSIAN_KDE_SIMD_EXP_DISABLE.store(false, Ordering::Relaxed);
+                values
+            })
         });
     }
+    GAUSSIAN_KDE_TAIL_WINDOW_DISABLE.store(false, Ordering::Relaxed);
+    GAUSSIAN_KDE_SIMD_EXP_DISABLE.store(false, Ordering::Relaxed);
     group.finish();
 }
 

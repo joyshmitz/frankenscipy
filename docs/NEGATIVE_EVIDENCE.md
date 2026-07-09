@@ -6,6 +6,43 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: `GaussianKde::evaluate_many` sorted 8σ tail-window atop SIMD (1.60x vs ORIG, 1.44x vs current-main SIMD)
+
+- Dig audit: consulted this ledger first. Avoided the rejected 1-D KDE scalar
+  constant-hoist, KDE-ND buffer/unroll rejects, dense-linalg repeats, and the
+  harvested stats reuse-transcendental vein. Short stats profile on RCH `ovh-a`
+  made `gaussian_kde/evaluate_many/5000` the hottest remaining row at
+  **18.301 ms**, above rank tests, MGC, robust slopes, and KDE-ND.
+- REJECTED before landing: a uniform-grid exponential recurrence that rebased
+  every 128 query points. It attacked per-term `exp`, but the loop-carried
+  multiply chain lost the direct kernel's vectorizable shape. Same-binary RCH
+  A/B on `ovh-a`: current **15.641 ms** vs legacy **15.807 ms** = **1.01x**,
+  a no-gain wash. Removed before commit; do not retry that recurrence shape.
+- KEPT primitive: store a sorted copy of the 1-D KDE dataset at construction.
+  For large finite batches (`points >= 4096`, `dataset >= 512`), evaluate each
+  query only over the sorted window `x ± 8*bandwidth`, share the SIMD exp kernel
+  for retained windows, and fall back unless at least 10% of kernel terms are
+  skipped. Small/irregular/non-finite calls keep the current direct path.
+- Rebase note: upstream landed the portable-SIMD KDE exp batch while this work
+  was in flight, so the final bench includes three same-binary rows:
+  default tail+SIMD, `evaluate_many_tail_disabled` for current-main SIMD, and
+  `evaluate_many_legacy_original` with both tail and SIMD disabled.
+- MEASURED on RCH `hz1`, command
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod
+  rch exec -- cargo bench -p fsci-stats --bench stats_bench --profile release --
+  gaussian_kde --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`:
+  hot row `gaussian_kde/evaluate_many/5000` median **26.845 ms** vs
+  current-main SIMD `evaluate_many_tail_disabled/5000` **38.561 ms** =
+  **1.44x faster**, and vs ORIG `evaluate_many_legacy_original/5000`
+  **43.000 ms** = **1.60x faster vs ORIG**. The `1000` row remains below the
+  fast-path gate and is only fallback/noise context.
+- Correctness: RCH `cargo test -p fsci-stats gaussian_kde --profile release
+  --lib -- --nocapture` passed on `hz1` (`9 passed; 0 failed`), including
+  explicit SIMD-vs-scalar and tail-window-vs-direct tolerance guards. RCH
+  conformance `cargo test -p fsci-conformance stats_packet_runner_passes
+  --profile release -- --nocapture` passed on `hz2` (`1 passed; 210 filtered
+  out`).
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: GaussianKde `evaluate_many` SIMD exp batch (2.32x vs ORIG, conformance GREEN)
 
 - Dig audit: consulted this ledger first. Avoided the prior KDE scalar-constant

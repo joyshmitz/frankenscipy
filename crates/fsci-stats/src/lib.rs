@@ -37983,6 +37983,8 @@ fn dagostino_kurttest_z(g2: f64, n: f64) -> f64 {
 pub struct GaussianKde {
     /// Data points.
     dataset: Vec<f64>,
+    /// Data points sorted by value for large-batch tail-window evaluation.
+    sorted_dataset: Vec<f64>,
     /// Bandwidth (standard deviation of the Gaussian kernel).
     bandwidth: f64,
 }
@@ -38043,6 +38045,12 @@ fn kde_simd_exp_nonpos(
     Simd::from_array(out)
 }
 
+pub static GAUSSIAN_KDE_TAIL_WINDOW_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub static GAUSSIAN_KDE_SIMD_EXP_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl GaussianKde {
     /// Create a new Gaussian KDE from data.
     ///
@@ -38060,6 +38068,7 @@ impl GaussianKde {
         let bw = std_dev * n.powf(-0.2); // Scott's factor n^(-1/5)
         Self {
             dataset: data.to_vec(),
+            sorted_dataset: gaussian_kde_sorted_copy(data),
             bandwidth: bw.max(f64::EPSILON),
         }
     }
@@ -38068,6 +38077,7 @@ impl GaussianKde {
     pub fn with_bandwidth(data: &[f64], bandwidth: f64) -> Self {
         Self {
             dataset: data.to_vec(),
+            sorted_dataset: gaussian_kde_sorted_copy(data),
             bandwidth: bandwidth.max(f64::EPSILON),
         }
     }
@@ -38087,51 +38097,32 @@ impl GaussianKde {
     }
 
     fn evaluate_batch_simd(&self, x: f64, inv_bw: f64, norm: f64) -> f64 {
-        use std::simd::{Simd, num::SimdFloat};
-
-        let xv = Simd::<f64, KDE_SIMD_LANES>::splat(x);
-        let inv = Simd::<f64, KDE_SIMD_LANES>::splat(inv_bw);
-        let minus_half = Simd::<f64, KDE_SIMD_LANES>::splat(-0.5);
-        let mut acc0 = Simd::<f64, KDE_SIMD_LANES>::splat(0.0);
-        let mut acc1 = Simd::<f64, KDE_SIMD_LANES>::splat(0.0);
-        let mut i = 0;
-        while i + 2 * KDE_SIMD_LANES <= self.dataset.len() {
-            let z0 = (xv - Simd::from_slice(&self.dataset[i..i + KDE_SIMD_LANES])) * inv;
-            let z1 = (xv
-                - Simd::from_slice(
-                    &self.dataset[i + KDE_SIMD_LANES..i + 2 * KDE_SIMD_LANES],
-                ))
-                * inv;
-            acc0 += kde_simd_exp_nonpos(minus_half * z0 * z0);
-            acc1 += kde_simd_exp_nonpos(minus_half * z1 * z1);
-            i += 2 * KDE_SIMD_LANES;
-        }
-        while i + KDE_SIMD_LANES <= self.dataset.len() {
-            let z = (xv - Simd::from_slice(&self.dataset[i..i + KDE_SIMD_LANES])) * inv;
-            acc0 += kde_simd_exp_nonpos(minus_half * z * z);
-            i += KDE_SIMD_LANES;
-        }
-        let mut sum = (acc0 + acc1).reduce_sum();
-        for &xi in &self.dataset[i..] {
-            let z = (x - xi) * inv_bw;
-            sum += (-0.5 * z * z).exp();
-        }
-        norm * sum
+        gaussian_kde_evaluate_window_simd(&self.dataset, x, 0, self.dataset.len(), inv_bw, norm)
     }
 
-    /// Evaluate the KDE at multiple points.
+    pub fn evaluate_many(&self, points: &[f64]) -> Vec<f64> {
+        if !GAUSSIAN_KDE_TAIL_WINDOW_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(values) = self.evaluate_many_tail_window(points) {
+                return values;
+            }
+        }
+        self.evaluate_many_direct(points)
+    }
+
+    /// Evaluate the KDE at multiple points with the legacy per-point direct sum.
     ///
     /// Each query point is an independent O(n) sum over the dataset, so for large
     /// `points × dataset` the work is split across threads; the per-point value is
     /// the same pure `evaluate` regardless of the owning core, so the result is
     /// bit-identical to the sequential map (order preserved by concatenating chunks).
-    pub fn evaluate_many(&self, points: &[f64]) -> Vec<f64> {
+    fn evaluate_many_direct(&self, points: &[f64]) -> Vec<f64> {
         let m = points.len();
         let work = (m as u64).saturating_mul(self.dataset.len() as u64);
         if work < 1 << 18 || m < 4 {
             return points.iter().map(|&x| self.evaluate(x)).collect();
         }
-        let use_simd = work >= KDE_SIMD_BATCH_MIN_WORK
+        let use_simd = !GAUSSIAN_KDE_SIMD_EXP_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+            && work >= KDE_SIMD_BATCH_MIN_WORK
             && self.bandwidth.is_finite()
             && self.dataset.iter().all(|v| v.is_finite())
             && points.iter().all(|v| v.is_finite());
@@ -38182,10 +38173,198 @@ impl GaussianKde {
         })
     }
 
+    fn evaluate_many_tail_window(&self, points: &[f64]) -> Option<Vec<f64>> {
+        const MIN_POINTS: usize = 4096;
+        const MIN_DATASET: usize = 512;
+        const KERNEL_RADIUS_IN_BANDWIDTHS: f64 = 8.0;
+
+        let m = points.len();
+        let n = self.sorted_dataset.len();
+        if m < MIN_POINTS || n < MIN_DATASET {
+            return None;
+        }
+        let bandwidth = self.bandwidth;
+        if !bandwidth.is_finite() || bandwidth <= 0.0 {
+            return None;
+        }
+        if points.iter().any(|x| !x.is_finite()) {
+            return None;
+        }
+        if !self.sorted_dataset.first()?.is_finite() || !self.sorted_dataset.last()?.is_finite() {
+            return None;
+        }
+
+        let radius = KERNEL_RADIUS_IN_BANDWIDTHS * bandwidth;
+        let mut ranges = Vec::with_capacity(m);
+        let mut kept_terms = 0_u64;
+        for &x in points {
+            let lower = x - radius;
+            let upper = x + radius;
+            let lo = self.sorted_dataset.partition_point(|&v| v < lower);
+            let hi = self.sorted_dataset.partition_point(|&v| v <= upper);
+            kept_terms = kept_terms.saturating_add((hi - lo) as u64);
+            ranges.push((lo, hi));
+        }
+        let full_terms = (m as u64).saturating_mul(n as u64);
+        if kept_terms.saturating_mul(10) >= full_terms.saturating_mul(9) {
+            return None;
+        }
+
+        let inv_bw = 1.0 / bandwidth;
+        let norm = (1.0 / bandwidth) / (n as f64 * (2.0 * std::f64::consts::PI).sqrt());
+        let use_simd =
+            !GAUSSIAN_KDE_SIMD_EXP_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+                && kept_terms >= KDE_SIMD_BATCH_MIN_WORK;
+        if kept_terms < 1 << 18 || m < 4 {
+            return Some(
+                points
+                    .iter()
+                    .zip(&ranges)
+                    .map(|(&x, &(lo, hi))| {
+                        gaussian_kde_evaluate_sorted_window(
+                            &self.sorted_dataset,
+                            x,
+                            lo,
+                            hi,
+                            inv_bw,
+                            norm,
+                            use_simd,
+                        )
+                    })
+                    .collect(),
+            );
+        }
+
+        let cores = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1);
+        let nthreads = cores.min(m / 2).max(1);
+        if nthreads <= 1 {
+            return Some(
+                points
+                    .iter()
+                    .zip(&ranges)
+                    .map(|(&x, &(lo, hi))| {
+                        gaussian_kde_evaluate_sorted_window(
+                            &self.sorted_dataset,
+                            x,
+                            lo,
+                            hi,
+                            inv_bw,
+                            norm,
+                            use_simd,
+                        )
+                    })
+                    .collect(),
+            );
+        }
+
+        let chunk = m.div_ceil(nthreads);
+        let ranges_ref = &ranges;
+        let points_ref = points;
+        let sorted_dataset = &self.sorted_dataset;
+        Some(std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .filter_map(|t| {
+                    let i0 = t * chunk;
+                    if i0 >= m {
+                        return None;
+                    }
+                    let i1 = (i0 + chunk).min(m);
+                    Some(scope.spawn(move || {
+                        (i0..i1)
+                            .map(|i| {
+                                let (lo, hi) = ranges_ref[i];
+                                gaussian_kde_evaluate_sorted_window(
+                                    sorted_dataset,
+                                    points_ref[i],
+                                    lo,
+                                    hi,
+                                    inv_bw,
+                                    norm,
+                                    use_simd,
+                                )
+                            })
+                            .collect::<Vec<f64>>()
+                    }))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("kde tail-window worker panicked"))
+                .collect()
+        }))
+    }
+
     /// Return the bandwidth.
     pub fn bandwidth(&self) -> f64 {
         self.bandwidth
     }
+}
+
+fn gaussian_kde_sorted_copy(data: &[f64]) -> Vec<f64> {
+    let mut sorted = data.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    sorted
+}
+
+fn gaussian_kde_evaluate_sorted_window(
+    sorted_dataset: &[f64],
+    x: f64,
+    lo: usize,
+    hi: usize,
+    inv_bw: f64,
+    norm: f64,
+    use_simd: bool,
+) -> f64 {
+    if use_simd {
+        return gaussian_kde_evaluate_window_simd(sorted_dataset, x, lo, hi, inv_bw, norm);
+    }
+    sorted_dataset[lo..hi]
+        .iter()
+        .map(|&xi| {
+            let z = (x - xi) * inv_bw;
+            norm * (-0.5 * z * z).exp()
+        })
+        .sum()
+}
+
+fn gaussian_kde_evaluate_window_simd(
+    dataset: &[f64],
+    x: f64,
+    lo: usize,
+    hi: usize,
+    inv_bw: f64,
+    norm: f64,
+) -> f64 {
+    use std::simd::{Simd, num::SimdFloat};
+
+    let xv = Simd::<f64, KDE_SIMD_LANES>::splat(x);
+    let inv = Simd::<f64, KDE_SIMD_LANES>::splat(inv_bw);
+    let minus_half = Simd::<f64, KDE_SIMD_LANES>::splat(-0.5);
+    let mut acc0 = Simd::<f64, KDE_SIMD_LANES>::splat(0.0);
+    let mut acc1 = Simd::<f64, KDE_SIMD_LANES>::splat(0.0);
+    let mut i = lo;
+    while i + 2 * KDE_SIMD_LANES <= hi {
+        let z0 = (xv - Simd::from_slice(&dataset[i..i + KDE_SIMD_LANES])) * inv;
+        let z1 = (xv
+            - Simd::from_slice(&dataset[i + KDE_SIMD_LANES..i + 2 * KDE_SIMD_LANES]))
+            * inv;
+        acc0 += kde_simd_exp_nonpos(minus_half * z0 * z0);
+        acc1 += kde_simd_exp_nonpos(minus_half * z1 * z1);
+        i += 2 * KDE_SIMD_LANES;
+    }
+    while i + KDE_SIMD_LANES <= hi {
+        let z = (xv - Simd::from_slice(&dataset[i..i + KDE_SIMD_LANES])) * inv;
+        acc0 += kde_simd_exp_nonpos(minus_half * z * z);
+        i += KDE_SIMD_LANES;
+    }
+    let mut sum = (acc0 + acc1).reduce_sum();
+    for &xi in &dataset[i..hi] {
+        let z = (x - xi) * inv_bw;
+        sum += (-0.5 * z * z).exp();
+    }
+    norm * sum
 }
 
 /// Multivariate Gaussian kernel density estimate.
@@ -64660,13 +64839,47 @@ mod tests {
         let points: Vec<f64> = (0..4096)
             .map(|i| -5.0 + i as f64 * 10.0 / 4096.0)
             .collect();
-        let got = kde.evaluate_many(&points);
+        let inv_bw = 1.0 / kde.bandwidth();
+        let norm = inv_bw / (data.len() as f64 * (2.0 * std::f64::consts::PI).sqrt());
+        let got: Vec<f64> = points
+            .iter()
+            .map(|&x| kde.evaluate_batch_simd(x, inv_bw, norm))
+            .collect();
         let want: Vec<f64> = points.iter().map(|&x| kde.evaluate(x)).collect();
         for (k, (&g, &w)) in got.iter().zip(&want).enumerate() {
             let scale = w.abs().max(1.0);
             assert!(
                 (g - w).abs() <= 1e-11 * scale,
                 "kde SIMD batch mismatch at {k}: got={g} want={w}"
+            );
+        }
+    }
+
+    #[test]
+    fn gaussian_kde_tail_window_matches_direct() {
+        let data: Vec<f64> = (0..640)
+            .map(|i| {
+                let t = i as f64;
+                (t * 0.017).sin() * 2.5 + (t * 0.0031).cos()
+            })
+            .collect();
+        let kde = GaussianKde::new(&data);
+        let points: Vec<f64> = (0..4096)
+            .map(|i| -5.0 + i as f64 * 10.0 / 4096.0)
+            .collect();
+
+        let windowed = kde
+            .evaluate_many_tail_window(&points)
+            .expect("tail-window fast path should be selected");
+        let direct: Vec<f64> = points.iter().map(|&x| kde.evaluate(x)).collect();
+
+        assert_eq!(direct.len(), windowed.len());
+        for (i, (&d, &r)) in direct.iter().zip(&windowed).enumerate() {
+            let tol = 1e-11_f64.max(1e-10 * d.abs());
+            assert!(
+                (d - r).abs() <= tol,
+                "kde tail-window mismatch at {i}: direct={d} windowed={r} abs={}",
+                (d - r).abs()
             );
         }
     }
