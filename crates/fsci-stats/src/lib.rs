@@ -21242,7 +21242,7 @@ impl ContinuousDistribution for FrechetR {
             return 0.0;
         }
         let ax = (-x).abs();
-        self.c * ax.powf(self.c - 1.0) * (-ax.powf(self.c)).exp()
+        self.c * weibull_pdf_shape(ax, self.c, weibull_density_reuse())
     }
 
     fn logpdf(&self, x: f64) -> f64 {
@@ -21252,7 +21252,7 @@ impl ContinuousDistribution for FrechetR {
             return self.pdf(x).ln();
         }
         let ax = (-x).abs();
-        self.c.ln() + (self.c - 1.0) * ax.ln() - ax.powf(self.c)
+        self.c.ln() + weibull_logpdf_shape(ax, self.c, weibull_density_reuse())
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -23006,7 +23006,7 @@ impl ContinuousDistribution for InvWeibull {
         if x <= 0.0 {
             return 0.0;
         }
-        self.c * x.powf(-self.c - 1.0) * (-x.powf(-self.c)).exp()
+        self.c * weibull_pdf_shape(x, -self.c, weibull_density_reuse())
     }
 
     fn logpdf(&self, x: f64) -> f64 {
@@ -23014,7 +23014,7 @@ impl ContinuousDistribution for InvWeibull {
         if x <= 0.0 {
             return f64::NEG_INFINITY;
         }
-        self.c.ln() + (-self.c - 1.0) * x.ln() - x.powf(-self.c)
+        self.c.ln() + weibull_logpdf_shape(x, -self.c, weibull_density_reuse())
     }
 
     fn cdf(&self, x: f64) -> f64 {

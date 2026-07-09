@@ -6,6 +6,28 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: InvWeibull/FrechetR density reuse via existing weibull_*_shape helpers (pdf 1.53x, logpdf 1.28x)
+
+- Dig audit: consulted ledger first. Completes the stretched-exponential density
+  family started with Weibull/WeibullMax last commit. InvWeibull `x^(−c−1)·exp(−x^−c)`
+  and FrechetR `ax^(c−1)·exp(−ax^c)` are exactly `weibull_pdf_shape(base, ±c)` /
+  `weibull_logpdf_shape(base, ±c)` (the helpers already in HEAD), so this is a
+  4-site call-site swap with ZERO new logic — the helper's reuse is already proven.
+- MEASURED (mapped 500k, same-binary A/B `WEIBULL_DENSITY_REUSE_DISABLE`, best-of-4):
+  InvWeibull **pdf 1.53x / logpdf 1.28x**, max-rel ~1e-15. FrechetR uses the identical
+  helper (its support is x<0, so the x>0 probe returned 0 and read 1.00x — the edit is
+  the same tested code, exercised + GREEN in its conformance tests). fsci-stats lib
+  **2017 passed / 0 failed** GREEN.
+- SCOPE NOTE (deliberately narrowed): Fisk/Loglogistic/Burr12 have the SAME two-powf
+  redundancy (`x^(c−1)=x^c/x`) but in RATIONAL form (no exp), needing inline branches,
+  AND Fisk is DUPLICATED as a separate `Loglogistic` impl (Loglogistic pdf already
+  reuses `xc`, its logpdf doesn't) — the duplicate-impl + codex-vs-HEAD ambiguity made
+  a clean reset-reapply risky, so I dropped them this turn (deferred, low-risk inline
+  edit for a calmer turn). ExponWeibull (multiple x^c + double exp) also deferred.
+- VEIN: reuse-transcendental now spans lombscargle / GenGamma pdf_many / Weibull::fit /
+  Weibull+WeibullMax+InvWeibull+FrechetR density. Same shared-checkout dance (special
+  reset-to-HEAD, stats reset-reapply, E0514 retry).
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: Weibull/WeibullMax density powf-count reduction + ln-reuse (pdf 1.50-1.52x, logpdf 1.27-1.29x)
 
 - Dig audit: consulted ledger first. Harvests the tail of the reuse-transcendental
