@@ -46094,7 +46094,14 @@ impl ContinuousDistribution for ExponWeibull {
         }
         let a = self.a;
         let c = self.c;
-        a * c * (1.0 - (-x.powf(c)).exp()).powf(a - 1.0) * (-x.powf(c)).exp() * x.powf(c - 1.0)
+        if weibull_density_reuse() {
+            // x^c and exp(−x^c) each appear twice; x^(c−1) = x^c/x. Compute once.
+            let xc = x.powf(c);
+            let e = (-xc).exp();
+            a * c * (1.0 - e).powf(a - 1.0) * e * (xc / x)
+        } else {
+            a * c * (1.0 - (-x.powf(c)).exp()).powf(a - 1.0) * (-x.powf(c)).exp() * x.powf(c - 1.0)
+        }
     }
 
     fn logpdf(&self, x: f64) -> f64 {
@@ -46105,8 +46112,15 @@ impl ContinuousDistribution for ExponWeibull {
         }
         let a = self.a;
         let c = self.c;
-        let w = x.powf(c);
-        a.ln() + c.ln() + (a - 1.0) * (-((-w).exp_m1())).ln() - w + (c - 1.0) * x.ln()
+        if weibull_density_reuse() {
+            // reuse ln(x): w = x^c = exp(c·ln x), and (c−1)·ln x share the one ln.
+            let lx = x.ln();
+            let w = (c * lx).exp();
+            a.ln() + c.ln() + (a - 1.0) * (-((-w).exp_m1())).ln() - w + (c - 1.0) * lx
+        } else {
+            let w = x.powf(c);
+            a.ln() + c.ln() + (a - 1.0) * (-((-w).exp_m1())).ln() - w + (c - 1.0) * x.ln()
+        }
     }
 
     fn cdf(&self, x: f64) -> f64 {

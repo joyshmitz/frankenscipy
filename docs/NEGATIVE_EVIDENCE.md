@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: ExponWeibull density collapses duplicated x^c/exp(-x^c) (pdf 1.37x, logpdf 1.16x)
+
+- Dig audit: consulted ledger first. Highest-value remaining reuse-transcendental
+  site — a SINGLE clean impl (no duplicate) with MULTIPLE redundancies, not just 2→1.
+- PROFILED: ExponWeibull pdf `a·c·(1−exp(−x^c))^(a−1)·exp(−x^c)·x^(c−1)` recomputes
+  `x.powf(c)` TWICE (both `exp(−x^c)`), `exp(−x^c)` TWICE, and `x^(c−1)` separately.
+  Collapse: `xc=x^c` once, `e=(−xc).exp()` once (reused), `x^(c−1)=xc/x` → 4 powf +
+  2 exp ⇒ 2 powf + 1 exp + 1 div. logpdf reuses `lx=ln(x)` for both `w=x^c=exp(c·lx)`
+  and the `(c−1)·ln(x)` term (drops one ln).
+- MEASURED (mapped 500k, same-binary A/B `WEIBULL_DENSITY_REUSE_DISABLE`, best-of-4):
+  **pdf 1.36-1.37x, logpdf 1.15-1.18x** across (a,c)=(2,1.5)/(1.3,0.9)/(2.5,2.2).
+  max-rel ~1e-15 (reusing `e` is byte-exact since x^c is deterministic; only `xc/x`
+  and the ln-form drift ~1e-16). fsci-stats lib **2017 passed / 0 failed** GREEN.
+- LEVER (sharpened): beyond the 2→1 `x^(k)=exp(k·ln x)` reuse, look for a
+  transcendental (here `exp(−x^c)`) that appears LITERALLY MORE THAN ONCE in one
+  expression — hoist it to a `let`. Reusing a deterministic sub-expression is
+  byte-exact, not just tolerance-close.
+- Same shared-checkout dance (special reset-to-HEAD, stats reset-reapply, E0514 retry).
+  Deferred (documented prior turn): Fisk/Loglogistic/Burr12 rational two-powf (duplicate
+  Fisk↔Loglogistic impl makes clean isolation fiddly).
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: InvWeibull/FrechetR density reuse via existing weibull_*_shape helpers (pdf 1.53x, logpdf 1.28x)
 
 - Dig audit: consulted ledger first. Completes the stretched-exponential density
