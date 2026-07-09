@@ -2162,6 +2162,14 @@ pub fn hilbert_envelope(x: &[f64]) -> Result<Vec<f64>, SignalError> {
 /// * `y` — Measurements at each sample time.
 /// * `freqs` — Angular frequencies at which to evaluate the periodogram.
 /// * `normalize` — Whether to divide by the signal energy as SciPy does.
+/// Same-binary A/B toggle for [`lombscargle`]: when `true`, each frequency uses
+/// the original two-pass kernel (recomputing cos/sin of the tau-shifted phase);
+/// when `false` (default) it uses the fused single-pass kernel that derives the
+/// tau-shifted sums from the un-shifted cos/sin via angle-subtraction identities
+/// (half the transcendental calls). The two agree to ~1e-14 (rounding only).
+pub static LOMBSCARGLE_FUSED_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn lombscargle(
     x: &[f64],
     y: &[f64],
@@ -2190,11 +2198,13 @@ pub fn lombscargle(
     let inv_sample_count = 1.0 / sample_count;
     let mean_square = y.iter().map(|value| value * value).sum::<f64>() * inv_sample_count;
 
-    // Each frequency's periodogram value is an independent reduction over the samples
-    // (two fixed-order passes over x/y); the result depends only on (omega, x, y). So
-    // the per-frequency closure is pure and the frequency loop parallelizes byte-
-    // identically — each `power[k]` is computed exactly as the serial version and
-    // written to its own index, with the sample-summation order untouched.
+    // Each frequency's periodogram value is an independent reduction over the samples;
+    // the result depends only on (omega, x, y). So the per-frequency closure is pure and
+    // the frequency loop parallelizes — each `power[k]` is computed exactly as the serial
+    // version and written to its own index. The default `fused` kernel makes one pass over
+    // the samples (deriving the tau-shifted sums algebraically); the toggle restores the
+    // original two-pass kernel for A/B and as an escape hatch.
+    let fused = !LOMBSCARGLE_FUSED_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
     let power_at = |omega: f64| -> f64 {
         if !omega.is_finite() {
             return f64::NAN;
@@ -2213,35 +2223,80 @@ pub fn lombscargle(
             };
         }
 
-        let mut cos2_mean = 0.0;
-        let mut cos_sin_mean = 0.0;
-        for &xi in x {
-            let phase = omega * xi;
-            let c = phase.cos();
-            let s = phase.sin();
-            cos2_mean += c * c;
-            cos_sin_mean += c * s;
-        }
-        cos2_mean *= inv_sample_count;
-        cos_sin_mean *= inv_sample_count;
-        let sin2_mean = 1.0 - cos2_mean;
-        let tau_angle = 0.5 * (2.0 * cos_sin_mean).atan2(cos2_mean - sin2_mean);
+        let (y_cos_mean, y_sin_mean, shifted_cos2_mean, shifted_sin2_mean) = if fused {
+            // Single pass: accumulate the un-shifted cos/sin moments AND the
+            // y-weighted cos/sin sums together. The tau-shifted quantities the
+            // periodogram needs — Σ yᵢ·cos(ωxᵢ−τ), Σ yᵢ·sin(ωxᵢ−τ), Σ cos²(ωxᵢ−τ)
+            // — are exact linear combinations of these via the angle-subtraction
+            // identities, so the second cos/sin pass over the samples is dropped
+            // (half the transcendental calls, the kernel's bottleneck). Matches
+            // the two-pass form to rounding (~1e-14).
+            let mut cos2 = 0.0;
+            let mut cos_sin = 0.0;
+            let mut y_cos = 0.0;
+            let mut y_sin = 0.0;
+            for (&xi, &yi) in x.iter().zip(y.iter()) {
+                let phase = omega * xi;
+                let c = phase.cos();
+                let s = phase.sin();
+                cos2 += c * c;
+                cos_sin += c * s;
+                y_cos += yi * c;
+                y_sin += yi * s;
+            }
+            let cos2_mean = cos2 * inv_sample_count;
+            let cos_sin_mean = cos_sin * inv_sample_count;
+            let y_cos_unshifted = y_cos * inv_sample_count;
+            let y_sin_unshifted = y_sin * inv_sample_count;
+            let sin2_mean = 1.0 - cos2_mean;
+            let tau_angle = 0.5 * (2.0 * cos_sin_mean).atan2(cos2_mean - sin2_mean);
+            let (sin_tau, cos_tau) = tau_angle.sin_cos();
 
-        let mut y_cos_mean = 0.0;
-        let mut y_sin_mean = 0.0;
-        let mut shifted_cos2_mean = 0.0;
-        for (&xi, &yi) in x.iter().zip(y.iter()) {
-            let phase = omega * xi - tau_angle;
-            let c = phase.cos();
-            let s = phase.sin();
-            y_cos_mean += yi * c;
-            y_sin_mean += yi * s;
-            shifted_cos2_mean += c * c;
-        }
-        y_cos_mean *= inv_sample_count;
-        y_sin_mean *= inv_sample_count;
-        shifted_cos2_mean *= inv_sample_count;
-        let shifted_sin2_mean = 1.0 - shifted_cos2_mean;
+            // cos(ωx−τ) = cosωx·cosτ + sinωx·sinτ ; sin(ωx−τ) = sinωx·cosτ − cosωx·sinτ
+            let y_cos_mean = cos_tau * y_cos_unshifted + sin_tau * y_sin_unshifted;
+            let y_sin_mean = cos_tau * y_sin_unshifted - sin_tau * y_cos_unshifted;
+            // Σcos²(ωx−τ) = cos²τ·Σcos² + 2cosτsinτ·Σcos·sin + sin²τ·Σsin²
+            let shifted_cos2_mean = cos_tau * cos_tau * cos2_mean
+                + 2.0 * cos_tau * sin_tau * cos_sin_mean
+                + sin_tau * sin_tau * sin2_mean;
+            (
+                y_cos_mean,
+                y_sin_mean,
+                shifted_cos2_mean,
+                1.0 - shifted_cos2_mean,
+            )
+        } else {
+            let mut cos2_mean = 0.0;
+            let mut cos_sin_mean = 0.0;
+            for &xi in x {
+                let phase = omega * xi;
+                let c = phase.cos();
+                let s = phase.sin();
+                cos2_mean += c * c;
+                cos_sin_mean += c * s;
+            }
+            cos2_mean *= inv_sample_count;
+            cos_sin_mean *= inv_sample_count;
+            let sin2_mean = 1.0 - cos2_mean;
+            let tau_angle = 0.5 * (2.0 * cos_sin_mean).atan2(cos2_mean - sin2_mean);
+
+            let mut y_cos_mean = 0.0;
+            let mut y_sin_mean = 0.0;
+            let mut shifted_cos2_mean = 0.0;
+            for (&xi, &yi) in x.iter().zip(y.iter()) {
+                let phase = omega * xi - tau_angle;
+                let c = phase.cos();
+                let s = phase.sin();
+                y_cos_mean += yi * c;
+                y_sin_mean += yi * s;
+                shifted_cos2_mean += c * c;
+            }
+            y_cos_mean *= inv_sample_count;
+            y_sin_mean *= inv_sample_count;
+            shifted_cos2_mean *= inv_sample_count;
+            let shifted_sin2_mean = 1.0 - shifted_cos2_mean;
+            (y_cos_mean, y_sin_mean, shifted_cos2_mean, shifted_sin2_mean)
+        };
 
         let epsneg = f64::EPSILON / 2.0;
         let shifted_cos2_mean = shifted_cos2_mean.max(epsneg);

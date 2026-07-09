@@ -6,6 +6,43 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-08 - BlackThrush (cc) - KEEP: `lombscargle` fused single-pass kernel via angle-subtraction identities (1.6-2.0x vs ORIG)
+
+- Dig audit: consulted this ledger first; avoided all rejected levers (det gate,
+  Strassen, cholesky-NB, ecdf/parallel sort, ODR FD-jacobian). Confirmed
+  already-optimal (don't re-chase): fsci-ndimage rank/median filter
+  (`select_nth_unstable` quickselect), fsci-interpolate NearestND (KDTree +
+  parallel), griddata (KDTree/Delaunay), fsci-opt brute/isotonic, linalg
+  Sylvester/Lyapunov (Schur+Bartels-Stewart O(n³)). Linalg dense = won-or-walled.
+- PROFILED `signal::lombscargle`: the per-frequency kernel made TWO passes over
+  the n samples — pass 1 computes cos/sin(ω·xᵢ) for the moments Σcos², Σcos·sin;
+  pass 2 recomputes cos/sin of the τ-SHIFTED phase (ω·xᵢ − τ) for Σyᵢcos, Σyᵢsin,
+  Σcos². Transcendental cos/sin is the bottleneck (~4 per sample per frequency,
+  O(n·m) total). The τ-shift is a per-frequency CONSTANT, so the shifted sums are
+  exact linear combinations of the un-shifted cos/sin moments via
+  cos(ωx−τ)=cosωx·cosτ+sinωx·sinτ etc. → drop pass 2 entirely: one pass
+  accumulating {Σcos², Σcos·sin, Σyᵢcosωx, Σyᵢsinωx}, then O(1) trig for
+  (cosτ,sinτ) and a closed-form combine. HALVES the cos/sin count.
+- MEASURED (same-binary A/B via `LOMBSCARGLE_FUSED_DISABLE`, interleaved
+  best-of-4, isolated clean-HEAD build,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cc`): **1.6x@n=500,m=2000 /
+  2.03x@2000,4000 / 1.98x@5000,8000** (~2x once past small-m noise). Agreement vs
+  the two-pass kernel: maxdiff 1.3e-13, max-rel 4.8e-11 — well inside the
+  conformance tolerances (5e-9 / 1e-12). fsci-signal lib suite **672 passed / 0
+  failed** GREEN.
+- LEVER: any kernel with a SECOND transcendental pass over the same samples at a
+  PHASE-SHIFTED argument, where the shift is loop-invariant → collapse via
+  angle-addition identities to reuse the first pass's cos/sin (one pass, O(1)
+  extra trig). Candidates: Goertzel-like sweeps, other periodogram/DFT-by-hand
+  kernels with a τ or phase-reference recomputation.
+- SHARED-CHECKOUT: signal lib.rs had 552/310 lines of codex's UNCOMMITTED work
+  (reformatted signatures, identify_ridge_lines refactor) PLUS a leftover
+  `<<<<<<< Updated upstream / Stashed changes` autostash conflict marker (blocked
+  compile). Used the reset-reapply-restore technique: backed up the codex file to
+  scratchpad, `git cat-file blob HEAD:… > lib.rs`, re-applied ONLY my 3
+  lombscargle edits, staged (verified 3 hunks in the 2162-2293 region only),
+  committed, then restored the codex backup so their work stays in the tree.
+
 ## 2026-07-08 - BlackThrush (cc) - REJECT: fsci-odr dense `finite_diff_jacobian` parallel column fan-out (0.59-0.95x, REVERTED)
 
 - Dig audit: consulted this ledger first; avoided all rejected linalg levers
