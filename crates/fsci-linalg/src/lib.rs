@@ -953,6 +953,35 @@ pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError
     // Restricted to the plain Strict / General case; a singular pivot or any unmet
     // precondition falls through to the portfolio inverse (diagnostics preserved).
     let n = a.len();
+    // Fast path for SPD (`assume_a = pos`): factor once via Cholesky and read the
+    // inverse off the batched identity solve `L·Lᵀ·X = I`. A Cholesky inverse is
+    // ~2x cheaper than an LU inverse, so declaring the matrix SPD should be FASTER —
+    // but it was routing to the slow portfolio (3x slower than General @512). A
+    // non-PD matrix makes `Cholesky::new` return None → falls through to the
+    // portfolio, preserving the exact `assume_a = pos` rejection behavior.
+    if n >= inv_flat_min()
+        && options.mode == RuntimeMode::Strict
+        && options.assume_a == Some(MatrixAssumption::PositiveDefinite)
+        && rows_are_rectangular(a, n)
+        && a.iter().flatten().all(|v| v.is_finite())
+        && let Ok(matrix) = dmatrix_from_rows(a)
+        && let Some(chol) = Cholesky::new(matrix)
+        && let Some(inverse) = cholesky_solve_identity_rhs_rows_batched(&chol)
+    {
+        emit_trace(LinalgTrace {
+            operation: "inv",
+            matrix_size: (n, n),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return Ok(InvResult {
+            inverse,
+            warning: None,
+            certificate: None,
+        });
+    }
     if n >= inv_flat_min()
         && options.mode == RuntimeMode::Strict
         && matches!(options.assume_a, None | Some(MatrixAssumption::General))

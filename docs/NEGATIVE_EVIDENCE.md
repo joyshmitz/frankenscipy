@@ -54,6 +54,22 @@ ledger above so the project has one source of truth.
   row without a new profile; that was already rejected as <5% noise. The winning
   primitive is the sliding order-statistic window in the ridge/noise filter
   phase.
+## 2026-07-08 - BlackThrush (cc) - KEEP: inv(assume_a=pos) SPD Cholesky fast path — 2.8x vs ORIG portfolio, flips an anti-pattern
+
+- PROFILED: `inv(assume_a=PositiveDefinite)` was **3x SLOWER than inv(General)** @512 (61.63 vs 20.38ms) —
+  BACKWARDS: declaring a matrix SPD (which should let Cholesky beat LU) routed it to the SLOW PORTFOLIO
+  (`inv`'s blocked fast path only accepted assume_a ∈ {None, General}; pos fell through).
+- FIX: added an SPD fast path — `Cholesky::new(A)` + `cholesky_solve_identity_rhs_rows_batched` (the same
+  L·Lᵀ·X=I inverse the pinv path uses), gated n≥`inv_flat_min()`=256. A non-PD matrix ⇒ `Cholesky::new`
+  returns None ⇒ falls through to the portfolio, PRESERVING the exact `assume_a=pos` non-PD rejection.
+- MEASURED (best-of-2, `-cc`): inv(pos)NEW vs the OLD portfolio — @256 8.67→4.92ms **1.76x**; @512 61.63→22.27ms
+  **2.77x**. And NEW inv(pos) now BEATS inv(General) 1.15-1.69x (@256 6.06→4.92 1.23x; @384 28.96→17.13 1.69x;
+  @512 28.77→22.27 1.29x) — Cholesky inverse is ~2x cheaper than LU, so SPD is now correctly the FAST case.
+  ACCURACY: maxdiff vs the General LU inverse ~**1e-17** (machine-eps); inv conformance is tolerance-based.
+  Full fsci-linalg lib suite GREEN.
+- LEVER: an `assume_a`/structure HINT that makes an op SLOWER (routes to a generic portfolio instead of the
+  specialized fast kernel) is a bug — profile each assumption arm. cho_solve/lu_solve/solve_triangular are
+  VECTOR-RHS only (no matrix B) = a capability gap (deferred, feature not hot-path opt).
 
 ## 2026-07-09 - BlackThrush (codex) - REJECT: sparse-spread COO `sum_duplicates` fused histogram cursor (0.999x vs ORIG)
 
