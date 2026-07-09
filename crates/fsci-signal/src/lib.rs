@@ -3310,9 +3310,71 @@ impl Default for FindPeaksCwtOptions {
     }
 }
 
-/// Linear-interpolation percentile, matching `scipy.stats.scoreatpercentile`
-/// with the default `interpolation_method='fraction'`.
-fn score_at_percentile_linear(slice: &[f64], per: f64) -> f64 {
+fn score_at_percentile_linear_sorted(sorted: &[f64], per: f64) -> f64 {
+    let n = sorted.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    if n == 1 {
+        return sorted[0];
+    }
+    let idx = per / 100.0 * (n - 1) as f64;
+    let lo = idx.floor() as usize;
+    let frac = idx - lo as f64;
+    if lo + 1 < n {
+        sorted[lo] * (1.0 - frac) + sorted[lo + 1] * frac
+    } else {
+        sorted[n - 1]
+    }
+}
+
+fn centered_window_percentiles(row: &[f64], window_size: usize, per: f64) -> Vec<f64> {
+    let n = row.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if window_size == 0 {
+        return vec![f64::NAN; n];
+    }
+    let hf_window = window_size / 2;
+    let odd = window_size % 2;
+
+    let mut start = 0usize;
+    let mut end = (hf_window + odd).min(n);
+    let mut window = row[start..end].to_vec();
+    window.sort_by(f64::total_cmp);
+
+    let mut out = Vec::with_capacity(n);
+    for ind in 0..n {
+        out.push(score_at_percentile_linear_sorted(&window, per));
+
+        if ind + 1 == n {
+            break;
+        }
+
+        let next_start = (ind + 1).saturating_sub(hf_window);
+        let next_end = (ind + 1 + hf_window + odd).min(n);
+
+        while start < next_start {
+            let value = row[start];
+            let pos = window
+                .binary_search_by(|probe| probe.total_cmp(&value))
+                .expect("sliding percentile value must be present");
+            window.remove(pos);
+            start += 1;
+        }
+        while end < next_end {
+            let value = row[end];
+            let pos = window.partition_point(|probe| probe.total_cmp(&value).is_lt());
+            window.insert(pos, value);
+            end += 1;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+fn score_at_percentile_linear_legacy_sort(slice: &[f64], per: f64) -> f64 {
     let mut v = slice.to_vec();
     v.sort_by(f64::total_cmp);
     let n = v.len();
@@ -3380,16 +3442,8 @@ pub fn find_peaks_cwt(vector: &[f64], widths: &[f64], opts: &FindPeaksCwtOptions
     let window_size = opts
         .window_size
         .unwrap_or_else(|| (n as f64 / 20.0).ceil() as usize);
-    let hf_window = window_size / 2;
-    let odd = window_size % 2;
     let row_one = &matr[0];
-    let noises: Vec<f64> = (0..n)
-        .map(|ind| {
-            let start = ind.saturating_sub(hf_window);
-            let end = (ind + hf_window + odd).min(n);
-            score_at_percentile_linear(&row_one[start..end], opts.noise_perc)
-        })
-        .collect();
+    let noises = centered_window_percentiles(row_one, window_size, opts.noise_perc);
 
     let mut max_locs: Vec<usize> = ridge_lines
         .iter()
@@ -21252,6 +21306,40 @@ mod tests {
     }
 
     #[test]
+    fn centered_window_percentiles_match_legacy_sort() {
+        let row: Vec<f64> = (0..257)
+            .map(|i| match i % 11 {
+                0 => -0.0,
+                1 => 0.0,
+                2 => -3.5,
+                _ => {
+                    let x = i as f64;
+                    (x * 0.17).sin() * 11.0 + (x * 0.031).cos() * 3.0
+                }
+            })
+            .collect();
+
+        for &window_size in &[0usize, 1, 2, 7, 16, 31, 64] {
+            for &per in &[0.0, 10.0, 33.3, 50.0, 90.0, 100.0] {
+                let got = centered_window_percentiles(&row, window_size, per);
+                assert_eq!(got.len(), row.len());
+                let hf_window = window_size / 2;
+                let odd = window_size % 2;
+                for (ind, &actual) in got.iter().enumerate() {
+                    let start = ind.saturating_sub(hf_window);
+                    let end = (ind + hf_window + odd).min(row.len());
+                    let expected = score_at_percentile_linear_legacy_sort(&row[start..end], per);
+                    assert_eq!(
+                        actual.to_bits(),
+                        expected.to_bits(),
+                        "window_size={window_size} per={per} ind={ind}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn find_peaks_cwt_matches_scipy() {
         // Same formula scipy oracle used (regenerated bit-for-bit in Rust).
         let data: Vec<f64> = (0..200)
@@ -32825,11 +32913,6 @@ mod tests {
         }
     }
 }
-
-
-
-
-
 
 
 

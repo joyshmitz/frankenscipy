@@ -6,6 +6,55 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: `find_peaks_cwt` sliding noise-percentile window (2.52x vs ORIG)
+
+- Dig audit: consulted this ledger first. Avoided the rejected `find_peaks_cwt`
+  CWT-build parallelization from 2026-06-20 (the ledger says ridge/filter work,
+  not CWT construction, dominated), and did not retry already-landed stats
+  percentile/scoreatpercentile quickselect, spectral_contrast min/max, or CWT
+  width-parallel levers.
+- Profiled hot row: `fsci-signal` Criterion `find_peaks_cwt/n5000_w29` was still
+  a large row in the per-crate bench. The remaining filter phase rebuilt
+  `row_one[start..end]` and full-sorted it for every centered noise-floor
+  percentile. Lever: maintain the same `f64::total_cmp` sorted window while the
+  centered window slides, using binary remove/insert and the same sorted
+  percentile interpolation. This removes per-sample allocation and
+  O(window log window) full sorts without changing the SNR formula.
+- MEASURED vs LEGACY ORIGINAL with:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=vmi1293453 RCH_REQUIRE_REMOTE=1 rch exec -- cargo bench --profile release -p fsci-signal --bench signal_bench find_peaks_cwt -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`.
+  Same RCH worker `vmi1293453`:
+  - ORIG (`origin/main` 59c53fcd, clean scratch): `find_peaks_cwt/n5000_w29`
+    37.212 ms mean.
+  - NEW (this patch): `find_peaks_cwt/n5000_w29` 14.779 ms mean.
+  - Ratio: 37.212 / 14.779 = **2.52x faster vs ORIG**.
+- Correctness / conformance:
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=ovh-a RCH_REQUIRE_REMOTE=1 rch exec -- cargo test --profile release -p fsci-signal centered_window_percentiles_match_legacy_sort -- --nocapture`
+    (`1 passed`) checks every centered window against the legacy full-sort
+    helper by `to_bits()`, including signed zero ties and `window_size=0`.
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=ovh-a RCH_REQUIRE_REMOTE=1 rch exec -- cargo test --profile release -p fsci-signal find_peaks_cwt_matches_scipy -- --nocapture`
+    (`1 passed`) keeps the SciPy-reference peak set unchanged.
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=vmi1293453 RCH_REQUIRE_REMOTE=1 rch exec -- cargo check -p fsci-signal --all-targets`.
+  - PASS: in the broad `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=ovh-a RCH_REQUIRE_REMOTE=1 rch exec -- cargo test -p fsci-conformance -- --nocapture`
+    run, the touched signal conformance lanes reported
+    `differential_test_signal_fixture ... ok` and
+    `signal_packet_runner_passes ... ok`.
+  - PASS: `git diff --check`.
+  - BLOCKED: the same broad `fsci-conformance` run is not a whole-suite green
+    in this checkout for unrelated pre-existing reasons: missing SciPy on the
+    RCH worker, missing contract-table/oracle-repo artifacts, and an existing
+    `cluster_core` fixture mismatch. After the signal lanes passed and the
+    unrelated failures were emitted, the RCH job stayed silent and was canceled
+    to avoid leaving a live validation process behind.
+  - BLOCKED: `cargo fmt --all -- --check`, `cargo clippy -p fsci-signal
+    --all-targets -- -D warnings`, and
+    `ubs crates/fsci-signal/src/lib.rs docs/NEGATIVE_EVIDENCE.md` still report
+    broad pre-existing workspace / `fsci-signal` debt outside this patch's
+    hunks; not reformatted or refactored here to keep the perf lever scoped.
+- Negative evidence: do not revive CWT-matrix build parallelization for this
+  row without a new profile; that was already rejected as <5% noise. The winning
+  primitive is the sliding order-statistic window in the ridge/noise filter
+  phase.
+
 ## 2026-07-09 - BlackThrush (codex) - REJECT: sparse-spread COO `sum_duplicates` fused histogram cursor (0.999x vs ORIG)
 
 - Dig audit: consulted this ledger first and did not retry rejected sparse
