@@ -6,6 +6,24 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-08 - BlackThrush (cc) - KEEP: cholesky() blocked-factor gate 1000→256 (1.08-1.36x mid-n, byte-tolerant)
+
+- 4th win in the mis-gated-fast-path vein (solve/inv/lu_factor). `cholesky_lower_factor` used the unblocked
+  left-looking SIMD path (`cholesky_lower_simd`) for n<1000; the parallel-SYRK register-tiled blocked Cholesky
+  (`cholesky_lower_blocked`) was gated at the shared `FLAT_LU_SOLVE_MIN_DIM=1000` (set on the OLD kernel, before
+  the SYRK was register-tiled + parallelized). Split a `cholesky`-specific `CHOL_FACTOR_FLAT_MIN_DIM=256`
+  (override `CHOL_FACTOR_FLAT_MIN_OVERRIDE`).
+- MEASURED (simd vs blocked, best-of-2, `-cc`): n=128 0.98x / n=256 1.00x (parity, no regression); n=384
+  3.34→3.10ms **1.08x**; n=512 7.62→6.37ms **1.20x**; n=768 24.02→17.61ms **1.36x** (win grows with n as the
+  parallel trailing SYRK amortizes). maxdiff ~3.6e-15 (near machine-eps; Cholesky factor is unique, validated
+  to 1e-10). Full fsci-linalg lib suite GREEN.
+- Modest (like lu_factor) — cholesky is factor-only, no portfolio redundancy; the win is the parallel-SYRK
+  blocked kernel over the unblocked left-looking simd_dot. Benefits public cholesky()/cho_factor() (the SPD
+  solve path already used blocked cholesky via its own gate 128). Still ~2x vs scipy dpotrf @512 (AVX-512 wall).
+- VEIN TALLY (mis-gated FLAT_LU_*_MIN_DIM gates go stale as kernels gain parallel/SIMD — re-A/B): solve(128,
+  mixed-prec) 5.8-7.9x + SPD 7-9x; inv(256,blocked) 1.9-3.7x; lu_factor(128,blocked) 1.4-1.7x; cholesky(256,
+  blocked) 1.08-1.36x; det = REJECTED (overflow+light-work). Vein now fully harvested.
+
 ## 2026-07-08 - BlackThrush (codex) - KEEP: Poisson logpmf_many hoists ln(mu) over batch (1.30x vs scalar-map ORIG)
 
 - LAND/DIG: no unlanded `.scratch` win remained; checked the open scratch worktrees

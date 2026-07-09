@@ -5033,8 +5033,25 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
     Some(l_flat)
 }
 
+/// `cholesky` blocked-factor gate — the parallel-SYRK blocked Cholesky beats the
+/// unblocked left-looking SIMD path from n≈256 up (measured). MUCH lower than the
+/// shared [`FLAT_LU_SOLVE_MIN_DIM`]=1000 (set on the old kernel; the trailing SYRK is
+/// now register-tiled + parallel). Byte-tolerant: the Cholesky factor is unique
+/// (validated to 1e-10 vs the unblocked reference).
+const CHOL_FACTOR_FLAT_MIN_DIM: usize = 256;
+
+/// Runtime override for [`CHOL_FACTOR_FLAT_MIN_DIM`] (0 ⇒ default). Same-binary A/B switch.
+pub static CHOL_FACTOR_FLAT_MIN_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[inline]
+fn chol_factor_flat_min() -> usize {
+    let o = CHOL_FACTOR_FLAT_MIN_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if o == 0 { CHOL_FACTOR_FLAT_MIN_DIM } else { o }
+}
+
 fn cholesky_lower_factor(a: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
-    if n >= FLAT_LU_SOLVE_MIN_DIM
+    if n >= chol_factor_flat_min()
         && let Some(l_flat) = cholesky_lower_blocked(a, n)
     {
         return Some(l_flat);
