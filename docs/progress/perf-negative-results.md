@@ -56,6 +56,59 @@ Negative evidence: do not retry generic `binned_statistic_dd` parallelization
 or 1-D/2-D binned-statistic parallelization; those were already landed. This
 keep only closes the 3-D specialized serial bypass.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: MGC permutation-view selection vector avoids materialized Y matrices (1.085x vs ORIG)
+
+Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided the
+already exhausted/rejected families: Theilslopes already has the count-based
+rank-selection fast path for the no-tie benchmark, and the O(n^2) materialized
+fallback parallelization lever is explicitly rejected/noise; KDE scalar hoists
+and grid recurrences are rejected; KDE SIMD/tail-window and special/interpolate
+compact-support families are already harvested. The required short profile was:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`.
+On RCH `ovh-a`, `robust_slopes/theilslopes/4000` was hottest at **18.689 ms**
+but skipped by ledger. The next hot unrejected row was `mgc/n80_reps100` at
+**16.934 ms**; neighboring rows were `rank_tests/kruskal_200k` 16.309 ms,
+`rank_tests/mannwhitneyu_200k` 14.101 ms, and `siegelslopes/4000` 13.746 ms.
+
+Kept primitive: a selection-vector/permutation-view MGC map builder for
+permutation p-value scoring. The legacy permutation scorer materialized two
+dense n*n matrices per permutation:
+`permute_matrix(centered_y, perm)` and `permute_matrix_usize(rank_y, perm)`,
+then called the normal `compute_mgc_map`. The new `compute_mgc_map_permuted_y`
+keeps the existing row-major accumulation and prefix-sum finish, but indexes
+`centered_y[perm[i]][perm[j]]` and `rank_y[perm[i]][perm[j]]` directly. This
+removes the two dense allocation/fill passes per rep without changing the map
+math. The materialized helpers are retained under `#[cfg(test)]` as the oracle.
+
+Same-worker A/B against the pinned legacy original worktree
+`/data/projects/.scratch/frankenscipy-cod-dig6-orig-20260709-0700` at
+`3672009c415ba4de637c583cec336d182b94f3fa`, command:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=vmi1293453 RCH_REQUIRE_REMOTE=1 rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench mgc/n80_reps100 -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`.
+On RCH `vmi1293453`, ORIG median was **18.832 ms** (`[18.270 ms 18.832 ms
+19.644 ms]`); patched median was **17.358 ms** (`[16.863 ms 17.358 ms
+18.069 ms]`) = **1.085x faster vs ORIG**. The confidence intervals do not
+overlap, so this clears the short-bench keep bar.
+
+Correctness/conformance: new focused oracle
+`multiscale_graphcorr_permutation_view_matches_materialized_map_bits` builds a
+deterministic permutation, compares the materialized old MGC map with the
+permutation-view map, and requires `to_bits()` equality for every cell. The
+focused local release test
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo test --profile release -p fsci-stats multiscale_graphcorr --lib -- --nocapture`
+passed (`10 passed; 2011 filtered out`). SciPy-backed local conformance
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo test --profile release -p fsci-conformance --test e2e_stats e2e_044_multiscale_graphcorr_scipy_parity -- --nocapture`
+passed with SciPy 1.17.1 (`1 passed; 45 filtered out`). An RCH run of the same
+e2e target on `vmi1227854` also passed structurally but skipped the SciPy oracle
+because that worker lacks SciPy, so the local SciPy-backed run is the actual
+MGC conformance evidence. Broader stats packet conformance
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo test --profile release -p fsci-conformance stats_packet_runner_passes -- --nocapture`
+also passed locally (`1 passed; 210 filtered out`).
+
+Do not retry MGC dense permuted-Y materialization avoidance by first building
+scratch permuted matrices; the winning primitive is the direct permutation-view
+indexing that preserves the old accumulation order and skips the allocation
+work.
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: GaussianKde sorted 8σ tail-window skips negligible kernels atop SIMD (1.60x vs ORIG)
 
 Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided the

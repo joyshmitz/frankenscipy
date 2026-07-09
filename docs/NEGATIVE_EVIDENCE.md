@@ -80,6 +80,33 @@ ledger above so the project has one source of truth.
   binned-statistic parallelization; those paths were already landed. This keep
   only closes the 3-D specialized serial bypass.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: stats MGC permutation-view scoring avoids dense permuted-Y matrices (1.085x vs ORIG, BYTE-IDENTICAL)
+
+- Land-or-dig audit: consulted this ledger first. Did NOT retry Theilslopes:
+  its count-based rank-selection fast path already landed, and materialized
+  fallback parallelization is already rejected/noise. Short `fsci-stats`
+  profile on RCH `ovh-a` had `robust_slopes/theilslopes/4000` at **18.689 ms**
+  but skipped by ledger; next hot unrejected row was `mgc/n80_reps100` at
+  **16.934 ms**.
+- New primitive from vectorized-execution selection vectors: in MGC permutation
+  scoring, observe Y through the permutation vector instead of materializing
+  `permute_matrix(centered_y, perm)` and `permute_matrix_usize(rank_y, perm)`
+  for every rep. `compute_mgc_map_permuted_y` indexes `centered_y`/`rank_y`
+  directly and shares the old prefix-sum finish path.
+- Same-worker A/B vs legacy original (`3672009c4`) on RCH `vmi1293453`:
+  ORIG `mgc/n80_reps100` **18.832 ms** (`[18.270, 18.832, 19.644]`), patched
+  **17.358 ms** (`[16.863, 17.358, 18.069]`) = **1.085x faster vs ORIG**.
+  Intervals are non-overlapping.
+- Correctness: new bit-exact oracle
+  `multiscale_graphcorr_permutation_view_matches_materialized_map_bits` checks
+  `to_bits()` equality against the materialized old map. Focused stats test
+  `cargo test --profile release -p fsci-stats multiscale_graphcorr --lib -- --nocapture`
+  passed locally (`10 passed`). SciPy-backed conformance
+  `cargo test --profile release -p fsci-conformance --test e2e_stats e2e_044_multiscale_graphcorr_scipy_parity -- --nocapture`
+  passed locally with SciPy 1.17.1 (`1 passed`). Broader stats packet
+  `cargo test --profile release -p fsci-conformance stats_packet_runner_passes -- --nocapture`
+  passed locally (`1 passed; 210 filtered out`).
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: special `sph_legendre_p_all` + `sph_harm_y_all` recurrence-prefix reuse (2.7-60x self, BYTE-IDENTICAL)
 
 - COMPLETES the spherical-harmonics `*_all` family (legendre_p_all + assoc_legendre_p_all already

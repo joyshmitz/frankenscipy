@@ -35020,6 +35020,51 @@ fn compute_mgc_map(
         }
     }
 
+    finish_mgc_map_acc(acc, n)
+}
+
+/// Compute an MGC map where Y is observed through a permutation vector.
+///
+/// This is row-isomorphic to building `permute_matrix(centered_y, y_perm)` and
+/// `permute_matrix_usize(rank_y, y_perm)` first, then calling `compute_mgc_map`,
+/// but avoids two dense n*n materializations per permutation score.
+fn compute_mgc_map_permuted_y(
+    centered_x: &[Vec<f64>],
+    centered_y: &[Vec<f64>],
+    rank_x: &[Vec<usize>],
+    rank_y: &[Vec<usize>],
+    y_perm: &[usize],
+    n: usize,
+) -> Vec<Vec<f64>> {
+    debug_assert_eq!(y_perm.len(), n);
+    let mut acc = vec![[0.0_f64; 4]; n * n];
+
+    for i in 0..n {
+        let rx = &rank_x[i];
+        let cx_row = &centered_x[i];
+        let py_i = y_perm[i];
+        let cy_row = &centered_y[py_i];
+        let ry_row = &rank_y[py_i];
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let py_j = y_perm[j];
+            let idx = rx[j] * n + ry_row[py_j];
+            let cx = cx_row[j];
+            let cy = cy_row[py_j];
+            let cell = &mut acc[idx];
+            cell[0] += cx * cy;
+            cell[1] += cx * cx;
+            cell[2] += cy * cy;
+            cell[3] += 1.0;
+        }
+    }
+
+    finish_mgc_map_acc(acc, n)
+}
+
+fn finish_mgc_map_acc(mut acc: Vec<[f64; 4]>, n: usize) -> Vec<Vec<f64>> {
     prefix_sum_2d_inclusive_aos(&mut acc, n);
 
     // Map cell (k-1, l-1) = corr from the prefix value at (k-1, l-1). Every cell is
@@ -35274,9 +35319,7 @@ fn mgc_permutation_pvalue(
     // byte-identical to the serial accumulation (same permutations, same per-rep stat,
     // same count).
     let score = |perm: &[usize]| -> bool {
-        let perm_centered_y = permute_matrix(centered_y, perm);
-        let perm_rank_y = permute_matrix_usize(rank_y, perm);
-        let perm_map = compute_mgc_map(centered_x, &perm_centered_y, rank_x, &perm_rank_y, n);
+        let perm_map = compute_mgc_map_permuted_y(centered_x, centered_y, rank_x, rank_y, perm, n);
         let (_, _, perm_stat) = find_optimal_scale(&perm_map, n);
         perm_stat >= observed - 1e-12
     };
@@ -35326,6 +35369,7 @@ fn mgc_permutation_pvalue(
 }
 
 /// Permute rows and columns of a matrix according to a permutation.
+#[cfg(test)]
 fn permute_matrix(matrix: &[Vec<f64>], perm: &[usize]) -> Vec<Vec<f64>> {
     let n = matrix.len();
     let mut result = vec![vec![0.0; n]; n];
@@ -35338,6 +35382,7 @@ fn permute_matrix(matrix: &[Vec<f64>], perm: &[usize]) -> Vec<Vec<f64>> {
 }
 
 /// Permute rows and columns of a usize matrix according to a permutation.
+#[cfg(test)]
 fn permute_matrix_usize(matrix: &[Vec<usize>], perm: &[usize]) -> Vec<Vec<usize>> {
     let n = matrix.len();
     let mut result = vec![vec![0usize; n]; n];
@@ -67213,6 +67258,44 @@ mod tests {
                 max_abs < 1e-12,
                 "n={n}: prefix-sum mgc_map deviates from O(n^4) reference by {max_abs:e}"
             );
+        }
+    }
+
+    #[test]
+    fn multiscale_graphcorr_permutation_view_matches_materialized_map_bits() {
+        let n = 17usize;
+        let x: Vec<Vec<f64>> = (0..n)
+            .map(|i| vec![(i as f64 * 0.31).sin(), (i as f64 * 0.13 + 0.2).cos()])
+            .collect();
+        let y: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                vec![
+                    (i as f64 * 0.19 + 0.5).cos(),
+                    ((i * i + 3) as f64 * 0.017).sin(),
+                ]
+            })
+            .collect();
+        let dist_x = pairwise_euclidean_distance_matrix(&x);
+        let dist_y = pairwise_euclidean_distance_matrix(&y);
+        let rank_x = compute_row_ranks(&dist_x);
+        let rank_y = compute_row_ranks(&dist_y);
+        let cx = double_center_distance_matrix(&dist_x);
+        let cy = double_center_distance_matrix(&dist_y);
+        let perm: Vec<usize> = (0..n).map(|i| (i * 7 + 3) % n).collect();
+
+        let perm_cy = permute_matrix(&cy, &perm);
+        let perm_rank_y = permute_matrix_usize(&rank_y, &perm);
+        let materialized = compute_mgc_map(&cx, &perm_cy, &rank_x, &perm_rank_y, n);
+        let viewed = compute_mgc_map_permuted_y(&cx, &cy, &rank_x, &rank_y, &perm, n);
+
+        for k in 0..n {
+            for l in 0..n {
+                assert_eq!(
+                    viewed[k][l].to_bits(),
+                    materialized[k][l].to_bits(),
+                    "permutation-view MGC map mismatch at ({k},{l})"
+                );
+            }
         }
     }
 
