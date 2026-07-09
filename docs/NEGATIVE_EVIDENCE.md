@@ -6,6 +6,25 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: pdist(Jaccard) bit-packing + popcount (2.2-3.1x, byte-identical)
+
+- Dig audit: consulted ledger first. Extends yesterday's cdist(Jaccard) popcount win
+  (same clean spatial crate, no friction) to `pdist` — the intra-set n(n-1)/2-pair path,
+  which fell to the SCALAR default `metric_distance` arm (no SoA even), so the popcount
+  win is bigger here.
+- IMPL: pack the n rows to bits ONCE (`cdist_pack_bits`, bit=value≠0), then each condensed
+  upper-triangle pair is `jaccard_bits_pair` = O(d/64) popcount. Extracted the shared
+  `jaccard_bits_pair` helper (used by both cdist row-fill and the new pdist branch). Same
+  `dim>=256` gate. Byte-identical (integer counts exact; Jaccard is boolean-internal so
+  exact for any numeric input).
+- MEASURED (pdist n=600, same-binary A/B `SPATIAL_BOOL_POPCOUNT_DISABLE`, best-of-4, all
+  maxdiff=0.0): **d256 2.31-2.64x / d512 2.20-2.82x / d1024 2.61-3.09x / d2048 2.80-2.95x**.
+  d128 = 0.89-0.99x (below gate → scalar). fsci-spatial lib **229 passed / 0 failed** GREEN.
+- CLEAN LANDING again: spatial has no codex uncommitted work + no fsci-special dep.
+- REMAINING (same lever): the `&[bool]` count metrics (yule/dice/rogerstanimoto/sokal*/
+  russellrao/kulczynski) have NO cdist/pdist path (standalone scalars) — extending them is
+  a capability-add, deferred.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: Jaccard cdist via bit-packing + hardware popcount (1.2-3.1x, byte-identical); Hamming REJECTED
 
 - Dig audit: consulted ledger first. GENUINE PIVOT off the (harvested) stats

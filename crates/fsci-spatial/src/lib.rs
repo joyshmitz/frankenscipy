@@ -760,6 +760,15 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
                 }
             })
         }
+        // Jaccard over the condensed upper triangle: pack rows to bits ONCE, then each of
+        // the n(n-1)/2 pairs is an O(d/64) popcount (byte-identical, any numeric input).
+        // Same gate/lever as cdist; the packing amortizes even better here (more pairs/row).
+        DistanceMetric::Jaccard if spatial_bool_popcount() && dim >= JACCARD_POPCOUNT_MIN_DIM => {
+            let (bits, ones) = cdist_pack_bits(x, dim);
+            pdist_fill(n, total, nthreads, |i, j| {
+                jaccard_bits_pair(&bits[i], ones[i], &bits[j], ones[j])
+            })
+        }
         _ => {
             // AoS rows (`&[Vec<f64>]`) force the O(n²) inner loop to chase one heap
             // pointer per row; flatten into a single contiguous row-major buffer so
@@ -1521,6 +1530,19 @@ fn cdist_pack_bits(x: &[Vec<f64>], dim: usize) -> (Vec<Vec<u64>>, Vec<u32>) {
 
 /// One Jaccard cdist row from packed bits: `(c_TF + c_FT) / (c_TT + c_TF + c_FT) =
 /// popcount(a ⊕ b) / popcount(a ∨ b)`, returning 0 when the union is empty (matches scalar).
+/// Jaccard dissimilarity of two packed rows: `popcount(a⊕b) / popcount(a∨b)`, where
+/// `popcount(a∨b) = ones_a + ones_b − popcount(a∧b)`; 0 when the union is empty.
+#[inline]
+fn jaccard_bits_pair(a: &[u64], ones_a: u32, b: &[u64], ones_b: u32) -> f64 {
+    let ntt: u32 = a.iter().zip(b).map(|(&aw, &bw)| (aw & bw).count_ones()).sum();
+    let n_union = ones_a + ones_b - ntt;
+    if n_union == 0 {
+        0.0
+    } else {
+        (n_union - ntt) as f64 / n_union as f64
+    }
+}
+
 fn cdist_row_jaccard_packed(
     a: &[u64],
     ones_a: u32,
@@ -1529,16 +1551,7 @@ fn cdist_row_jaccard_packed(
     nb: usize,
 ) -> Vec<f64> {
     (0..nb)
-        .map(|j| {
-            let bj = &b_bits[j];
-            let ntt: u32 = a.iter().zip(bj).map(|(&aw, &bw)| (aw & bw).count_ones()).sum();
-            let n_union = ones_a + ones_b[j] - ntt;
-            if n_union == 0 {
-                0.0
-            } else {
-                (n_union - ntt) as f64 / n_union as f64
-            }
-        })
+        .map(|j| jaccard_bits_pair(a, ones_a, &b_bits[j], ones_b[j]))
         .collect()
 }
 
