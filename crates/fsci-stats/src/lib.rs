@@ -10457,6 +10457,11 @@ impl BetaNegativeBinomial {
         assert!(b > 0.0, "b must be positive, got {b}");
         Self { n, a, b }
     }
+
+    fn entropy_tail_estimate(a: f64, k: u64, p: f64, logp: f64) -> f64 {
+        let x = k as f64;
+        p * x * ((-logp) / a + (a + 1.0) / (a * a))
+    }
 }
 
 impl DiscreteDistribution for BetaNegativeBinomial {
@@ -10552,12 +10557,11 @@ impl DiscreteDistribution for BetaNegativeBinomial {
 
     fn entropy(&self) -> f64 {
         // Support is infinite but the pmf tail decays polynomially, so
-        // h = −Σ pmf·ln pmf converges (scipy betanbinom sums it too). Sum until
-        // the mass is essentially exhausted and the pmf is negligible. The mode is
-        // 0 and adjacent terms have a closed ratio, so one logpmf anchor replaces
-        // one ln_gamma-heavy pmf rebuild per term.
+        // h = −Σ pmf·ln pmf converges (scipy betanbinom sums it too). The
+        // recurrence prefix is exact; once the tail is smooth, splice in the
+        // integral of p(k) ~ C/k^(a+1) instead of waiting for cumulative mass to
+        // cross a threshold that can be lost to f64 summation saturation.
         let mut h = 0.0_f64;
-        let mut cum = 0.0_f64;
         let nf = self.n as f64;
         let (a, b) = (self.a, self.b);
         let mut k = 0u64;
@@ -10566,10 +10570,6 @@ impl DiscreteDistribution for BetaNegativeBinomial {
         loop {
             if p > 0.0 {
                 h -= p * logp;
-                cum += p;
-            }
-            if cum > 1.0 - 1e-15 && p < 1e-16 {
-                break;
             }
             if k >= 50_000_000 {
                 break;
@@ -10579,6 +10579,12 @@ impl DiscreteDistribution for BetaNegativeBinomial {
             p *= r;
             logp += r.ln();
             k += 1;
+            if a >= 2.0 && k >= 8192 && p > 0.0 && logp < -1.0 {
+                let tail = Self::entropy_tail_estimate(a, k, p, logp);
+                if tail.is_finite() && tail / (k as f64) <= 1e-12 {
+                    return h + tail;
+                }
+            }
         }
         h
     }

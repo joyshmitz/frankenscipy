@@ -4,6 +4,55 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: BetaNegativeBinomial entropy tail splice avoids f64-saturated 50M-term walk (1526x vs ORIG)
+
+Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided already
+rejected or exhausted families: no robust-slope/parallel retries, no CWT build
+parallelism, no dense-linalg Strassen/det/cholesky threshold gates, no ECDF
+single-sort radix retry, and no reuse-transcendental Weibull/GenGamma follow-on.
+The profiling pass was the short stats bench:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`.
+On `vmi1167313`, `discrete_entropy/betanbinom/10` was the hottest row by a wide
+margin at `[955.77 ms 991.41 ms 1.0309 s]`; next rows were tens of milliseconds
+(`robust_slopes/theilslopes/4000` ~52.6 ms, `mgc/n80_reps100` ~40.3 ms,
+`siegelslopes/4000` ~34.5 ms).
+
+Kept primitive: exact prefix recurrence plus a smooth-tail splice for
+Beta-negative-binomial entropy. The existing implementation already used the
+closed pmf ratio, but its stop condition depended on cumulative mass crossing
+`1 - 1e-15`. For the benchmark tail, f64 summation saturated just below that
+threshold, so the loop walked to the 50M hard cap even though the entropy was
+stable to the existing goldens hundreds to thousands of times earlier. The new
+path still sums exact recurrence terms; for `a >= 2`, after at least 8192 terms,
+it estimates the remaining polynomial tail from
+`p_k*k*((-logp_k)/a + (a+1)/a^2)` and returns `prefix + tail` only when
+`tail/k <= 1e-12`.
+
+Same-worker A/B against the pinned legacy original worktree
+`/data/projects/.scratch/frankenscipy-cod-dig3-orig-20260709-0533` at
+`ff91a5eb15c3a315e8a133d4e5e87cb0f38000e3`, command:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench discrete_entropy/betanbinom -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`.
+On `vmi1167313`, ORIG median was **934.55 ms** (`[921.58 ms 934.55 ms
+947.82 ms]`); patched median was **612.42 us** (`[565.12 us 612.42 us
+722.71 us]`) = **1526.0x faster**. Criterion also reported patched
+`change: [-99.940% -99.930% -99.919%]`.
+
+Correctness/conformance: RCH release test
+`cargo test --profile release -p fsci-stats discrete_entropy_recurrence_matches_scipy -- --nocapture`
+passed on `vmi1167313` (`1 passed; 2017 filtered out`), locking the existing
+BetaNegativeBinomial entropy goldens plus neighboring discrete entropy paths.
+The targeted conformance harness
+`cargo test --profile release -p fsci-conformance --test diff_stats_entropy -- --nocapture`
+passed locally with SciPy 1.17.1 (`1 passed`). The same RCH conformance attempt
+failed before comparison on `vmi1149989` because the worker had no SciPy
+(`ModuleNotFoundError: No module named 'scipy'`), so the local SciPy-backed
+rerun is the conformance evidence.
+
+Do not retry the old cumulative-mass saturation gate for `BetaNegativeBinomial`
+entropy. If touching heavier `a < 2` tails later, keep it separate: this fast
+path intentionally leaves those on the legacy cap fallback rather than widening
+the approximation contract in this commit.
+
 ## 2026-07-09 - BlackThrush (codex) - REJECT: sparse-spread COO `sum_duplicates` fused validation/histogram cursor
 
 Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided rejected sparse `spsolve` BTreeMap/order

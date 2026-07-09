@@ -76,6 +76,33 @@ ledger above so the project has one source of truth.
   Weibull::fit / Weibull / WeibullMax / InvWeibull / FrechetR / ExponWeibull / Fisk /
   Loglogistic / Burr12. No known remaining density with the pattern.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: BetaNegativeBinomial entropy tail splice avoids f64-saturated 50M-term walk (1526x vs ORIG)
+
+- Dig audit: consulted this ledger first and avoided rejected/harvested veins:
+  no sort/radix repeats, no robust-slope/parallel-build retries, no dense-linalg
+  gates, and no reuse-transcendental Weibull/GenGamma family retread. Short
+  `fsci-stats` profile made `discrete_entropy/betanbinom/10` the hottest row by
+  far at ~0.99 s, above robust slopes, MGC, KDE, and rank-test rows.
+- Primitive: keep the exact pmf-ratio prefix recurrence, but stop waiting for
+  cumulative probability to exceed `1 - 1e-15` (it saturates below that in f64
+  and falls through to the 50M cap). For `a >= 2`, after at least 8192 exact
+  terms, splice in the smooth polynomial tail integral
+  `p_k*k*((-logp_k)/a + (a+1)/a^2)` only when `tail/k <= 1e-12`.
+- MEASURED vs LEGACY ORIGINAL, same RCH worker `vmi1167313`, same command shape
+  with `CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod`:
+  ORIG `discrete_entropy/betanbinom/10` median **934.55 ms**; patched median
+  **612.42 us** = **1526.0x faster**. Criterion on the patched worktree also
+  reported **-99.930%** against its cached baseline.
+- Correctness/conformance: `cargo test --profile release -p fsci-stats
+  discrete_entropy_recurrence_matches_scipy -- --nocapture` passed on RCH
+  (`1 passed; 2017 filtered out`). `cargo test --profile release -p
+  fsci-conformance --test diff_stats_entropy -- --nocapture` passed locally with
+  SciPy 1.17.1 (`1 passed`); the same RCH conformance attempt failed only
+  because worker `vmi1149989` lacked SciPy (`ModuleNotFoundError: scipy`).
+- NOTE: for heavier `a < 2` tails, the legacy cap remains the fallback; the
+  tail-splice fast path is deliberately limited to the tested smoother tail
+  family rather than weakening infinite-tail tolerance contracts.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: ExponWeibull density collapses duplicated x^c/exp(-x^c) (pdf 1.37x, logpdf 1.16x)
 
 - Dig audit: consulted ledger first. Highest-value remaining reuse-transcendental
