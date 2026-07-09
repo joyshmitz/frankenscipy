@@ -6,6 +6,33 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: GaussianKde `evaluate_many` SIMD exp batch (2.32x vs ORIG, conformance GREEN)
+
+- Dig audit: consulted this ledger first. Avoided the prior KDE scalar-constant
+  hoist rejection, the stats reuse-transcendental entropy/density vein, spatial
+  Jaccard popcount work, COO `sum_duplicates` cursor fusion, and dense-linalg
+  threshold/Strassen/panel retries.
+- Profile target: short `fsci-stats` bench on RCH showed the hottest row was
+  `gaussian_kde/evaluate_many/5000` at **314.97 ms** median on `vmi1264463`,
+  ahead of `gaussian_kde_nd/d3_eval5k` (75.887 ms), Theil slopes (72.244 ms),
+  and Mann-Whitney U (55.125 ms).
+- PRIMITIVE: for large finite 1-D KDE batches, vectorize across the dataset with
+  safe portable-SIMD lanes and a Cody-Waite/Cephes-style non-positive exp kernel.
+  The scalar `evaluate` path is unchanged; non-finite data/points fall back to
+  the legacy scalar path; smaller batches keep the old threaded bit-identical
+  route.
+- MEASURED vs LEGACY ORIGINAL on the same RCH worker `hz1`, pinned ORIG
+  `8d6bcab9cc98609617f5104fc7349313624cfc1e`: ORIG
+  `gaussian_kde/evaluate_many/5000` **95.754 ms** (`[86.270 ms 95.754 ms
+  107.56 ms]`), patched **41.248 ms** (`[40.493 ms 41.248 ms 41.985 ms]`) =
+  **2.321x faster vs ORIG**.
+- Correctness/conformance: targeted SciPy oracle
+  `cargo test --profile release -p fsci-conformance --test diff_stats_gaussian_kde -- --nocapture`
+  passed (`1 passed`). The focused release KDE tests, including scalar-vs-SIMD
+  batch comparison, passed (`8 passed; 2011 filtered out`). LEVER: do not retry
+  scalar constant hoists for KDE; the winning direction is exp throughput and
+  vectorized summation for large finite batches.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: pdist_seuclidean dim==4 whitening picks up the dim-4 Euclidean kernel (~5.7-7.1x)
 
 - Dig audit: consulted ledger first. Follow-on to the seuclidean whitening KEEP below.

@@ -4,6 +4,51 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: GaussianKde `evaluate_many` portable-SIMD exp batch (2.321x vs ORIG)
+
+Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided
+already rejected/exhausted families: the KDE scalar-constant hoist no-ship,
+stats reuse-transcendental entropy/density work, spatial Jaccard bit-pack
+popcount, COO `sum_duplicates` fused cursor/validation, and dense-linalg
+Strassen/threshold/panel retries. The required profiling pass was the short
+stats bench:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`.
+On `vmi1264463`, `gaussian_kde/evaluate_many/5000` was the hottest row at
+**314.97 ms** median (`[188.26 ms 314.97 ms 461.86 ms]`), followed by
+`gaussian_kde_nd/d3_eval5k` at 75.887 ms, `robust_slopes/theilslopes/4000` at
+72.244 ms, and `rank_tests/mannwhitneyu_200k` at 55.125 ms.
+
+Kept primitive: a large-batch finite-data SIMD exponential kernel for
+`GaussianKde::evaluate_many`. The scalar implementation computes each query as
+an O(n) sum of `exp(-0.5*z*z)`, so the previous scalar-constant hoist left the
+real bottleneck untouched. This change vectorizes across the dataset with
+8-lane portable SIMD and a Cody-Waite/Cephes-style non-positive exp
+approximation, accumulating two vectors per loop before a scalar tail. It is
+gated to large work (`dataset.len() * points.len() >= 1<<20`) and finite
+bandwidth/data/points. Scalar `evaluate` is unchanged, non-finite batches fall
+back to the legacy scalar path, and smaller batches keep the old threaded
+bit-identical route.
+
+Same-worker A/B against the pinned legacy original worktree
+`/data/projects/.scratch/frankenscipy-cod-dig4-orig-20260709-0641` at
+`8d6bcab9cc98609617f5104fc7349313624cfc1e`, command:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=hz1 RCH_REQUIRE_REMOTE=1 rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench gaussian_kde/evaluate_many/5000 -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`.
+On `hz1`, ORIG median was **95.754 ms** (`[86.270 ms 95.754 ms
+107.56 ms]`); patched median was **41.248 ms** (`[40.493 ms 41.248 ms
+41.985 ms]`) = **2.321x faster vs ORIG**. The full-profile worker and the
+strict A/B worker differ, so the ratio is based only on the `hz1` ORIG/patched
+pair.
+
+Correctness/conformance: focused RCH release tests
+`cargo test --profile release -p fsci-stats gaussian_kde -- --nocapture`
+passed on `vmi1264463` (`8 passed; 2011 filtered out`), including the new
+scalar-vs-SIMD batch comparison at 512 data points by 4096 queries. The
+SciPy-backed conformance target
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo test --profile release -p fsci-conformance --test diff_stats_gaussian_kde -- --nocapture`
+passed locally (`1 passed`). Do not retry scalar constant hoisting for 1-D KDE;
+future KDE speedups should target exp throughput, vectorized accumulation, or a
+separate exactness-audited algorithmic batch path.
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: BetaNegativeBinomial entropy tail splice avoids f64-saturated 50M-term walk (1526x vs ORIG)
 
 Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided already
