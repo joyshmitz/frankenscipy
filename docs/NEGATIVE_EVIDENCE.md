@@ -79,6 +79,22 @@ ledger above so the project has one source of truth.
   inputs without a new profile; the density gate exists because the ungated
   `n100000_nnz2000000` case was only parity/slight loss while the dense
   duplicate row won cleanly.
+## 2026-07-08 - BlackThrush (cc) - KEEP: public matmul() parallel gate 64M→8M macs (1.67-3.02x mid-n, BYTE-IDENTICAL)
+
+- PROFILED matmul fair (fsci parallel vs numpy-1thr): fsci was SLOWER than numpy on ONE core at n=256-384 —
+  root cause: `matmul_thread_count`'s `macs < 64M → serial` gate left n≈200-400 (macs 8-64M) on the SERIAL
+  Vec<Vec> register kernel while the PARALLEL flat-workspace path (byte-identical: each thread owns disjoint
+  output rows, same monotonic-k order) sat idle. n≥403 (macs>64M) already parallel.
+- FIX: the gate is SHARED with cholesky's SYRK — lowering it globally REGRESSED cholesky 0.69x@512 (small
+  triangular SYRK updates over-subscribe). So added a matmul-DEDICATED `matmul_ws_thread_count` (8M gate) used
+  only by `matmul_flat_workspace`; `matmul_thread_count` (cholesky/par_dmatmul path) restored to 64M unchanged.
+- MEASURED (serial vs parallel, best-of-2, `-cc`, BYTE-IDENTICAL mism=0): n=256 3.28→1.97ms **1.67x**; n=320
+  5.24→2.45ms **2.13x**; n=384 9.23→3.06ms **3.02x**. cholesky UNAFFECTED (0.94-1.07x ≈ 1.0, separate gate).
+  matmul 8/8 + full fsci-linalg lib suite GREEN. Override `MATMUL_MACS_GATE_OVERRIDE` for A/B.
+- LEVER: a parallelism gate SHARED across kernels (matmul rectangular GEMM vs cholesky triangular SYRK) is
+  wrong when the kernels have different parallel-efficiency crossovers — SPLIT per-kernel. The GEMM parallelizes
+  from macs≈8M; the triangular SYRK needs macs≈64M (over-subscribes below). NOTE: fsci matmul is STILL an AVX2
+  Vec<Vec> vs OpenBLAS-AVX512 wall vs numpy — this only recovers the was-serial mid-n range, byte-identically.
 
 ## 2026-07-08 - BlackThrush (cc) - KEEP: public lu() (P/L/U) blocked-LU gate 1000→128 (1.52-2.38x mid-n)
 

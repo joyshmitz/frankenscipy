@@ -17128,6 +17128,33 @@ fn matmul_thread_count(m: usize, ka: usize, n: usize) -> usize {
     cores.min(m / 64).max(1)
 }
 
+/// A/B override for the public `matmul` flat-workspace parallel gate (0 ⇒ default 8M
+/// macs). Same-binary A/B only; byte-identical either way.
+pub static MATMUL_MACS_GATE_OVERRIDE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Thread count for the public `matmul` flat-workspace GEMM. A LOWER macs gate (8M vs
+/// the 64M `matmul_thread_count` used by cholesky's SYRK — which OVER-subscribes on
+/// small triangular updates if lowered): the plain rectangular GEMM parallelizes
+/// cleanly (each thread owns disjoint output rows, byte-identical) and wins 2.2-2.5x
+/// for n≈200-400 (macs 8-64M) that were falling to the serial register kernel.
+fn matmul_ws_thread_count(m: usize, ka: usize, n: usize) -> usize {
+    let macs = (m as u64)
+        .saturating_mul(ka as u64)
+        .saturating_mul(n as u64);
+    let gate = {
+        let o = MATMUL_MACS_GATE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+        if o == 0 { 8 * 1024 * 1024 } else { o }
+    };
+    if macs < gate {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    cores.min(m / 64).max(1)
+}
+
 fn matmul_flat_workspace(
     a: &[Vec<f64>],
     b: &[Vec<f64>],
@@ -17159,7 +17186,7 @@ fn matmul_flat_workspace(
     // by the identical k-ordered reduction irrespective of the row split, so the
     // result is bit-identical to the sequential kernel (golden sha unchanged); only
     // *which* core writes each row changes.
-    let nthreads = matmul_thread_count(m, ka, n);
+    let nthreads = matmul_ws_thread_count(m, ka, n);
     if nthreads <= 1 {
         matmul_flat_compute_rows(&mut c_flat, 0, m, &a_flat, &packed_b, b, ka, n);
     } else {
