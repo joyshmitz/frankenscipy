@@ -453,6 +453,19 @@ pub struct CooMatrix {
     pub(crate) col_indices: Vec<usize>,
 }
 
+#[doc(hidden)]
+pub static COO_SUM_DUPLICATES_RADIX_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+const COO_SUM_DUPLICATES_RADIX_MIN_NNZ: usize = 65_536;
+const COO_SUM_DUPLICATES_RADIX_MIN_AVG_ROW_NNZ: usize = 64;
+
+#[derive(Clone, Copy)]
+struct PackedCooEntry {
+    key: u64,
+    value: f64,
+}
+
 impl CooMatrix {
     pub fn from_triplets(
         shape: Shape2D,
@@ -495,6 +508,13 @@ impl CooMatrix {
         }
 
         let nnz = data.len();
+        if !COO_SUM_DUPLICATES_RADIX_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+            && let Some(coalesced) =
+                coo_sum_duplicates_radix(shape, &data, &row_indices, &col_indices)
+        {
+            return Ok(coalesced);
+        }
+
         // Counting sort by row (O(nnz + rows)) beats the global O(nnz·log nnz)
         // `sort_unstable_by_key((row,col))` — SciPy's `coo.sum_duplicates()` uses a
         // (slow) `np.lexsort`, and this path feeds `sparse.random` + graph builds.
@@ -1457,6 +1477,94 @@ impl DiaMatrix {
     }
 }
 
+fn coo_sum_duplicates_radix(
+    shape: Shape2D,
+    data: &[f64],
+    row_indices: &[usize],
+    col_indices: &[usize],
+) -> Option<CooMatrix> {
+    let nnz = data.len();
+    if nnz < COO_SUM_DUPLICATES_RADIX_MIN_NNZ
+        || shape.cols == 0
+        || shape
+            .rows
+            .saturating_mul(COO_SUM_DUPLICATES_RADIX_MIN_AVG_ROW_NNZ)
+            > nnz
+    {
+        return None;
+    }
+
+    let rows = u64::try_from(shape.rows).ok()?;
+    let cols = u64::try_from(shape.cols).ok()?;
+    rows.checked_mul(cols)?;
+
+    let mut entries = Vec::with_capacity(nnz);
+    let mut max_key = 0_u64;
+    for ((&row_index, &col_index), &value) in row_indices.iter().zip(col_indices).zip(data) {
+        let row = u64::try_from(row_index).ok()?;
+        let col = u64::try_from(col_index).ok()?;
+        let key = row.checked_mul(cols)?.checked_add(col)?;
+        max_key = max_key.max(key);
+        entries.push(PackedCooEntry { key, value });
+    }
+
+    stable_radix_sort_packed_coo(&mut entries, max_key);
+
+    let mut merged_rows = Vec::with_capacity(nnz);
+    let mut merged_cols = Vec::with_capacity(nnz);
+    let mut merged_data = Vec::with_capacity(nnz);
+    let mut i = 0;
+    while i < entries.len() {
+        let key = entries[i].key;
+        let mut value = entries[i].value;
+        let mut j = i + 1;
+        while j < entries.len() && entries[j].key == key {
+            value += entries[j].value;
+            j += 1;
+        }
+        merged_rows.push(usize::try_from(key / cols).ok()?);
+        merged_cols.push(usize::try_from(key % cols).ok()?);
+        merged_data.push(value);
+        i = j;
+    }
+
+    Some(CooMatrix {
+        shape,
+        data: merged_data,
+        row_indices: merged_rows,
+        col_indices: merged_cols,
+    })
+}
+
+fn stable_radix_sort_packed_coo(entries: &mut Vec<PackedCooEntry>, max_key: u64) {
+    let bit_width = 64usize - max_key.leading_zeros() as usize;
+    let pass_count = bit_width.max(1).div_ceil(8);
+    let mut scratch = vec![PackedCooEntry { key: 0, value: 0.0 }; entries.len()];
+
+    for pass in 0..pass_count {
+        let shift = pass * 8;
+        let mut offsets = [0usize; 256];
+        for entry in entries.iter() {
+            offsets[((entry.key >> shift) & 0xff) as usize] += 1;
+        }
+
+        let mut total = 0usize;
+        for offset in &mut offsets {
+            let count = *offset;
+            *offset = total;
+            total += count;
+        }
+
+        for &entry in entries.iter() {
+            let bucket = ((entry.key >> shift) & 0xff) as usize;
+            scratch[offsets[bucket]] = entry;
+            offsets[bucket] += 1;
+        }
+
+        std::mem::swap(entries, &mut scratch);
+    }
+}
+
 pub trait NalgebraBridge {
     fn to_nalgebra_cs(&self) -> NalgebraCsMatrix<f64>;
     fn from_nalgebra_cs(matrix: &NalgebraCsMatrix<f64>) -> SparseResult<Self>
@@ -2064,5 +2172,64 @@ fn mode_label(mode: RuntimeMode) -> &'static str {
     match mode {
         RuntimeMode::Strict => "strict",
         RuntimeMode::Hardened => "hardened",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn coo_sum_duplicates_radix_matches_legacy_bits() {
+        let n = 2_048usize;
+        let nnz = 131_072usize;
+        let mut state = 0x86d2_2b9f_cafe_2017u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as usize
+        };
+
+        let mut rows = Vec::with_capacity(nnz);
+        let mut cols = Vec::with_capacity(nnz);
+        let mut data = Vec::with_capacity(nnz);
+        for i in 0..nnz {
+            rows.push(next() % n);
+            cols.push(next() % 257);
+            data.push((i % 17) as f64 - 8.0);
+        }
+
+        COO_SUM_DUPLICATES_RADIX_DISABLE.store(true, Ordering::Relaxed);
+        let legacy = CooMatrix::from_triplets(
+            Shape2D::new(n, n),
+            data.clone(),
+            rows.clone(),
+            cols.clone(),
+            true,
+        )
+        .expect("legacy coo");
+
+        COO_SUM_DUPLICATES_RADIX_DISABLE.store(false, Ordering::Relaxed);
+        let radix = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, true)
+            .expect("radix coo");
+
+        assert_eq!(radix.row_indices(), legacy.row_indices());
+        assert_eq!(radix.col_indices(), legacy.col_indices());
+        assert_eq!(
+            radix
+                .data()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            legacy
+                .data()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+
+        COO_SUM_DUPLICATES_RADIX_DISABLE.store(false, Ordering::Relaxed);
     }
 }

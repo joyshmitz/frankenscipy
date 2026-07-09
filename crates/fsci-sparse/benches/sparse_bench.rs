@@ -1,9 +1,11 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
-    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IluOptions, Shape2D, SolveOptions, add_csr,
-    block_diag, diags, eye, kron, random, scale_csr, spilu, spmm, spmv_csr, spsolve,
+    COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
+    IluOptions, Shape2D, SolveOptions, add_csr, block_diag, diags, eye, kron, random, scale_csr,
+    spilu, spmm, spmv_csr, spsolve,
 };
 use std::hint::black_box;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 /// Matrix configurations: (rows/cols, density).
@@ -375,8 +377,8 @@ fn bench_coo_to_csr(c: &mut Criterion) {
             cols.push(next() % n);
             data.push((next() % 1000) as f64 + 1.0);
         }
-        let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
-            .expect("coo");
+        let coo =
+            CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false).expect("coo");
         group.bench_with_input(
             BenchmarkId::new(format!("n{n}_nnz{nnz}"), nnz),
             &coo,
@@ -407,23 +409,28 @@ fn bench_coo_sum_duplicates(c: &mut Criterion) {
         let rows: Vec<usize> = (0..nnz).map(|_| next() % n).collect();
         let cols: Vec<usize> = (0..nnz).map(|_| next() % n).collect();
         let data: Vec<f64> = (0..nnz).map(|_| (next() % 1000) as f64 + 1.0).collect();
-        group.bench_with_input(
-            BenchmarkId::new(format!("n{n}_nnz{nnz}"), nnz),
-            &(rows, cols, data),
-            |bi, (rows, cols, data)| {
-                bi.iter(|| {
-                    let coo = CooMatrix::from_triplets(
-                        Shape2D::new(n, n),
-                        black_box(data).clone(),
-                        black_box(rows).clone(),
-                        black_box(cols).clone(),
-                        true,
-                    )
-                    .expect("coo");
-                    black_box(coo.nnz());
-                });
-            },
-        );
+        let fixture = (rows, cols, data);
+        for (label, disable_radix) in [("current", false), ("legacy_original", true)] {
+            group.bench_with_input(
+                BenchmarkId::new(format!("{label}_n{n}_nnz{nnz}"), nnz),
+                &fixture,
+                |bi, (rows, cols, data)| {
+                    bi.iter(|| {
+                        COO_SUM_DUPLICATES_RADIX_DISABLE.store(disable_radix, Ordering::Relaxed);
+                        let coo = CooMatrix::from_triplets(
+                            Shape2D::new(n, n),
+                            black_box(data).clone(),
+                            black_box(rows).clone(),
+                            black_box(cols).clone(),
+                            true,
+                        )
+                        .expect("coo");
+                        black_box(coo.nnz());
+                    });
+                },
+            );
+        }
+        COO_SUM_DUPLICATES_RADIX_DISABLE.store(false, Ordering::Relaxed);
     }
     group.finish();
 }
@@ -449,8 +456,8 @@ fn bench_coo_to_csc(c: &mut Criterion) {
             cols.push(next() % n);
             data.push((next() % 1000) as f64 + 1.0);
         }
-        let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
-            .expect("coo");
+        let coo =
+            CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false).expect("coo");
         group.bench_with_input(
             BenchmarkId::new(format!("n{n}_nnz{nnz}"), nnz),
             &coo,

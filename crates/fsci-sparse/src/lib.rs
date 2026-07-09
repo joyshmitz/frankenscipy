@@ -15,9 +15,9 @@ pub use construct::{
     eye_rectangular, hstack, hstack_with_format, identity, kron, kronsum, random, spdiags, vstack,
 };
 pub use formats::{
-    BsrMatrix, CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix,
-    DokMatrix, LilMatrix, NalgebraBridge, Shape2D, SparseError, SparseFormat, SparseResult,
-    SparseSliceSpec,
+    BsrMatrix, COO_SUM_DUPLICATES_RADIX_DISABLE, CanonicalMeta, ConstructionLogEntry, CooMatrix,
+    CscMatrix, CsrMatrix, DiaMatrix, DokMatrix, LilMatrix, NalgebraBridge, Shape2D, SparseError,
+    SparseFormat, SparseResult, SparseSliceSpec,
 };
 
 // SciPy-compatible lowercase type aliases (e.g. `csr_matrix` mirrors

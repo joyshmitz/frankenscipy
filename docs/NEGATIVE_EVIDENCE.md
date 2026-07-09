@@ -6,6 +6,48 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: dense-duplicate COO `sum_duplicates` stable radix coalescer (1.12x vs ORIG)
+
+- Dig audit: consulted this ledger first and did not retry prior dense-eigh,
+  SVD, sparse `spsolve`, cholesky, or old BTreeMap sparse-LU levers. A fresh
+  sparse bench/profile made `sparse_coo_sum_duplicates` the hot row after the
+  previous `spsolve` spectral keep: `n100000_nnz2000000` was ~132.6 ms and
+  `n20000_nnz2000000` was ~143.2 ms, while `spsolve_laplacian` was already
+  ~0.2-1.3 ms.
+- Lever: add a guarded stable LSD-radix coalescer for large dense-duplicate COO
+  triplet construction. It packs `(row, col)` into a checked `u64` key, radix
+  sorts stably, and then sums equal keys in the same encounter order as the
+  original per-row stable-sort path, preserving byte-exact `f64` sums. Gate:
+  `nnz >= 65_536` and average row nnz >= 64; sparse-spread inputs fall back to
+  ORIG after an ungated A/B showed only parity there.
+- Same-binary A/B switch: `COO_SUM_DUPLICATES_RADIX_DISABLE` forces the legacy
+  original path in the bench. Command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-sparse --bench sparse_bench --profile release -- sparse_coo_sum_duplicates --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+- MEASURED on RCH worker `ovh-a`, final post-clippy-fix Criterion medians:
+  - sparse-spread gated fallback: `current_n100000_nnz2000000` 100.82 ms vs
+    ORIG `legacy_original_n100000_nnz2000000` 100.73 ms = **1.00x parity**.
+  - dense-duplicate keep: `current_n20000_nnz2000000` 93.208 ms vs ORIG
+    `legacy_original_n20000_nnz2000000` 104.79 ms = **0.889x time / 1.12x faster**.
+- Correctness / conformance:
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-sparse coo_sum_duplicates_radix_matches_legacy_bits --profile release -- --nocapture`
+    (`1 passed`) verifies radix vs ORIG row order, column order, and
+    `f64::to_bits()` values.
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo test -p fsci-conformance --test e2e_sparse --profile release -- --nocapture`
+    locally with SciPy 1.17.1 / NumPy 2.4.3 (`24 passed`). The same RCH
+    `e2e_sparse` command also passed `24/24`, but its worker lacked SciPy and
+    skipped the live helper-oracle branch.
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo check -p fsci-sparse --all-targets`.
+  - BLOCKED: `cargo clippy -p fsci-sparse --all-targets -- -D warnings` no
+    longer reports a new radix lint after replacing manual div-ceil, but still
+    stops in existing `linalg.rs`/`ops.rs` `needless_range_loop` lint debt.
+  - BLOCKED: `rustfmt --check` on `fsci-sparse/src/lib.rs` walks existing
+    child modules and reports unrelated pre-existing formatting drift in
+    `construct.rs`, `linalg.rs`, and `ops.rs`.
+- Negative evidence: do not apply the radix path to broad sparse-spread COO
+  inputs without a new profile; the density gate exists because the ungated
+  `n100000_nnz2000000` case was only parity/slight loss while the dense
+  duplicate row won cleanly.
+
 ## 2026-07-08 - BlackThrush (cc) - KEEP: public lu() (P/L/U) blocked-LU gate 1000→128 (1.52-2.38x mid-n)
 
 - 5th win in the mis-gated-fast-path vein. The PUBLIC `lu()` (scipy.linalg.lu = P/L/U) still used
@@ -81,7 +123,6 @@ ledger above so the project has one source of truth.
 - Negative evidence: do not pursue SIMD `log/log1p` here without a new profile.
   The kept primitive is the safer erfc-vectorize-then-scalar-log path with
   scalar fallback for the numerically sensitive deep left tail.
-
 ## 2026-07-08 - BlackThrush (codex) - KEEP: Poisson logpmf_many hoists ln(mu) over batch (1.30x vs scalar-map ORIG)
 
 - LAND/DIG: no unlanded `.scratch` win remained; checked the open scratch worktrees
