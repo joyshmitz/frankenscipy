@@ -6,6 +6,42 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-08 - BlackThrush (cc) - REJECT: fsci-cluster `double_centered_gram_from_squared` parallel-row build (0.84-1.10x, REVERTED) + BLOCKER note
+
+- Dig audit: consulted this ledger first; avoided all rejected levers. Confirmed
+  ALREADY-OPTIMAL (do not re-chase): fsci-special struve (term-ratio recurrence +
+  early break), ellipj (AGM/descending Landen), fsci-integrate
+  monte_carlo_integrate / qmc_quad / brute / dblquad_many / tplquad_many /
+  quad_many / nquad_many (all thread::scope-parallel), fsci-interpolate NearestND
+  (KDTree+parallel) / griddata / Durand-Kerner root find (has early break),
+  fsci-opt isotonic (O(n) PAVA), fsci-signal firls (precomputed `ic` trig vector),
+  linalg Sylvester/Lyapunov (Schur+Bartels-Stewart).
+- EXTERNAL FINDING (banked): scipy.special.struve(1.0, x) over 200k pts = **1604
+  ms** (notoriously slow) vs the fast others (sici 8ms, fresnel 15ms). BUT fsci's
+  `struve_series` already uses the optimal term-ratio recurrence (2 gammas + early
+  break) → fsci already beats scipy; NO fsci headroom. Do not chase struve.
+- ATTEMPT: `double_centered_gram_from_squared` (fsci-cluster; used by
+  classical_mds / landmark_mds / landmark_isomap) builds the O(n²) double-centered
+  Gram with two SERIAL per-row passes. Parallelized both across rows (thread::scope,
+  disjoint output rows, byte-identical, gated n≥256, `GRAM_PAR_DISABLE` A/B).
+- MEASURED (classical_mds, k=3, same-binary A/B interleaved best-of-4): **0.89x@512
+  / 0.84x@1024 / 1.10x@2000**, maxdiff=0.0 (BYTE-IDENTICAL). Net WASH/loss: the
+  callers pass an O(1) `squared` (a distance-matrix lookup+square), so the Gram
+  build is cheap + bandwidth-bound while randomized_eigh (k small, parallel)
+  dominates end-to-end — parallelizing the cheap build just adds thread-spawn
+  overhead (regresses n≤1024). Reverted to byte-clean HEAD, probe deleted.
+- LEVER (learned): parallelizing an O(n²) BUILD only pays when the per-cell
+  callback is EXPENSIVE (O(d) kernel) AND the build is a real fraction of the whole
+  op. When the callback is an O(1) lookup and a parallel eigensolver dominates, it's
+  a bandwidth-bound wash — same lesson as the ODR FD-jacobian reject.
+- **BLOCKER SURFACED**: `crates/fsci-special/src/{orthopoly.rs (×2), lib.rs}` carry
+  leftover `<<<<<<< Updated upstream / >>>>>>> Stashed changes` autostash conflict
+  markers from a concurrent codex agent's mathieu work (a
+  `MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH` ↔ `MATHIEU_PERIODIC_ORIG_SHIFT_FOR_BENCH`
+  re-export rename mid-stash-pop). **fsci-special does not compile** in the shared
+  tree until these are resolved. I did NOT touch them (real content conflict = codex's
+  intent to resolve). Any special-crate perf work is blocked until then.
+
 ## 2026-07-08 - BlackThrush (cc) - KEEP: `lombscargle` fused single-pass kernel via angle-subtraction identities (1.6-2.0x vs ORIG)
 
 - Dig audit: consulted this ledger first; avoided all rejected levers (det gate,
