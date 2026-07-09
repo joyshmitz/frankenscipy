@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: `Weibull::fit` MLE reuses precomputed ln_data instead of powf (1.59-1.61x vs ORIG)
+
+- Dig audit: consulted this ledger first. Directly extends yesterday's GenGamma
+  ln-reuse KEEP (the deferred sibling I flagged there). Same lever family as
+  lombscargle (reuse a precomputed transcendental).
+- PROFILED: `Weibull::fit` runs a 50-iteration Newton MLE whose inner loop rebuilds
+  `xc = data.map(|x| x.powf(c))` every iteration — but `powf(x,c) = exp(c·ln(x))`
+  and `ln_data = data.map(x.ln())` is ALREADY precomputed at the top of the fit
+  (for `mean_ln` / the score terms). Reuse it: `xc = ln_data.map(|lx| (c·lx).exp())`,
+  dropping powf's internal `ln` on every element of every iteration (plus the
+  post-loop `xc_sum`). One `exp` per element instead of `ln + exp`.
+- MEASURED (`fit::<Weibull>`, same-binary A/B `WEIBULL_FIT_LN_REUSE_DISABLE`,
+  interleaved best-of-4, `CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cc`):
+  **1.61x@10k / 1.61x@100k / 1.59x@500k**. Fitted params vs the powf form:
+  Δc ≈ 2e-16, Δscale ≈ 0-2e-16 (the ~1e-15 per-element drift does NOT move the
+  Newton fixed point). fsci-stats lib suite **2017 passed / 0 failed** GREEN.
+- LEVER (reinforced, now proven on both a density AND an MLE loop): grep any
+  `x.powf(k)` with loop-invariant `k` where `x.ln()` (or a precomputed `ln_data`)
+  is available nearby → `(k·lx).exp()`. Highest payoff in iterative fits that
+  re-raise the SAME data to a changing exponent. Remaining stats candidates (same
+  pattern, deferred — scalar/unbenched): Weibull/WeibullMax `pdf` (`z.powf(c-1)` +
+  `z.powf(c)` → `zc=z^c; z^(c-1)=zc/z`, one powf instead of two) and their `logpdf`
+  (explicit `z.ln()` next to `z.powf(c)`).
+- SHARED-CHECKOUT (unchanged from prior turns): fsci-special STILL uncompilable
+  (codex mathieu autostash markers, now 3rd turn unresolved) → temp-reset the 2
+  files to HEAD (backup+restore) to build; stats lib.rs carries codex uncommitted
+  work → landed via reset-reapply. E0514 autocfg/cc/num-traits/matrixmultiply/
+  chacha20 cascade (shared-target concurrent-build race) cleared on plain retry.
+
 ## 2026-07-08 - BlackThrush (cc) - KEEP: GenGamma density reuses precomputed ln(x) instead of powf (1.29-1.43x vs ORIG)
 
 - Dig audit: consulted this ledger first; avoided all rejected levers (parallel

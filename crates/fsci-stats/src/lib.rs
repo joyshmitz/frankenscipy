@@ -4873,6 +4873,13 @@ impl Weibull {
     }
 }
 
+/// Same-binary A/B toggle for `Weibull::fit`: when `true`, the MLE Newton loop
+/// recomputes `x.powf(c)` each iteration (powf recomputes `ln(x)`); when `false`
+/// (default) it reuses the precomputed `ln_data` as `(c·lx).exp()`, dropping one
+/// `ln` per element per iteration. Agrees to ~1e-15; the fixed point is unchanged.
+pub static WEIBULL_FIT_LN_REUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl ContinuousDistribution for Weibull {
     fn cdf_sf_is_cheap(&self) -> bool {
         true
@@ -5000,10 +5007,20 @@ impl ContinuousDistribution for Weibull {
         let n = data.len() as f64;
         let ln_data: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
         let mean_ln: f64 = ln_data.iter().sum::<f64>() / n;
+        // powf(x,c) = exp(c·ln(x)); ln(x) is already in `ln_data`, so reuse it and
+        // drop powf's internal `ln` on every element of every Newton iteration.
+        let reuse = !WEIBULL_FIT_LN_REUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+        let pow_c = |c: f64| -> Vec<f64> {
+            if reuse {
+                ln_data.iter().map(|&lx| (c * lx).exp()).collect()
+            } else {
+                data.iter().map(|&x| x.powf(c)).collect()
+            }
+        };
 
         let mut c = 1.0;
         for _ in 0..50 {
-            let xc: Vec<f64> = data.iter().map(|&x| x.powf(c)).collect();
+            let xc: Vec<f64> = pow_c(c);
             let sum_xc: f64 = xc.iter().sum();
             let sum_xc_ln: f64 = xc.iter().zip(ln_data.iter()).map(|(&x, &lx)| x * lx).sum();
             let f = 1.0 / c + mean_ln - sum_xc_ln / sum_xc;
@@ -5023,7 +5040,7 @@ impl ContinuousDistribution for Weibull {
             c -= f / df;
             c = c.max(1e-6);
         }
-        let xc_sum: f64 = data.iter().map(|&x| x.powf(c)).sum();
+        let xc_sum: f64 = pow_c(c).iter().sum();
         let scale = (xc_sum / n).powf(1.0 / c);
         Self { c, scale }
     }
