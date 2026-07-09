@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `shift` parallel + separable B-spline support (order 0-5: 2.0-16.5x, BYTE-IDENTICAL)
+
+- Directly extends yesterday's zoom-separable KEEP (reuses the extracted `compute_axis_support`).
+  Consulted ledger first. `shift` had DOUBLE headroom: it was a plain SERIAL `for flat in
+  0..input.size()` loop (not even parallel, unlike zoom) AND recomputed the per-axis B-spline
+  support per pixel — yet a shift is a translation `coord[axis] = out_idx[axis] − shift[axis]`,
+  fully SEPARABLE per axis.
+- IMPL: (1) parallelize via `fill_pixels_parallel` (each pixel independent); (2) for order ≥ 2
+  precompute `axis_supports[axis][o]` once (same pattern as zoom, different coord formula), each
+  pixel a gather + `sample_spline_recursive`. The legacy serial loop is kept as the A/B baseline.
+- MEASURED (512² shift, same-binary A/B `NDIMAGE_ZOOM_SEPARABLE_DISABLE`, best-of-3, all
+  maxdiff=0.0 vs the serial path): order0 **2.28x**, order1 **1.99x** (parallelization alone),
+  order2 **4.11x**, order3 **6.23x** (136→22ms), order5 **16.54x** (348→21ms). The separable
+  precompute makes order 2-5 nearly ORDER-INDEPENDENT (~20ms) while the serial path scaled
+  348ms@order5. NO regression at any order (shift was serial ⇒ parallelization wins everywhere,
+  so no order≥2 gate needed — order 0/1 use the parallel per-pixel path). fsci-ndimage **256/0**.
+- LEVER (now applied to zoom+shift): the `compute_axis_support` extraction is the enabler —
+  ANY separable-coord transform (zoom, shift, diagonal affine) precomputes per-axis weights once.
+  Still per-pixel (coords couple axes): rotate, general affine, arbitrary map_coordinates.
+  SHARED-CHECKOUT: ndimage codex-contested but codex didn't touch `shift`; reset-reapply clean.
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: `GaussianKde::evaluate_many` sorted 8σ tail-window atop SIMD (1.60x vs ORIG, 1.44x vs current-main SIMD)
 
 - Dig audit: consulted this ledger first. Avoided the rejected 1-D KDE scalar

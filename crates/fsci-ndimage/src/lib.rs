@@ -8433,7 +8433,90 @@ pub fn shift(
 
     let spline = prefilter_spline_coefficients(input, order, mode)?;
     let mut output = NdArray::zeros(input.shape.clone());
+    let out_shape = output.shape.clone();
+    let in_shape = input.shape.clone();
+    let ndim = out_shape.len();
+    let kernel_work = (order + 1).saturating_pow(ndim as u32);
 
+    // A shift is a translation: coord[axis] = out_idx[axis] − shift[axis], separable per axis
+    // exactly like zoom. Two wins over the legacy SERIAL per-pixel loop below: (1) parallelize
+    // (each output pixel is independent), and (2) for order ≥ 2 precompute the per-axis B-spline
+    // supports ONCE (via the same `compute_axis_support`) rather than per pixel. Byte-identical.
+    if !NDIMAGE_ZOOM_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if order >= 2 {
+            let coeffs = &spline.coeffs;
+            let coord_offsets = &spline.coord_offsets;
+            let axis_supports: Vec<Vec<Option<Vec<(usize, f64)>>>> = (0..ndim)
+                .map(|axis| {
+                    (0..out_shape[axis])
+                        .map(|o| {
+                            let coord = o as f64 - shift_values[axis];
+                            let mut s = Vec::new();
+                            if compute_axis_support(
+                                coord,
+                                coeffs.shape[axis],
+                                in_shape[axis],
+                                coord_offsets[axis],
+                                order,
+                                mode,
+                                &mut s,
+                            ) {
+                                Some(s)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            let axis_supports = &axis_supports;
+            fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
+                thread_local! {
+                    static ZB: std::cell::RefCell<(Vec<Vec<(usize, f64)>>, Vec<usize>)> =
+                        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+                }
+                let oidx = unravel_with_shape(flat, &out_shape);
+                ZB.with_borrow_mut(|(bases, idx)| -> f64 {
+                    if bases.len() < ndim {
+                        bases.resize_with(ndim, Vec::new);
+                    }
+                    for axis in 0..ndim {
+                        match &axis_supports[axis][oidx[axis]] {
+                            None => return cval,
+                            Some(s) => {
+                                bases[axis].clear();
+                                bases[axis].extend_from_slice(s);
+                            }
+                        }
+                    }
+                    idx.clear();
+                    idx.resize(coeffs.ndim(), 0);
+                    sample_spline_recursive(coeffs, &bases[..ndim], 0, idx.as_mut_slice())
+                })
+            });
+        } else {
+            fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
+                let out_idx = unravel_with_shape(flat, &out_shape);
+                let coords: Vec<f64> = out_idx
+                    .iter()
+                    .enumerate()
+                    .map(|(axis, &o)| o as f64 - shift_values[axis])
+                    .collect();
+                sample_interpolated(
+                    input,
+                    &spline.coeffs,
+                    &coords,
+                    &spline.coord_offsets,
+                    order,
+                    mode,
+                    cval,
+                )
+            });
+        }
+        return Ok(output);
+    }
+
+    // Legacy serial per-pixel path (retained as the same-binary A/B baseline).
     for flat in 0..input.size() {
         let out_idx = input.unravel(flat);
         let coords: Vec<f64> = out_idx
