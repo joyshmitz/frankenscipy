@@ -6,6 +6,31 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: special `assoc_legendre_p_all` recurrence-prefix reuse (4.5-52x self, BYTE-IDENTICAL)
+
+- Harvest of the `legendre_p_all` prefix-reuse lever (prior commit f6fd97753) on its 2-D sibling —
+  the documented follow-on. `assoc_legendre_p_all(n,m,z)` filled its `(n+1)×(2m+1)` table by calling
+  `assoc_legendre_p(j,order,z)` = `lpmv(order,j,z)` for EVERY `(j,order)`, and each rebuilt
+  `P_j^{|order|}(z)` by rerunning the fixed-order upward degree recurrence from `P_{|order|}^{|order|}`
+  ⇒ `O(n²·m)`.
+- FIX: for a FIXED order magnitude `am`, the values `P_j^{am}(z)` across degrees `j=am..n` are exactly
+  the recurrence PREFIX; ONE sweep fills the whole `+am`/`−am` column PAIR in `O(n)` → table `O(n·m)`.
+  BYTE-IDENTICAL: sweep runs the identical `lpmv_nonneg_m` steps (`P_am^am` via same
+  `(1−z²).max(0).sqrt()` + `(2i−1)!!` loop, `P_{am+1}^am=z(2am+1)P`, then
+  `((2l−1)zP−(l+am−1)P⁻)/(l−am)`); the negative-order column reuses `lpmv`'s EXACT
+  `(−1)^am·∏1/k` ratio (fresh successive-division loop, NOT the O(1) multiplicative update — that
+  would drift). Gated on finite `z` (lpmv's non-finite→NaN short-circuit unmodelled by the sweep).
+- Same-binary A/B `ASSOC_LEGENDRE_P_ALL_FUSED_DISABLE` + new `assoc_legendre_p_all_fused_matches_
+  map_and_direct` test (to_bits equality vs BOTH the map and direct `assoc_legendre_p`, incl |z|>1).
+  MEASURED (z=0.37, all maxdiff=0.0): n=30 m=15 **4.45x**, n=50 m=25 **4.97x**, n=100 m=50 **5.32x**,
+  n=200 m=100 **4.47x**, **n=200 m=10 52.06x** (40.9→0.79ms). Win is `n×` on the RECURRENCE but the
+  per-negative-entry `O(am)` ratio work is UNCHANGED, so large `m≈n/2` caps at ~4.5-5x while small
+  `m≪n` (recurrence-bound) hits 52x. fsci-special lib **1150/0**.
+- FOLLOW-ONS (same normalization-wrapper family, deferred): `sph_legendre_p_all` (×√norm·cos θ),
+  `sph_harm_y_all` (complex, ×exp(imθ)) — both wrap the same `lpmv` column, so fill the `am`-column
+  once then apply each wrapper per-cell. LEVER unchanged: grep `*_all` table-builders calling a
+  single-degree helper that reruns a from-base recurrence → fill the recurrence PREFIX once.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: special `legendre_p_all` recurrence-prefix reuse (11-187x self, BYTE-IDENTICAL)
 
 - New primitive (recurrence-PREFIX reuse), adjacent to the compact-support vein. Scout-flagged

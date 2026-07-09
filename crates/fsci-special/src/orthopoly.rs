@@ -2740,21 +2740,107 @@ fn legendre_all_order(k: u32, m: u32) -> i32 {
     }
 }
 
+/// Same-binary A/B toggle: when `true`, `assoc_legendre_p_all` rebuilds each cell with an
+/// independent `assoc_legendre_p` (`lpmv`) call — the old `O(n²·m)` map that reran the
+/// order-fixed degree recurrence from `P_m^m` for every degree. Byte-identical; A/B timing only.
+#[doc(hidden)]
+pub static ASSOC_LEGENDRE_P_ALL_FUSED_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Write `P_j^{am}(z) = plm` into the positive-order column, and (for `am > 0`) the
+/// negative-order column scaled EXACTLY as `lpmv` does for `m < 0`:
+/// `(−1)^am · [∏_{k=j−am+1}^{j+am} 1/k] · plm` (the ratio built by successive division in
+/// ascending `k`, bit-for-bit matching `lpmv`).
+#[inline]
+fn assoc_all_store(
+    table: &mut [Vec<f64>],
+    j: u32,
+    plm: f64,
+    am: u32,
+    k_pos: usize,
+    k_neg: usize,
+    sign_neg: f64,
+) {
+    table[j as usize][k_pos] = plm;
+    if am > 0 {
+        let li = j as i32;
+        let ami = am as i32;
+        let mut ratio = 1.0;
+        for k in (li - ami + 1)..=(li + ami) {
+            ratio /= k as f64;
+        }
+        table[j as usize][k_neg] = sign_neg * ratio * plm;
+    }
+}
+
 /// All associated Legendre polynomials up to degree `n` and order `m`, as an
 /// `(n+1) × (2m+1)` table; entry `[j][k]` is the degree-`j`, order-`k′`
 /// polynomial where `k′` follows SciPy's order wraparound `0,1,…,m,−m,…,−1`.
 ///
 /// Matches `scipy.special.assoc_legendre_p_all(n, m, z)` (default `branch_cut=2`,
 /// `norm=False`, `diff_n=0`).
+///
+/// The naive map calls `assoc_legendre_p(j, order, z)` = `lpmv(order, j, z)` for every
+/// `(j, order)`, and each rebuilds `P_j^{|order|}(z)` by rerunning the fixed-order upward
+/// degree recurrence from `P_{|order|}^{|order|}` — `O(n²·m)`. But for a FIXED order magnitude
+/// `am`, the values `P_j^{am}(z)` across degrees `j = am..n` are exactly that recurrence's
+/// PREFIX, so one sweep fills the whole `+am`/`−am` column pair in `O(n)`, making the table
+/// `O(n·m)` (an `n×` reduction). BYTE-IDENTICAL: the sweep runs the identical
+/// `lpmv_nonneg_m` steps (`P_am^am`, `P_{am+1}^am = z(2am+1)P_am^am`, then
+/// `((2l−1)zP−(l+am−1)P⁻)/(l−am)`), and the negative column reuses `lpmv`'s exact ratio.
+/// Gated on finite `z` (matches `lpmv`'s non-finite → NaN short-circuit, which the sweep
+/// does not model).
 #[must_use]
 pub fn assoc_legendre_p_all(n: u32, m: u32, z: f64) -> Vec<Vec<f64>> {
-    (0..=n)
-        .map(|j| {
-            (0..=2 * m)
-                .map(|k| assoc_legendre_p(j, legendre_all_order(k, m), z, false))
-                .collect()
-        })
-        .collect()
+    let ncols = (2 * m + 1) as usize;
+    let mut table = vec![vec![0.0_f64; ncols]; n as usize + 1];
+    if !z.is_finite()
+        || ASSOC_LEGENDRE_P_ALL_FUSED_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        for j in 0..=n {
+            for k in 0..=2 * m {
+                table[j as usize][k as usize] =
+                    assoc_legendre_p(j, legendre_all_order(k, m), z, false);
+            }
+        }
+        return table;
+    }
+    // Fused prefix sweep: one fixed-order degree recurrence per order magnitude `am`.
+    for am in 0..=m {
+        // Column indices: `+am` sits at `k = am` (also the order-0 column); `−am` (only for
+        // am > 0) sits at `k = 2m+1−am` per `legendre_all_order`'s wraparound.
+        let k_pos = am as usize;
+        let k_neg = if am > 0 { (2 * m + 1 - am) as usize } else { 0 };
+        let sign_neg = if am % 2 == 0 { 1.0 } else { -1.0 };
+
+        // P_am^am(z) = (−1)^am (2am−1)!! (1−z²)^{am/2}, built exactly as `lpmv_nonneg_m`.
+        let mut pmm = 1.0;
+        if am > 0 {
+            let somx2 = (1.0 - z * z).max(0.0).sqrt();
+            let mut fact = 1.0;
+            for _i in 1..=am {
+                pmm *= -fact * somx2;
+                fact += 2.0;
+            }
+        }
+        assoc_all_store(&mut table, am, pmm, am, k_pos, k_neg, sign_neg);
+        if n >= am + 1 {
+            let pmm1 = z * (2.0 * am as f64 + 1.0) * pmm;
+            assoc_all_store(&mut table, am + 1, pmm1, am, k_pos, k_neg, sign_neg);
+            let mut p_prev = pmm;
+            let mut p_curr = pmm1;
+            for ll in (am + 2)..=n {
+                let llf = ll as f64;
+                let mf = am as f64;
+                let p_next =
+                    ((2.0 * llf - 1.0) * z * p_curr - (llf + mf - 1.0) * p_prev) / (llf - mf);
+                p_prev = p_curr;
+                p_curr = p_next;
+                assoc_all_store(&mut table, ll, p_curr, am, k_pos, k_neg, sign_neg);
+            }
+        }
+    }
+    table
 }
 
 /// All spherical Legendre polynomials up to degree `n` and order `m`, as an
@@ -4871,6 +4957,35 @@ mod tests {
             ],
             "all(4,-0.6,2)",
         );
+    }
+
+    #[test]
+    fn assoc_legendre_p_all_fused_matches_map_and_direct() {
+        use std::sync::atomic::Ordering;
+        // The fused prefix sweep must be BYTE-IDENTICAL to the per-cell map, and both must
+        // equal direct `assoc_legendre_p` calls (fused path is the default).
+        for &(n, m, z) in &[
+            (0u32, 0u32, 0.3),
+            (5, 3, 0.4),
+            (8, 8, -0.6),
+            (10, 2, 0.9),
+            (12, 5, -1.4), // |z| > 1 (somx2 clamps to 0 in both paths)
+            (20, 10, 0.15),
+        ] {
+            ASSOC_LEGENDRE_P_ALL_FUSED_DISABLE.store(true, Ordering::Relaxed);
+            let map = assoc_legendre_p_all(n, m, z);
+            ASSOC_LEGENDRE_P_ALL_FUSED_DISABLE.store(false, Ordering::Relaxed);
+            let fused = assoc_legendre_p_all(n, m, z);
+            assert_eq!(fused.len(), (n + 1) as usize);
+            for j in 0..=n {
+                for k in 0..=2 * m {
+                    let direct = assoc_legendre_p(j, legendre_all_order(k, m), z, false);
+                    let (f, mp) = (fused[j as usize][k as usize], map[j as usize][k as usize]);
+                    assert_eq!(f.to_bits(), mp.to_bits(), "fused!=map at n={n} m={m} j={j} k={k}");
+                    assert_eq!(f.to_bits(), direct.to_bits(), "fused!=direct at n={n} m={m} j={j} k={k}");
+                }
+            }
+        }
     }
 
     #[test]
