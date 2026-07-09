@@ -31,6 +31,31 @@ ledger above so the project has one source of truth.
   A/B resolved it to a consistent 1.08x — QMC micro-timings need the interleaved-best-of-N protocol.
   LEVER: base-b radical inverse for b==2 → `reverse_bits`; grep any per-digit base-2 expansion loop.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: stats `binned_statistic_dd` 3-D per-thread histograms (1.60-1.63x vs ORIG)
+
+- Dig audit: consulted this ledger first. Avoided rejected/exhausted dense
+  LU/Cholesky/BLAS-wall retreads, sparse COO `sum_duplicates`, KDE scalar/grid
+  retries, KDE-ND buffer/unroll rejects, rank-test sort retreads, robust-slope
+  build parallelism, and already-landed binned-statistic generic/1-D/2-D
+  parallel paths.
+- Primitive: the specialized 3-D `binned_statistic_dd` accumulator no longer
+  bypasses the parallel family. For `n >= 131072` and `bins^3 <= 65536`, it
+  shards the finite-coordinate min/max pass and the flat bin scatter into
+  per-thread private histograms (`count/sum/min/max/has_nan`), then merges once.
+  Small or huge-grid cases keep the legacy serial path.
+- Same-worker A/B on RCH `ovh-a`:
+  - `current_d3_mean/20` **2.6746 ms** vs `legacy_original_d3_mean/20`
+    **4.3681 ms** = **1.63x faster vs ORIG**.
+  - `current_d3_mean/30` **3.3797 ms** vs `legacy_original_d3_mean/30`
+    **5.4124 ms** = **1.60x faster vs ORIG**.
+- GREEN: focused 3-D serial-reference test, `stats_packet_runner_passes`
+  conformance, `cargo check --profile release -p fsci-stats --all-targets`,
+  `git diff --check`, and UBS (0 critical; broad pre-existing warning
+  inventory only).
+- Negative evidence: do not retry generic `binned_statistic_dd` or the 1-D/2-D
+  binned-statistic parallelization; those paths were already landed. This keep
+  only closes the 3-D specialized serial bypass.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: special `sph_legendre_p_all` + `sph_harm_y_all` recurrence-prefix reuse (2.7-60x self, BYTE-IDENTICAL)
 
 - COMPLETES the spherical-harmonics `*_all` family (legendre_p_all + assoc_legendre_p_all already

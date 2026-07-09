@@ -48834,39 +48834,120 @@ pub fn binned_statistic_dd(
     (stats, edges)
 }
 
+pub static BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn binned_statistic_dd_3d_accumulator(
     sample: &[Vec<f64>],
     values: &[f64],
     bins: usize,
     statistic: &str,
 ) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let n = sample.len();
+    let bins2 = bins * bins;
+    let total = bins2 * bins;
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if !BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE
+        .load(std::sync::atomic::Ordering::Relaxed)
+        && n >= 131_072
+        && total <= 65_536
+    {
+        cores.min(n / 65_536).max(1)
+    } else {
+        1
+    };
+
     let mut min0 = f64::INFINITY;
     let mut min1 = f64::INFINITY;
     let mut min2 = f64::INFINITY;
     let mut max0 = f64::NEG_INFINITY;
     let mut max1 = f64::NEG_INFINITY;
     let mut max2 = f64::NEG_INFINITY;
-    for point in sample {
-        let x0 = point[0];
-        let x1 = point[1];
-        let x2 = point[2];
-        if x0 < min0 {
-            min0 = x0;
+    if nthreads > 1 {
+        let chunk = n.div_ceil(nthreads);
+        let partials: Vec<([f64; 3], [f64; 3])> = std::thread::scope(|scope| {
+            sample
+                .chunks(chunk)
+                .map(|points| {
+                    scope.spawn(move || {
+                        let mut mn = [f64::INFINITY; 3];
+                        let mut mx = [f64::NEG_INFINITY; 3];
+                        for point in points {
+                            let x0 = point[0];
+                            let x1 = point[1];
+                            let x2 = point[2];
+                            if x0 < mn[0] {
+                                mn[0] = x0;
+                            }
+                            if x1 < mn[1] {
+                                mn[1] = x1;
+                            }
+                            if x2 < mn[2] {
+                                mn[2] = x2;
+                            }
+                            if x0 > mx[0] {
+                                mx[0] = x0;
+                            }
+                            if x1 > mx[1] {
+                                mx[1] = x1;
+                            }
+                            if x2 > mx[2] {
+                                mx[2] = x2;
+                            }
+                        }
+                        (mn, mx)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect()
+        });
+        for (mn, mx) in partials {
+            if mn[0] < min0 {
+                min0 = mn[0];
+            }
+            if mn[1] < min1 {
+                min1 = mn[1];
+            }
+            if mn[2] < min2 {
+                min2 = mn[2];
+            }
+            if mx[0] > max0 {
+                max0 = mx[0];
+            }
+            if mx[1] > max1 {
+                max1 = mx[1];
+            }
+            if mx[2] > max2 {
+                max2 = mx[2];
+            }
         }
-        if x1 < min1 {
-            min1 = x1;
-        }
-        if x2 < min2 {
-            min2 = x2;
-        }
-        if x0 > max0 {
-            max0 = x0;
-        }
-        if x1 > max1 {
-            max1 = x1;
-        }
-        if x2 > max2 {
-            max2 = x2;
+    } else {
+        for point in sample {
+            let x0 = point[0];
+            let x1 = point[1];
+            let x2 = point[2];
+            if x0 < min0 {
+                min0 = x0;
+            }
+            if x1 < min1 {
+                min1 = x1;
+            }
+            if x2 < min2 {
+                min2 = x2;
+            }
+            if x0 > max0 {
+                max0 = x0;
+            }
+            if x1 > max1 {
+                max1 = x1;
+            }
+            if x2 > max2 {
+                max2 = x2;
+            }
         }
     }
 
@@ -48891,29 +48972,84 @@ fn binned_statistic_dd_3d_accumulator(
         (0..=bins).map(|i| min2 + i as f64 * bw2).collect(),
     ];
 
-    let bins2 = bins * bins;
-    let total = bins2 * bins;
     let mut count = vec![0.0f64; total];
     let mut sum = vec![0.0f64; total];
     let mut bmin = vec![f64::INFINITY; total];
     let mut bmax = vec![f64::NEG_INFINITY; total];
     let mut has_nan = vec![false; total];
 
-    for (point, &v) in sample.iter().zip(values.iter()) {
-        let b0 = (((point[0] - min0) / bw0).floor() as usize).min(bins - 1);
-        let b1 = (((point[1] - min1) / bw1).floor() as usize).min(bins - 1);
-        let b2 = (((point[2] - min2) / bw2).floor() as usize).min(bins - 1);
-        let flat = b0 * bins2 + b1 * bins + b2;
-        count[flat] += 1.0;
-        sum[flat] += v;
-        if v.is_nan() {
-            has_nan[flat] = true;
-        } else {
-            if v < bmin[flat] {
-                bmin[flat] = v;
+    if nthreads > 1 {
+        let chunk = n.div_ceil(nthreads);
+        type Partial = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<bool>);
+        let partials: Vec<Partial> = std::thread::scope(|scope| {
+            sample
+                .chunks(chunk)
+                .zip(values.chunks(chunk))
+                .map(|(points, vals)| {
+                    scope.spawn(move || {
+                        let mut c = vec![0.0f64; total];
+                        let mut sm = vec![0.0f64; total];
+                        let mut mn = vec![f64::INFINITY; total];
+                        let mut mx = vec![f64::NEG_INFINITY; total];
+                        let mut hn = vec![false; total];
+                        for (point, &v) in points.iter().zip(vals.iter()) {
+                            let b0 = (((point[0] - min0) / bw0).floor() as usize).min(bins - 1);
+                            let b1 = (((point[1] - min1) / bw1).floor() as usize).min(bins - 1);
+                            let b2 = (((point[2] - min2) / bw2).floor() as usize).min(bins - 1);
+                            let flat = b0 * bins2 + b1 * bins + b2;
+                            c[flat] += 1.0;
+                            sm[flat] += v;
+                            if v.is_nan() {
+                                hn[flat] = true;
+                            } else {
+                                if v < mn[flat] {
+                                    mn[flat] = v;
+                                }
+                                if v > mx[flat] {
+                                    mx[flat] = v;
+                                }
+                            }
+                        }
+                        (c, sm, mn, mx, hn)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect()
+        });
+        for (c, sm, mn, mx, hn) in partials {
+            for b in 0..total {
+                count[b] += c[b];
+                sum[b] += sm[b];
+                if mn[b] < bmin[b] {
+                    bmin[b] = mn[b];
+                }
+                if mx[b] > bmax[b] {
+                    bmax[b] = mx[b];
+                }
+                if hn[b] {
+                    has_nan[b] = true;
+                }
             }
-            if v > bmax[flat] {
-                bmax[flat] = v;
+        }
+    } else {
+        for (point, &v) in sample.iter().zip(values.iter()) {
+            let b0 = (((point[0] - min0) / bw0).floor() as usize).min(bins - 1);
+            let b1 = (((point[1] - min1) / bw1).floor() as usize).min(bins - 1);
+            let b2 = (((point[2] - min2) / bw2).floor() as usize).min(bins - 1);
+            let flat = b0 * bins2 + b1 * bins + b2;
+            count[flat] += 1.0;
+            sum[flat] += v;
+            if v.is_nan() {
+                has_nan[flat] = true;
+            } else {
+                if v < bmin[flat] {
+                    bmin[flat] = v;
+                }
+                if v > bmax[flat] {
+                    bmax[flat] = v;
+                }
             }
         }
     }
@@ -83696,6 +83832,63 @@ mod tests {
                 assert!(
                     (mean[b] - expected).abs() < 1e-12,
                     "mean mismatch at bin {b}: {} vs {expected}",
+                    mean[b]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn binned_statistic_dd_3d_parallel_matches_serial_large() {
+        // The specialized 3-D accumulator uses a different flat-index kernel than
+        // the generic N-D path. Large inputs must still match a point-order
+        // single-thread reference: count exactly, mean within reduction tolerance.
+        let n = 150_000usize;
+        let bins = 20usize;
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut nx = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let sample: Vec<Vec<f64>> = (0..n).map(|_| vec![nx(), nx(), nx()]).collect();
+        let values: Vec<f64> = (0..n).map(|_| nx() * 8.0 - 4.0).collect();
+
+        let total = bins * bins * bins;
+        let bins2 = bins * bins;
+        let (mut mins, mut maxs) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for p in &sample {
+            for d in 0..3 {
+                mins[d] = mins[d].min(p[d]);
+                maxs[d] = maxs[d].max(p[d]);
+            }
+        }
+        let bws: Vec<f64> = (0..3).map(|d| (maxs[d] - mins[d]) / bins as f64).collect();
+        let mut rcount = vec![0.0f64; total];
+        let mut rsum = vec![0.0f64; total];
+        for (p, &v) in sample.iter().zip(&values) {
+            let b0 = (((p[0] - mins[0]) / bws[0]).floor() as usize).min(bins - 1);
+            let b1 = (((p[1] - mins[1]) / bws[1]).floor() as usize).min(bins - 1);
+            let b2 = (((p[2] - mins[2]) / bws[2]).floor() as usize).min(bins - 1);
+            let flat = b0 * bins2 + b1 * bins + b2;
+            rcount[flat] += 1.0;
+            rsum[flat] += v;
+        }
+
+        let (count, _) = binned_statistic_dd(&sample, &values, bins, "count");
+        let (mean, _) = binned_statistic_dd(&sample, &values, bins, "mean");
+        assert_eq!(count.len(), total);
+        assert_eq!(count.iter().sum::<f64>(), n as f64);
+        for b in 0..total {
+            assert_eq!(count[b], rcount[b], "3D count mismatch at bin {b}");
+            if rcount[b] == 0.0 {
+                assert!(mean[b].is_nan(), "expected NaN mean at 3D bin {b}");
+            } else {
+                let expected = rsum[b] / rcount[b];
+                assert!(
+                    (mean[b] - expected).abs() < 1e-12,
+                    "3D mean mismatch at bin {b}: {} vs {expected}",
                     mean[b]
                 );
             }

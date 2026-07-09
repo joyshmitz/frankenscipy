@@ -4,7 +4,7 @@ use fsci_stats::{
     binned_statistic_dd, centered_discrepancy, ecdf, energy_distance, histogram, kendalltau,
     kruskal, ks_2samp, l2_star_discrepancy, mannkendall, mannwhitneyu, mixture_discrepancy, pacf,
     psd_welch, rand_index, siegelslopes, somersd, theilslopes, wasserstein_distance,
-    wraparound_discrepancy,
+    wraparound_discrepancy, BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE,
 };
 use std::hint::black_box;
 
@@ -566,9 +566,19 @@ fn bench_binned_statistic_dd(c: &mut Criterion) {
         .collect();
     let vs: Vec<f64> = (0..n).map(|i| (i as f64 * 0.001).sin()).collect();
     for &bins in &[20usize, 30] {
-        group.bench_function(BenchmarkId::new("d3_mean", bins), |b| {
-            b.iter(|| binned_statistic_dd(black_box(&sample), black_box(&vs), bins, "mean"))
-        });
+        for (label, disable_parallel) in [
+            ("current_d3_mean", false),
+            ("legacy_original_d3_mean", true),
+        ] {
+            group.bench_function(BenchmarkId::new(label, bins), |b| {
+                b.iter(|| {
+                    BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE
+                        .store(disable_parallel, std::sync::atomic::Ordering::Relaxed);
+                    binned_statistic_dd(black_box(&sample), black_box(&vs), bins, "mean")
+                })
+            });
+        }
+        BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
     }
     group.finish();
 }

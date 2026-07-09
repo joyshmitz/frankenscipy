@@ -4,6 +4,58 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: binned_statistic_dd 3-D per-thread histograms (1.60-1.63x vs ORIG)
+
+Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided
+already rejected/exhausted families: dense LU/Cholesky/BLAS-wall retreads,
+sparse COO `sum_duplicates` fused cursor/validation, KDE scalar-constant and
+grid-recurrence retries, KDE-ND whitening-buffer/unroll rejects, rank-test sort
+retreads, robust-slope build parallelism, and the already-landed
+`binned_statistic` 1-D/2-D plus generic N-D parallel paths.
+
+Profiling pass:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10 --noplot`.
+The broad stats pass still had KDE/rank/robust rows above the binned row, but
+the ledger marks those families as closed or requiring a different larger
+campaign. The clean unclosed residual was `binned_statistic_dd/d3_mean`: the
+3-D specialization bypassed the previously parallelized generic N-D path and
+still ran its min/max and bin-scatter passes serially.
+
+Kept primitive: keep the specialized 3-D flat indexer, but shard both passes
+across per-thread private state. For finite-coordinate inputs with
+`n >= 131072` and `bins^3 <= 65536`, the function now reduces min/max for
+coordinates 0/1/2 in per-thread chunks, then scatters into per-thread
+`count/sum/min/max/has_nan` histograms and merges once. Small inputs and huge
+grids keep the legacy serial path. Count/min/max are exact under merge; sum/mean
+reassociate only within the existing `1e-12` binned-statistic tolerance. The
+temporary public A/B switch `BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE` exists
+only to keep the ORIG comparator in the same Criterion binary.
+
+Same-worker A/B command:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=ovh-a RCH_REQUIRE_REMOTE=1 rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench binned_statistic_dd -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10 --noplot`.
+On RCH `ovh-a`, same binary:
+
+| row | current | legacy original | ratio |
+| --- | ---: | ---: | ---: |
+| `binned_statistic_dd/current_d3_mean/20` vs `legacy_original_d3_mean/20` | 2.6746 ms | 4.3681 ms | **1.63x faster vs ORIG** |
+| `binned_statistic_dd/current_d3_mean/30` vs `legacy_original_d3_mean/30` | 3.3797 ms | 5.4124 ms | **1.60x faster vs ORIG** |
+
+Correctness / conformance:
+- PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test --profile release -p fsci-stats binned_statistic_dd_3d_parallel_matches_serial_large --lib -- --nocapture`
+  on `ovh-a` (`1 passed`) checks exact counts and tolerance-bounded means
+  against a point-order serial reference.
+- PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=ovh-a RCH_REQUIRE_REMOTE=1 rch exec -- cargo test --profile release -p fsci-conformance stats_packet_runner_passes -- --nocapture`
+  (`stats_packet_runner_passes ... ok`).
+- PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=hz1 RCH_REQUIRE_REMOTE=1 rch exec -- cargo check --profile release -p fsci-stats --all-targets`.
+- PASS: `git diff --check`.
+- PASS: `ubs crates/fsci-stats/src/lib.rs crates/fsci-stats/benches/stats_bench.rs docs/NEGATIVE_EVIDENCE.md docs/progress/perf-negative-results.md`
+  reported 0 critical issues; warnings are broad pre-existing inventory in the
+  large stats source/bench, not this hunk.
+
+Negative evidence: do not retry generic `binned_statistic_dd` parallelization
+or 1-D/2-D binned-statistic parallelization; those were already landed. This
+keep only closes the 3-D specialized serial bypass.
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: GaussianKde sorted 8σ tail-window skips negligible kernels atop SIMD (1.60x vs ORIG)
 
 Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided the
