@@ -5788,6 +5788,13 @@ pub struct NdBSpline {
     pub k: usize,
 }
 
+/// Same-binary A/B toggle: when `true`, `NdBSpline` contraction sweeps the FULL coefficient
+/// tensor (∏ ns\[d] combinations, mostly zero-weighted) instead of the compact (k+1)^ndim
+/// nonzero support box. Byte-identical output; only for A/B timing. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static NDBSPLINE_COMPACT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl NdBSpline {
     /// Build an N-D B-spline; validates the coefficient count against the knots.
     pub fn new(t: Vec<Vec<f64>>, c: Vec<f64>, k: usize) -> Result<Self, InterpError> {
@@ -5818,40 +5825,80 @@ impl NdBSpline {
         Ok(Self { t, c, k })
     }
 
-    /// Evaluate at `point` (length `ndim`).
-    pub fn evaluate(&self, point: &[f64]) -> f64 {
+    /// Contract the coefficient tensor with the per-dimension B-spline basis at `point`, visiting
+    /// ONLY the `(k+1)^ndim` nonzero support combinations instead of the full `∏ ns[d]` tensor.
+    ///
+    /// A degree-`k` basis of length `ns[d]` is nonzero on just `k+1` contiguous indices, so the
+    /// dense odometer wasted `∏(ns[d]/(k+1))` iterations on `w = ∏basis` products that are zero —
+    /// compounding MULTIPLICATIVELY in ndim (e.g. ndim=3, ns=50 ⇒ 125k combos vs 64 nonzero).
+    /// BYTE-IDENTICAL: nonzero terms are exactly those where every `basis[d][idx[d]]` is nonzero
+    /// (a contiguous run), and the compact odometer visits them in the SAME row-major order, so
+    /// the retained `c·w` terms accumulate identically. The `w != 0.0` guard is kept so an
+    /// interior zero within the run (should not occur for B-splines) stays a `+c·0` no-op.
+    #[inline]
+    fn contract(&self, point: &[f64], ns: &[usize], stride: &[usize]) -> f64 {
         let ndim = self.t.len();
-        let ns: Vec<usize> = (0..ndim).map(|d| self.t[d].len() - self.k - 1).collect();
-        let bases: Vec<Vec<f64>> = (0..ndim)
-            .map(|d| eval_basis_all(&self.t[d], point[d], self.k, ns[d]))
-            .collect();
-        // Row-major strides over the coefficient tensor [n0,…,n_{D-1}].
-        let mut stride = vec![1usize; ndim];
-        for i in (0..ndim.saturating_sub(1)).rev() {
-            stride[i] = stride[i + 1] * ns[i + 1];
+        let full_mode = NDBSPLINE_COMPACT_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+        // Per-dimension compact support: `base` accumulates the support box's origin offset into
+        // `c`; `runs[d]` is the nonzero weight run; `lens[d]` its length (<= k+1).
+        let mut base = 0usize;
+        let mut runs: Vec<Vec<f64>> = Vec::with_capacity(ndim);
+        let mut lens: Vec<usize> = Vec::with_capacity(ndim);
+        for d in 0..ndim {
+            let full = eval_basis_all(&self.t[d], point[d], self.k, ns[d]);
+            if full_mode {
+                // A/B baseline: base 0 + full basis reproduces the old dense ∏ns[d] sweep exactly.
+                lens.push(full.len());
+                runs.push(full);
+            } else {
+                match full.iter().position(|&v| v != 0.0) {
+                    None => {
+                        lens.push(0);
+                        runs.push(Vec::new());
+                    }
+                    Some(b) => {
+                        let e = full.iter().rposition(|&v| v != 0.0).map_or(b, |x| x + 1);
+                        base += b * stride[d];
+                        lens.push(e - b);
+                        runs.push(full[b..e].to_vec());
+                    }
+                }
+            }
         }
-        let total: usize = ns.iter().product();
+        let total: usize = lens.iter().product();
         let mut idx = vec![0usize; ndim];
         let mut sum = 0.0f64;
         for _ in 0..total {
-            let mut off = 0usize;
+            let mut off = base;
             let mut w = 1.0f64;
             for d in 0..ndim {
                 off += idx[d] * stride[d];
-                w *= bases[d][idx[d]];
+                w *= runs[d][idx[d]];
             }
             if w != 0.0 {
                 sum += self.c[off] * w;
             }
             for d in (0..ndim).rev() {
                 idx[d] += 1;
-                if idx[d] < ns[d] {
+                if idx[d] < lens[d] {
                     break;
                 }
                 idx[d] = 0;
             }
         }
         sum
+    }
+
+    /// Evaluate at `point` (length `ndim`).
+    pub fn evaluate(&self, point: &[f64]) -> f64 {
+        let ndim = self.t.len();
+        let ns: Vec<usize> = (0..ndim).map(|d| self.t[d].len() - self.k - 1).collect();
+        // Row-major strides over the coefficient tensor [n0,…,n_{D-1}].
+        let mut stride = vec![1usize; ndim];
+        for i in (0..ndim.saturating_sub(1)).rev() {
+            stride[i] = stride[i + 1] * ns[i + 1];
+        }
+        self.contract(point, &ns, &stride)
     }
 
     /// Evaluate the spline at many points (the realistic grid-evaluation workload,
@@ -5867,42 +5914,15 @@ impl NdBSpline {
         for i in (0..ndim.saturating_sub(1)).rev() {
             stride[i] = stride[i + 1] * ns[i + 1];
         }
-        let total: usize = ns.iter().product();
-        // Reused per-point `idx` scratch (point-invariant ns/stride hoisted above; the
-        // per-dim `bases` are allocated per point). (Parallelizing the per-point loop
-        // MEASURED as a regression on the typical low-degree/low-dim case — the
-        // O(total) contraction is too cheap to amortise thread-spawn + scratch
-        // overhead; reverted to the serial map. frankenscipy-yw7ts ledger:
-        // docs/perf_ledger_cc.md.)
-        let mut idx = vec![0usize; ndim];
+        // Each point is an independent compact contraction (see `contract`): only the
+        // `(k+1)^ndim` nonzero support combinations are summed, not the full `∏ns[d]` tensor.
+        // (Parallelizing the per-point loop was MEASURED as a regression on the typical
+        // low-degree/low-dim case — thread-spawn overhead swamped the tiny contraction; the
+        // compact box makes it tinier still, so it stays a serial map. frankenscipy-yw7ts
+        // ledger: docs/perf_ledger_cc.md.)
         points
             .iter()
-            .map(|point| {
-                let bases: Vec<Vec<f64>> = (0..ndim)
-                    .map(|d| eval_basis_all(&self.t[d], point[d], self.k, ns[d]))
-                    .collect();
-                idx.iter_mut().for_each(|v| *v = 0);
-                let mut sum = 0.0f64;
-                for _ in 0..total {
-                    let mut off = 0usize;
-                    let mut w = 1.0f64;
-                    for d in 0..ndim {
-                        off += idx[d] * stride[d];
-                        w *= bases[d][idx[d]];
-                    }
-                    if w != 0.0 {
-                        sum += self.c[off] * w;
-                    }
-                    for d in (0..ndim).rev() {
-                        idx[d] += 1;
-                        if idx[d] < ns[d] {
-                            break;
-                        }
-                        idx[d] = 0;
-                    }
-                }
-                sum
-            })
+            .map(|point| self.contract(point, &ns, &stride))
             .collect()
     }
 }

@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: interpolate `NdBSpline` compact-support contraction (35-220x self, BYTE-IDENTICAL)
+
+- DIRECT harvest of the bisplev compact-support lever (same turn) applied to its N-D sibling —
+  the win compounds MULTIPLICATIVELY in ndim. `NdBSpline::evaluate`/`evaluate_many` contracted the
+  coefficient tensor by iterating `total = ∏ ns[d]` (the FULL Cartesian product of ALL coefficient
+  indices), computing `w = ∏ bases[d][idx[d]]` per combo and adding only when `w != 0.0`. A degree-k
+  basis of length `ns[d]` is nonzero on only `k+1` contiguous indices ⇒ only `(k+1)^ndim` combos
+  contribute; the rest were wasted `∏basis`-with-a-zero-factor iterations. e.g. ndim=3 ns=50 ⇒
+  125k combos iterated vs 64 nonzero.
+- FIX: extract a shared `contract(point, ns, stride)` that builds per-dim COMPACT support
+  `(base_offset, nonzero_run)` and runs the odometer over the `(k+1)^ndim` support box only, at
+  coefficient offset `base + Σ idx[d]·stride[d]`. BYTE-IDENTICAL: the nonzero terms are exactly
+  those where every `basis[d]` is nonzero (contiguous run), visited in the SAME row-major order;
+  `w != 0.0` guard kept so any interior zero stays a `+c·0` no-op. `evaluate` + `evaluate_many`
+  both route through it (removes the per-point full-tensor sweep).
+- Same-binary A/B `NDBSPLINE_COMPACT_DISABLE` (`full_mode` → base 0 + full basis reproduces the
+  old dense ∏ns[d] sweep in the SAME `contract`). MEASURED (clamped-cubic, evaluate_many, all
+  maxdiff=0.0): 2d ns=60 **35.7x**, 2d ns=100 **71.3x**, 3d ns=20 **66.9x**, 3d ns=30 **219.9x**
+  (1092→4.97ms), 4d ns=12 **57.5x**. Win scales with knots AND dim. fsci-interpolate **181/0**
+  (ndbspline_matches_scipy + evaluate_many==evaluate byte-identity guards green).
+- Kept the serial per-point map (the earlier parallelization revert stands — the compact box makes
+  each contraction tinier still, so thread-spawn would only lose harder). LEVER (now 2x-proven):
+  grep tensor-product evaluators looping the FULL basis length instead of the `k+1` support run.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: interpolate `bisplev` compact-support tensor product (2.3-8.3x self, BYTE-IDENTICAL)
 
 - Consulted ledger first; NEGATIVE_EVIDENCE has no bisplev entry and this is a NEW compact-support
