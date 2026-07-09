@@ -6,6 +6,29 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: Weibull/WeibullMax density powf-count reduction + ln-reuse (pdf 1.50-1.52x, logpdf 1.27-1.29x)
+
+- Dig audit: consulted ledger first. Harvests the tail of the reuse-transcendental
+  vein (GenGamma density + Weibull::fit already landed). Confirmed the vein's BIG
+  wins are done: swept all explicit `pdf_many`/`logpdf_many` — only GenGamma had the
+  `ln`+`powf` redundancy (density x^p·exp(−x^q), q≠1); the rest (Gamma/Chi/Nakagami/
+  Erlang/Beta/F…) have a single unavoidable `x.powf(shape−1)` with no shared `ln`.
+- The stretched-exp-with-power-prefactor family (Weibull/WeibullMax) has scalar
+  `pdf`/`logpdf` only (no `_many`), so the scalar path IS the array-eval path. Two
+  algebraic wins: **pdf** `z^(c−1)·exp(−z^c)` → `zc=z^c; z^(c−1)=zc/z` (ONE powf, not
+  two); **logpdf** `(c−1)·z.ln() − z.powf(c)` → reuse `lz=z.ln()` as `(c·lz).exp()`
+  (ONE ln, not two). Shared helpers `weibull_pdf_shape`/`weibull_logpdf_shape` wired
+  into Weibull + WeibullMax (4 sites).
+- MEASURED (mapped over 500k pts, same-binary A/B `WEIBULL_DENSITY_REUSE_DISABLE`,
+  interleaved best-of-4): **pdf 1.52x/1.50x/1.50x, logpdf 1.29x/1.28x/1.27x** across
+  (c,scale)=(1.5,2)/(0.8,1)/(3,1.5). max-rel 5e-16 (one logpdf case 3.2e-12, still far
+  inside tol). fsci-stats lib **2017 passed / 0 failed** GREEN.
+- VEIN STATUS: reuse-transcendental (powf→exp/reused-ln, trig-collapse) now harvested
+  across lombscargle, GenGamma pdf_many, Weibull::fit, Weibull/WeibullMax density.
+  Remaining scalar candidates (InvWeibull/Frechet/Burr `x^(-c-1)exp(-x^-c)`) are
+  smaller and lower-priority. Same shared-checkout dance as prior turns (special reset
+  -to-HEAD to unblock; stats reset-reapply; E0514 retry).
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: `Weibull::fit` MLE reuses precomputed ln_data instead of powf (1.59-1.61x vs ORIG)
 
 - Dig audit: consulted this ledger first. Directly extends yesterday's GenGamma

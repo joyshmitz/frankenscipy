@@ -4880,6 +4880,39 @@ impl Weibull {
 pub static WEIBULL_FIT_LN_REUSE_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Same-binary A/B toggle for the Weibull/WeibullMax density shape factors.
+pub static WEIBULL_DENSITY_REUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[inline]
+fn weibull_density_reuse() -> bool {
+    !WEIBULL_DENSITY_REUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Weibull-family pdf shape factor `base^(c−1)·exp(−base^c)` (base > 0). Computes
+/// `bc = base^c` once, so `base^(c−1) = bc/base` — ONE `powf` instead of two.
+#[inline]
+fn weibull_pdf_shape(base: f64, c: f64, reuse: bool) -> f64 {
+    if reuse {
+        let bc = base.powf(c);
+        (bc / base) * (-bc).exp()
+    } else {
+        base.powf(c - 1.0) * (-base.powf(c)).exp()
+    }
+}
+
+/// Weibull-family logpdf shape term `(c−1)·ln(base) − base^c` (base > 0). Reuses a
+/// single `ln(base)` (so `base^c = exp(c·ln(base))`) — ONE `ln` instead of two.
+#[inline]
+fn weibull_logpdf_shape(base: f64, c: f64, reuse: bool) -> f64 {
+    if reuse {
+        let lb = base.ln();
+        (c - 1.0) * lb - (c * lb).exp()
+    } else {
+        (c - 1.0) * base.ln() - base.powf(c)
+    }
+}
+
 impl ContinuousDistribution for Weibull {
     fn cdf_sf_is_cheap(&self) -> bool {
         true
@@ -4899,7 +4932,7 @@ impl ContinuousDistribution for Weibull {
             };
         }
         let z = x / self.scale;
-        (self.c / self.scale) * z.powf(self.c - 1.0) * (-z.powf(self.c)).exp()
+        (self.c / self.scale) * weibull_pdf_shape(z, self.c, weibull_density_reuse())
     }
 
     fn logpdf(&self, x: f64) -> f64 {
@@ -4917,7 +4950,7 @@ impl ContinuousDistribution for Weibull {
             };
         }
         let z = x / self.scale;
-        (self.c / self.scale).ln() + (self.c - 1.0) * z.ln() - z.powf(self.c)
+        (self.c / self.scale).ln() + weibull_logpdf_shape(z, self.c, weibull_density_reuse())
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -5128,7 +5161,7 @@ impl ContinuousDistribution for WeibullMax {
         }
         let c = self.c;
         let neg = -x;
-        c * neg.powf(c - 1.0) * (-neg.powf(c)).exp()
+        c * weibull_pdf_shape(neg, c, weibull_density_reuse())
     }
 
     fn logpdf(&self, x: f64) -> f64 {
@@ -5137,7 +5170,7 @@ impl ContinuousDistribution for WeibullMax {
             return self.pdf(x).ln();
         }
         let neg = -x;
-        self.c.ln() + (self.c - 1.0) * neg.ln() - neg.powf(self.c)
+        self.c.ln() + weibull_logpdf_shape(neg, self.c, weibull_density_reuse())
     }
 
     fn cdf(&self, x: f64) -> f64 {
