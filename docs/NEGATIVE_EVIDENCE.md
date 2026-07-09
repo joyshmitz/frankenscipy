@@ -6,6 +6,41 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-08 - BlackThrush (cc) - REJECT: fsci-odr dense `finite_diff_jacobian` parallel column fan-out (0.59-0.95x, REVERTED)
+
+- Dig audit: consulted this ledger first; avoided all rejected linalg levers
+  (det gate, Strassen, cholesky-NB, ecdf/parallel sort). Surveyed fresh crates
+  and confirmed already-optimized: fsci-opt `brute` (parallel grid+byte-id
+  argmin), `isotonic_regression` (O(n) PAVA stack), FD Jacobian (parallel);
+  fsci-integrate `monte_carlo_integrate`/`brute` (parallel w/ LCG jump);
+  fsci-spatial `cdist` cosine/correlation (row-norms precomputed once). Local
+  scipy 1.17.1 IS available for direct comparison.
+- HYPOTHESIS: fsci-odr's dense-reference `finite_diff_jacobian` (lib.rs ~1494)
+  is a SERIAL `for col in 0..(n_beta+n_delta)` loop, each an independent full
+  `residuals()` eval → O((p+n)·n) per iteration, unlike fsci-opt's already-
+  parallel FD Jacobian. Parallelized across columns (thread::scope, one owned
+  Vec per column + serial transpose, `#![forbid(unsafe_code)]`-safe, gated
+  rows·cols≥2^13, `ODR_FDJAC_PAR_DISABLE` A/B toggle, `+Sync` on the closure —
+  Model fn is `Arc<dyn Fn+Send+Sync>` so it composes).
+- MEASURED (same-binary A/B via `run_dense_reference`, interleaved best-of-4,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cc`): parallel is SLOWER —
+  **0.59x@n=150 / 0.83x@n=300 / 0.95x@n=500**, dbeta=ddelta=0.0 (BYTE-IDENTICAL,
+  so purely a timing loss). Two reasons: (1) the dense ODR path's real
+  bottleneck is the O((p+n)³) LM normal-equations SOLVE each iteration, NOT the
+  O((p+n)·n) Jacobian — that's exactly why the structured Schur-eliminated path
+  exists and is the default for scalar-separable models; the dense path is a
+  `#[doc(hidden)]` reference oracle. (2) each column allocates several small
+  Vecs (x_plus/unpack/residual/weighted/column) → allocator contention under
+  fan-out negates the parallelism.
+- Reverted lib.rs to byte-clean HEAD (empty diff), deleted probe. Docs-only
+  rejection.
+- LEVER (learned): before parallelizing an O(n²) inner loop, confirm it's the
+  ACTUAL bottleneck — an O(n³) dense solve in the same iteration dominates and
+  makes the Jacobian fan-out invisible; and many-small-Vec-per-unit work loses
+  to allocator contention. The structured/Schur path already avoids the O(n³)
+  solve, so the dense reference is not a user hot path. DON'T re-try ODR dense
+  FD-Jacobian parallelization.
+
 ## 2026-07-08 - BlackThrush (cc) - KEEP: `solve(assume_a=Symmetric/Hermitian)` Cholesky-then-LU fast path (3.35x vs ORIG portfolio)
 
 - Dig audit: consulted this ledger first; avoided the rejected det gate,
