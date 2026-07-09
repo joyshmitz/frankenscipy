@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-08 - BlackThrush (cc) - KEEP: public lu() (P/L/U) blocked-LU gate 1000→128 (1.52-2.38x mid-n)
+
+- 5th win in the mis-gated-fast-path vein. The PUBLIC `lu()` (scipy.linalg.lu = P/L/U) still used
+  `rows >= FLAT_LU_SOLVE_MIN_DIM=1000` for its blocked-LU path (lu_factor's twin, a separate call site I missed
+  last turn) → n<1000 fell to nalgebra's scalar `.lu()` + slow P/L/U unpack. Routed it through the
+  already-landed `lu_factor_flat_min()` (=128) — same `lu_factor_blocked` kernel, same GEPP, L/U match to
+  roundoff; the P/L/U extraction is O(n²).
+- MEASURED (nalgebra vs blocked, best-of-2, `-cc`): n=128 0.44→0.22ms **2.00x**; n=256 3.47→1.70ms **2.03x**;
+  n=384 8.50→5.58ms 1.52x; n=512 30.44→12.80ms **2.38x**; n=768 72.62→46.01ms 1.58x. BIGGER than lu_factor's
+  1.4-1.7x because nalgebra's `.lu()` P/L/U UNPACK (into separate dense matrices) is itself slow. All wins, no
+  regression. Full fsci-linalg lib suite GREEN.
+- LEVER: when lowering a shared FLAT_LU_*_MIN_DIM gate, grep ALL its call sites — `lu()` and `lu_factor()` are
+  DISTINCT public fns sharing `lu_factor_blocked`; I lowered lu_factor last turn but missed lu(). Both fixed now.
+- OTHER dense probes this turn (fine, don't chase): expm/cosm/sqrtm/logm @256 competitive/winning vs scipy-1thr
+  (expm parity, cosm 1.28x, sqrtm 2.28x, logm 4.86x); eig eigenvector back-transform only ~14% of eig (Schur =
+  nalgebra Francis-QR wall).
+
 ## 2026-07-08 - BlackThrush (cc) - KEEP: cholesky() blocked-factor gate 1000→256 (1.08-1.36x mid-n, byte-tolerant)
 
 - 4th win in the mis-gated-fast-path vein (solve/inv/lu_factor). `cholesky_lower_factor` used the unblocked

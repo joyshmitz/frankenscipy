@@ -3312,12 +3312,13 @@ pub fn lu(a: &[Vec<f64>], options: DecompOptions) -> Result<LuResult, LinalgErro
         });
     }
 
-    // Large matrices: factor with the in-house parallel blocked LU (its trailing
-    // update + panel are multithreaded/SIMD, ≈2x nalgebra's serial `.lu()` at
-    // n≥1000) and extract P/L/U from the flat factors. Same partial-pivot GEPP as
+    // Mid+large matrices: factor with the in-house parallel blocked LU (its trailing
+    // update + panel are multithreaded/SIMD, beats nalgebra's serial `.lu()` from
+    // n≈128 up) and extract P/L/U from the flat factors. Same partial-pivot GEPP as
     // nalgebra, so L/U match to roundoff; A = P·L·U with `P[perm[j]][j] = 1` (SciPy's
     // convention). Falls through to nalgebra on a singular pivot (blocked returns None).
-    if rows >= FLAT_LU_SOLVE_MIN_DIM
+    // Shares the `lu_factor` gate (same blocked kernel; the P/L/U extraction is O(n²)).
+    if rows >= lu_factor_flat_min()
         && let Some(factors) = lu_factor_blocked(a)
     {
         let n = factors.n;
