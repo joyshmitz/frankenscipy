@@ -653,6 +653,13 @@ pub fn legendre_p(n: u32, z: f64, diff_n: usize) -> Vec<f64> {
     out
 }
 
+/// Same-binary A/B toggle: when `true`, `legendre_p_all` rebuilds each column with an
+/// independent `legendre_p` call (the old `O(n²·diff_n)` map — every degree reruns the
+/// Gegenbauer recurrence from `C_0`). Byte-identical output; only for A/B timing.
+#[doc(hidden)]
+pub static LEGENDRE_P_ALL_FUSED_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// All Legendre polynomials of the first kind up to degree `n`, with all
 /// derivatives up to order `diff_n`.
 ///
@@ -661,13 +668,58 @@ pub fn legendre_p(n: u32, z: f64, diff_n: usize) -> Vec<f64> {
 /// `scipy.special.legendre_p_all(n, z, diff_n=diff_n)` (output shape
 /// `(diff_n + 1, n + 1)`). Each column is one [`legendre_p`] evaluation, so it
 /// inherits the everywhere-stable Gegenbauer derivative identity.
+///
+/// The naive map recomputes `eval_gegenbauer(j−m, m+½, z)` for every `(j, m)`, and that
+/// call reruns the three-term recurrence from `C_0` up to degree `j−m` — so degree `n`
+/// alone costs `O(n)` per derivative order, and the whole table costs `O(n²·diff_n)`.
+/// For a FIXED derivative order `m` the needed values are exactly the recurrence PREFIX
+/// `C_0^{m+½}(z), C_1, …, C_{n−m}^{m+½}(z)`, which one sweep fills in `O(n)`. Filling the
+/// whole table this way is `O(n·diff_n)` — an `n×` reduction — and BYTE-IDENTICAL: the
+/// sweep runs the identical recurrence steps `eval_gegenbauer` runs, so `C_l` matches
+/// `eval_gegenbauer(l, m+½, z)` bit-for-bit, and `(2m−1)!!` is accumulated in the same
+/// order. Gated on a finite `z` so `eval_gegenbauer`'s non-finite NaN short-circuits
+/// (which the prefix sweep does not model) never diverge; non-finite `z` keeps the map.
 #[must_use]
 pub fn legendre_p_all(n: u32, z: f64, diff_n: usize) -> Vec<Vec<f64>> {
-    let mut table = vec![vec![0.0_f64; n as usize + 1]; diff_n + 1];
-    for j in 0..=n {
-        let col = legendre_p(j, z, diff_n);
-        for (i, &v) in col.iter().enumerate() {
-            table[i][j as usize] = v;
+    let nn = n as usize;
+    let mut table = vec![vec![0.0_f64; nn + 1]; diff_n + 1];
+    if !z.is_finite() || LEGENDRE_P_ALL_FUSED_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        for j in 0..=n {
+            let col = legendre_p(j, z, diff_n);
+            for (i, &v) in col.iter().enumerate() {
+                table[i][j as usize] = v;
+            }
+        }
+        return table;
+    }
+    // Fused prefix sweep: one Gegenbauer recurrence per derivative order `m`.
+    let mut double_factorial = 1.0_f64; // (2m−1)!! accumulated across m, exactly as legendre_p
+    for m in 0..=diff_n {
+        if m > 0 {
+            double_factorial *= (2 * m - 1) as f64;
+        }
+        if (m as u32) > n {
+            // P_j^(m) = 0 for every j ≤ n < m; row stays zero-initialized.
+            continue;
+        }
+        let alpha = m as f64 + 0.5;
+        let lmax = nn - m; // degree of the highest Gegenbauer term (j = n)
+        let row = &mut table[m];
+        // C_0^alpha(z) = 1  → column j = m
+        let mut c_prev = 1.0_f64;
+        row[m] = double_factorial * c_prev;
+        if lmax >= 1 {
+            // C_1^alpha(z) = 2·alpha·z  → column j = m + 1
+            let mut c_curr = 2.0 * alpha * z;
+            row[m + 1] = double_factorial * c_curr;
+            for k in 1..lmax {
+                let kf = k as f64;
+                let c_next = (2.0 * (kf + alpha) * z * c_curr - (kf + 2.0 * alpha - 1.0) * c_prev)
+                    / (kf + 1.0);
+                c_prev = c_curr;
+                c_curr = c_next;
+                row[m + k + 1] = double_factorial * c_next;
+            }
         }
     }
     table

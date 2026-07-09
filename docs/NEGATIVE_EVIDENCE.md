@@ -6,6 +6,31 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: special `legendre_p_all` recurrence-prefix reuse (11-187x self, BYTE-IDENTICAL)
+
+- New primitive (recurrence-PREFIX reuse), adjacent to the compact-support vein. Scout-flagged
+  in fsci-special after confirming benched special fns are already optimized. `legendre_p_all(n,z,
+  diff_n)` built its `(diff_n+1)×(n+1)` table by calling `legendre_p(j,z,diff_n)` for EVERY degree
+  `j=0..n`, and each of those reran `eval_gegenbauer(j−m, m+½, z)` — a three-term recurrence FROM
+  `C_0` up to degree `j−m`. So every column recomputed the entire recurrence prefix ⇒ `O(n²·diff_n)`.
+- FIX: for a FIXED derivative order `m`, the needed values are exactly the recurrence prefix
+  `C_0..C_{n−m}` at `α=m+½`; ONE sweep fills them in `O(n)`, so the whole table is `O(n·diff_n)` —
+  an `n×` reduction. BYTE-IDENTICAL: the sweep runs the identical recurrence steps
+  `eval_gegenbauer` runs (same `C_0=1`, `C_1=2αz`, same `(2(k+α)z·C_k−(k+2α−1)C_{k−1})/(k+1)`), so
+  `C_l` matches `eval_gegenbauer(l,·)` bit-for-bit; `(2m−1)!!` accumulated in the same order.
+  Gated on finite `z` (eval_gegenbauer's non-finite NaN short-circuit isn't modelled by the sweep,
+  so non-finite `z` keeps the old map).
+- Same-binary A/B `LEGENDRE_P_ALL_FUSED_DISABLE`. MEASURED (z=0.37, all maxdiff=0.0): n=30 diff0
+  **11.1x**, n=50 diff2 **19.6x**, n=100 diff2 **43.7x**, n=200 diff4 **90.0x**, n=400 diff4
+  **187.1x** (101.6→0.54ms). Win scales ~linearly with n. `legendre_p_all_matches_scipy` golden
+  (scipy 1.17.1) GREEN + full fsci-special lib suite GREEN.
+- LEVER: grep `*_all` / table-builder evaluators that call a single-degree helper per degree where
+  that helper reruns a from-C_0 recurrence → fill the recurrence PREFIX once per fixed parameter.
+  FOLLOW-ONS (same file, harder byte-identity — deferred): `assoc_legendre_p_all` /
+  `sph_legendre_p_all` / `sph_harm_y_all` map `assoc_legendre_p` per (j,order) the same way.
+  NOTE: fsci-special working tree is BLOCKED by codex mathieu autostash conflict markers
+  (orthopoly.rs + lib.rs); landed via reset-both-to-HEAD + reapply, restoring codex's mess after.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: interpolate `NdBSpline` compact-support contraction (35-220x self, BYTE-IDENTICAL)
 
 - DIRECT harvest of the bisplev compact-support lever (same turn) applied to its N-D sibling —
