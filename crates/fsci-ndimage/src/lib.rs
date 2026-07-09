@@ -9676,24 +9676,58 @@ fn binary_dilation_with_structure_once(
     }
 
     let mut output = NdArray::zeros(input.shape.clone());
+    // Row-major odometer for the source multi-index (was `input.unravel(flat)`, a `Vec` heap-alloc
+    // per FOREGROUND element) plus a direct output flat-index (was a fresh `out_idx` `Vec` per
+    // (element, offset)). Dilation writes 1.0 idempotently, so cell-write order is irrelevant.
+    // BYTE-IDENTICAL: `idx` = `unravel(flat)`; `out_flat = Σ (idx+offset)·strides` = exactly what
+    // `output.set(&out_idx, 1.0)` computes, so the same cells become 1.0.
+    let full_mode = NDIMAGE_UNRAVEL_ODOMETER_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let ndim = input.ndim();
+    let mut idx = vec![0usize; ndim];
     for flat in 0..input.size() {
-        if input.data[flat] == 0.0 {
-            continue;
+        if input.data[flat] != 0.0 {
+            if full_mode {
+                let uidx = input.unravel(flat);
+                for offset in &offsets {
+                    let mut out_idx = Vec::with_capacity(ndim);
+                    let mut in_bounds = true;
+                    for axis in 0..ndim {
+                        let coord = uidx[axis] as i64 + offset[axis];
+                        if coord < 0 || coord >= input.shape[axis] as i64 {
+                            in_bounds = false;
+                            break;
+                        }
+                        out_idx.push(coord as usize);
+                    }
+                    if in_bounds {
+                        output.set(&out_idx, 1.0);
+                    }
+                }
+            } else {
+                for offset in &offsets {
+                    let mut in_bounds = true;
+                    let mut out_flat = 0usize;
+                    for axis in 0..ndim {
+                        let coord = idx[axis] as i64 + offset[axis];
+                        if coord < 0 || coord >= input.shape[axis] as i64 {
+                            in_bounds = false;
+                            break;
+                        }
+                        out_flat += coord as usize * output.strides[axis];
+                    }
+                    if in_bounds {
+                        output.data[out_flat] = 1.0;
+                    }
+                }
+            }
         }
-        let idx = input.unravel(flat);
-        for offset in &offsets {
-            let mut out_idx = Vec::with_capacity(input.ndim());
-            let mut in_bounds = true;
-            for axis in 0..input.ndim() {
-                let coord = idx[axis] as i64 + offset[axis];
-                if coord < 0 || coord >= input.shape[axis] as i64 {
-                    in_bounds = false;
+        if !full_mode {
+            for d in (0..ndim).rev() {
+                idx[d] += 1;
+                if idx[d] < input.shape[d] {
                     break;
                 }
-                out_idx.push(coord as usize);
-            }
-            if in_bounds {
-                output.set(&out_idx, 1.0);
+                idx[d] = 0;
             }
         }
     }
@@ -18737,6 +18771,29 @@ mod tests {
             }
             for (a, b) in pc_f.data.iter().zip(pc_o.data.iter()) {
                 assert_eq!(a.to_bits(), b.to_bits(), "pad_constant {shape:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn binary_dilation_odometer_matches_full_bitexact() {
+        use std::sync::atomic::Ordering;
+        // binary_dilation's odometer + direct-flat write must be BYTE-IDENTICAL to the
+        // per-element unravel + per-offset out_idx path, across ndim 1/2/3 and iterations.
+        let shapes: &[Vec<usize>] = &[vec![25], vec![11, 13], vec![5, 6, 4]];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            // Sparse-ish binary foreground.
+            let data: Vec<f64> = (0..total).map(|k| ((k * 7 + 3) % 5 == 0) as u8 as f64).collect();
+            let arr = NdArray::new(data, shape.clone()).unwrap();
+            for iters in [1usize, 2] {
+                NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(true, Ordering::Relaxed);
+                let full = binary_dilation(&arr, 3, iters).unwrap();
+                NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(false, Ordering::Relaxed);
+                let odo = binary_dilation(&arr, 3, iters).unwrap();
+                for (a, b) in full.data.iter().zip(odo.data.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "binary_dilation {shape:?} iters={iters}");
+                }
             }
         }
     }

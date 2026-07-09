@@ -6,6 +6,24 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `iterate_structure` (binary_dilation_with_structure_once) unravel→odometer + direct-flat write (2.6-2.83x self, BYTE-IDENTICAL)
+
+- Extends the unravel→odometer lever to the last ndimage sibling. `binary_dilation_with_structure_once`
+  (the loop body of `iterate_structure`, scipy.ndimage.iterate_structure) did, per FOREGROUND element,
+  `input.unravel(flat)` (1 `Vec` alloc) PLUS a fresh `out_idx = Vec::with_capacity(ndim)` PER OFFSET
+  (num_offsets allocs) then `output.set(&out_idx, 1.0)`. Replaced with a row-major odometer for the
+  source index + a DIRECT `out_flat = Σ (idx+offset)·output.strides` write (`output.set`'s `flat_index`
+  is exactly that sum). Dilation writes 1.0 IDEMPOTENTLY, so cell-write order is irrelevant ⇒
+  BYTE-IDENTICAL (to_bits test via `binary_dilation`, ndim 1/2/3, iters 1/2).
+- Same-binary A/B `NDIMAGE_UNRAVEL_ODOMETER_DISABLE`. MEASURED via `iterate_structure` (same=true):
+  [3,3] iters=60 **2.83x** (26.65→9.43ms), [5,5] iters=40 **2.59x**, [3,3,3] iters=25 **2.60x**
+  (230.9→88.7ms). fsci-ndimage **260/0**.
+- GOTCHA (measurement): first probed via `binary_dilation(input,size,iters)` → **1.00x** because that
+  PUBLIC path uses `binary_dilation_once_with_origins` (a DIFFERENT, already-optimized separable path),
+  NOT this helper — the helper is reached ONLY through `iterate_structure` (line ~9781). Probe the
+  ACTUAL caller, not the nearest public fn. ndimage per-element-unravel vein now EXHAUSTED (conv taps /
+  spline eval hoisted; center_of_mass/sum_axis/pad_constant + this all converted).
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: stats beta-negative-binomial batch CDF prefix table (38-351x vs ORIG, BIT-IDENTICAL)
 
 - Dig audit: consulted this ledger first. Avoided rejected/exhausted dense
