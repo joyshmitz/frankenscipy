@@ -10580,6 +10580,13 @@ pub fn array_histogram(input: &NdArray, bins: usize) -> (Vec<usize>, Vec<f64>) {
 use fsci_fft::Complex64;
 use std::f64::consts::PI;
 
+/// Same-binary A/B toggle: when `true`, `fourier_gaussian`/`fourier_uniform` re-evaluate the
+/// per-axis transcendental factor at every element instead of the precomputed separable 1-D
+/// tables. Byte-identical output; A/B timing only. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static NDIMAGE_FOURIER_SEPARABLE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Apply a Gaussian filter in the Fourier domain.
 ///
 /// Matches `scipy.ndimage.fourier_gaussian`. The input is assumed to be
@@ -10601,6 +10608,36 @@ pub fn fourier_gaussian(input: &[Complex64], shape: &[usize], sigma: &[f64]) -> 
 
     let mut output = input.to_vec();
 
+    // The frequency-domain Gaussian is SEPARABLE: `filter_val = ∏_d g_d(index_d)` where the
+    // per-axis factor `g_d(i) = exp(-0.5·(2π·freq(i)·sigma_d)²)` depends ONLY on the index along
+    // axis `d`. The naive loop re-evaluated that `exp` at every one of the `total` elements
+    // (`total·ndim` exps); precomputing the `ndim` 1-D factor tables costs only `Σ shape[d]` exps
+    // (~`total/ndim`× fewer). BYTE-IDENTICAL: each `g_d[i]` is the identical expression and the
+    // per-element product runs in the SAME reverse-axis order, so `filter_val` matches bit-for-bit.
+    let full_mode =
+        NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let factors: Vec<Vec<f64>> = if full_mode {
+        Vec::new()
+    } else {
+        shape
+            .iter()
+            .enumerate()
+            .map(|(d, &n)| {
+                (0..n)
+                    .map(|i| {
+                        let freq = if i <= n / 2 {
+                            i as f64 / n as f64
+                        } else {
+                            (i as f64 - n as f64) / n as f64
+                        };
+                        let omega = 2.0 * PI * freq;
+                        (-0.5 * (omega * sigma[d]).powi(2)).exp()
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+
     for (idx, val) in output.iter_mut().enumerate() {
         let mut filter_val = 1.0;
         let mut remaining = idx;
@@ -10609,13 +10646,17 @@ pub fn fourier_gaussian(input: &[Complex64], shape: &[usize], sigma: &[f64]) -> 
             let i = remaining % n;
             remaining /= n;
 
-            let freq = if i <= n / 2 {
-                i as f64 / n as f64
+            if full_mode {
+                let freq = if i <= n / 2 {
+                    i as f64 / n as f64
+                } else {
+                    (i as f64 - n as f64) / n as f64
+                };
+                let omega = 2.0 * PI * freq;
+                filter_val *= (-0.5 * (omega * sigma[d]).powi(2)).exp();
             } else {
-                (i as f64 - n as f64) / n as f64
-            };
-            let omega = 2.0 * PI * freq;
-            filter_val *= (-0.5 * (omega * sigma[d]).powi(2)).exp();
+                filter_val *= factors[d][i];
+            }
         }
 
         *val = (val.0 * filter_val, val.1 * filter_val);
@@ -10644,6 +10685,38 @@ pub fn fourier_uniform(input: &[Complex64], shape: &[usize], size: &[f64]) -> Ve
 
     let mut output = input.to_vec();
 
+    // Separable like `fourier_gaussian`: per-axis factor `u_d(i) = sinc(π·freq(i)·size_d)` (1.0 at
+    // freq≈0). Precompute the `ndim` 1-D tables (`Σ shape[d]` sines) instead of a `sin` at every
+    // `total·ndim`. BYTE-IDENTICAL: the freq≈0 factor is exactly `1.0`, so `filter_val *= 1.0`
+    // reproduces the old `continue` (no-op), and the retained sines run in the same reverse order.
+    let full_mode =
+        NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let factors: Vec<Vec<f64>> = if full_mode {
+        Vec::new()
+    } else {
+        shape
+            .iter()
+            .enumerate()
+            .map(|(d, &n)| {
+                (0..n)
+                    .map(|i| {
+                        let freq = if i <= n / 2 {
+                            i as f64 / n as f64
+                        } else {
+                            (i as f64 - n as f64) / n as f64
+                        };
+                        if freq.abs() < 1e-15 {
+                            1.0
+                        } else {
+                            let x = PI * freq * size[d];
+                            x.sin() / x
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+
     for (idx, val) in output.iter_mut().enumerate() {
         let mut filter_val = 1.0;
         let mut remaining = idx;
@@ -10652,17 +10725,21 @@ pub fn fourier_uniform(input: &[Complex64], shape: &[usize], size: &[f64]) -> Ve
             let i = remaining % n;
             remaining /= n;
 
-            let freq = if i <= n / 2 {
-                i as f64 / n as f64
-            } else {
-                (i as f64 - n as f64) / n as f64
-            };
+            if full_mode {
+                let freq = if i <= n / 2 {
+                    i as f64 / n as f64
+                } else {
+                    (i as f64 - n as f64) / n as f64
+                };
 
-            if freq.abs() < 1e-15 {
-                continue;
+                if freq.abs() < 1e-15 {
+                    continue;
+                }
+                let x = PI * freq * size[d];
+                filter_val *= x.sin() / x;
+            } else {
+                filter_val *= factors[d][i];
             }
-            let x = PI * freq * size[d];
-            filter_val *= x.sin() / x;
         }
 
         *val = (val.0 * filter_val, val.1 * filter_val);
@@ -18414,5 +18491,41 @@ mod tests {
             result.data.iter().all(|&x| x.abs() < 1e-10),
             "laplace on constant should be 0"
         );
+    }
+
+    #[test]
+    fn fourier_separable_matches_full_per_element_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The separable per-axis factor precompute must be BYTE-IDENTICAL to the old per-element
+        // recompute for fourier_gaussian and fourier_uniform, across ndim 1/2/3 and even/odd sizes.
+        let cases: &[(&[usize], &[f64])] = &[
+            (&[17], &[1.3]),
+            (&[16, 12], &[0.7, 2.1]),
+            (&[8, 9, 5], &[1.1, 0.4, 3.0]),
+        ];
+        for &(shape, params) in cases {
+            let total: usize = shape.iter().product();
+            let input: Vec<Complex64> = (0..total)
+                .map(|k| ((k as f64).sin() * 3.0, (k as f64 * 0.7).cos()))
+                .collect();
+            for gaussian in [true, false] {
+                NDIMAGE_FOURIER_SEPARABLE_DISABLE.store(true, Ordering::Relaxed);
+                let full = if gaussian {
+                    fourier_gaussian(&input, shape, params)
+                } else {
+                    fourier_uniform(&input, shape, params)
+                };
+                NDIMAGE_FOURIER_SEPARABLE_DISABLE.store(false, Ordering::Relaxed);
+                let sep = if gaussian {
+                    fourier_gaussian(&input, shape, params)
+                } else {
+                    fourier_uniform(&input, shape, params)
+                };
+                for (a, b) in full.iter().zip(sep.iter()) {
+                    assert_eq!(a.0.to_bits(), b.0.to_bits(), "re {shape:?} gaussian={gaussian}");
+                    assert_eq!(a.1.to_bits(), b.1.to_bits(), "im {shape:?} gaussian={gaussian}");
+                }
+            }
+        }
     }
 }

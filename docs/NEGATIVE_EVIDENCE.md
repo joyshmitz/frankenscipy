@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `fourier_gaussian`/`fourier_uniform` separable per-axis factor precompute (4.0-7.5x self, BYTE-IDENTICAL)
+
+- FRESH hot path (fourier-domain filters, no prior ledger entry), uncontested region of ndimage
+  lib.rs (~10600, codex hasn't touched it). Both filters compute, for EACH of the `total` output
+  elements, a PRODUCT over axes of a per-axis factor — `fourier_gaussian`
+  `∏_d exp(-0.5·(2π·freq_d·σ_d)²)`, `fourier_uniform` `∏_d sinc(π·freq_d·size_d)` — where each
+  factor depends ONLY on the index along that axis. The naive loop re-evaluated the `exp`/`sin` at
+  every element ⇒ `total·ndim` transcendentals.
+- FIX (separable precompute, same lever family as zoom/shift/affine): build the `ndim` 1-D factor
+  tables once (`Σ shape[d]` transcendentals, ~`total/ndim`× fewer), then each element is just
+  `∏_d factors[d][index_d]`. BYTE-IDENTICAL: each `factors[d][i]` is the identical expression, the
+  per-element product runs in the SAME reverse-axis order, and `fourier_uniform`'s freq≈0 factor is
+  exactly `1.0` so `*=1.0` reproduces the old `continue` no-op. `to_bits` test over ndim 1/2/3
+  (even+odd sizes).
+- Same-binary A/B `NDIMAGE_FOURIER_SEPARABLE_DISABLE`. MEASURED (best-of-4, all same=true):
+  fourier_gaussian 512² **4.23x** (4.04→0.95ms), 256²×4 **4.02x**; fourier_uniform 512² **7.53x**
+  (7.23→0.96ms), 1024² **7.26x** (30.0→4.14ms). uniform wins MORE — `sin/x` is costlier than `exp`,
+  so eliminating it saves more. fsci-ndimage lib **257/0**.
+- SKIPPED (correctly non-separable): `fourier_shift` (phase is a SUM over axes → ONE `sin_cos`/element
+  already, per-axis work is cheap arithmetic) and `fourier_ellipsoid` (filter of the COMBINED radius
+  `r=√Σ(freq_d·size_d)²` — couples all axes, one transcendental/element already). LEVER: grep
+  frequency-domain / tensor filters computing `∏_d f(index_d)` (or a sum reduced to one transcendental)
+  per element → precompute the per-axis 1-D factor tables.
+
 ## 2026-07-09 - BlackThrush (cc) - REJECT: Sobol general-dim direction-table hoist (0.80-0.98x, REVERTED) + profile audit FINDING
 
 - After the Halton base-2 bit-reversal KEEP, profiled the whole QMC + stats-non-distribution + special
