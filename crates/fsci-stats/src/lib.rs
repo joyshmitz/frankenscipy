@@ -17062,7 +17062,12 @@ impl ContinuousDistribution for Fisk {
             };
         }
         let c = self.c;
-        c * x.powf(c - 1.0) / (1.0 + x.powf(c)).powi(2)
+        if weibull_density_reuse() {
+            let xc = x.powf(c);
+            c * (xc / x) / (1.0 + xc).powi(2)
+        } else {
+            c * x.powf(c - 1.0) / (1.0 + x.powf(c)).powi(2)
+        }
     }
 
     fn logpdf(&self, x: f64) -> f64 {
@@ -17072,7 +17077,12 @@ impl ContinuousDistribution for Fisk {
             return self.pdf(x).ln();
         }
         let c = self.c;
-        c.ln() + (c - 1.0) * x.ln() - 2.0 * x.powf(c).ln_1p()
+        if weibull_density_reuse() {
+            let lx = x.ln();
+            c.ln() + (c - 1.0) * lx - 2.0 * (c * lx).exp().ln_1p()
+        } else {
+            c.ln() + (c - 1.0) * x.ln() - 2.0 * x.powf(c).ln_1p()
+        }
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -19886,7 +19896,12 @@ impl ContinuousDistribution for Burr12 {
         }
         let c = self.c;
         let d = self.d;
-        c * d * x.powf(c - 1.0) / (1.0 + x.powf(c)).powf(d + 1.0)
+        if weibull_density_reuse() {
+            let xc = x.powf(c);
+            c * d * (xc / x) / (1.0 + xc).powf(d + 1.0)
+        } else {
+            c * d * x.powf(c - 1.0) / (1.0 + x.powf(c)).powf(d + 1.0)
+        }
     }
 
     fn logpdf(&self, x: f64) -> f64 {
@@ -19897,7 +19912,12 @@ impl ContinuousDistribution for Burr12 {
         }
         let c = self.c;
         let d = self.d;
-        c.ln() + d.ln() + (c - 1.0) * x.ln() - (d + 1.0) * x.powf(c).ln_1p()
+        if weibull_density_reuse() {
+            let lx = x.ln();
+            c.ln() + d.ln() + (c - 1.0) * lx - (d + 1.0) * (c * lx).exp().ln_1p()
+        } else {
+            c.ln() + d.ln() + (c - 1.0) * x.ln() - (d + 1.0) * x.powf(c).ln_1p()
+        }
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -20272,7 +20292,11 @@ impl ContinuousDistribution for Loglogistic {
         }
         let c = self.c;
         let xc = x.powf(c);
-        c * x.powf(c - 1.0) / ((1.0 + xc) * (1.0 + xc))
+        if weibull_density_reuse() {
+            c * (xc / x) / ((1.0 + xc) * (1.0 + xc))
+        } else {
+            c * x.powf(c - 1.0) / ((1.0 + xc) * (1.0 + xc))
+        }
     }
 
     fn logpdf(&self, x: f64) -> f64 {
@@ -20281,7 +20305,12 @@ impl ContinuousDistribution for Loglogistic {
             return f64::NEG_INFINITY;
         }
         let c = self.c;
-        c.ln() + (c - 1.0) * x.ln() - 2.0 * x.powf(c).ln_1p()
+        if weibull_density_reuse() {
+            let lx = x.ln();
+            c.ln() + (c - 1.0) * lx - 2.0 * (c * lx).exp().ln_1p()
+        } else {
+            c.ln() + (c - 1.0) * x.ln() - 2.0 * x.powf(c).ln_1p()
+        }
     }
 
     fn cdf(&self, x: f64) -> f64 {

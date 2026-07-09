@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: Fisk/Loglogistic/Burr12 rational-density two-powf reduction + ln-reuse (pdf 1.46-1.53x, logpdf 1.22-1.39x)
+
+- Dig audit: consulted ledger first. Completes the reuse-transcendental density family
+  with the RATIONAL-form members (Burr/log-logistic) deferred two turns ago. First
+  confirmed the lever does NOT apply to the common dists (Normal closed-form; Gamma/F/
+  StudentT single powf; Beta distinct bases) and that std `.parse::<f64>()` is already
+  Eisel-Lemire (io has no float-parse headroom).
+- PROFILED: Fisk/Loglogistic `c·x^(c−1)/(1+x^c)^2` and Burr12 `c·d·x^(c−1)/(1+x^c)^(d+1)`
+  compute `x.powf(c)` TWICE (Loglogistic even keeps `let xc` but still recomputes
+  `x^(c−1)`!). Reuse `xc=x^c`, `x^(c−1)=xc/x` → one powf. logpdf `(c−1)·x.ln() −
+  k·ln1p(x^c)` reuses `lx=x.ln()` (x^c = exp(c·lx)) → one ln.
+- MEASURED (mapped 500k, same-binary A/B `WEIBULL_DENSITY_REUSE_DISABLE`, best-of-4):
+  **Fisk pdf 1.46x/logpdf 1.22x, Loglogistic 1.47x/1.22x, Burr12 pdf 1.53x/logpdf 1.39x**.
+  max-rel ~1e-15. fsci-stats lib **1980 passed / 0 failed** GREEN (1980 = HEAD without
+  codex's uncommitted tests).
+- WORKFLOW NOTE: edited against a HEAD-reset stats (not the codex-present tree), so the
+  diff is isolated from the start — no post-hoc reset-reapply, just commit + restore
+  codex backups. Cleaner than the edit-then-reset dance for multi-site batches. Handled
+  the Fisk↔Loglogistic DUPLICATE impl: pdf forms differ (Loglogistic pre-had `xc`) so
+  each pdf edit is unique; the identical logpdf used replace_all.
+- VEIN NOW FULLY HARVESTED: reuse-transcendental spans lombscargle / GenGamma /
+  Weibull::fit / Weibull / WeibullMax / InvWeibull / FrechetR / ExponWeibull / Fisk /
+  Loglogistic / Burr12. No known remaining density with the pattern.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: ExponWeibull density collapses duplicated x^c/exp(-x^c) (pdf 1.37x, logpdf 1.16x)
 
 - Dig audit: consulted ledger first. Highest-value remaining reuse-transcendental
