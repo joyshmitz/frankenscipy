@@ -7475,6 +7475,13 @@ pub fn spalde(
 pub static BISPLEV_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Same-binary A/B toggle: when `true`, `bisplev` sweeps the FULL basis (all nx_c/ny_c
+/// coefficients, mostly zero-weighted) instead of the compact ky+1 nonzero run. Byte-identical
+/// output; only for A/B timing. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static BISPLEV_COMPACT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Matches `scipy.interpolate.bisplev(x, y, tck)` for the value case
 /// (`dx == dy == 0`). The coefficient layout is scipy's, so a `tck` produced by
 /// `scipy.interpolate.bisplrep` can be evaluated directly.
@@ -7507,24 +7514,45 @@ pub fn bisplev(
         });
     }
 
-    // Pre-compute the y-direction basis once per output column (independent of x).
-    let by_all: Vec<Vec<f64>> = y.iter().map(|&yj| eval_basis_all(ty, yj, ky, ny_c)).collect();
+    // Pre-compute the y-direction basis once per output column (independent of x), stored as
+    // COMPACT support `(base index, nonzero weight run)`. Only ky+1 basis functions are nonzero
+    // per point, so the inner y-sum touches ky+1 coefficients instead of sweeping all ny_c —
+    // the old loop multiplied every c[row+b] by a mostly-zero byb. Byte-identical: the skipped
+    // terms are exactly the zero-weight ones (`s += c·bxa·0.0` is a no-op) and the nonzero run
+    // is contiguous, so the retained terms accumulate in the same order.
+    let full_mode = BISPLEV_COMPACT_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let compact = |full: &[f64]| -> (usize, Vec<f64>) {
+        if full_mode {
+            // A/B baseline: base 0 + full basis reproduces the old all-`ny_c` sweep exactly.
+            return (0, full.to_vec());
+        }
+        match full.iter().position(|&v| v != 0.0) {
+            None => (0, Vec::new()),
+            Some(base) => {
+                let end = full.iter().rposition(|&v| v != 0.0).map_or(base, |e| e + 1);
+                (base, full[base..end].to_vec())
+            }
+        }
+    };
+    let by_all: Vec<(usize, Vec<f64>)> = y
+        .iter()
+        .map(|&yj| compact(&eval_basis_all(ty, yj, ky, ny_c)))
+        .collect();
 
     let mut out = vec![vec![0.0; y.len()]; x.len()];
 
-    // One output ROW (fixed x) is an independent, compute-bound tensor-product
-    // evaluation: the x-basis is one de Boor sweep, then each y-column sums the
-    // (kx+1)·(ky+1) nonzero coefficient block. Rows are independent (each writes its
-    // own `out[i]`), so the loop fans across cores BYTE-IDENTICALLY.
+    // One output ROW (fixed x) is an independent, compute-bound tensor-product evaluation: the
+    // x-basis is one de Boor sweep, then each y-column sums the (kx+1)·(ky+1) nonzero coefficient
+    // block. Rows are independent (each writes its own `out[i]`), so the loop fans across cores.
     let fill_row = |xi: f64, row_out: &mut [f64]| {
-        let bx = eval_basis_all(tx, xi, kx, nx_c);
-        for (j, by) in by_all.iter().enumerate() {
+        let (bx_base, bx) = compact(&eval_basis_all(tx, xi, kx, nx_c));
+        for (j, (by_base, by)) in by_all.iter().enumerate() {
             let mut s = 0.0;
             for (a, &bxa) in bx.iter().enumerate() {
                 if bxa == 0.0 {
                     continue;
                 }
-                let row = a * ny_c;
+                let row = (bx_base + a) * ny_c + by_base;
                 for (b, &byb) in by.iter().enumerate() {
                     s += c[row + b] * bxa * byb;
                 }

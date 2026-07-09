@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: interpolate `bisplev` compact-support tensor product (2.3-8.3x self, BYTE-IDENTICAL)
+
+- Consulted ledger first; NEGATIVE_EVIDENCE has no bisplev entry and this is a NEW compact-support
+  lever (distinct from all rejected levers). Profiled the tensor-product eval: the inner comment
+  claimed `(kx+1)·(ky+1)` nonzero coefficients per output point, but the y-loop actually iterated
+  ALL `ny_c` columns — a B-spline basis of length `ny_c` is nonzero on only `ky+1` contiguous
+  spans, so ~`ny_c/(ky+1)` of the work was `s += c·bxa·0.0` no-ops. Cost ∝ knot count `ny_c`.
+- FIX: precompute each y-column basis as COMPACT support `(base_index, nonzero_weight_run)` via
+  `first_nonzero..last_nonzero+1`; `fill_row` sums only the `ky+1` retained weights at coefficient
+  offset `(bx_base+a)*ny_c + by_base`. BYTE-IDENTICAL: skipped terms are exactly the zero-weight
+  ones and the nonzero run is contiguous, so retained terms accumulate in the SAME order.
+- Same-binary A/B via `BISPLEV_COMPACT_DISABLE` (`full_mode` → `(0, full.to_vec())` reproduces
+  the old all-`ny_c` sweep in the SAME `fill_row`). MEASURED (clamped-cubic tck, all maxdiff=0.0):
+  nc=30 grid=300² **2.30x** (1.92→0.84ms); nc=60 grid=500² **5.75x** (8.72→1.52ms); nc=100
+  grid=500² **8.29x** (14.97→1.81ms). Win scales with knot count `ny_c` (more zero columns
+  skipped). fsci-interpolate conformance **181/0**.
+- LEVER: grep tensor-product / separable evaluators that loop the FULL basis length (`ny_c`,
+  `nx_c`) instead of the `k+1` nonzero support run → compact `(base, run)`. `RectBivariateSpline`/
+  `SmoothBivariateSpline::eval_grid` already precompute per-axis basis ONCE (separable) — this
+  was the raw `bisplev(x,y,tck)` scattered entry point that still swept the full basis.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage diagonal `affine_transform` separable B-spline (order 2-5: 1.3-3.4x, BYTE-IDENTICAL)
 
 - Completes the separable geometric-transform family (zoom + shift already landed) using the
