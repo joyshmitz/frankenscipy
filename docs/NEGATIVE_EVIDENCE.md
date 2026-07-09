@@ -42,6 +42,31 @@ ledger above so the project has one source of truth.
   conformance `cargo test -p fsci-conformance stats_packet_runner_passes
   --profile release -- --nocapture` passed on `hz2` (`1 passed; 210 filtered
   out`).
+## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage zoom separable B-spline support precompute (order 2-5: 2.0-3.7x, BYTE-IDENTICAL)
+
+- Executes the FINDING logged last turn (zoom order-3 was at parity with scipy's SERIAL
+  55ms despite being parallel ⇒ ~cores× per-pixel over-work). Consulted ledger first.
+- IMPL, exactly as planned: (1) extracted the per-axis B-spline support-loop body from
+  `sample_interpolated` into `fn compute_axis_support(coord, coeff_len, input_shape_axis,
+  coord_offset, order, mode, support) -> bool` (`continue`→return true, `return cval`→
+  return false) — a VERBATIM move, validated byte-identical by full conformance BEFORE
+  touching zoom (256/0). (2) In `zoom`, precompute `axis_supports[axis][o]` once (a regular
+  zoom maps each output axis-index to a fixed input coord ⇒ the support is separable), then
+  each pixel is a gather into thread-local scratch + the existing `sample_spline_recursive`
+  combine. Same weights, same combine ⇒ BYTE-IDENTICAL.
+- MEASURED (512×512 → 2×, same-binary A/B `NDIMAGE_ZOOM_SEPARABLE_DISABLE`, best-of-3, all
+  maxdiff=0.0): order2 **1.99-2.16x**, order3 **2.30-2.35x** (61→26ms), order4 **2.51-3.09x**,
+  order5 **3.21-3.69x** (143→39ms). Scales with order (more taps ⇒ more recompute avoided).
+  Gated **order >= 2**: order-1 Reflect is the ultra-fast cardinal linear path where the
+  precompute LOSES 0.77x (order-1 Mirror wins 1.72x but excluded to stay safe). fsci-ndimage
+  lib **256 passed / 0 failed** GREEN.
+- LEVER: any regular-grid resample (zoom / affine with diagonal scale) is axis-SEPARABLE —
+  precompute the per-axis interpolation weights once instead of per pixel; the general
+  per-pixel path (rotate / arbitrary map_coordinates) can't (coords couple axes). Extract the
+  weight kernel so both share it (guarantees byte-identity). This is what scipy does — fsci is
+  now parallel AND separable ⇒ beats scipy by ~cores. SHARED-CHECKOUT: ndimage lib.rs had codex
+  work but codex only SHIFTED sample_interpolated +6 lines (body identical), so reset-reapply
+  was clean.
 
 ## 2026-07-09 - BlackThrush (codex) - KEEP: GaussianKde `evaluate_many` SIMD exp batch (2.32x vs ORIG, conformance GREEN)
 

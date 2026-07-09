@@ -1306,6 +1306,165 @@ fn sample_spline_recursive(
     acc
 }
 
+/// Per-axis B-spline support (index/weight taps) for one interpolation coordinate.
+/// Extracted verbatim from `sample_interpolated`'s per-axis loop so the general
+/// per-pixel path and the separable zoom path share EXACTLY the same weights.
+/// Returns `false` when the coordinate maps out of range (→ the pixel is `cval`).
+fn compute_axis_support(
+    coord: f64,
+    coeff_len: usize,
+    input_shape_axis: usize,
+    coord_offset: f64,
+    order: usize,
+    mode: BoundaryMode,
+    support: &mut Vec<(usize, f64)>,
+) -> bool {
+    support.clear();
+    let Some(mapped) = map_interpolation_coordinate(coord, input_shape_axis, mode) else {
+        return false;
+    };
+    let spline_coord = if coord_offset > 0.0 {
+        match mode {
+            BoundaryMode::Nearest => {
+                (coord + coord_offset).clamp(0.0, (coeff_len - 1) as f64)
+            }
+            BoundaryMode::Wrap => {
+                let mut wrapped = coord + coord_offset;
+                let period = input_shape_axis as f64;
+                let padded_max = (coeff_len - 1) as f64;
+                while wrapped < 0.0 {
+                    wrapped += period;
+                }
+                while wrapped > padded_max {
+                    wrapped -= period;
+                }
+                wrapped
+            }
+            _ => mapped + coord_offset,
+        }
+    } else {
+        mapped
+    };
+    // Snap sub-ULP boundary excursions back into the valid spline
+    // domain (see original note: prevents dropped corner pixels under
+    // e.g. rotate(360°)).
+    let spline_coord = match mode {
+        BoundaryMode::Wrap => spline_coord,
+        _ => {
+            let max = (coeff_len - 1) as f64;
+            let bound = 1.0e-9 * max.max(1.0);
+            if spline_coord < 0.0 && spline_coord > -bound {
+                0.0
+            } else if spline_coord > max && spline_coord < max + bound {
+                max
+            } else {
+                spline_coord
+            }
+        }
+    };
+    let effective_order = order.min(coeff_len.saturating_sub(1));
+    // Constant/Wrap order-3: cardinal cubic B-spline with a mirror index fold.
+    if matches!(mode, BoundaryMode::Wrap | BoundaryMode::Constant) && effective_order == 3 {
+        let base = spline_coord.floor() as isize - 1;
+        let t = spline_coord - spline_coord.floor();
+        let omt = 1.0 - t;
+        let max = coeff_len - 1;
+        support.push((fold_wrap_cubic_index(base, max), omt * omt * omt / 6.0));
+        support.push((
+            fold_wrap_cubic_index(base + 1, max),
+            (3.0 * t * t * t - 6.0 * t * t + 4.0) / 6.0,
+        ));
+        support.push((
+            fold_wrap_cubic_index(base + 2, max),
+            (-3.0 * t * t * t + 3.0 * t * t + 3.0 * t + 1.0) / 6.0,
+        ));
+        support.push((fold_wrap_cubic_index(base + 3, max), t * t * t / 6.0));
+        return true;
+    }
+    // Reflect / Mirror / Nearest orders 1..=5: cardinal B-spline kernel with a
+    // per-tap boundary fold (matches scipy: fold the support TAPS, not the coord).
+    // order=1 (linear) was excluded and fell through to the slow generic
+    // eval_bspline_basis_all path — the lone interpolating order without a fast
+    // path, making zoom order=1 ~17x slower than scipy (frankenscipy-wm14d).
+    // cardinal_bspline(1, cc-k) = (1-|cc-k|).max(0) yields the linear weights.
+    let cardinal_reflect_nearest = effective_order == order
+        && matches!(order, 1..=5)
+        && (mode == BoundaryMode::Nearest
+            || (matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror)
+                // order=1 Reflect/Mirror is PADDED (coord_offsets=SPLINE_NEAREST_PAD)
+                // so the linear support always lands inside the padded coeffs →
+                // clamp (Nearest) fold; that path was previously routed to the slow
+                // generic eval_bspline_basis_all (frankenscipy-wm14d).
+                && (coord_offset == 0.0 || order == 1)));
+    if cardinal_reflect_nearest {
+        let cc = coord + coord_offset;
+        let len = coeff_len as isize;
+        // A still-padded order=1 reflect/mirror axis (coord_offsets>0, e.g. an order>=2
+        // short-axis fallback) folds via clamp because the padding already encodes the
+        // reflection; the unpadded order=1 path (coord_offsets==0) and every other case
+        // fold per the actual boundary mode.
+        let fold_mode = if order == 1
+            && matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror)
+            && coord_offset > 0.0
+        {
+            BoundaryMode::Nearest
+        } else {
+            mode
+        };
+        let fold = |i: isize| -> usize {
+            match fold_mode {
+                BoundaryMode::Nearest => i.clamp(0, len - 1) as usize,
+                BoundaryMode::Mirror => {
+                    if len <= 1 {
+                        0
+                    } else {
+                        let period = 2 * (len - 1);
+                        let mut m = i.rem_euclid(period);
+                        if m >= len {
+                            m = period - m;
+                        }
+                        m as usize
+                    }
+                }
+                _ => {
+                    let period = 2 * len;
+                    let mut m = i.rem_euclid(period);
+                    if m >= len {
+                        m = period - 1 - m;
+                    }
+                    m as usize
+                }
+            }
+        };
+        let floor = cc.floor() as isize;
+        let span = order as isize;
+        for k in (floor - span)..=(floor + span) {
+            let weight = cardinal_bspline(order, cc - k as f64);
+            if weight != 0.0 {
+                support.push((fold(k), weight));
+            }
+        }
+        return true;
+    }
+    if effective_order == 0 {
+        support.push((
+            spline_coord.round().clamp(0.0, (coeff_len - 1) as f64) as usize,
+            1.0,
+        ));
+        return true;
+    }
+    // Compact-support evaluation: BYTE-IDENTICAL to filtering the full O(len·order)
+    // eval_bspline_basis_all but O(order²) with no per-pixel knot/basis allocation. The old
+    // path made affine_transform/map_coordinates/geometric_transform with
+    // Constant/Wrap order∈{1,2,4,5} ~8-18× slower than scipy (the cardinal fast paths only
+    // covered Nearest/Reflect/Mirror and Constant-order-3); this routes the rest here.
+    bspline_local_support(coeff_len, spline_coord, effective_order, support);
+    if support.is_empty() {
+        return false;
+    }
+    true
+}
+
 fn sample_interpolated(
     input: &NdArray,
     coeffs: &NdArray,
@@ -1359,154 +1518,18 @@ fn sample_interpolated(
             bases.resize_with(n, Vec::new);
         }
         for axis in 0..n {
-            let coord = coords[axis];
-            let coeff_len = coeffs.shape[axis];
-            let support = &mut bases[axis];
-            support.clear();
-            let Some(mapped) = map_interpolation_coordinate(coord, input.shape[axis], mode) else {
-                return cval;
-            };
-            let spline_coord = if coord_offsets[axis] > 0.0 {
-                match mode {
-                    BoundaryMode::Nearest => {
-                        (coord + coord_offsets[axis]).clamp(0.0, (coeff_len - 1) as f64)
-                    }
-                    BoundaryMode::Wrap => {
-                        let mut wrapped = coord + coord_offsets[axis];
-                        let period = input.shape[axis] as f64;
-                        let padded_max = (coeff_len - 1) as f64;
-                        while wrapped < 0.0 {
-                            wrapped += period;
-                        }
-                        while wrapped > padded_max {
-                            wrapped -= period;
-                        }
-                        wrapped
-                    }
-                    _ => mapped + coord_offsets[axis],
-                }
-            } else {
-                mapped
-            };
-            // Snap sub-ULP boundary excursions back into the valid spline
-            // domain (see original note: prevents dropped corner pixels under
-            // e.g. rotate(360°)).
-            let spline_coord = match mode {
-                BoundaryMode::Wrap => spline_coord,
-                _ => {
-                    let max = (coeff_len - 1) as f64;
-                    let bound = 1.0e-9 * max.max(1.0);
-                    if spline_coord < 0.0 && spline_coord > -bound {
-                        0.0
-                    } else if spline_coord > max && spline_coord < max + bound {
-                        max
-                    } else {
-                        spline_coord
-                    }
-                }
-            };
-            let effective_order = order.min(coeff_len.saturating_sub(1));
-            // Constant/Wrap order-3: cardinal cubic B-spline with a mirror index fold.
-            if matches!(mode, BoundaryMode::Wrap | BoundaryMode::Constant) && effective_order == 3 {
-                let base = spline_coord.floor() as isize - 1;
-                let t = spline_coord - spline_coord.floor();
-                let omt = 1.0 - t;
-                let max = coeff_len - 1;
-                support.push((fold_wrap_cubic_index(base, max), omt * omt * omt / 6.0));
-                support.push((
-                    fold_wrap_cubic_index(base + 1, max),
-                    (3.0 * t * t * t - 6.0 * t * t + 4.0) / 6.0,
-                ));
-                support.push((
-                    fold_wrap_cubic_index(base + 2, max),
-                    (-3.0 * t * t * t + 3.0 * t * t + 3.0 * t + 1.0) / 6.0,
-                ));
-                support.push((fold_wrap_cubic_index(base + 3, max), t * t * t / 6.0));
-                continue;
-            }
-            // Reflect / Mirror / Nearest orders 1..=5: cardinal B-spline kernel with a
-            // per-tap boundary fold (matches scipy: fold the support TAPS, not the coord).
-            // order=1 (linear) was excluded and fell through to the slow generic
-            // eval_bspline_basis_all path — the lone interpolating order without a fast
-            // path, making zoom order=1 ~17x slower than scipy (frankenscipy-wm14d).
-            // cardinal_bspline(1, cc-k) = (1-|cc-k|).max(0) yields the linear weights.
-            let cardinal_reflect_nearest = effective_order == order
-                && matches!(order, 1..=5)
-                && (mode == BoundaryMode::Nearest
-                    || (matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror)
-                        // order=1 Reflect/Mirror is PADDED (coord_offsets=SPLINE_NEAREST_PAD)
-                        // so the linear support always lands inside the padded coeffs →
-                        // clamp (Nearest) fold; that path was previously routed to the slow
-                        // generic eval_bspline_basis_all (frankenscipy-wm14d).
-                        && (coord_offsets[axis] == 0.0 || order == 1)));
-            if cardinal_reflect_nearest {
-                let cc = coord + coord_offsets[axis];
-                let len = coeff_len as isize;
-                // A still-padded order=1 reflect/mirror axis (coord_offsets>0, e.g. an order>=2
-                // short-axis fallback) folds via clamp because the padding already encodes the
-                // reflection; the unpadded order=1 path (coord_offsets==0) and every other case
-                // fold per the actual boundary mode.
-                let fold_mode = if order == 1
-                    && matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror)
-                    && coord_offsets[axis] > 0.0
-                {
-                    BoundaryMode::Nearest
-                } else {
-                    mode
-                };
-                let fold = |i: isize| -> usize {
-                    match fold_mode {
-                        BoundaryMode::Nearest => i.clamp(0, len - 1) as usize,
-                        BoundaryMode::Mirror => {
-                            if len <= 1 {
-                                0
-                            } else {
-                                let period = 2 * (len - 1);
-                                let mut m = i.rem_euclid(period);
-                                if m >= len {
-                                    m = period - m;
-                                }
-                                m as usize
-                            }
-                        }
-                        _ => {
-                            let period = 2 * len;
-                            let mut m = i.rem_euclid(period);
-                            if m >= len {
-                                m = period - 1 - m;
-                            }
-                            m as usize
-                        }
-                    }
-                };
-                let floor = cc.floor() as isize;
-                let span = order as isize;
-                for k in (floor - span)..=(floor + span) {
-                    let weight = cardinal_bspline(order, cc - k as f64);
-                    if weight != 0.0 {
-                        support.push((fold(k), weight));
-                    }
-                }
-                continue;
-            }
-            if effective_order == 0 {
-                support.push((
-                    spline_coord.round().clamp(0.0, (coeff_len - 1) as f64) as usize,
-                    1.0,
-                ));
-                continue;
-            }
-            // Compact-support evaluation: BYTE-IDENTICAL to filtering the full O(len·order)
-            // eval_bspline_basis_all but O(order²) with no per-pixel knot/basis allocation. The old
-            // path made affine_transform/map_coordinates/geometric_transform with
-            // Constant/Wrap order∈{1,2,4,5} ~8-18× slower than scipy (the cardinal fast paths only
-            // covered Nearest/Reflect/Mirror and Constant-order-3); this routes the rest here.
-            bspline_local_support(coeff_len, spline_coord, effective_order, support);
-            if support.is_empty() {
+            if !compute_axis_support(
+                coords[axis],
+                coeffs.shape[axis],
+                input.shape[axis],
+                coord_offsets[axis],
+                order,
+                mode,
+                &mut bases[axis],
+            ) {
                 return cval;
             }
         }
-
         idx.clear();
         idx.resize(coeffs.ndim(), 0);
         sample_spline_recursive(coeffs, &bases[..n], 0, idx.as_mut_slice())
@@ -8432,6 +8455,12 @@ pub fn shift(
     Ok(output)
 }
 
+/// Same-binary A/B toggle: when `true`, `zoom` recomputes the per-axis B-spline support per
+/// output pixel (via `sample_interpolated`); when `false` (default) it precomputes the support
+/// once per output axis-index (separable) — byte-identical, but skips the per-pixel recompute.
+pub static NDIMAGE_ZOOM_SEPARABLE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Zoom (rescale) an array by the given factors.
 ///
 /// Matches `scipy.ndimage.zoom`.
@@ -8483,6 +8512,73 @@ pub fn zoom(
     let in_shape = input.shape.clone();
     let ndim = out_shape.len();
     let kernel_work = (order + 1).saturating_pow(ndim as u32);
+
+    // Separable fast path: a regular zoom maps each output axis-index to a FIXED input
+    // coordinate, so the per-axis B-spline support depends ONLY on the output position along
+    // that axis. Precompute the O(Σ out_shape[a]) supports ONCE (via the same
+    // `compute_axis_support` the per-pixel path uses) instead of recomputing them for all
+    // out_shape.product() pixels; each pixel is then a gather + `sample_spline_recursive`.
+    // Byte-identical (same weights, same combine order). Gated `order >= 2`: order-1 Reflect is
+    // already the ultra-fast cardinal linear path where the precompute doesn't pay (0.77x),
+    // while orders 2-5 win 2.0-3.7x (more support taps ⇒ more per-pixel recompute avoided).
+    if order >= 2 && !NDIMAGE_ZOOM_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let coeffs = &spline.coeffs;
+        let coord_offsets = &spline.coord_offsets;
+        let axis_supports: Vec<Vec<Option<Vec<(usize, f64)>>>> = (0..ndim)
+            .map(|axis| {
+                (0..out_shape[axis])
+                    .map(|o| {
+                        let coord = if out_shape[axis] <= 1 || in_shape[axis] <= 1 {
+                            0.0
+                        } else {
+                            o as f64 * (in_shape[axis] - 1) as f64 / (out_shape[axis] - 1) as f64
+                        };
+                        let mut s = Vec::new();
+                        if compute_axis_support(
+                            coord,
+                            coeffs.shape[axis],
+                            in_shape[axis],
+                            coord_offsets[axis],
+                            order,
+                            mode,
+                            &mut s,
+                        ) {
+                            Some(s)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let axis_supports = &axis_supports;
+        fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
+            thread_local! {
+                static ZB: std::cell::RefCell<(Vec<Vec<(usize, f64)>>, Vec<usize>)> =
+                    const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+            }
+            let oidx = unravel_with_shape(flat, &out_shape);
+            ZB.with_borrow_mut(|(bases, idx)| -> f64 {
+                if bases.len() < ndim {
+                    bases.resize_with(ndim, Vec::new);
+                }
+                for axis in 0..ndim {
+                    match &axis_supports[axis][oidx[axis]] {
+                        None => return cval,
+                        Some(s) => {
+                            bases[axis].clear();
+                            bases[axis].extend_from_slice(s);
+                        }
+                    }
+                }
+                idx.clear();
+                idx.resize(coeffs.ndim(), 0);
+                sample_spline_recursive(coeffs, &bases[..ndim], 0, idx.as_mut_slice())
+            })
+        });
+        return Ok(output);
+    }
+
     fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
         let out_idx = unravel_with_shape(flat, &out_shape);
         let coords: Vec<f64> = out_idx
