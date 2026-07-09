@@ -24,6 +24,47 @@ ledger above so the project has one source of truth.
   mixed-prec) 5.8-7.9x + SPD 7-9x; inv(256,blocked) 1.9-3.7x; lu_factor(128,blocked) 1.4-1.7x; cholesky(256,
   blocked) 1.08-1.36x; det = REJECTED (overflow+light-work). Vein now fully harvested.
 
+## 2026-07-08 - BlackThrush (codex) - KEEP: log_ndtr RealVec erfc-SIMD dispatch (1.55x vs scalar-map ORIG)
+
+- DIG audit: consulted this ledger first and did not retry rejected/done levers:
+  `ndtri` central-region SIMD, error-family SIMD rows, sparse stale beads, det
+  gate lowering, and the recent Mathieu/Poisson keeps. The live gap was
+  `log_ndtr(RealVec)`, which still used the scalar mapper while `ndtr` already
+  had a work-gated SIMD erfc primitive.
+- Lever: for `RealVec` lengths `64..1<<20`, evaluate finite `x >= -8` chunks as
+  `ln(0.5 * erfc(-x/sqrt(2)))` through the existing full-domain
+  `erfc_full_simd_chunk`; fall back to the scalar `log_ndtr_scalar` for deep
+  left tails, non-finite lanes, and the tail remainder. The scalar API and
+  Mills-ratio deep-tail asymptotic are unchanged.
+- SHORT per-crate bench:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo bench -p fsci-special --bench special_bench --profile release special_log_ndtr_array`.
+  Same-worker RCH `vmi1227854`, Criterion median of 10 samples:
+  - NEW `special_log_ndtr_array/fast_erfc_simd_n500000`: **6.9526 ms**
+  - ORIG `special_log_ndtr_array/orig_scalar_map_n500000`: **10.799 ms**
+  - Ratio vs ORIG: **0.644x time / 1.55x faster**.
+- Correctness / conformance:
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo test -p fsci-special log_ndtr_simd_matches_scalar_within_tol -- --nocapture`
+    on RCH `vmi1227854` (`1 passed; 0 failed`) covers branch boundaries,
+    infinities/NaN, deep-tail fallback, and max scalar-path drift `<1e-12`.
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo test -p fsci-conformance --test diff_special_ndtr -- --nocapture`
+    against local SciPy 1.17.1 (`1 passed; 0 failed`). The same RCH conformance
+    target on `ovh-a` was blocked by missing SciPy (`ModuleNotFoundError: No
+    module named 'scipy'`), so local oracle was used for the green gate.
+  - PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod cargo check -p fsci-special --all-targets`
+    (existing warnings only).
+  - PASS: `AGENT_NAME=BlackThrush rustfmt --edition 2024 --check crates/fsci-special/src/convenience.rs crates/fsci-special/benches/special_bench.rs`.
+  - BLOCKED: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod rch exec -- cargo clippy -p fsci-special --all-targets -- -D warnings`
+    stops in existing `fsci-opt` dependency lints (`neg_cmp_op_on_partial_ord`
+    in `curvefit.rs:549`, `needless_range_loop` and `neg_cmp_op_on_partial_ord`
+    in `lib.rs:4272/4276`).
+  - BLOCKED: `ubs crates/fsci-special/src/convenience.rs crates/fsci-special/benches/special_bench.rs`
+    exits nonzero on broad pre-existing test/bench panic and warning inventory;
+    its shadow-workspace fmt, clippy, cargo check, and test-build sections were
+    clean.
+- Negative evidence: do not pursue SIMD `log/log1p` here without a new profile.
+  The kept primitive is the safer erfc-vectorize-then-scalar-log path with
+  scalar fallback for the numerically sensitive deep left tail.
+
 ## 2026-07-08 - BlackThrush (codex) - KEEP: Poisson logpmf_many hoists ln(mu) over batch (1.30x vs scalar-map ORIG)
 
 - LAND/DIG: no unlanded `.scratch` win remained; checked the open scratch worktrees

@@ -5545,7 +5545,40 @@ pub fn inv_boxcox1p_scalar(y: f64, lam: f64) -> f64 {
 ///
 /// Matches `scipy.special.log_ndtr`.
 pub fn log_ndtr(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    if let SpecialTensor::RealVec(values) = x_tensor {
+        if (64..(1 << 20)).contains(&values.len()) {
+            return Ok(SpecialTensor::RealVec(log_ndtr_real_vec_simd(values)));
+        }
+    }
     map_real_wg("log_ndtr", x_tensor, mode, |x| Ok(log_ndtr_scalar(x)))
+}
+
+fn log_ndtr_real_vec_simd(values: &[f64]) -> Vec<f64> {
+    use std::simd::Simd;
+    const LANES: usize = 8;
+    let scale = Simd::<f64, LANES>::splat(-FRAC_1_SQRT_2);
+    let mut out = vec![0.0f64; values.len()];
+    let mut i = 0;
+    while i + LANES <= values.len() {
+        let x = Simd::<f64, LANES>::from_slice(&values[i..i + LANES]);
+        let lanes = x.to_array();
+        if lanes.iter().all(|x| x.is_finite() && *x >= -8.0) {
+            let erfc = crate::error::erfc_full_simd_chunk(x * scale);
+            for j in 0..LANES {
+                out[i + j] = (0.5 * erfc[j]).ln();
+            }
+        } else {
+            for j in 0..LANES {
+                out[i + j] = log_ndtr_scalar(lanes[j]);
+            }
+        }
+        i += LANES;
+    }
+    while i < values.len() {
+        out[i] = log_ndtr_scalar(values[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Scalar helper for `log_ndtr`.
@@ -8410,6 +8443,46 @@ mod tests {
         assert!(
             max_abs < 1e-15,
             "ndtr simd max abs diff vs scalar = {max_abs:e}"
+        );
+    }
+
+    #[test]
+    fn log_ndtr_simd_matches_scalar_within_tol() {
+        let mut xs: Vec<f64> = (0..4096)
+            .map(|i| -8.0 + 16.0 * (i as f64) / 4095.0)
+            .collect();
+        for b in [
+            -50.0,
+            -25.0,
+            -8.0,
+            -7.999_999,
+            -1.0,
+            0.0,
+            6.0,
+            12.0,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            xs.push(b);
+        }
+        let simd = match log_ndtr(&SpecialTensor::RealVec(xs.clone()), RuntimeMode::Strict).unwrap()
+        {
+            SpecialTensor::RealVec(v) => v,
+            _ => unreachable!(),
+        };
+        let mut max_abs = 0.0f64;
+        for (k, &x) in xs.iter().enumerate() {
+            let expected = log_ndtr_scalar(x);
+            if expected.is_nan() {
+                assert!(simd[k].is_nan(), "log_ndtr simd preserved NaN at {x}");
+            } else {
+                max_abs = max_abs.max((simd[k] - expected).abs());
+            }
+        }
+        assert!(
+            max_abs < 1e-12,
+            "log_ndtr simd max abs diff vs scalar = {max_abs:e}"
         );
     }
 

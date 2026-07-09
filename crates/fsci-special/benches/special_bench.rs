@@ -3,8 +3,8 @@ use fsci_runtime::RuntimeMode;
 use fsci_special::{
     MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH, SpecialTensor, beta, ellipe, ellipeinc, ellipk,
     ellipkinc, erf, erfc, erfinv, gamma, gammainc, gammaln, hyperu, hyperu_scalar, j0, j1,
-    jn_zeros, jnjnp_zeros, jnp_zeros, jv, mathieu_cem, mathieu_sem, ndtri, pbdv, pbdv_many, rgamma,
-    spence_scalar, y0, zeta, zeta_scalar,
+    jn_zeros, jnjnp_zeros, jnp_zeros, jv, log_ndtr, log_ndtr_scalar, mathieu_cem, mathieu_sem,
+    ndtri, pbdv, pbdv_many, rgamma, spence_scalar, y0, zeta, zeta_scalar,
 };
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -586,6 +586,37 @@ fn bench_special_ndtri_array(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_special_log_ndtr_array(c: &mut Criterion) {
+    let mut group = c.benchmark_group("special_log_ndtr_array");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+
+    let n = 500_000usize;
+    let denom = (n - 1) as f64;
+    let x: Vec<f64> = (0..n).map(|i| -8.0 + 16.0 * (i as f64) / denom).collect();
+    let input = real_vec(&x);
+
+    group.bench_function("fast_erfc_simd_n500000", |b| {
+        b.iter(|| {
+            let out = log_ndtr(black_box(&input), RuntimeMode::Strict).expect("log_ndtr");
+            black_box(out);
+        });
+    });
+
+    group.bench_function("orig_scalar_map_n500000", |b| {
+        b.iter(|| {
+            let out: Vec<f64> = black_box(&x)
+                .iter()
+                .map(|&value| log_ndtr_scalar(value))
+                .collect();
+            black_box(out);
+        });
+    });
+
+    group.finish();
+}
+
 fn scipy_zeta_duration(n: usize, iters: u64) -> Option<Duration> {
     let script = r#"
 import sys
@@ -1136,6 +1167,7 @@ criterion_group!(
     bench_erfc,
     bench_erfinv,
     bench_special_erfinv_array,
+    bench_special_log_ndtr_array,
     bench_special_ndtri_array,
     bench_special_zeta_array,
     bench_special_hyperu_a1_gamma_array,
