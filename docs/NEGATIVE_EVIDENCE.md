@@ -32,6 +32,31 @@ ledger above so the project has one source of truth.
   batch comparison, passed (`8 passed; 2011 filtered out`). LEVER: do not retry
   scalar constant hoists for KDE; the winning direction is exp throughput and
   vectorized summation for large finite batches.
+## 2026-07-09 - BlackThrush (cc) - FINDING (not yet landed): ndimage geometric-transform interpolation recomputes per-axis B-spline support PER PIXEL — separable precompute is a ~cores× win vs scipy
+
+- Dig audit: consulted ledger first. Used LOCAL scipy 1.17.1 to profile fsci-ndimage
+  vs scipy (512×512, OMP=1). fsci already WINS where it parallelizes: median_filter(5)
+  **13.4ms vs scipy 81.2ms (6.1×)**, maximum_filter(9) **3.45 vs 5.66ms (1.6×)**. BUT
+  zoom(2×, order=3) is at **EXACT PARITY: fsci 55.06ms vs scipy 54.93ms** — fsci is
+  parallel yet only matches scipy's SERIAL time ⇒ fsci does ~cores× more work per pixel.
+- ROOT CAUSE (read `sample_interpolated` lib.rs ~1315): per output pixel it recomputes the
+  per-axis B-spline support (index+weight taps) via the ~150-line cardinal/boundary-fold
+  block, then combines with `sample_spline_recursive`. For a REGULAR zoom the support along
+  axis a depends ONLY on the output position along a (out_shape[a] distinct coords), so it's
+  SEPARABLE — scipy precomputes it (that's why scipy's serial 55ms competes with fsci's
+  parallel). Per-pixel heap allocs are already fixed (thread-local scratch); the remaining
+  cost is the per-pixel support RECOMPUTATION.
+- LEVER / clean plan (deferred — a ~150-line refactor in a codex-contested file, too large
+  to land byte-safely in this turn's remaining budget; NOT rushing a subtle interp bug to
+  main): (1) extract the per-axis support-loop body into `compute_axis_support(coord,
+  coeffs, axis, coord_offset, order, mode, cval) -> Option<Vec<(usize,f64)>>` (`continue`→
+  Some, `return cval`→None) — byte-identical since it MOVES code; the combine already
+  cleanly separates (`sample_spline_recursive` takes the per-axis `bases`). (2) In `zoom`
+  precompute `axis_supports[axis][o]` once (O(Σ out_shape[a]) vs O(N_out·ndim)) and per
+  pixel just gather+`sample_spline_recursive` — byte-identical (same supports, same combine).
+  Expected: zoom/rotate/map_coordinates order≥2 drop from ~800ns/pixel to the gather cost,
+  ~2-4× AND beats scipy by ~cores. Confirmed already-optimal this turn: uniform_filter
+  (running-sum), gaussian_filter (separable 1D), fft rfft/DCT-II/hfft, io parse.
 
 ## 2026-07-09 - BlackThrush (cc) - KEEP: pdist_seuclidean dim==4 whitening picks up the dim-4 Euclidean kernel (~5.7-7.1x)
 
