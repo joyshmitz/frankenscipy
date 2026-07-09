@@ -163,7 +163,7 @@ impl HaltonSampler {
         self.next_index = self.next_index.saturating_add(n as u64);
         halton_fill_points(n, 4, move |p, slot| {
             let idx = start.saturating_add(p as u64);
-            slot[0] = radical_inverse_const::<2>(idx);
+            slot[0] = radical_inverse_base2(idx);
             slot[1] = radical_inverse_const::<3>(idx);
             slot[2] = radical_inverse_const::<5>(idx);
             slot[3] = radical_inverse_const::<7>(idx);
@@ -187,6 +187,33 @@ impl QmcEngine for HaltonSampler {
     fn sample(&mut self, n: usize) -> Vec<f64> {
         HaltonSampler::sample(self, n)
     }
+}
+
+/// Same-binary A/B toggle: when `true`, the base-2 radical inverse uses the per-digit loop
+/// instead of the hardware bit-reversal shortcut. Byte-identical; A/B timing only.
+#[doc(hidden)]
+pub static HALTON_BASE2_BITREV_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Base-2 radical inverse via a single hardware bit-reversal instead of the per-digit loop.
+///
+/// For base 2, `φ_2(index) = Σ bᵢ·2^{-(i+1)}` where `bᵢ` is bit `i` of `index`. Reversing all
+/// 64 bits maps bit `i` → bit `63−i`, so `index.reverse_bits() = Σ bᵢ·2^{63−i}`, and dividing
+/// by `2^64` gives exactly `Σ bᵢ·2^{-(i+1)} = φ_2(index)`. BYTE-IDENTICAL to
+/// `radical_inverse_const::<2>` whenever `index < 2^53`: the exact sum then spans ≤ 53
+/// significant bits, so BOTH the loop's left-to-right accumulation AND `reverse_bits as f64`
+/// (a ≤53-bit integer, `/2^64` an exact power-of-two scale) are exact and equal. For
+/// `index ≥ 2^53` (astronomically large sample counts) the shortcut's single rounding could
+/// diverge from the loop's, so fall back to the loop there.
+#[inline]
+fn radical_inverse_base2(index: u64) -> f64 {
+    if index < (1u64 << 53)
+        && !HALTON_BASE2_BITREV_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        // 2^64 is an exact f64; reverse_bits(index) is a ≤53-bit integer ⇒ exact f64.
+        return index.reverse_bits() as f64 / 18_446_744_073_709_551_616.0;
+    }
+    radical_inverse_const::<2>(index)
 }
 
 /// Radical inverse of `index` in base `prime`.
@@ -232,7 +259,7 @@ fn radical_inverse_const<const PRIME: u64>(mut index: u64) -> f64 {
 #[inline]
 fn radical_inverse_fast(index: u64, prime: u64) -> f64 {
     match prime {
-        2 => radical_inverse_const::<2>(index),
+        2 => radical_inverse_base2(index),
         3 => radical_inverse_const::<3>(index),
         5 => radical_inverse_const::<5>(index),
         7 => radical_inverse_const::<7>(index),
@@ -2714,6 +2741,28 @@ mod tests {
             (frac - 0.25).abs() < 0.05,
             "Halton box-count fraction {frac} should be within 5% of 0.25"
         );
+    }
+
+    #[test]
+    fn radical_inverse_base2_bitrev_matches_digit_loop() {
+        use std::sync::atomic::Ordering;
+        // The bit-reversal shortcut must be bit-for-bit identical to the per-digit loop for
+        // every index < 2^53 (sequential, powers of two ± 1, and boundary values).
+        let mut idxs: Vec<u64> = (0..5000).collect();
+        for e in 0..53 {
+            idxs.push(1u64 << e);
+            idxs.push((1u64 << e).saturating_sub(1));
+            idxs.push((1u64 << e) + 1);
+        }
+        idxs.push((1u64 << 53) - 1);
+        for &i in &idxs {
+            HALTON_BASE2_BITREV_DISABLE.store(true, Ordering::Relaxed);
+            let loop_val = radical_inverse_base2(i);
+            HALTON_BASE2_BITREV_DISABLE.store(false, Ordering::Relaxed);
+            let rev_val = radical_inverse_base2(i);
+            assert_eq!(loop_val.to_bits(), rev_val.to_bits(), "base2 mismatch at index {i}");
+            assert_eq!(rev_val.to_bits(), radical_inverse_const::<2>(i).to_bits(), "const2 mismatch at {i}");
+        }
     }
 
     #[test]

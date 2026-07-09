@@ -6,6 +6,31 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: QMC Halton base-2 radical inverse via hardware bit-reversal (1.08-3.2x self, BYTE-IDENTICAL)
+
+- RADICALLY DIFFERENT primitive (hardware bit-reversal) — a genuine pivot off the recurrence/compact
+  veins. Confirmed the rest of the codebase is thoroughly optimized first (linalg/io scout found only
+  cold micro-opts; ndimage label/EDT, spatial procrustes/hausdorff, stats binned_statistic_dd all
+  optimized). Landed in fsci-stats `qmc.rs` — an UNCONTESTED file (codex only holds stats lib.rs +
+  radix probes). The base-2 radical inverse ran a per-digit loop (`while index>0: result += digit·f`,
+  ~log₂(index) iters) while the other Halton primes were already `radical_inverse_const` strength-
+  reduced.
+- KEY IDENTITY: for base 2, `φ_2(index) = Σ bᵢ·2^{−(i+1)} = index.reverse_bits() / 2^64` EXACTLY.
+  `reverse_bits` is one instruction (`rbit`) vs the whole digit loop. BYTE-IDENTICAL when `index <
+  2^53`: the exact result then spans ≤53 significant bits, so BOTH the loop's left-to-right
+  accumulation AND `reverse_bits as f64 / 2^64` (a ≤53-bit int scaled by an exact power of two) are
+  exact and equal (proven by `to_bits` test over 0..5000 + all 2^e±1 + 2^53−1). `index ≥ 2^53`
+  (unreachable for real sample counts) falls back to the loop. Wired into `sample_4d` slot[0] +
+  `radical_inverse_fast`'s `2 =>` arm.
+- Same-binary A/B `HALTON_BASE2_BITREV_DISABLE`. MEASURED (best-of-5, 60 iters): **dim=1 (base-2
+  only) n=65536 3.20x**, dim=1 n=262144 1.83x, dim=2 1.45x, dim=4 (benched `halton_4d`) **1.08-1.25x**
+  (base 2 is 1/4 of the work AND `halton_fill_points` parallelizes the memory-bound Vec fill, diluting
+  the compute win — but consistently positive). qmc suite **76/0** (incl. exact-value + parallel-vs-
+  serial Halton tests) + scipy Halton conformance GREEN.
+- NOTE (measurement): a first noisy probe showed n=65536 dim=4 at 0.94x; a cleaner best-of-5/60-iter
+  A/B resolved it to a consistent 1.08x — QMC micro-timings need the interleaved-best-of-N protocol.
+  LEVER: base-b radical inverse for b==2 → `reverse_bits`; grep any per-digit base-2 expansion loop.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: special `sph_legendre_p_all` + `sph_harm_y_all` recurrence-prefix reuse (2.7-60x self, BYTE-IDENTICAL)
 
 - COMPLETES the spherical-harmonics `*_all` family (legendre_p_all + assoc_legendre_p_all already
