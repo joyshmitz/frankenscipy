@@ -6,6 +6,33 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: Jaccard cdist via bit-packing + hardware popcount (1.2-3.1x, byte-identical); Hamming REJECTED
+
+- Dig audit: consulted ledger first. GENUINE PIVOT off the (harvested) stats
+  reuse-transcendental vein to a radically different primitive in a CLEAN crate.
+  Profiled the `cdist_boolean_metrics` bench: Hamming/Jaccard cdist already use a
+  SoA-across-pairs count but still O(d) per pair.
+- PRIMITIVE: boolean distance counts (c_TT/c_TF/c_FT) are popcounts of bitwise
+  AND/OR/XOR. Pack each row's d coords into ⌈d/64⌉ u64 words (bit = value≠0) ONCE,
+  then per pair `ntt = Σ popcount(a&b)` (O(d/64) with a hardware popcount) and derive
+  the union from precomputed per-row popcounts. **Byte-identical** — the integer
+  counts are exact regardless of how they're summed. Jaccard converts to boolean
+  internally (`ai!=0`), so this is exact for ANY numeric input (no boolean check).
+- MEASURED (cdist 400×400, same-binary A/B `SPATIAL_BOOL_POPCOUNT_DISABLE`, best-of-4,
+  all maxdiff=0.0): Jaccard **d256 1.19-1.38x / d512 1.84x / d1024 1.97-2.56x /
+  d2048 3.13x** (scales with d — more words amortize packing better). Gated
+  `dim>=256` (`JACCARD_POPCOUNT_MIN_DIM`): d128 was 0.94-1.03x, and the SoA path is
+  already vectorized at small d. fsci-spatial lib **229 passed / 0 failed** GREEN.
+- HAMMING REJECTED (reverted): Hamming counts REAL f64 inequality, so packing needs a
+  boolean-input check (O(n·d)); even for boolean data it was only 0.72x@d64 / 0.72x@d256
+  / 1.10x@d1024 — the detection cost + already-good SoA made it a wash/loss. Kept the
+  scalar/SoA Hamming path; dropped the Hamming packed helper.
+- CLEAN LANDING: spatial has NO codex uncommitted work and does NOT depend on
+  fsci-special, so this landed with no reset-reapply / special-unblock dance.
+- LEVER: any boolean/set distance (jaccard/dice/rogerstanimoto/sokal*/yule/russellrao)
+  or a k-of-n count over 0/1 data → bit-pack + popcount, O(d/64), byte-identical. The
+  other bool metrics (yule/dice/... take &[bool]) are candidates if they get a cdist path.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: Fisk/Loglogistic/Burr12 rational-density two-powf reduction + ln-reuse (pdf 1.46-1.53x, logpdf 1.22-1.39x)
 
 - Dig audit: consulted ledger first. Completes the reuse-transcendental density family

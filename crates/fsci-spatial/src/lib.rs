@@ -1485,6 +1485,63 @@ pub fn cdist_seuclidean(
     }))
 }
 
+/// Same-binary A/B toggle: when `true`, the boolean Hamming/Jaccard cdist paths use the
+/// scalar/SoA per-dimension count; when `false` (default) they pack rows to `u64` words and
+/// count via hardware popcount (O(d/64) per pair). The popcount path is byte-identical — the
+/// integer (in)equality counts are exact either way.
+pub static SPATIAL_BOOL_POPCOUNT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[inline]
+fn spatial_bool_popcount() -> bool {
+    !SPATIAL_BOOL_POPCOUNT_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Minimum coordinate count before the bit-packed popcount Jaccard cdist beats the
+/// already-vectorized SoA count (below it the packing overhead dominates).
+const JACCARD_POPCOUNT_MIN_DIM: usize = 256;
+
+/// Pack each row's `dim` coordinates into `⌈dim/64⌉` `u64` words, bit k = `(value != 0.0)`.
+/// Padding bits in the final word stay 0, so they contribute nothing to AND/OR/XOR popcounts.
+/// Also returns each row's set-bit count (its number of nonzero coordinates).
+fn cdist_pack_bits(x: &[Vec<f64>], dim: usize) -> (Vec<Vec<u64>>, Vec<u32>) {
+    let words = dim.div_ceil(64);
+    let mut bits = vec![vec![0u64; words]; x.len()];
+    let mut ones = vec![0u32; x.len()];
+    for (row, (packed, cnt)) in x.iter().zip(bits.iter_mut().zip(ones.iter_mut())) {
+        for (k, &v) in row.iter().enumerate() {
+            if v != 0.0 {
+                packed[k >> 6] |= 1u64 << (k & 63);
+            }
+        }
+        *cnt = packed.iter().map(|w| w.count_ones()).sum();
+    }
+    (bits, ones)
+}
+
+/// One Jaccard cdist row from packed bits: `(c_TF + c_FT) / (c_TT + c_TF + c_FT) =
+/// popcount(a ⊕ b) / popcount(a ∨ b)`, returning 0 when the union is empty (matches scalar).
+fn cdist_row_jaccard_packed(
+    a: &[u64],
+    ones_a: u32,
+    b_bits: &[Vec<u64>],
+    ones_b: &[u32],
+    nb: usize,
+) -> Vec<f64> {
+    (0..nb)
+        .map(|j| {
+            let bj = &b_bits[j];
+            let ntt: u32 = a.iter().zip(bj).map(|(&aw, &bw)| (aw & bw).count_ones()).sum();
+            let n_union = ones_a + ones_b[j] - ntt;
+            if n_union == 0 {
+                0.0
+            } else {
+                (n_union - ntt) as f64 / n_union as f64
+            }
+        })
+        .collect()
+}
+
 pub fn cdist_metric(
     xa: &[Vec<f64>],
     xb: &[Vec<f64>],
@@ -1681,6 +1738,17 @@ pub fn cdist_metric(
             let b_soa = cdist_soa(xb, dim);
             cdist_fill_rows(na, nthreads.min(16), |i| {
                 cdist_row_hamming_soa(&xa[i], &b_soa, nb)
+            })
+        }
+        // Jaccard converts to boolean internally (bit = value≠0), so bit-packing is
+        // byte-identical for ANY numeric input — no boolean check needed. Gated on `dim`:
+        // at small d the already-vectorized SoA count wins; the O(d/64) popcount pulls
+        // ahead once there are enough words to amortize the packing (crossover ~128-256).
+        DistanceMetric::Jaccard if spatial_bool_popcount() && dim >= JACCARD_POPCOUNT_MIN_DIM => {
+            let (xa_bits, ones_a) = cdist_pack_bits(xa, dim);
+            let (xb_bits, ones_b) = cdist_pack_bits(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_jaccard_packed(&xa_bits[i], ones_a[i], &xb_bits, &ones_b, nb)
             })
         }
         DistanceMetric::Jaccard => {
