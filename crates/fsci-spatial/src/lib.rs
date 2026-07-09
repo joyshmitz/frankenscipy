@@ -652,6 +652,19 @@ pub fn pdist_seuclidean(x: &[Vec<f64>], v: &[f64]) -> Result<Vec<f64>, SpatialEr
             });
         }
     }
+    // Whitened-Euclidean fast path (see `cdist_seuclidean`): scale by 1/√vₖ once, then it's a
+    // plain Euclidean pdist with no per-pair divide/`v≤0` mask. ~1e-15 agreement.
+    if dim >= 8
+        && !SPATIAL_SEUCLIDEAN_PRESCALE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+        && v.iter().all(|&vk| vk > 0.0)
+    {
+        let inv_sqrt: Vec<f64> = v.iter().map(|&vk| 1.0 / vk.sqrt()).collect();
+        let scaled: Vec<Vec<f64>> = x
+            .iter()
+            .map(|r| r.iter().zip(&inv_sqrt).map(|(&xi, &s)| xi * s).collect())
+            .collect();
+        return pdist(&scaled, DistanceMetric::Euclidean);
+    }
     let total = n * (n - 1) / 2;
     let nthreads = pdist_thread_count(n, dim);
     Ok(pdist_fill(n, total, nthreads, |i, j| {
@@ -1479,6 +1492,26 @@ pub fn cdist_seuclidean(
     }
     let (na, nb) = (xa.len(), xb.len());
     let nthreads = cdist_thread_count(na, nb, dim);
+    // Standardized-Euclidean is Euclidean in the whitened space `x/√vₖ`: the per-pair
+    // `seuclidean` divides by `vₖ` AND re-checks `vₖ ≤ 0` per element on EVERY pair, even
+    // though `v` is shared. When all `vₖ > 0`, scale both point sets by `1/√vₖ` ONCE and
+    // route through the already-tuned Euclidean cdist (no per-pair divide/mask). Not
+    // byte-identical (`x/√v` rounds first) but agrees to ~1e-15. A non-positive `vₖ` keeps
+    // the exact per-pair NaN behavior below.
+    if dim >= 8
+        && !SPATIAL_SEUCLIDEAN_PRESCALE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+        && v.iter().all(|&vk| vk > 0.0)
+    {
+        let inv_sqrt: Vec<f64> = v.iter().map(|&vk| 1.0 / vk.sqrt()).collect();
+        let scale = |rows: &[Vec<f64>]| -> Vec<Vec<f64>> {
+            rows.iter()
+                .map(|r| r.iter().zip(&inv_sqrt).map(|(&x, &s)| x * s).collect())
+                .collect()
+        };
+        let sa = scale(xa);
+        let sb = scale(xb);
+        return cdist_metric(&sa, &sb, DistanceMetric::Euclidean);
+    }
     // Small d: the per-pair `seuclidean(&xa[i],&xb[j],v)` pointer-chases the Vec<Vec>
     // and loses to SciPy's contiguous loop (same loss the Euclidean/Canberra SoA paths
     // flipped). For d<8 `seuclidean` is a scalar left-fold ⇒ the per-lane SoA reduction
@@ -1493,6 +1526,11 @@ pub fn cdist_seuclidean(
         seuclidean(&xa[i], &xb[j], v)
     }))
 }
+
+/// Same-binary A/B toggle: when `true`, `cdist_seuclidean` uses the per-pair divide path;
+/// when `false` (default) it whitens to `x/√v` once and routes through Euclidean cdist.
+pub static SPATIAL_SEUCLIDEAN_PRESCALE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Same-binary A/B toggle: when `true`, the boolean Hamming/Jaccard cdist paths use the
 /// scalar/SoA per-dimension count; when `false` (default) they pack rows to `u64` words and

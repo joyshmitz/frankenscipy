@@ -6,6 +6,26 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: (c/p)dist_seuclidean whitened-Euclidean fast path (1.3-2.0x)
+
+- Dig audit: consulted ledger first. Applied the layout lesson from the GEMM REJECT
+  below — instead of inventing a new kernel, ROUTE THROUGH the existing fast Euclidean
+  path. Also confirmed already-optimal this turn: rfft (half-size complex pack for even N),
+  count_neighbors (tree-pruned ball_search), cdist_mahalanobis (GEMM).
+- PROFILED: standardized-Euclidean is Euclidean in the whitened space `x/√vₖ`. The per-pair
+  `seuclidean` DIVIDES by vₖ AND re-checks `vₖ ≤ 0` (simd_le + select) per element on EVERY
+  pair — even though `v` is shared across all pairs. Scale both point sets by `1/√vₖ` ONCE
+  and route through the already-tuned Euclidean (c/p)dist: no per-pair divide/mask.
+- MEASURED (same-binary A/B `SPATIAL_SEUCLIDEAN_PRESCALE_DISABLE`, best-of-4): cdist
+  **d16 1.27x / d64 1.40x / d256 1.61x / d1024 1.79x / (n800,d128) 1.99x**; pdist
+  **d64 1.64x / d256 1.40x / d1024 1.98x**. Scales with d (removing the per-pair divide
+  matters more as d grows). max-rel **~4e-16** (essentially machine-eps — `x/√v` rounds
+  first). Gated dim≥8 (dim<8 keeps its SoA path); a non-positive vₖ falls back to the exact
+  per-pair NaN path. fsci-spatial lib **229 passed / 0 failed** GREEN.
+- CLEAN LANDING (spatial: no codex work, no fsci-special dep). LEVER: any "weighted/scaled
+  Euclidean" (seuclidean, wminkowski p=2) = Euclidean after a once-per-axis whitening →
+  route to the tuned Euclidean kernel, don't fold the weight into the per-pair inner loop.
+
 ## 2026-07-09 - BlackThrush (cc) - REJECT: (sq)euclidean cdist via GEMM gram identity (0.19-1.11x, REVERTED)
 
 - Dig audit: consulted ledger first. Bold attempt at the classic "distance matrix via
