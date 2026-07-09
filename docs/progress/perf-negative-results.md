@@ -4,6 +4,73 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: smoothing-spline GCV compact fixed-band storage (2.00x hot row vs ORIG)
+
+Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided the
+already harvested/rejected smoothing-spline families: sparse-support assembly,
+compact band solve, one-factor GCV trace, selected-inverse trace arithmetic, and
+per-eval dense allocation retreads. The ledger left one unrejected structural
+gap: after the arithmetic path became banded, `xtwx`, `xte`, and the reusable
+`lhs` factorization buffer still lived as full `n*n` row vectors.
+
+Profiling pass:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench --profile release -p fsci-interpolate --bench interpolate_bench smoothing_spline_gcv -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10 --noplot`.
+On RCH `vmi1167313`, the profiled row means were:
+
+| row | mean |
+| --- | ---: |
+| `smoothing_spline_gcv/200` | 3.8033 ms |
+| `smoothing_spline_gcv/500` | 12.310 ms |
+| `smoothing_spline_gcv/1000` | 43.624 ms |
+| `smoothing_spline_gcv/2000` | 169.25 ms |
+| `smoothing_spline_gcv/5000` | 645.43 ms |
+
+Kept primitive: fixed-width compact band storage for the GCV `(4,4)` Gram and
+lhs matrices. The new `GcvBandRow = [f64; 9]` stores the diagonal plus four
+sub/super-diagonals. `chol_banded_gcv` and `gcv_trace_selinv_gcv` use compact
+accessors but preserve the old full-row loop order over the nonzero band. This
+keeps the mathematical primitive the same and removes the full `xtwx`, `xte`,
+and `lhs_buf` `n*n` resident storage from the hot GCV lambda sweep.
+
+Same-worker A/B against the LEGACY ORIGINAL worktree at
+`8080b50f35f0db2d4a60cffc7d4ea840884b30b1`, command:
+`AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_WORKER=vmi1152480 RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo bench --profile release -p fsci-interpolate --bench interpolate_bench smoothing_spline_gcv -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10 --noplot`.
+
+| row | patched mean | ORIG mean | ratio vs ORIG |
+| --- | ---: | ---: | ---: |
+| `smoothing_spline_gcv/200` | 1.4869 ms | 2.6887 ms | 1.81x faster |
+| `smoothing_spline_gcv/500` | 3.8646 ms | 7.2117 ms | 1.87x faster |
+| `smoothing_spline_gcv/1000` | 11.612 ms | 35.841 ms | 3.09x faster |
+| `smoothing_spline_gcv/2000` | 40.066 ms | 36.804 ms | 0.92x (noisy regression row) |
+| `smoothing_spline_gcv/5000` | 78.288 ms | 156.88 ms | **2.00x faster** |
+
+Correctness / conformance:
+- PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo test --profile release -p fsci-interpolate gcv_compact_band_trace_matches_full_storage_bits --lib -- --nocapture`
+  on RCH `ovh-a` (`1 passed`) checks `to_bits()` equality between compact band
+  storage and a local full-row reference for the Cholesky lower band and
+  selected-inverse trace.
+- PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo test --profile release -p fsci-interpolate make_smoothing_spline_lam_matches_scipy --lib -- --nocapture`
+  on RCH `vmi1293453` (`1 passed`) preserves the SciPy-pinned smoothing-spline
+  coefficients for explicit lambda and GCV lambda.
+- PASS: `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cod RCH_REQUIRE_REMOTE=1 RCH_QUEUE_WHEN_BUSY=1 rch exec -- cargo test --profile release -p fsci-conformance --test e2e_interpolate -- --nocapture`
+  on RCH `vmi1149989` (interpolate E2E conformance packet).
+- PASS: `git diff --check`.
+- NOTE: `cargo fmt --check -p fsci-interpolate` still reports broad
+  pre-existing formatting drift across `fsci-interpolate` bench/bin/support
+  files. No crate-wide formatting was applied because this perf patch is
+  intentionally narrow.
+
+Alien-graveyard/optimization mapping: this is the compact/sparse-matrix storage
+route, not another solve or recurrence tweak. The hot path was already using
+band-limited arithmetic; the kept primitive makes the data representation match
+the algebra, changing live memory for the three GCV matrices from O(n^2) rows
+to O(n) fixed-width rows while keeping the same nonzero operations.
+
+Negative evidence: do not retry full `n*n` GCV Gram/lhs storage, dense GCV input
+expansion, or selected-inverse arithmetic churn for this path. Future attempts
+should only revisit smoothing-spline GCV with a genuinely different arithmetic
+primitive and fresh byte/parity proof.
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: binned_statistic_dd 3-D per-thread histograms (1.60-1.63x vs ORIG)
 
 Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided

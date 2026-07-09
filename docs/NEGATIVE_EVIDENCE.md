@@ -6,6 +6,36 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (codex) - KEEP: interpolate smoothing-spline GCV compact band storage (2.00x hot row vs ORIG, BYTE-EXACT storage oracle)
+
+- Land-or-dig audit: consulted this ledger first. Avoided the already rejected
+  smoothing-spline GCV retreads: dense input matrix expansion, repeated
+  trace-solve refactors, selected-inverse arithmetic churn, and per-eval
+  allocation tweaks. The remaining unrejected gap was the storage shape itself:
+  the GCV path still kept `xtwx`, `xte`, and reusable `lhs` as full `n*n`
+  rows even though every matrix is fixed `(4,4)` banded.
+- Profile: short RCH `fsci-interpolate` bench picked
+  `smoothing_spline_gcv/5000` as the hottest profiled path at **645.43 ms**
+  on `vmi1167313`.
+- Primitive: replaced the full-row GCV Gram/lhs buffers with compact
+  `[f64; 9]` rows plus compact-band Cholesky/selected-inverse accessors. This
+  is a storage-only rewrite; the nonzero accumulation and recurrence order are
+  preserved.
+- Same-worker RCH A/B vs LEGACY ORIGINAL at `8080b50f` on `vmi1152480`:
+  `5000` mean **78.288 ms** vs ORIG **156.88 ms** = **2.00x faster vs ORIG**.
+  Smaller rows were mostly wins (`200` 1.81x, `500` 1.87x, `1000` 3.09x) with
+  one noisy intermediate row (`2000` 0.92x); the targeted hot row is the keep.
+- GREEN: bit-exact compact-vs-full storage oracle
+  `gcv_compact_band_trace_matches_full_storage_bits`; SciPy-pinned
+  `make_smoothing_spline_lam_matches_scipy`; interpolate E2E conformance packet
+  `cargo test --profile release -p fsci-conformance --test e2e_interpolate`.
+  `git diff --check` clean. `cargo fmt --check -p fsci-interpolate` still
+  reports broad pre-existing crate formatting drift, so no crate-wide formatter
+  was applied.
+- Negative evidence: do not retry full `n*n` GCV Gram/lhs storage or dense
+  GCV input expansion for this path. Future attempts must change arithmetic or
+  algorithm selection with a separate byte/parity proof.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `fourier_shift`/`fourier_ellipsoid` per-axis arithmetic precompute (1.22-1.29x self, BYTE-IDENTICAL)
 
 - COMPLETES the fourier-filter family (gaussian/uniform separable landed same day). These two are NOT

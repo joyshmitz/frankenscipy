@@ -2992,61 +2992,59 @@ fn solve_banded(a: &mut [Vec<f64>], b: &mut [f64], bw: usize) -> Result<Vec<f64>
     Ok(x)
 }
 
-/// In-place banded Cholesky of an SPD `(bw,bw)`-banded matrix `a` (only the lower band is
-/// read/written): on success `a`'s lower band holds `L` with `a = L Lᵀ`, `L` lower-`bw`-
-/// banded (Cholesky has no fill-in beyond the original bandwidth, and needs no pivoting).
+/// In-place Cholesky of the GCV `(4,4)`-banded SPD matrix in compact band storage.
+/// Only the lower band is read/written: on success the lower band holds `L` with
+/// `a = L L^T`. Cholesky has no fill-in beyond the original bandwidth and needs no
+/// pivoting, so compact storage is arithmetic-identical to the prior full-row path.
 /// Returns `None` if `a` is not positive definite (a non-positive pivot) — the caller
-/// treats that like a singular system. Used to factor the column-independent GCV `lhs`
-/// once and substitute the n trace RHS columns (the per-column solve re-factored it n×).
-fn chol_banded(a: &mut [Vec<f64>], bw: usize) -> Option<()> {
+/// treats that like a singular system.
+fn chol_banded_gcv(a: &mut [GcvBandRow]) -> Option<()> {
     let n = a.len();
     for j in 0..n {
-        let klo = j.saturating_sub(bw);
-        let mut d = a[j][j];
+        let klo = j.saturating_sub(GCV_BW);
+        let mut d = gcv_band_lower_get(a, j, j);
         for k in klo..j {
-            d -= a[j][k] * a[j][k];
+            let ljk = gcv_band_lower_get(a, j, k);
+            d -= ljk * ljk;
         }
         if d <= 0.0 {
             return None;
         }
         let ljj = d.sqrt();
-        a[j][j] = ljj;
-        let ihi = (j + bw + 1).min(n);
+        gcv_band_lower_set(a, j, j, ljj);
+        let ihi = (j + GCV_BW + 1).min(n);
         for i in (j + 1)..ihi {
             // L[i][j] = (a[i][j] - Σ_{k} L[i][k] L[j][k]) / L[j][j], k where both nonzero:
-            // k ∈ [i-bw, j) (since i>j ⇒ i-bw ≥ j-bw, and L[*][k]=0 for k below the band).
-            let kstart = i.saturating_sub(bw);
-            let mut s = a[i][j];
+            // k ∈ [i-bw, j) (since i>j ⇒ i-bw ≥ j-bw, and L[*][k]=0 below the band).
+            let kstart = i.saturating_sub(GCV_BW);
+            let mut s = gcv_band_lower_get(a, i, j);
             for k in kstart..j {
-                s -= a[i][k] * a[j][k];
+                s -= gcv_band_lower_get(a, i, k) * gcv_band_lower_get(a, j, k);
             }
-            a[i][j] = s / ljj;
+            gcv_band_lower_set(a, i, j, s / ljj);
         }
     }
     Some(())
 }
 
-/// Solve `a x = b` for one RHS where `a = L Lᵀ` from [`chol_banded`] (lower `bw`-band):
-/// forward-substitute `L y = b` (in place in `b`), then back-substitute `Lᵀ x = y`.
-/// O(n·bw). Tolerance-parity with `solve_banded` on the same SPD system.
-/// `tr(A⁻¹ B)` where `A = G Gᵀ` (`g` = [`chol_banded`] lower factor, lower bandwidth `bw`)
-/// and `B` is symmetric `bw`-banded. Only the band of `A⁻¹` (|i−j| ≤ bw) contributes
+/// `tr(A^-1 B)` where `A = G G^T` (`g` = [`chol_banded_gcv`] lower factor) and
+/// `B` is symmetric `(4,4)`-banded. Only the band of `A^-1` (|i-j| <= 4) contributes
 /// (B is banded), and that band is recovered from `g` by the Erisman–Tinney SELECTED
 /// INVERSE backward recurrence in O(n·bw²) — no n solves. `z[i][d] = (A⁻¹)_{i,i+d}` for
 /// `d ∈ 0..=bw` (upper band incl. diagonal; A⁻¹ is symmetric). With `L_{ki}=g[k][i]/g[i][i]`
 /// (unit-lower) and `D_i=g[i][i]²`: `Z_{ij} = −Σ_{k=i+1}^{i+bw} L_{ki} Z_{kj}` (j>i) and
 /// `Z_{ii} = 1/D_i − Σ_{k} L_{ki} Z_{ik}`. Tolerance-parity with `Σ_col (A⁻¹ B)_{col,col}`.
-fn gcv_trace_selinv(g: &[Vec<f64>], b: &[Vec<f64>], n: usize, bw: usize) -> f64 {
-    let mut z = vec![vec![0.0_f64; bw + 1]; n];
+fn gcv_trace_selinv_gcv(g: &[GcvBandRow], b: &[GcvBandRow], n: usize) -> f64 {
+    let mut z = vec![[0.0_f64; GCV_BW + 1]; n];
     for i in (0..n).rev() {
-        let gii = g[i][i];
-        let kmax = (i + bw).min(n - 1);
+        let gii = gcv_band_lower_get(g, i, i);
+        let kmax = (i + GCV_BW).min(n - 1);
         // off-diagonals Z_{ij}, j = kmax..i+1 (descending), then the diagonal.
         let mut j = kmax;
         while j > i {
             let mut s = 0.0_f64;
             for k in (i + 1)..=kmax {
-                let lki = g[k][i] / gii;
+                let lki = gcv_band_lower_get(g, k, i) / gii;
                 if lki != 0.0 {
                     let (lo, hi) = if k <= j { (k, j) } else { (j, k) };
                     s -= lki * z[lo][hi - lo];
@@ -3057,7 +3055,7 @@ fn gcv_trace_selinv(g: &[Vec<f64>], b: &[Vec<f64>], n: usize, bw: usize) -> f64 
         }
         let mut s = 1.0 / (gii * gii);
         for k in (i + 1)..=kmax {
-            let lki = g[k][i] / gii;
+            let lki = gcv_band_lower_get(g, k, i) / gii;
             if lki != 0.0 {
                 s -= lki * z[i][k - i]; // Z_{ik}, k>i, just computed above
             }
@@ -3067,10 +3065,10 @@ fn gcv_trace_selinv(g: &[Vec<f64>], b: &[Vec<f64>], n: usize, bw: usize) -> f64 
     // tr = Σ_i Z_ii B_ii + 2 Σ_i Σ_{d=1}^{bw} Z_{i,i+d} B_{i,i+d}  (both symmetric, banded)
     let mut tr = 0.0_f64;
     for i in 0..n {
-        tr += z[i][0] * b[i][i];
-        let dmax = bw.min(n - 1 - i);
+        tr += z[i][0] * gcv_band_get(b, i, i);
+        let dmax = GCV_BW.min(n - 1 - i);
         for d in 1..=dmax {
-            tr += 2.0 * z[i][d] * b[i][i + d];
+            tr += 2.0 * z[i][d] * gcv_band_get(b, i, i + d);
         }
     }
     tr
@@ -6560,12 +6558,51 @@ fn band2_get(band: &[Vec<f64>], i: usize, j: usize) -> f64 {
     }
 }
 
+const GCV_BW: usize = 4;
+const GCV_BAND_WIDTH: usize = 2 * GCV_BW + 1;
+const GCV_BAND_CENTER: isize = GCV_BW as isize;
+type GcvBandRow = [f64; GCV_BAND_WIDTH];
+
+#[inline]
+fn gcv_band_index(i: usize, j: usize) -> Option<usize> {
+    let offset = j as isize - i as isize;
+    (-GCV_BAND_CENTER..=GCV_BAND_CENTER)
+        .contains(&offset)
+        .then_some((GCV_BAND_CENTER + offset) as usize)
+}
+
+#[inline]
+fn gcv_band_get(band: &[GcvBandRow], i: usize, j: usize) -> f64 {
+    gcv_band_index(i, j).map_or(0.0, |idx| band[i][idx])
+}
+
+#[inline]
+fn gcv_band_set(band: &mut [GcvBandRow], i: usize, j: usize, value: f64) {
+    if let Some(idx) = gcv_band_index(i, j) {
+        band[i][idx] = value;
+    }
+}
+
+#[inline]
+fn gcv_band_lower_get(band: &[GcvBandRow], i: usize, j: usize) -> f64 {
+    debug_assert!(i >= j);
+    debug_assert!(i - j <= GCV_BW);
+    band[i][(GCV_BAND_CENTER - (i - j) as isize) as usize]
+}
+
+#[inline]
+fn gcv_band_lower_set(band: &mut [GcvBandRow], i: usize, j: usize, value: f64) {
+    debug_assert!(i >= j);
+    debug_assert!(i - j <= GCV_BW);
+    band[i][(GCV_BAND_CENTER - (i - j) as isize) as usize] = value;
+}
+
 fn gcv_optimal_lambda(xm: &[Vec<f64>], we: &[Vec<f64>], y: &[f64], w: &[f64]) -> f64 {
     let n = y.len();
     let nf = n as f64;
     // XtWX = Xᵀ W X, XtE = Xᵀ W E.
-    let mut xtwx = vec![vec![0.0_f64; n]; n];
-    let mut xte = vec![vec![0.0_f64; n]; n];
+    let mut xtwx = vec![[0.0_f64; GCV_BAND_WIDTH]; n];
+    let mut xte = vec![[0.0_f64; GCV_BAND_WIDTH]; n];
     // X and E are (2,2)-banded (x_full[k][·] ≠ 0 only within |k-·| ≤ 2), so the Gram
     // products XᵀWX, XᵀWE are (4,4)-banded and each entry's k-sum has nonzero terms
     // only where BOTH the row factor (|k-i| ≤ 2) and the column factor (|k-j| ≤ 2)
@@ -6585,16 +6622,15 @@ fn gcv_optimal_lambda(xm: &[Vec<f64>], we: &[Vec<f64>], y: &[f64], w: &[f64]) ->
                 sx += xwk * band2_get(xm, k, j);
                 se += xwk * band2_get(we, k, j);
             }
-            xtwx[i][j] = sx;
-            xte[i][j] = se;
+            gcv_band_set(&mut xtwx, i, j, sx);
+            gcv_band_set(&mut xte, i, j, se);
         }
     }
-    // lhs scratch reused across every bounded_minimize eval: allocated ONCE (n×n) instead
-    // of vec![vec![0;n];n] per eval. Cholesky writes only the lower (4)-band + diagonal and
-    // does no pivoting/fill, so re-filling |i-j| ≤ 4 each eval fully overwrites the previous
-    // factorization; out-of-band cells are never touched (stay 0). Drops the per-eval alloc
-    // from O(n²) to O(n) → the whole GCV sweep is O(n·iters).
-    let lhs_buf = std::cell::RefCell::new(vec![vec![0.0_f64; n]; n]);
+    // lhs scratch reused across every bounded_minimize eval in compact (4,4)-band storage.
+    // Cholesky writes only the lower band + diagonal and does no pivoting/fill, so re-filling
+    // |i-j| ≤ 4 each eval fully overwrites the previous factorization. This keeps the whole
+    // GCV path at O(n) memory instead of keeping three full n×n matrices alive.
+    let lhs_buf = std::cell::RefCell::new(vec![[0.0_f64; GCV_BAND_WIDTH]; n]);
     let gcv = |lam: f64| -> f64 {
         // c solves (X + λE) c = y. m = X + λE is (2,2)-banded; build it in COMPACT banded
         // storage (O(n·bw) per eval, not the dense O(n²) alloc) and solve with the same
@@ -6643,11 +6679,16 @@ fn gcv_optimal_lambda(xm: &[Vec<f64>], we: &[Vec<f64>], y: &[f64], w: &[f64]) ->
                 let jlo = i.saturating_sub(4);
                 let jhi = (i + 4).min(n - 1);
                 for j in jlo..=jhi {
-                    lhs[i][j] = xtwx[i][j] + lam * xte[i][j];
+                    gcv_band_set(
+                        &mut lhs,
+                        i,
+                        j,
+                        gcv_band_get(&xtwx, i, j) + lam * gcv_band_get(&xte, i, j),
+                    );
                 }
             }
-            match chol_banded(lhs.as_mut_slice(), 4) {
-                Some(()) => gcv_trace_selinv(lhs.as_slice(), &xtwx, n, 4),
+            match chol_banded_gcv(lhs.as_mut_slice()) {
+                Some(()) => gcv_trace_selinv_gcv(lhs.as_slice(), &xtwx, n),
                 None => return f64::INFINITY,
             }
         };
@@ -9715,6 +9756,137 @@ mod tests {
         }
         // Negative lam is rejected.
         assert!(make_smoothing_spline(&x, &y, None, Some(-1.0)).is_err());
+    }
+
+    #[test]
+    fn gcv_compact_band_trace_matches_full_storage_bits() {
+        fn chol_banded_full(a: &mut [Vec<f64>], bw: usize) -> Option<()> {
+            let n = a.len();
+            for j in 0..n {
+                let klo = j.saturating_sub(bw);
+                let mut d = a[j][j];
+                for k in klo..j {
+                    d -= a[j][k] * a[j][k];
+                }
+                if d <= 0.0 {
+                    return None;
+                }
+                let ljj = d.sqrt();
+                a[j][j] = ljj;
+                let ihi = (j + bw + 1).min(n);
+                for i in (j + 1)..ihi {
+                    let kstart = i.saturating_sub(bw);
+                    let mut s = a[i][j];
+                    for k in kstart..j {
+                        s -= a[i][k] * a[j][k];
+                    }
+                    a[i][j] = s / ljj;
+                }
+            }
+            Some(())
+        }
+
+        fn gcv_trace_selinv_full(g: &[Vec<f64>], b: &[Vec<f64>], n: usize, bw: usize) -> f64 {
+            let mut z = vec![vec![0.0_f64; bw + 1]; n];
+            for i in (0..n).rev() {
+                let gii = g[i][i];
+                let kmax = (i + bw).min(n - 1);
+                let mut j = kmax;
+                while j > i {
+                    let mut s = 0.0_f64;
+                    for k in (i + 1)..=kmax {
+                        let lki = g[k][i] / gii;
+                        if lki != 0.0 {
+                            let (lo, hi) = if k <= j { (k, j) } else { (j, k) };
+                            s -= lki * z[lo][hi - lo];
+                        }
+                    }
+                    z[i][j - i] = s;
+                    j -= 1;
+                }
+                let mut s = 1.0 / (gii * gii);
+                for k in (i + 1)..=kmax {
+                    let lki = g[k][i] / gii;
+                    if lki != 0.0 {
+                        s -= lki * z[i][k - i];
+                    }
+                }
+                z[i][0] = s;
+            }
+
+            let mut tr = 0.0_f64;
+            for i in 0..n {
+                tr += z[i][0] * b[i][i];
+                let dmax = bw.min(n - 1 - i);
+                for d in 1..=dmax {
+                    tr += 2.0 * z[i][d] * b[i][i + d];
+                }
+            }
+            tr
+        }
+
+        let n = 48usize;
+        let mut lower = vec![vec![0.0_f64; n]; n];
+        for i in 0..n {
+            lower[i][i] = 7.0 + (i % 5) as f64 * 0.125;
+            let jlo = i.saturating_sub(GCV_BW);
+            for j in jlo..i {
+                lower[i][j] =
+                    ((i * 17 + j * 31 + 11) % 23) as f64 * 0.0025 + 0.00075;
+            }
+        }
+
+        let mut full_a = vec![vec![0.0_f64; n]; n];
+        let mut compact_a = vec![[0.0_f64; GCV_BAND_WIDTH]; n];
+        for i in 0..n {
+            let jlo = i.saturating_sub(GCV_BW);
+            for j in jlo..=i {
+                let klo = i.max(j).saturating_sub(GCV_BW);
+                let khi = i.min(j);
+                let mut sum = 0.0_f64;
+                for k in klo..=khi {
+                    sum += lower[i][k] * lower[j][k];
+                }
+                full_a[i][j] = sum;
+                full_a[j][i] = sum;
+                gcv_band_set(&mut compact_a, i, j, sum);
+                gcv_band_set(&mut compact_a, j, i, sum);
+            }
+        }
+
+        let mut full_b = vec![vec![0.0_f64; n]; n];
+        let mut compact_b = vec![[0.0_f64; GCV_BAND_WIDTH]; n];
+        for i in 0..n {
+            let jhi = (i + GCV_BW).min(n - 1);
+            for j in i..=jhi {
+                let value = ((i * 13 + j * 7 + 3) % 29) as f64 * 0.003 + 0.25;
+                full_b[i][j] = value;
+                full_b[j][i] = value;
+                gcv_band_set(&mut compact_b, i, j, value);
+                gcv_band_set(&mut compact_b, j, i, value);
+            }
+        }
+
+        assert_eq!(chol_banded_full(&mut full_a, GCV_BW), Some(()));
+        assert_eq!(chol_banded_gcv(&mut compact_a), Some(()));
+        for i in 0..n {
+            let jlo = i.saturating_sub(GCV_BW);
+            for j in jlo..=i {
+                assert_eq!(
+                    gcv_band_lower_get(&compact_a, i, j).to_bits(),
+                    full_a[i][j].to_bits(),
+                    "Cholesky lower-band mismatch at ({i},{j})"
+                );
+            }
+        }
+
+        let full_trace = gcv_trace_selinv_full(&full_a, &full_b, n, GCV_BW);
+        let compact_trace = gcv_trace_selinv_gcv(&compact_a, &compact_b, n);
+        assert_eq!(
+            compact_trace.to_bits(),
+            full_trace.to_bits(),
+            "compact trace differs from full storage"
+        );
     }
 
     #[test]
