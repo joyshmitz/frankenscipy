@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-08 - BlackThrush (cc) - KEEP: GenGamma density reuses precomputed ln(x) instead of powf (1.29-1.43x vs ORIG)
+
+- Dig audit: consulted this ledger first; avoided all rejected levers (parallel
+  builds/sorts, det gate, Strassen, ODR/cluster parallel washes). Applied the same
+  "reuse a precomputed transcendental" lever that won lombscargle last turn.
+- PROFILED (grep `.powf(` in hot loops): `GenGamma` pdf/logpdf/pdf_many/logpdf_many
+  compute the shape term `(c·a−1)·x.ln() − x.powf(c)`. `powf(x,c) = exp(c·ln(x))`
+  recomputes `ln(x)` INTERNALLY, while the same expression already computes `x.ln()`
+  explicitly — so `ln(x)` is evaluated TWICE per element. Reuse it: `let lx = x.ln();
+  (c·a−1)·lx − (c·lx).exp()` → one `ln` + one `exp` per element instead of two `ln`
+  + one `exp`. gengamma pdf_many IS benched.
+- MEASURED (pdf_many, 500k pts, same-binary A/B `GENGAMMA_LN_REUSE_DISABLE`,
+  interleaved best-of-4, `CARGO_TARGET_DIR=/data/projects/.rch-targets/scipy-cc`):
+  **1.43x (a=2.5,c=1.7) / 1.29x (a=1.3,c=0.8) / 1.33x (a=3.1,c=2.4)**. Agreement vs
+  the powf form: max-rel **5.7e-14** (powf carries extra internal precision; the
+  ~1e-14 drift is far inside tolerance). fsci-stats lib suite **2017 passed / 0
+  failed** GREEN (incl. gengamma pdf/entropy/sf-tail-vs-scipy).
+- LEVER (reinforced): grep `x.powf(k)` where `k` is loop-invariant AND `x.ln()` (or
+  `ln_data`) is already computed nearby → replace with `(k·lx).exp()` reusing lx. Also
+  applies to any MLE/score loop iterating a fixed exponent over fixed data (e.g.
+  Weibull::fit runs 50 Newton iters of `data.map(x.powf(c))` with `ln_data`
+  precomputed — same fix, deferred as it is not benched).
+- E0514 GOTCHA: the full stats-lib test build hit a transient
+  `autocfg/num-traits/matrixmultiply` "incompatible rustc" cascade (concurrent build
+  race on the shared target dir); a plain retry compiled clean (2017/0). No cargo
+  clean needed. SHARED-CHECKOUT: fsci-special is STILL uncompilable (codex's mathieu
+  autostash conflict markers from the prior turn, unresolved) — since fsci-stats deps
+  fsci-special, I temporarily reset the 2 conflicted special files to HEAD (codex
+  backups saved) to unblock my build+test, then restored them; and stats lib.rs
+  carries 405/111 lines of codex uncommitted work, so I landed via reset-reapply.
+
 ## 2026-07-08 - BlackThrush (cc) - REJECT: fsci-cluster `double_centered_gram_from_squared` parallel-row build (0.84-1.10x, REVERTED) + BLOCKER note
 
 - Dig audit: consulted this ledger first; avoided all rejected levers. Confirmed

@@ -4559,6 +4559,25 @@ pub struct GenGamma {
     pub c: f64,
 }
 
+/// Same-binary A/B toggle for the GenGamma density shape term: when `true`, the
+/// original `x.ln()` + `x.powf(c)` form runs (powf recomputes `ln(x)`); when
+/// `false` (default) `ln(x)` is computed once and reused as `(c·lx).exp()`,
+/// dropping one `ln` per element. Agrees with the powf form to ~1e-15.
+pub static GENGAMMA_LN_REUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// GenGamma log-density shape term `(c·a−1)·ln(x) − x^c`, reusing a single
+/// `ln(x)` (so `x^c = exp(c·ln(x))`) instead of letting `powf` recompute it.
+#[inline]
+fn gengamma_shape_term(x: f64, c: f64, ca_minus_1: f64, reuse: bool) -> f64 {
+    if reuse {
+        let lx = x.ln();
+        ca_minus_1 * lx - (c * lx).exp()
+    } else {
+        ca_minus_1 * x.ln() - x.powf(c)
+    }
+}
+
 impl GenGamma {
     #[must_use]
     pub fn new(a: f64, c: f64) -> Self {
@@ -4579,11 +4598,13 @@ impl GenGamma {
         let c = self.c;
         let lead = c.abs().ln();
         let lg = ln_gamma(a);
+        let ca1 = c * a - 1.0;
+        let reuse = !GENGAMMA_LN_REUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
         par_continuous_map_min(xs, 65536, |x| {
             if x <= 0.0 {
                 return f64::NEG_INFINITY;
             }
-            lead + (c * a - 1.0) * x.ln() - x.powf(c) - lg
+            lead + gengamma_shape_term(x, c, ca1, reuse) - lg
         })
     }
 
@@ -4595,11 +4616,13 @@ impl GenGamma {
         let c = self.c;
         let lead = c.abs().ln();
         let lg = ln_gamma(a);
+        let ca1 = c * a - 1.0;
+        let reuse = !GENGAMMA_LN_REUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
         par_continuous_map_min(xs, 65536, |x| {
             if x <= 0.0 {
                 return 0.0;
             }
-            (lead + (c * a - 1.0) * x.ln() - x.powf(c) - lg).exp()
+            (lead + gengamma_shape_term(x, c, ca1, reuse) - lg).exp()
         })
     }
 }
@@ -4611,7 +4634,9 @@ impl ContinuousDistribution for GenGamma {
         }
         let a = self.a;
         let c = self.c;
-        let ln_pdf = c.abs().ln() + (c * a - 1.0) * x.ln() - x.powf(c) - ln_gamma(a);
+        let reuse = !GENGAMMA_LN_REUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+        let ln_pdf =
+            c.abs().ln() + gengamma_shape_term(x, c, c * a - 1.0, reuse) - ln_gamma(a);
         ln_pdf.exp()
     }
 
@@ -4622,7 +4647,8 @@ impl ContinuousDistribution for GenGamma {
         }
         let a = self.a;
         let c = self.c;
-        c.abs().ln() + (c * a - 1.0) * x.ln() - x.powf(c) - ln_gamma(a)
+        let reuse = !GENGAMMA_LN_REUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+        c.abs().ln() + gengamma_shape_term(x, c, c * a - 1.0, reuse) - ln_gamma(a)
     }
 
     fn cdf(&self, x: f64) -> f64 {
