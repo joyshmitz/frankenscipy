@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - REJECT: Sobol general-dim direction-table hoist (0.80-0.98x, REVERTED) + profile audit FINDING
+
+- After the Halton base-2 bit-reversal KEEP, profiled the whole QMC + stats-non-distribution + special
+  benched surface for a second win. `sample_general_serial/_parallel` (Sobol dims ∉ {2,4,8}) called
+  `direction_table(dim)` — a `dim<2` branch + static index — per point per dim. HOISTED it to a
+  precomputed `Vec<&'static [u64;64]>` indexed as `tables[dim][bit]`. Byte-identical (`same=true`),
+  but MEASURED **0.80-0.98x** (dim=3 0.91×, dim=6 0.80×, dim=10 0.98×, all A/B best-of-5): the Vec
+  indirection + bounds-check is SLOWER than the well-predicted branch on a directly-addressable static
+  array. Clean REVERT. LESSON: don't "hoist" a predictable branch over a static table into a Vec load
+  — the compiler already resolves `direction_table(dim)` optimally; the Vec adds indirection.
+- PROFILE AUDIT (this turn verified ALREADY-OPTIMAL, don't re-scan): stats `mannkendall` (O(n log n)
+  merge-sort inversion counting, not O(n²)), `pacf` (Durbin-Levinson), `histogram` (O(1) uniform
+  binning), `binned_statistic_dd` (parallel prescan + per-thread accumulators + 3D fast path),
+  `LatinHypercube` (O(n·d) Fisher-Yates); qmc `centered/mixture/l2_star/wraparound_discrepancy_2d`
+  (symmetric 2× + per-point precompute; O(n²) is inherent for the pairwise kernel), Sobol (Antonov-
+  Saleev Gray-code `trailing_zeros`+XOR, tuned 2d/8d-prefix30 paths); special `ncfdtr` (incomplete-
+  beta first-param recurrence O(1)/term), array evaluators (SpecialTensor parallel dispatch),
+  `ncfdtri_many`/`ncfdtrinc_many`/… (`par_map_indices`); linalg `qz`/`randomized_rcond` (only cold
+  O(n²) transpose-caches, <1% of the O(n³) — not worth it). REMAINING real gap = mathieu_a/b
+  `tridiagonal_kth_eigenvalue` 60-iter Sturm bisection (DEFERRED, needs Zhang-Jin specfun port;
+  Newton-on-pivot already rejected 0.70%). NON-BYTE-EXACT lead (not taken): discrepancy pair loops are
+  O(n²) serial and parallelizable-across-i (scipy has a `workers` param), but the metric already
+  reassociates ~1e-15 so it can't be byte-exact — left for a turn that accepts tolerance-based gains.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: QMC Halton base-2 radical inverse via hardware bit-reversal (1.08-3.2x self, BYTE-IDENTICAL)
 
 - RADICALLY DIFFERENT primitive (hardware bit-reversal) — a genuine pivot off the recurrence/compact
