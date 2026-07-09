@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - REJECT: (sq)euclidean cdist via GEMM gram identity (0.19-1.11x, REVERTED)
+
+- Dig audit: consulted ledger first. Bold attempt at the classic "distance matrix via
+  GEMM" primitive (sklearn's euclidean_distances): `‖x−y‖² = ‖x‖² − 2·XYᵀ + ‖y‖²`, so the
+  cross term is one cache-blocked matmul. cdist Euclidean/SqEuclidean at dim≥8 falls to the
+  per-pair `_ =>` arm (mahalanobis already uses GEMM, plain euclidean does not).
+- MEASURED (cdist n=500-1000, d=16-1024, same-binary A/B `SPATIAL_EUCLIDEAN_GEMM_DISABLE`):
+  GEMM is SLOWER everywhere — SqEuclid 0.19x@d64 / 0.36x@d256 / 0.87x@d1024, Euclid
+  0.20-0.51x. Accuracy was FINE (max-rel ~1e-16, maxdiff ~1e-13 — cancellation is a
+  non-issue for separated random points), so the reject is purely on speed.
+- WHY IT LOST: the premise was wrong — the per-pair `_ =>` arm already FLATTENS xb into a
+  single contiguous row-major buffer, so it streams through cache (hardware prefetch) with
+  NO thrashing to fix. GEMM then just ADDS overhead: transpose xb→dim×nb, two ‖·‖² sweeps,
+  and a matmul with a SMALL contraction dim (d) that `matmul` isn't tuned for. Same O(n·m·d)
+  MACs, more passes.
+- Reverted to byte-clean HEAD (empty diff), probe deleted. LEVER (learned): "distance
+  matrix via GEMM" only wins over a per-pair loop that POINTER-CHASES scattered rows; once
+  the per-pair path is already contiguous+SIMD+parallel (as fsci's is), GEMM's extra
+  passes lose. Check the existing memory layout BEFORE assuming cache-thrashing. DON'T
+  re-try euclidean/sqeuclidean GEMM cdist.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: pdist(Jaccard) bit-packing + popcount (2.2-3.1x, byte-identical)
 
 - Dig audit: consulted ledger first. Extends yesterday's cdist(Jaccard) popcount win
