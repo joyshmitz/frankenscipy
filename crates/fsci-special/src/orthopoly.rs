@@ -2843,32 +2843,161 @@ pub fn assoc_legendre_p_all(n: u32, m: u32, z: f64) -> Vec<Vec<f64>> {
     table
 }
 
+/// Fill `col[j] = P_j^{am}(x)` for `j = am..=n` (`j < am` left `0.0`) with ONE `lpmv_nonneg_m`
+/// recurrence sweep — `col[j]` is bit-identical to `lpmv_nonneg_m(am, j, x)` (identical steps).
+/// Shared by the fused spherical-harmonic table builders below.
+fn lpmv_prefix_column(am: u32, n: u32, x: f64) -> Vec<f64> {
+    let mut col = vec![0.0_f64; n as usize + 1];
+    let mut pmm = 1.0;
+    if am > 0 {
+        let somx2 = (1.0 - x * x).max(0.0).sqrt();
+        let mut fact = 1.0;
+        for _i in 1..=am {
+            pmm *= -fact * somx2;
+            fact += 2.0;
+        }
+    }
+    col[am as usize] = pmm;
+    if n >= am + 1 {
+        let pmm1 = x * (2.0 * am as f64 + 1.0) * pmm;
+        col[(am + 1) as usize] = pmm1;
+        let mut p_prev = pmm;
+        let mut p_curr = pmm1;
+        for ll in (am + 2)..=n {
+            let llf = ll as f64;
+            let mf = am as f64;
+            let p_next = ((2.0 * llf - 1.0) * x * p_curr - (llf + mf - 1.0) * p_prev) / (llf - mf);
+            p_prev = p_curr;
+            p_curr = p_next;
+            col[ll as usize] = p_next;
+        }
+    }
+    col
+}
+
+/// Same-binary A/B toggle for `sph_legendre_p_all` (see `LEGENDRE_P_ALL_FUSED_DISABLE`).
+#[doc(hidden)]
+pub static SPH_LEGENDRE_P_ALL_FUSED_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// All spherical Legendre polynomials up to degree `n` and order `m`, as an
 /// `(n+1) × (2m+1)` table, matching `scipy.special.sph_legendre_p_all(n, m,
 /// theta)` (`diff_n=0`). Order columns follow the wraparound `0,1,…,m,−m,…,−1`.
+///
+/// The naive map calls `sph_legendre_p(j, order, θ)` for every cell, each rerunning the
+/// fixed-order degree recurrence for `P_j^{|order|}(cos θ)` from `P_{|order|}^{|order|}` ⇒
+/// `O(n²·m)`. For a FIXED order magnitude `am` those `P_j^{am}(cos θ)` are the recurrence
+/// PREFIX; `lpmv_prefix_column` fills them once in `O(n)`, then each cell applies
+/// `sph_legendre_p`'s per-cell factor `√((2j+1)/(4π)·(j−am)!/(j+am)!)` and the `(−1)^am`
+/// negative-order sign ⇒ `O(n·m)`, BYTE-IDENTICAL (`P` matches `lpmv` bit-for-bit and the
+/// factor/sign are the identical expressions). Gated on finite `θ`.
 #[must_use]
 pub fn sph_legendre_p_all(n: u32, m: u32, theta: f64) -> Vec<Vec<f64>> {
-    (0..=n)
-        .map(|j| {
-            (0..=2 * m)
-                .map(|k| sph_legendre_p(j, legendre_all_order(k, m), theta))
-                .collect()
-        })
-        .collect()
+    let ncols = (2 * m + 1) as usize;
+    let mut table = vec![vec![0.0_f64; ncols]; n as usize + 1];
+    if !theta.is_finite()
+        || SPH_LEGENDRE_P_ALL_FUSED_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        for j in 0..=n {
+            for k in 0..=2 * m {
+                table[j as usize][k as usize] = sph_legendre_p(j, legendre_all_order(k, m), theta);
+            }
+        }
+        return table;
+    }
+    let x = theta.cos();
+    for am in 0..=m {
+        let k_pos = am as usize;
+        let k_neg = if am > 0 { (2 * m + 1 - am) as usize } else { 0 };
+        let col = lpmv_prefix_column(am, n, x);
+        for j in am..=n {
+            // Matches sph_legendre_p's factor and (−1)^am negative-order sign exactly.
+            let factor = ((2.0 * f64::from(j) + 1.0) / (4.0 * PI)
+                * assoc_inverse_factorial_ratio(j, am))
+            .sqrt();
+            let base = factor * col[j as usize];
+            table[j as usize][k_pos] = base;
+            if am > 0 {
+                table[j as usize][k_neg] = if am % 2 == 1 { -base } else { base };
+            }
+        }
+    }
+    table
 }
+
+/// Same-binary A/B toggle for `sph_harm_y_all` (see `LEGENDRE_P_ALL_FUSED_DISABLE`).
+#[doc(hidden)]
+pub static SPH_HARM_Y_ALL_FUSED_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// All spherical harmonics up to degree `n` and order `m`, as an `(n+1) × (2m+1)`
 /// table, matching `scipy.special.sph_harm_y_all(n, m, theta, phi)` (`diff_n=0`).
 /// Order columns follow the wraparound `0,1,…,m,−m,…,−1`.
+///
+/// Fused like [`sph_legendre_p_all`]: for a fixed order magnitude `am` the shared
+/// `P_j^{am}(cos θ)` factor is the recurrence PREFIX (`lpmv_prefix_column`, filled once in
+/// `O(n)`); each cell then applies `sph_harm`'s per-cell norm `√((2j+1)/(4π)·(j−am)!/(j+am)!)`,
+/// the `exp(i·order·φ)` phase and the `(−1)^am` negative-order sign — reducing `O(n²·m)` to
+/// `O(n·m)`, BYTE-IDENTICAL. The `l==0` row is written by the map (its closed-form
+/// `1/√(4π)` return differs from the general `√(1/(4π))` by up to 1 ULP), and non-finite
+/// `θ`/`φ` fall back to the map (matching `sph_harm`'s NaN short-circuit).
 #[must_use]
 pub fn sph_harm_y_all(n: u32, m: u32, theta: f64, phi: f64) -> Vec<Vec<Complex64>> {
-    (0..=n)
-        .map(|j| {
-            (0..=2 * m)
-                .map(|k| sph_harm_y(j, legendre_all_order(k, m), theta, phi))
-                .collect()
-        })
-        .collect()
+    let ncols = (2 * m + 1) as usize;
+    let zero = Complex64 { re: 0.0, im: 0.0 };
+    let mut table = vec![vec![zero; ncols]; n as usize + 1];
+    if !theta.is_finite()
+        || !phi.is_finite()
+        || SPH_HARM_Y_ALL_FUSED_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        for j in 0..=n {
+            for k in 0..=2 * m {
+                table[j as usize][k as usize] = sph_harm_y(j, legendre_all_order(k, m), theta, phi);
+            }
+        }
+        return table;
+    }
+    // Row j = 0 via the map so the `l == 0` closed-form (`1/√(4π)`) is reproduced exactly.
+    for k in 0..=2 * m {
+        table[0][k as usize] = sph_harm_y(0, legendre_all_order(k, m), theta, phi);
+    }
+    let x = theta.cos();
+    for am in 0..=m {
+        let col = lpmv_prefix_column(am, n, x);
+        // Column indices and per-column order value (i32), matching legendre_all_order.
+        // Y_l^{−m} = (−1)^m·conj(Y_l^m): the norm/P use |m|, so sign is (−1)^am.
+        let cols: Vec<(usize, i32, f64)> = if am == 0 {
+            vec![(0usize, 0i32, 1.0f64)]
+        } else {
+            vec![
+                (am as usize, am as i32, 1.0),
+                (
+                    (2 * m + 1 - am) as usize,
+                    -(am as i32),
+                    if am % 2 == 1 { -1.0 } else { 1.0 },
+                ),
+            ]
+        };
+        for j in am.max(1)..=n {
+            let plm = col[j as usize];
+            // sph_harm's norm: √((2j+1)/(4π)·exp(−Σ_{k=j−am+1}^{j+am} ln k)).
+            let li = j as i32;
+            let mut log_ratio = 0.0;
+            for k in (li - am as i32 + 1)..=(li + am as i32) {
+                log_ratio -= (k as f64).ln();
+            }
+            let norm = ((2.0 * j as f64 + 1.0) / (4.0 * std::f64::consts::PI) * log_ratio.exp())
+                .sqrt();
+            for &(kc, order, sign) in &cols {
+                let angle = order as f64 * phi;
+                table[j as usize][kc] = Complex64 {
+                    re: sign * norm * plm * angle.cos(),
+                    im: sign * norm * plm * angle.sin(),
+                };
+            }
+        }
+    }
+    table
 }
 
 // ---------------------------------------------------------------------------
@@ -4983,6 +5112,43 @@ mod tests {
                     let (f, mp) = (fused[j as usize][k as usize], map[j as usize][k as usize]);
                     assert_eq!(f.to_bits(), mp.to_bits(), "fused!=map at n={n} m={m} j={j} k={k}");
                     assert_eq!(f.to_bits(), direct.to_bits(), "fused!=direct at n={n} m={m} j={j} k={k}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sph_all_fused_matches_map_and_direct() {
+        use std::sync::atomic::Ordering;
+        for &(n, m, theta, phi) in &[
+            (0u32, 0u32, 0.7, 1.3),
+            (5, 3, 0.4, 2.1),
+            (8, 8, 1.9, -0.6),
+            (10, 2, 2.7, 0.15),
+            (20, 10, 0.15, 3.0),
+        ] {
+            // sph_legendre_p_all
+            SPH_LEGENDRE_P_ALL_FUSED_DISABLE.store(true, Ordering::Relaxed);
+            let lmap = sph_legendre_p_all(n, m, theta);
+            SPH_LEGENDRE_P_ALL_FUSED_DISABLE.store(false, Ordering::Relaxed);
+            let lfused = sph_legendre_p_all(n, m, theta);
+            // sph_harm_y_all
+            SPH_HARM_Y_ALL_FUSED_DISABLE.store(true, Ordering::Relaxed);
+            let ymap = sph_harm_y_all(n, m, theta, phi);
+            SPH_HARM_Y_ALL_FUSED_DISABLE.store(false, Ordering::Relaxed);
+            let yfused = sph_harm_y_all(n, m, theta, phi);
+            for j in 0..=n {
+                for k in 0..=2 * m {
+                    let o = legendre_all_order(k, m);
+                    let (ju, ku) = (j as usize, k as usize);
+                    let ld = sph_legendre_p(j, o, theta);
+                    assert_eq!(lfused[ju][ku].to_bits(), lmap[ju][ku].to_bits(), "L f!=m {n},{m},{j},{k}");
+                    assert_eq!(lfused[ju][ku].to_bits(), ld.to_bits(), "L f!=direct {n},{m},{j},{k}");
+                    let yd = sph_harm_y(j, o, theta, phi);
+                    assert_eq!(yfused[ju][ku].re.to_bits(), ymap[ju][ku].re.to_bits(), "Y.re f!=m {n},{m},{j},{k}");
+                    assert_eq!(yfused[ju][ku].im.to_bits(), ymap[ju][ku].im.to_bits(), "Y.im f!=m {n},{m},{j},{k}");
+                    assert_eq!(yfused[ju][ku].re.to_bits(), yd.re.to_bits(), "Y.re f!=direct {n},{m},{j},{k}");
+                    assert_eq!(yfused[ju][ku].im.to_bits(), yd.im.to_bits(), "Y.im f!=direct {n},{m},{j},{k}");
                 }
             }
         }

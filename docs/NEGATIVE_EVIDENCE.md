@@ -6,6 +6,26 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: special `sph_legendre_p_all` + `sph_harm_y_all` recurrence-prefix reuse (2.7-60x self, BYTE-IDENTICAL)
+
+- COMPLETES the spherical-harmonics `*_all` family (legendre_p_all + assoc_legendre_p_all already
+  landed). Both mapped a single-cell fn per `(j,order)`, each rerunning the fixed-order degree
+  recurrence for `P_j^{|order|}(cos θ)` from `P_{|order|}^{|order|}` ⇒ `O(n²·m)`. Extracted a shared
+  `lpmv_prefix_column(am,n,x)` (one `lpmv_nonneg_m` sweep → `P_j^am(x)` for j=am..n, bit-identical to
+  per-j calls); each cell then applies the wrapper: `sph_legendre_p_all` ×`√((2j+1)/(4π)·(j−am)!/(j+am)!)`
+  + `(−1)^am` neg-order sign; `sph_harm_y_all` ×norm ×`exp(i·order·φ)` phase + sign. `O(n·m)`.
+- BYTE-IDENTICAL (to_bits test vs BOTH map and direct, incl. |·|-edge & n=0). Both wrappers use the
+  POSITIVE `|m|` for P and apply sign separately (unlike `assoc_legendre_p`/`lpmv` which scales neg
+  orders by a factorial ratio), so BOTH ±am columns share ONE prefix column. `sph_harm_y_all`'s
+  `l==0` closed-form return `1/√(4π)` differs up to 1 ULP from the general `√(1/(4π))`, so its **j=0
+  row is written by the MAP** (j≥1 by sweep); non-finite θ/φ fall back to the map.
+- Same-binary A/B `SPH_LEGENDRE_P_ALL_FUSED_DISABLE` / `SPH_HARM_Y_ALL_FUSED_DISABLE`. MEASURED:
+  sph_legendre_p_all n=50 m=25 **9.28x**, n=100 m=50 **12.24x**, n=200 m=10 **59.71x**; sph_harm_y_all
+  n=50 m=25 **2.73x**, n=100 m=50 **3.18x**, n=200 m=10 **11.03x** (harm wins less — its per-cell
+  norm-`ln`-loop + complex `cos`/`sin` are heavier vs the recurrence saving). fsci-special **1151/0**.
+- Spherical-harmonics `*_all` prefix-reuse family now COMPLETE (legendre_p_all, assoc_legendre_p_all,
+  sph_legendre_p_all, sph_harm_y_all). LEVER unchanged; likely-exhausted for orthopoly `*_all`.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: special `assoc_legendre_p_all` recurrence-prefix reuse (4.5-52x self, BYTE-IDENTICAL)
 
 - Harvest of the `legendre_p_all` prefix-reuse lever (prior commit f6fd97753) on its 2-D sibling —
