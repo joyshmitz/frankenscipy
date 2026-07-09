@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage diagonal `affine_transform` separable B-spline (order 2-5: 1.3-3.4x, BYTE-IDENTICAL)
+
+- Completes the separable geometric-transform family (zoom + shift already landed) using the
+  same extracted `compute_axis_support`. Consulted ledger first; confirmed rotate / general
+  affine / map_coordinates / geometric_transform are ALREADY parallel + per-pixel (coords
+  couple axes ⇒ not separable) and the spline prefilter is already parallel across fibers.
+- A DIAGONAL affine (`matrix[0][1]==0 && matrix[1][0]==0`) is pure per-axis scale+translate:
+  `src_r` depends only on r, `src_c` only on c ⇒ axis-SEPARABLE like zoom. Detect diagonal +
+  order>=2 → precompute `axis_supports[axis][o] = compute_axis_support(matrix[axis][axis]*o +
+  matrix[axis][2], ...)` once, per pixel gather + `sample_spline_recursive`. General (non-
+  diagonal) affine keeps the parallel per-pixel path.
+- MEASURED (512² diagonal affine, A/B `NDIMAGE_ZOOM_SEPARABLE_DISABLE`, all maxdiff=0.0):
+  order2 **1.31x**, order3 **2.17x**, order5 **3.42x**. Smaller than zoom/shift (affine was
+  already parallel; only the per-pixel-recompute is removed, like zoom). fsci-ndimage **256/0**.
+- Separable-transform family now COMPLETE: zoom, shift, diagonal-affine. Non-separable
+  (rotate/general-affine/map_coordinates) are parallel + per-pixel = optimal for coupled coords.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `shift` parallel + separable B-spline support (order 0-5: 2.0-16.5x, BYTE-IDENTICAL)
 
 - Directly extends yesterday's zoom-separable KEEP (reuses the extracted `compute_axis_support`).

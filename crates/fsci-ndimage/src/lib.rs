@@ -9911,6 +9911,73 @@ pub fn affine_transform(
     let _ = rows;
     let matrix = *matrix;
     let kernel_work = (order + 1) * (order + 1);
+
+    // A DIAGONAL affine (no cross terms) is pure per-axis scale+translate — src_r depends only
+    // on r, src_c only on c — so it is axis-separable exactly like zoom/shift. Precompute the
+    // per-axis B-spline supports once (order >= 2) instead of per pixel; byte-identical.
+    if matrix[0][1] == 0.0
+        && matrix[1][0] == 0.0
+        && order >= 2
+        && !NDIMAGE_ZOOM_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        let out_shape = output.shape.clone();
+        let in_shape = input.shape.clone();
+        let ndim = out_shape.len();
+        let coeffs = &spline.coeffs;
+        let coord_offsets = &spline.coord_offsets;
+        let axis_supports: Vec<Vec<Option<Vec<(usize, f64)>>>> = (0..ndim)
+            .map(|axis| {
+                let coef = matrix[axis][axis];
+                let off = matrix[axis][2];
+                (0..out_shape[axis])
+                    .map(|o| {
+                        let coord = coef * o as f64 + off;
+                        let mut s = Vec::new();
+                        if compute_axis_support(
+                            coord,
+                            coeffs.shape[axis],
+                            in_shape[axis],
+                            coord_offsets[axis],
+                            order,
+                            mode,
+                            &mut s,
+                        ) {
+                            Some(s)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let axis_supports = &axis_supports;
+        fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
+            thread_local! {
+                static ZB: std::cell::RefCell<(Vec<Vec<(usize, f64)>>, Vec<usize>)> =
+                    const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+            }
+            let oidx = unravel_with_shape(flat, &out_shape);
+            ZB.with_borrow_mut(|(bases, idx)| -> f64 {
+                if bases.len() < ndim {
+                    bases.resize_with(ndim, Vec::new);
+                }
+                for axis in 0..ndim {
+                    match &axis_supports[axis][oidx[axis]] {
+                        None => return cval,
+                        Some(s) => {
+                            bases[axis].clear();
+                            bases[axis].extend_from_slice(s);
+                        }
+                    }
+                }
+                idx.clear();
+                idx.resize(coeffs.ndim(), 0);
+                sample_spline_recursive(coeffs, &bases[..ndim], 0, idx.as_mut_slice())
+            })
+        });
+        return Ok(output);
+    }
+
     fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
         let r = (flat / cols) as f64;
         let c = (flat % cols) as f64;
