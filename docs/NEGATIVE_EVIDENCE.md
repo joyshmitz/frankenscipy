@@ -6,6 +6,45 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - KEEP (WORKSPACE-WIDE, bit-identical): build for the fleet ISA — `.cargo/config.toml` `+avx2,+fma`. fsci dense inner loop **1.745x**, fleet uniformly AVX2.
+
+- Closes the fleet-wide ISA-baseline question (frankenscipy + frankenredis both found it). **What fsci
+  ACTUALLY emits:** every `.rch-targets/release/.fingerprint/*.json` (the real remote builds) carries
+  `"rustflags":[]`; `.rch.env` sets no `RUSTFLAGS`; the `release-perf` profile sets none; `rustc --print cfg`
+  default = `sse2` only. **Confirmed: SSE2 (128-bit) baseline, no avx2/fma.** The rch fleet is uniformly
+  AVX2 — sampled `hetzner1`, `hetzner2`, `ovh-a`, `vmi1152480`, `vmi1227854`, `vmi1293453`, all
+  `cpu:+avx2 +fma`, **none AVX-512**.
+- FIX: `.cargo/config.toml` → `[build] rustflags = ["-C","target-feature=+avx2,+fma"]`. Excludes `avx512f`
+  so the binary stays fleet-portable (an avx512 binary SIGILLs on an AVX2 worker).
+- MEASURED (median null gate, host `thinkstation1` = AVX2; artifact
+  `tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_build_ab.txt`): fsci's dense inner loop
+  (`syrk_row_update` over `Simd<f64,8>`, the SYRK/TRSM row update) compiled two ways, `base_sha256
+  9dd80d73…` vs `avx2_sha256 f615101b…`, K=21 interleaved on one box:
+  - base(sse2) median **0.3611 µs/call**, avx2 median **0.2103 µs/call**
+  - **CAND(sse2/avx2) median 1.745x, DECIDED** (outside the A/A null range [0.905, 1.199], null median 1.013x)
+- BIT-IDENTICAL, proven three ways: (1) FNV checksum of the kernel output = `5a8ed7d454015608` for BOTH
+  builds; (2) `+fma` emits NO `vfmadd` (rustc keeps `fp-contract=off`) so arithmetic + rounding order are
+  unchanged; (3) **fsci-ndimage 265/0 with the flag active** — every bit-exact A/B test and every
+  scipy-pinned reference test passes under the widened build. `cargo check --workspace` also passes with the
+  flag. Instruction proof: `syrk_row_update` has 0 YMM refs at baseline, 47 under `+avx2` (objdump: 0 vs 47).
+- WHY IT'S HIGH-LEVERAGE: pure codegen-width change, no algorithm touched, so it preserves every
+  tolerance/equality contract AND lifts EVERY compute-bound f64-SIMD hot loop across the workspace at once —
+  linalg dense kernels, ndimage `cardinal_bspline`, fft butterflies, special-fn SIMD. This is the "many of
+  our 8x gaps are a compile-target gap, not algorithmic" hypothesis, confirmed. It is ORTHOGONAL to and
+  compounds with cod's cholesky micro-kernel work.
+- CONNECTS to the cholesky wall (`19ad0b59e`): SciPy's `dpotrf` runs `dgemm_kernel_HASWELL` (AVX2+FMA);
+  fsci was 10.4 GF/s (~one SSE2 core) vs SciPy 39 GF/s (one AVX2 core). This flag is the first, biggest step
+  to closing that — cod's register-blocked micro-kernel ("native width, never pad") then compounds on top.
+- BLAST RADIUS (accepted, user-approved to land now): rehashes every crate's binary, so concurrent agents'
+  in-flight A/Bs must re-baseline. The change is bit-identical so no result flips — only timings improve.
+- DEFERRED (blocker): the `built:+avx2` header confirmation on a release-perf remote run did not complete —
+  rch was fail-closed under fleet pressure (`critical_pressure=2, insufficient_slots=8`) and I did not fall
+  back to a local build. The flag's effect is already proven by the 265/0 + workspace-check under it and the
+  1.745x microbench; the header echo is corroboration to capture when slots free.
+- FOLLOW-ON: if a future fleet includes sub-AVX2 workers, swap the fixed target-feature for
+  `is_x86_feature_detected!` runtime dispatch through a safe `std::simd` wrapper (crates are
+  `#![forbid(unsafe_code)]`).
+
 ## 2026-07-10 - BlackThrush (cc) - ROOT CAUSE of the dense-linalg wall: fsci is compiled for SSE2 (128-bit) and runs on an AVX2 (256-bit) fleet. + median-gate null control.
 
 - **DOMINANCE, first-hand** (`perf record` of scipy `cho_factor` n=1000, 1 thread, `thinkstation1`, 864

@@ -4,6 +4,80 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-10 - frankenscipy-cc-fleet-isa-avx2 - KEEP (WORKSPACE-WIDE, bit-identical): `.cargo/config.toml` +avx2,+fma — fleet was building SSE2 on AVX2 hardware; dense inner loop 1.745x
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`). User-approved to land the workspace build-flag change.
+- Answers the fleet-wide ISA-baseline check. The question is now CLOSED for frankenscipy: **it emitted SSE2.**
+
+### What the build ACTUALLY emitted (proven from the real build fingerprints)
+
+- `.rch-targets/release/.fingerprint/*.json` — the ACTUAL remote release builds — all carry `"rustflags":[]`.
+- `.rch.env` sets no `RUSTFLAGS`; `RCH_ENV_ALLOWLIST` would strip one anyway.
+- The `release-perf` profile sets no rustflags (cargo profiles cannot).
+- `rustc --print cfg` default target: `target_feature = "fxsr","sse","sse2","x87"` — **no avx/avx2/fma**.
+- ⇒ **fsci shipped generic x86-64 baseline (SSE2, 128-bit)**, not a guess — read from the build artifacts.
+- Fleet ISA (sampled via the probe's `# isa` header): `hetzner1`, `hetzner2`, `ovh-a`, `vmi1152480`,
+  `vmi1227854`, `vmi1293453` — ALL `cpu:+avx2 +fma -avx512f`. Uniformly AVX2, no AVX-512.
+
+### Fix
+
+`.cargo/config.toml`:
+```
+[build]
+rustflags = ["-C", "target-feature=+avx2,+fma"]
+```
+`avx512f` excluded so the binary stays portable across the whole fleet (avx512 SIGILLs on an AVX2 worker).
+
+### Measured (median null gate)
+
+- Command: `rustc -O` two builds of `isa_bench.rs` (fsci's `syrk_row_update` over `Simd<f64,8>`; single-file,
+  not a cargo build, ~0 disk), run interleaved base/avx2/base on `thinkstation1` (AVX2), K=21.
+  Artifact `tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_build_ab.txt`.
+- `base_sha256 = 9dd80d73a4f2d786`, `avx2_sha256 = f615101b42334975`.
+
+  | arm | median µs/call |
+  | --- | ---: |
+  | base (SSE2, what fsci shipped) | 0.3611 |
+  | avx2 build | 0.2103 |
+
+  **CAND(sse2/avx2) median 1.745x — DECIDED**, outside the A/A null range [0.905, 1.199] (null median 1.013x).
+
+### Bit-identical (three independent proofs)
+
+1. FNV checksum of the kernel output = `5a8ed7d454015608` for BOTH builds.
+2. `+fma` emits NO `vfmadd` — rustc keeps `fp-contract=off` — so the arithmetic and its rounding order are
+   unchanged; only register width changes (asm: `syrk_row_update` 0 YMM at baseline, 47 under `+avx2`;
+   objdump of the linked binary: 0 vs 47 YMM instructions).
+3. **fsci-ndimage 265/0 with the flag active** — every bit-exact A/B test (`spline_offset_leaf…`,
+   `cardinal_bspline_lanes…`, `bspline_simd_run…`) and every scipy-pinned reference test passes under the
+   widened build. `cargo check --workspace` also passes with the flag.
+
+### Why this is the highest-leverage lever on the board
+
+Pure codegen-width change: no algorithm touched ⇒ preserves every tolerance/equality contract, and lifts
+EVERY compute-bound f64-SIMD hot loop across the whole workspace simultaneously — linalg dense kernels,
+ndimage `cardinal_bspline`, fft butterflies, special-fn SIMD. Confirms the "many of our '8x slower' gaps are
+a compile-TARGET gap, not an algorithmic one" hypothesis. Orthogonal to, and compounds with, cod's cholesky
+micro-kernel: SciPy's `dpotrf` runs `dgemm_kernel_HASWELL` (AVX2+FMA) at 39 GF/s/core while fsci was 10.4
+GF/s (~one SSE2 core); this flag is the first, biggest step, and cod's register-blocked "native width, never
+pad" micro-kernel compounds on top.
+
+### Guards / constraints
+
+- fsci-ndimage 265/0 and `cargo check --workspace` both PASS with the flag (remote). `git diff --check` clean.
+- Blast radius (user-approved): rehashes every crate's binary; concurrent agents must re-baseline. Bit-
+  identical, so no result flips — only timings improve.
+- DEFERRED (blocker, surfaced): the `built:+avx2` probe-header confirmation on a release-perf remote run did
+  not complete — rch fail-closed under fleet pressure (`critical_pressure=2, insufficient_slots=8`); I did NOT
+  fall back to a local build. Effect already proven by 265/0 + workspace-check under the flag and the 1.745x
+  microbench; capture the header echo when slots free.
+- Method: single-file `rustc` + Python only for the measurement (no cargo build, ~0 disk); remote checks via
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec`. No maturin, no new target tree/worktree, nothing
+  stashed or deleted. Only my own paths committed (`.cargo/config.toml`, the artifact, both ledgers).
+- RETRY / follow-on: (1) capture `built:+avx2` header when rch frees; (2) re-run the cholesky
+  `perf_chol_gate` A/B under the flag to quantify the dense-linalg lift; (3) heterogeneous future fleet →
+  `is_x86_feature_detected!` runtime dispatch through a safe `std::simd` wrapper (`#![forbid(unsafe_code)]`).
+
 **NULL-CONTROL IS GATED BY MEDIAN, NOT cv (frankenmermaid calibration, supersedes the `cv < 5%` rule).**
 A `cv < 5%` gate is UNREACHABLE on this hardware. Run paired(base,base) as the A/A null and paired(base,cand)
 INTERLEAVED in one measured routine; form per-iteration ratios. A row is DECIDABLE only when the candidate's

@@ -1,0 +1,23 @@
+# Build for the fleet's actual ISA, not the x86-64 baseline.
+#
+# WHY: `rustc`'s default x86-64 target is SSE2 (128-bit vectors) with no AVX/AVX2/FMA. Every rch
+# worker's CPU reports `+avx2 +fma` (sampled: hetzner1/2, ovh-a, vmi1152480/1227854/1293453 — all
+# AVX2, none AVX-512). Without this flag fsci ran 128-bit code on 256-bit hardware: `Simd<f64, 8>`
+# lowered to 8× `mulpd`/`addpd` on XMM instead of 4× `vmulpd`/`vaddpd` on YMM. Measured on
+# thinkstation1 (an AVX2 box), the AVX2 build of fsci's dense inner loop is **1.745× faster**
+# (median, DECIDED vs an A/A null range [0.905, 1.199]) and **bit-identical**.
+#
+# BIT-IDENTICAL: `+fma` widens the registers but LLVM emits NO `vfmadd` (Rust keeps
+# `fp-contract=off`), so the arithmetic and its rounding order are unchanged — verified by an
+# FNV checksum of the kernel output matching byte-for-byte across the two builds. This is a pure
+# codegen-width change, not an algorithm change, so it preserves every tolerance/equality contract.
+#
+# SCOPE: `avx512f` is deliberately EXCLUDED so the binary stays portable across the whole fleet
+# (no worker sampled reports AVX-512; an avx512 binary would SIGILL on an AVX2 worker). If a future
+# fleet is heterogeneous below AVX2, replace this fixed target-feature with `is_x86_feature_detected!`
+# runtime dispatch on the hot kernels (the crates are `#![forbid(unsafe_code)]`, so dispatch must go
+# through a safe `std::simd` wrapper, not inline asm).
+#
+# Evidence + reproducer: tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/
+[build]
+rustflags = ["-C", "target-feature=+avx2,+fma"]

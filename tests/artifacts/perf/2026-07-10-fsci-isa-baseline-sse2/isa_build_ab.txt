@@ -1,0 +1,16 @@
+# ISA build A/B: fsci dense inner loop (syrk_row_update over Simd<f64,8>), SSE2 vs AVX2 build
+# host thinkstation1 (AVX2), same source isa_bench.rs, median null gate, K=21 interleaved
+# base_sha256=9dd80d73a4f2d786 avx2_sha256=f615101b42334975
+
+BIT-IDENTICAL: FNV checksum of kernel output = 5a8ed7d454015608 for BOTH builds
+YMM in hot fn syrk_row_update: sse2=0  avx2=47   (objdump: sse2 bin 0 ymm insns, avx2 bin 47)
+
+  base(sse2) median 0.3611 us/call
+  avx2       median 0.2103 us/call
+  NULL(A/A base) median 1.013x  range [0.905, 1.199]
+  CAND(sse2/avx2) median 1.745x  DECIDED (outside null range)
+
+=> rebuilding fsci's own inner loop for the fleet ISA is 1.745x, bit-identical.
+=> fleet uniformly AVX2 (hetzner1/2, ovh-a, vmi1152480/1227854/1293453; none AVX-512).
+=> fix landed: .cargo/config.toml build.rustflags = -C target-feature=+avx2,+fma
+   VERIFIED: fsci-ndimage 265/0 and cargo check --workspace both pass with the flag active.

@@ -1,4 +1,7 @@
 d84605a386e619616b99a2195734f4bd654fed8672a762df7639d354ecac723e  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_demo.rs
+0b752170c65226c18b27dc1e6aea74986054b87cb6719aec460989eac3e00457  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_bench.rs
+6ca35936dc8f30c5589b904213e0f442d9ea5e2293e71609d6c68f579930537e  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_ab.py
 de324609d3c35d1ee3151c78779a551aad00775faa7d4ca92beaff3f1d7c7ca9  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/dpotrf_load.py
 b915974263ba8840ec52766decc933376fcef36493fc458e3c2e7d003bdb186a  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/asm_codegen.txt
 42a4cdd09d96c7fc217a3d6002d59d621b3061b9798905d1c7ed741fbebb48d4  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/scipy_dpotrf_profile.txt
+4b884bdbdcb31c29c855ad5354c9d6dd07a593e84af5f4b73b14e61bf577850e  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_build_ab.txt
