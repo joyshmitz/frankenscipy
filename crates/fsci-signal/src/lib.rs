@@ -17447,13 +17447,26 @@ pub fn resample_poly_axis_2d(
             detail: "x must be a rectangular 2-D matrix".to_string(),
         });
     }
+    // The anti-aliasing FIR filter depends only on (up, down), not the signal, but the per-line
+    // `resample_poly` redesigns it for every line. Design it ONCE and reuse across all lines
+    // (shared-predictor lever); each line then only pads + polyphase-filters. Byte-identical. The
+    // knob restores the per-line rebuild for the same-binary A/B.
+    let plan = if RESAMPLE_POLY_FORCE_PERROW.load(std::sync::atomic::Ordering::Relaxed) {
+        None
+    } else {
+        Some(resample_poly_plan(up, down)?)
+    };
+    let plan = &plan;
     let nfilt = up.max(down).max(1);
     match axis {
         -1 | 1 => {
             let nthreads = lfilter_axis_thread_count(x.len(), cols, nfilt);
             if nthreads <= 1 {
                 // One parallelism level: let each line's `par_index_fill` use the cores.
-                return x.iter().map(|row| resample_poly(row, up, down)).collect();
+                return x
+                    .iter()
+                    .map(|row| resample_poly_line(plan, row, up, down))
+                    .collect();
             }
             // Many lines: fan out across rows; force each line's internal pass serial.
             let chunk = x.len().div_ceil(nthreads);
@@ -17464,7 +17477,9 @@ pub fn resample_poly_axis_2d(
                             scope.spawn(move || {
                                 rows.iter()
                                     .map(|row| {
-                                        with_serial_par_index_fill(|| resample_poly(row, up, down))
+                                        with_serial_par_index_fill(|| {
+                                            resample_poly_line(plan, row, up, down)
+                                        })
                                     })
                                     .collect::<Result<Vec<_>, _>>()
                             })
@@ -17489,7 +17504,7 @@ pub fn resample_poly_axis_2d(
                 let mut block = Vec::with_capacity(cols);
                 for col in 0..cols {
                     let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
-                    block.push(resample_poly(&column, up, down)?);
+                    block.push(resample_poly_line(plan, &column, up, down)?);
                 }
                 vec![(0, block)]
             } else {
@@ -17506,7 +17521,7 @@ pub fn resample_poly_axis_2d(
                                         let column: Vec<f64> =
                                             x.iter().map(|row| row[col]).collect();
                                         block.push(with_serial_par_index_fill(|| {
-                                            resample_poly(&column, up, down)
+                                            resample_poly_line(plan, &column, up, down)
                                         })?);
                                     }
                                     Ok((col0, block))
@@ -17893,6 +17908,164 @@ pub fn resample_poly_with_padtype(
         }
     });
     Ok(output)
+}
+
+/// Same-binary A/B toggle for `resample_poly_axis_2d`. When `true`, every line rebuilds the
+/// anti-aliasing FIR filter (calls `resample_poly` per line — the ORIG behaviour). When `false`
+/// (default), the filter is designed ONCE and reused across all lines. Byte-identical. Benchmark knob.
+#[doc(hidden)]
+pub static RESAMPLE_POLY_FORCE_PERROW: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Line-independent part of `resample_poly`: the gcd-simplified rate and the (signal-independent)
+/// designed anti-aliasing FIR filter. Computed ONCE and reused across every line of a 2-D resample.
+enum ResamplePolyPlan {
+    /// `up == down == 1` after gcd — a pass-through (no filter).
+    Identity,
+    Filter {
+        up: usize,
+        down: usize,
+        n_taps: usize,
+        half_taps: i64,
+        h_scaled: Vec<f64>,
+    },
+}
+
+/// Design the line-independent `resample_poly` plan (gcd + Kaiser-window polyphase FIR). Identical
+/// to the design block inside `resample_poly_with_padtype`, so `resample_poly_apply` reproduces
+/// `resample_poly` bit-for-bit.
+fn resample_poly_plan(up: usize, down: usize) -> Result<ResamplePolyPlan, SignalError> {
+    if up == 0 || down == 0 {
+        return Err(SignalError::InvalidArgument(
+            "up and down must be > 0".to_string(),
+        ));
+    }
+    let g = gcd(up, down);
+    let up = up / g;
+    let down = down / g;
+    if up == 1 && down == 1 {
+        return Ok(ResamplePolyPlan::Identity);
+    }
+    let cutoff = 1.0 / (up.max(down) as f64);
+    let n_taps = up
+        .max(down)
+        .checked_mul(20)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| {
+            SignalError::InvalidArgument("resample_poly rate is too large".to_string())
+        })?;
+    let n_taps_i64 = i64::try_from(n_taps)
+        .map_err(|_| SignalError::InvalidArgument("resample_poly rate is too large".to_string()))?;
+    let h = firwin(n_taps, &[cutoff], FirWindow::Kaiser(5.0), true)?;
+    let h_scaled: Vec<f64> = h.iter().map(|&v| v * up as f64).collect();
+    let half_taps = (n_taps_i64 - 1) / 2;
+    Ok(ResamplePolyPlan::Filter {
+        up,
+        down,
+        n_taps,
+        half_taps,
+        h_scaled,
+    })
+}
+
+/// Apply a precomputed [`ResamplePolyPlan`] to one signal — the line-DEPENDENT part of
+/// `resample_poly` (padding, background subtraction, polyphase filtering). BYTE-IDENTICAL to
+/// `resample_poly_with_padtype(x, up, down, padtype, cval)` for the plan's `(up, down)`: the same
+/// padding, the same taps in the same order, written to the same indices.
+fn resample_poly_apply(
+    plan: &ResamplePolyPlan,
+    x: &[f64],
+    padtype: Option<&str>,
+    cval: Option<f64>,
+) -> Result<Vec<f64>, SignalError> {
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+    if x.iter().any(|value| !value.is_finite()) {
+        return Err(SignalError::NonFiniteInput {
+            detail: "resample_poly input samples must be finite".to_string(),
+        });
+    }
+    let parsed_mode = parse_resample_poly_pad_mode(x, padtype, cval)?;
+    let (background, pad_mode, input) = match parsed_mode {
+        ResamplePolyPadMode::Background(value) => (
+            value,
+            ResamplePolyPadMode::Constant(0.0),
+            x.iter().map(|sample| sample - value).collect::<Vec<_>>(),
+        ),
+        mode => (0.0, mode, x.to_vec()),
+    };
+    let (up, down, n_taps, half_taps, h_scaled) = match plan {
+        ResamplePolyPlan::Identity => {
+            return Ok(input.iter().map(|sample| sample + background).collect());
+        }
+        ResamplePolyPlan::Filter {
+            up,
+            down,
+            n_taps,
+            half_taps,
+            h_scaled,
+        } => (*up, *down, *n_taps, *half_taps, h_scaled),
+    };
+
+    let upsampled_len = input.len().checked_mul(up).ok_or_else(|| {
+        SignalError::InvalidArgument("resample_poly output length overflows usize".to_string())
+    })?;
+    let n_out = upsampled_len.div_ceil(down);
+    let compute = |j: usize| -> f64 {
+        let target = (j * down) as i64 + half_taps;
+        let k_start = (target % up as i64 + up as i64) % up as i64;
+        let mut val = 0.0;
+        for k in (k_start as usize..n_taps).step_by(up) {
+            let x_idx = (target - k as i64) / up as i64;
+            val += h_scaled[k] * resample_poly_sample(&input, x_idx, pad_mode);
+        }
+        val + background
+    };
+    let taps_per_out = n_taps / up + 1;
+    let work = (n_out as u64).saturating_mul(taps_per_out as u64);
+    let nthreads = if work < 1 << 16 || n_out < 64 || PAR_INDEX_FILL_SERIAL.with(|c| c.get()) {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n_out / 2)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return Ok((0..n_out).map(compute).collect());
+    }
+    let mut output = vec![0.0_f64; n_out];
+    let chunk = n_out.div_ceil(nthreads);
+    let compute = &compute;
+    std::thread::scope(|scope| {
+        for (t, out_chunk) in output.chunks_mut(chunk).enumerate() {
+            let start = t * chunk;
+            scope.spawn(move || {
+                for (li, slot) in out_chunk.iter_mut().enumerate() {
+                    *slot = compute(start + li);
+                }
+            });
+        }
+    });
+    Ok(output)
+}
+
+/// One line of a 2-D `resample_poly`: reuse the shared `plan` when present, else (knob) rebuild the
+/// filter per line via `resample_poly`. Byte-identical either way.
+fn resample_poly_line(
+    plan: &Option<ResamplePolyPlan>,
+    line: &[f64],
+    up: usize,
+    down: usize,
+) -> Result<Vec<f64>, SignalError> {
+    match plan {
+        Some(p) => resample_poly_apply(p, line, None, None),
+        None => resample_poly(line, up, down),
+    }
 }
 
 /// Upsample, FIR filter, and downsample a 1-D signal.
@@ -25571,6 +25744,50 @@ mod tests {
             }
         }
         assert!(detrend_axis_2d(&x, DetrendType::Linear, 9).is_err());
+    }
+
+    #[test]
+    fn resample_poly_axis_2d_hoisted_filter_matches_perrow_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The hoisted-filter path (design the FIR once, reuse across lines) must be BYTE-IDENTICAL
+        // to the per-line rebuild, across up/down ratios, both axes, and rectangular shapes
+        // (including the wide-short case where the filter is a large fraction of per-line work).
+        let shapes: &[(usize, usize)] = &[(6, 40), (40, 6), (13, 200), (9, 9), (30, 80)];
+        for &(rows, cols) in shapes {
+            let x: Vec<Vec<f64>> = (0..rows)
+                .map(|i| {
+                    (0..cols)
+                        .map(|j| ((i * 5 + j * 3) as f64 * 0.17).sin() * 3.0 - 0.4)
+                        .collect()
+                })
+                .collect();
+            for &(up, down) in &[(2usize, 1usize), (1, 2), (3, 2), (10, 3), (1, 1)] {
+                for axis in [-1isize, 0] {
+                    RESAMPLE_POLY_FORCE_PERROW.store(true, Ordering::Relaxed);
+                    let perrow = resample_poly_axis_2d(&x, up, down, axis);
+                    RESAMPLE_POLY_FORCE_PERROW.store(false, Ordering::Relaxed);
+                    let hoisted = resample_poly_axis_2d(&x, up, down, axis);
+                    match (perrow, hoisted) {
+                        (Ok(a), Ok(b)) => {
+                            assert_eq!(a.len(), b.len(), "shape=({rows},{cols}) up={up} down={down} axis={axis}");
+                            for (ra, rb) in a.iter().zip(&b) {
+                                assert_eq!(ra.len(), rb.len());
+                                for (p, q) in ra.iter().zip(rb) {
+                                    assert_eq!(
+                                        p.to_bits(),
+                                        q.to_bits(),
+                                        "shape=({rows},{cols}) up={up} down={down} axis={axis}"
+                                    );
+                                }
+                            }
+                        }
+                        (Err(_), Err(_)) => {}
+                        _ => panic!("perrow/hoisted disagree on Ok/Err"),
+                    }
+                }
+            }
+        }
+        RESAMPLE_POLY_FORCE_PERROW.store(false, Ordering::Relaxed);
     }
 
     #[test]

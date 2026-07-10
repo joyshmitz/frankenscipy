@@ -9103,3 +9103,23 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   to_bits equality) passes; fsci-ndimage suite 268/0. Per-column arithmetic order is unchanged
   (g[t][k]=op(g[t-1][k],ext[t][k]) per column k identical to the scalar g[t]=op(g[t-1],ext[t])).
   Safe Rust; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN signal resample_poly_axis_2d hoist per-line FIR design (1.42x wide-short, byte-identical)
+
+- **WIN; shipped.** `resample_poly_axis_2d` called `resample_poly(line, up, down)` per line, and
+  `resample_poly` designs the Kaiser-window anti-aliasing FIR (`firwin(20*max(up,down)+1)`) INTERNALLY
+  — signal-independent, rebuilt for every line. Split the design (`resample_poly_plan`: gcd + firwin,
+  line-independent) from the apply (`resample_poly_apply`: pad + polyphase, line-dependent); design
+  ONCE per call, reuse across all lines/columns (shared-predictor lever, cf. interpolate hoists). Both
+  axis paths + serial/parallel branches route through `resample_poly_line`.
+- FEASIBILITY (firwin fraction of resample_poly): len=2000 **0.5%**, len=200 12.5%, len=100 (up3/down2)
+  36.4%, len=80 (up10/down3) **51.3%** — so the hoist is decidable for WIDE-SHORT arrays, marginal
+  (strict no-regression) for long rows. Same-binary A/B (RESAMPLE_POLY_FORCE_PERROW knob,
+  perrow/hoisted/perrow interleaved, black-boxed): **20000x80 up=10 down=3 axis=-1 DECIDED 1.419x**
+  (83.69->57.11ms), NULL(A/A) 1.005x [0.930,1.056], worker ovh-a. Hoisted does strictly fewer firwin
+  calls -> never a regression (long-row case is IN-FLOOR parity).
+- **Byte-identical: bitmism=0** probe; test `resample_poly_axis_2d_hoisted_filter_matches_perrow_bitexact`
+  (up/down in {2/1,1/2,3/2,10/3,1/1}, axes -1 & 0, wide/tall/square shapes, to_bits equality) passes;
+  fsci-signal suite 673/0. resample_poly_apply reproduces resample_poly's post-firwin block verbatim
+  (same pad/gcd-simplified rate/tap order/indices); the single-signal resample_poly path is untouched.
+  Safe Rust; no external BLAS/LAPACK/MKL/XLA.
