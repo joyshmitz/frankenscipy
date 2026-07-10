@@ -6,6 +6,68 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - AUDIT: dense-Cholesky reject family under the ledger-integrity rule; `dpotrf` dominance answered; one dead A/B arm caught live; MR2 mis-labelled as closed
+
+- ANSWER (banked profiles, no new `perf record`): **`dgemm` dominates SciPy's `dpotrf` — GEMM-family
+  43.15%, TRSM-family 20.00%, direct SYRK 0.14%** (LAPACK routes the trailing update through GEMM
+  micro-kernels; its `dsyrk` is itself GEMM-backed). fsci instead spends **40.2% phase / 49.77% self in a
+  bespoke trailing SYRK** (`cholesky_syrk_flat_rows`), **~35% in panel TRSM** (`simd_dot` 24.15% self), and
+  **~21% in pure data movement** (copy 12.1% + pack 7.3% + upper-zero 1.6%) that LAPACK never pays as a
+  separate phase. SYRK and TRSM are within ~5 points of each other, so NO single-kernel lever closes the
+  ~3.3x n=1000 gap — it needs a flat, packed, lower-triangle-only GEMM-shaped update AND a GEMM-speed flat
+  panel TRSM, together. Safe Rust only; never C BLAS/LAPACK/MKL.
+- GATE RECONSTRUCTION (the audit's tool, now a ledger rule): `cholesky_lower_factor` is the ONLY non-test
+  caller of `cholesky_lower_blocked` (verified at blob `417e2c74`), and it was gated at
+  `n >= FLAT_LU_SOLVE_MIN_DIM` = **1000** until `176bccc67` (2026-07-08) lowered it to **256**. So **for
+  every cholesky A/B measured before 2026-07-08 the blocked path — and hence its trailing SYRK, packing and
+  NB — was DEAD CODE for all n < 1000.** Always check the gate's value AT THE MEASUREMENT'S DATE.
+- ROW-BY-ROW (self-time of the kernel under test now recorded on each):
+  - `packed-SYRK panel-order traversal` (2026-07-09, n=512..2048): **VALID** — gate was already 256, SYRK
+    49.77% self. Reject stands.
+  - `4x16 packed-SYRK micro-kernel` (2026-07-09, n=1000): **VALID** — SYRK 40-49.8% self, p=0.03 regression.
+    Reject stands.
+  - `cholesky NB block-size tuning` (2026-07-05, n=1024/1536/2048): **VALID** — all n >= the then-gate 1000.
+    Reject stands.
+  - `public-matmul trailing SYRK` (2026-06-26, n=500/1000/2000): verdict **STANDS** on the n=1000 (2.5x) and
+    n=2000 (2.26x) rows, which are provably live. The **n=500 sub-row is STRUCK as UNVERIFIABLE**: the gate
+    was 1000, and the entry never says whether it kept the gate or replaced the whole factor path. I did NOT
+    mark it INVALID — the record cannot distinguish dead code from a full-path swap, and asserting either
+    without evidence would be the exact error this rule exists to prevent.
+- **CORRECTION — "MR2 comparator" is NOT a closed rejection of the MR2 lever.** cod rejected its own
+  *comparator* (the false arm inherited a pre-branch `split_at_mut`, so codegen differed though bits matched)
+  and then landed `WIN MR2 shared-RHS panel TRSM (n=1000 1.132x, bit-identical)` in the very next entry.
+  Treating "MR2" as closed would skip work that is already shipped. Only the comparator shape is closed.
+- DEAD A/B ARM CAUGHT LIVE (new measurement, ONE `rch exec`, both arms alternating in one binary via the
+  public `CHOL_FACTOR_FLAT_MIN_OVERRIDE`): blocked vs unblocked Cholesky, with `differing_bits` printed as an
+  execution proof (the two paths must differ in the last bits):
+
+  | n | simd | blocked | best | differing_bits |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 128 | 0.12 ms | 0.12 ms | 1.03x | **0 ⇒ DEAD ARM** |
+  | 256 | 0.75 ms | 0.61 ms | 1.23x | 2543 |
+  | 384 | 2.33 ms | 1.73 ms | 1.35x | 10754 |
+  | 512 | 5.49 ms | 3.80 ms | 1.44x | 25805 |
+  | 768 | 18.04 ms | 11.37 ms | **1.59x** | 79099 |
+
+  At `n = NB = 128` the blocked factor degenerates to a single panel with an empty trailing update, so the
+  "blocked" arm runs the SAME arithmetic as the unblocked arm — identical bits, and its 1.03x is a NULL. Any
+  row that A/B'd blocked-vs-unblocked at n=128 was timing one arm twice. cv 0.7-3.7% elsewhere.
+- **REOPENED (scoped, evidence-backed):** the band `256 <= n < 1000` was unreachable for the blocked path
+  until 2026-07-08, so NO pre-that-date cholesky lever has EVER been evaluated there — yet the blocked path
+  now wins 1.23-1.59x across it. Re-open any cholesky lever at n in {256, 384, 512, 768} as well as 1000+,
+  and never at n=128 (dead arm).
+- SUBSTRATE RULE v2 COMPLIANCE (re-checked all my A/Bs): (1) I never used Criterion — both probes alternate
+  the two arms PER ITERATION inside one measured routine (`ov.push(bench(true)); cv.push(bench(false))`), so
+  drift cancels; merely registering two Criterion group members would NOT have cancelled it. (2) `black_box`:
+  `perf_chol_gate` already fed inputs through and consumed whole results; `perf_perpixel_leaf` consumed only
+  `.len()`, now fixed to feed every input through `black_box` and consume the whole `Vec`. DCE is REFUTED
+  independently: the code under test holds **61.39% self-time** and the timings scale with order (0.19 ms at
+  order 0 → 3.73 ms at order 5). A corrected-`black_box` re-run REPRODUCES the win (order-3 Reflect 1.31x vs
+  the committed 1.27x), so the `6c53716ff` / `6347c4045` / `bac0359e5` ratios all stand.
+- Constraint: no local cargo build/bench/test, no maturin, no new target tree/worktree, no `perf record`,
+  nothing stashed or deleted. All self-times reused from banked profiles; one new remote `rch exec` run. No
+  `fsci-linalg` kernel code touched — only my own probe `perf_chol_gate.rs`.
+
 ## 2026-07-10 - BlackThrush (cc) - REJECT (reverted): ndimage `compute_axis_support` fold interior fast path — 1.01-1.05x; the premise was FALSE (zero `idiv` emitted) + CORRECTION of a mis-attributed frame in two earlier entries
 
 - SELF-TIME OF THE CODE UNDER TEST (per the frankenmermaid `5feb977` ledger-integrity rule, which

@@ -25,10 +25,14 @@
 //!               cardinal loop). `order=0` is inert for `compact` too.
 //! Any run whose control drifts off 1.00x is noise-dominated and must be discarded.
 //!
-//! Both arms live in THIS binary and are selected by an in-process atomic, then alternated, so a
-//! single `rch exec` invocation measures both on the same worker (rch picks workers
-//! non-deterministically and the ORIG/CAND ratio is not worker-invariant — an A/B split across two
-//! invocations would be invalid).
+//! SUBSTRATE (rule v2): both arms live in THIS binary, are selected by an in-process atomic, and are
+//! ALTERNATED per iteration inside one measured routine — NOT merely registered as two Criterion
+//! group members, which run sequentially and therefore do NOT cancel worker/thermal drift. A single
+//! `rch exec` invocation measures both on the same worker (rch picks workers non-deterministically
+//! and the ORIG/CAND ratio is not worker-invariant, so an A/B split across two invocations is
+//! invalid). Every input is fed THROUGH `black_box` and the whole result is consumed BY `black_box`,
+//! so no arm can be dead-code-eliminated (a DCE'd arm shows 0% self-time — the integrity rule's
+//! other catch; here `compute_axis_support` measures 61.39% self, so nothing was eliminated).
 //!
 //! Usage: `perf_perpixel_leaf <compact|offs> [order]`
 use fsci_ndimage::{
@@ -126,19 +130,32 @@ fn main() {
             let kernels: [(&str, Box<dyn Fn() -> Vec<f64>>); 3] = [
                 (
                     "rotate_par",
-                    Box::new(|| rotate(&big, 33.0, false, order, mode, 0.0).unwrap().data),
-                ),
-                (
-                    "affine_gen_par",
                     Box::new(|| {
-                        affine_transform(&big, &GENERAL_AFFINE, order, mode, 0.0)
+                        rotate(black_box(&big), 33.0, false, order, mode, 0.0)
                             .unwrap()
                             .data
                     }),
                 ),
                 (
+                    "affine_gen_par",
+                    Box::new(|| {
+                        affine_transform(
+                            black_box(&big),
+                            black_box(&GENERAL_AFFINE),
+                            order,
+                            mode,
+                            0.0,
+                        )
+                        .unwrap()
+                        .data
+                    }),
+                ),
+                (
                     "map_coords_serial",
-                    Box::new(|| map_coordinates(&small, &coords, order, mode, 0.0).unwrap()),
+                    Box::new(|| {
+                        map_coordinates(black_box(&small), black_box(&coords), order, mode, 0.0)
+                            .unwrap()
+                    }),
                 ),
             ];
 
@@ -161,10 +178,12 @@ fn main() {
 
                 let bench = |orig: bool| {
                     set_orig(orig);
-                    let _ = black_box(f().len());
+                    // Consume the WHOLE Vec through black_box (not just `.len()`, which would let a
+                    // fully-inlined pure call have its element computation eliminated).
+                    drop(black_box(f()));
                     let t = Instant::now();
                     for _ in 0..reps {
-                        black_box(f().len());
+                        drop(black_box(f()));
                     }
                     t.elapsed().as_secs_f64() / reps as f64 * 1000.0
                 };
