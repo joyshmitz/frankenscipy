@@ -18604,3 +18604,25 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - Decision: KEEP. This does not reopen blind SYRK micro-kernel shape work. The next Cholesky primitive should again
   start from a fresh phase table; likely targets are `dtrsm`/exact-tail dot instruction count or thread-scope overhead,
   not another standalone SYRK tile.
+
+## 2026-07-10 - cod_fsc (cod) - REJECT invalid dense-Cholesky MR2 panel-TRSM A/B comparator
+
+- Ledger-first review kept the closed families closed: naive/public-`matmul` blocking and packing, NB retunes,
+  panel-order SYRK, panel row fan-out, MR=6/eight-dot/4x16 SYRK, and standalone SYRK tile reshaping.
+- Profile routing used the current `ce839d2dd` release-perf binary. All named self-time frames at or above 0.1% were
+  recorded separately; the leaders were `cholesky_syrk_flat_rows` 40.00% and
+  `cholesky_lower_blocked` 39.07%. The first maps to the closed SYRK-shape family. Line-range attribution put 88.17%
+  of `cholesky_lower_blocked` samples in the panel solve, about 34.45% global, so the next open primitive was TRSM.
+  SciPy/OpenBLAS `dpotrf(n=1000)` was independently GEMM-family 43.15%, TRSM-family 20.00%, direct SYRK 0.14%.
+- Attempted lever: pair two independent panel rows around a shared diagonal-panel RHS, with two exact copies of the
+  existing eight-lane `simd_dot` reduction. Generic release codegen uses four XMM registers per `Simd<f64, 8>`;
+  MR2 occupies the 16-XMM budget without observed hot-loop spills, while wider MR would spill.
+- Correctness was green: exact `to_bits()` parity for n=130/131/270 and the full n=1000 factor; digest
+  `0x51c725173f438a8c`.
+- Release-perf same-binary measurement, 20 alternating samples and 10 factors/sample: apparent ORIG mean 21.493237 ms,
+  CV 3.020%, p50 21.221944, p95/p99 22.156144; candidate mean 19.121661 ms, CV 3.668%, p50 18.758964,
+  p95/p99 20.351522; apparent ratio 1.124026x (paired-ratio mean 1.125117x).
+- Decision: REJECT this measurement as keep evidence. The false arm passed through a new `split_at_mut` before the
+  runtime branch, so its slice/no-alias codegen was not the literal `ce839d2dd` loop even though factor bits matched.
+  No performance conclusion is allowed from this run. Retry condition: branch before any split, preserve the original
+  global-index loop byte-for-byte in the false arm, then rebuild and rerun the same-binary CV-under-5 gate.

@@ -7721,3 +7721,17 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - Decision: KEEP. Next Cholesky pass should profile again and attack
   `dtrsm`/exact-tail dot instruction count or thread-scope overhead rather than
   reopening standalone SYRK tile-shape guesses.
+
+## 2026-07-10 - frankenscipy-8l8r1/cod_fsc - REJECT invalid MR2 panel-TRSM comparator
+
+- Ledger grep kept the closed Cholesky families closed. Fresh current-HEAD perf ranked packed SYRK first at 40.00%
+  but that shape family is closed; the blocked body was 39.07%, with 88.17% of its local samples in panel TRSM
+  (about 34.45% global). SciPy `dpotrf` was GEMM-family 43.15%, TRSM-family 20.00%, direct SYRK 0.14%.
+- Tried two independent panel rows sharing the diagonal RHS while preserving each row's exact `simd_dot` operation
+  order. MR2 fits the emitted 16-XMM generic budget without observed hot-loop spills. Exact factor bits passed at
+  n=130/131/270/1000; n=1000 digest `0x51c725173f438a8c`.
+- Apparent release-perf result, 20 alternating samples and 10 factors/sample: ORIG 21.493237 ms (CV 3.020%) versus
+  candidate 19.121661 ms (CV 3.668%), apparent 1.124026x mean ratio.
+- REJECT as invalid evidence: the false arm inherited a pre-branch `split_at_mut`, so alias/codegen conditions differed
+  from literal `ce839d2dd` even though arithmetic and bits matched. No code is kept on this result. Retry only after
+  moving the branch before the split and retaining the original global-index loop verbatim as the comparator.
