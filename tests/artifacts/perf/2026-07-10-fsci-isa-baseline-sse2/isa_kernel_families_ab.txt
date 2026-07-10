@@ -1,0 +1,19 @@
+# GENERALIZATION: does +avx2,+fma move the OTHER dense-linalg kernels? (median null gate, thinkstation1)
+# faithful copies of fsci-linalg's REAL inner loops, same source compiled SSE2 vs AVX2, K=21 interleaved
+# base_sha=caf387b9f34805c0 avx2_sha=916d7a06c91e4e97
+
+  kernel (fsci real)      role                    base us  avx2 us  CAND med  NULL med  null range     verdict   bit-id  avx2-ymm
+  simd_dot                dtrsm/dgemm inner        0.3288   0.2381    1.349    0.973   [0.735,1.131]  DECIDED   yes     8
+  simd_dot2 (MR2)         panel dtrsm (cod's)      0.5089   0.4447    1.176    1.014   [0.876,1.133]  DECIDED   yes     14
+  simd_dot4               dsyrk (dominant kernel)  1.0441   0.6806    1.527    0.986   [0.924,1.110]  DECIDED   yes     26
+  syrk_axpy               trailing update          0.3466   0.3304    1.260    1.025   [0.873,1.307]  IN-FLOOR  yes     9
+
+  => the flag moves EVERY compute-bound dense kernel; strongest on dsyrk (1.527x), the 40-50% frame.
+     syrk_axpy is IN-FLOOR: store-heavy, memory-bandwidth-bound, so AVX2 helps less (honest null).
+
+# REAL fsci cho_factor n=1000 (perf_chol_gate, blocked/production path), AVX2 build (worker vmi1227854):
+  banked SSE2 build (older algo):  31.945 ms
+  NOW AVX2 build + cod algo:       16.19 ms best / 17.46 mean   (1.83x combined, flag+algo conflated)
+  gap vs scipy default (all cores): 7.4x -> 4.0x   |   vs scipy 1-thread: 3.7x -> 2.0x
+  flag-alone Amdahl (measured syrk 1.53x / trsm 1.30x / movement ~1.1x on the dominance weights): ~1.34x
+  => of the 1.83x, ~1.34x is the build flag, ~1.36x is cod's algo work (770c4d490 etc).

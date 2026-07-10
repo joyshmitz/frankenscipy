@@ -5,3 +5,6 @@ de324609d3c35d1ee3151c78779a551aad00775faa7d4ca92beaff3f1d7c7ca9  tests/artifact
 b915974263ba8840ec52766decc933376fcef36493fc458e3c2e7d003bdb186a  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/asm_codegen.txt
 42a4cdd09d96c7fc217a3d6002d59d621b3061b9798905d1c7ed741fbebb48d4  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/scipy_dpotrf_profile.txt
 4b884bdbdcb31c29c855ad5354c9d6dd07a593e84af5f4b73b14e61bf577850e  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_build_ab.txt
+d412221f45721fc39bac25407f4d52ab1034ce466082ca9a681a96e3bb90f138  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernels.rs
+22fe63ca35072cae8616c36d2e84c765a40812a5a738129f54c2984587b1ce9c  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernels_ab.py
+fd09369054f8cf3cfa5b7649c1644a5c36aeca35fefdffba26a3dabaa336c828  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernel_families_ab.txt

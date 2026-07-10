@@ -6,6 +6,41 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - GENERALIZED: the +avx2,+fma flag moves EVERY dense kernel; the ~8x cholesky gap COLLAPSED to ~4x
+
+- Follows the fleet-ISA fix (`d89ca19f6`). Question: does `+avx2,+fma` move dtrsm/dgemm/dsyrk the same way
+  as the syrk row update, and does the cholesky gap collapse? **Yes and yes.**
+- KERNEL-FAMILY A/B (faithful copies of fsci-linalg's REAL inner loops, same source compiled SSE2 vs AVX2,
+  median null gate, K=21 interleaved, `thinkstation1`; artifact
+  `tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernel_families_ab.txt`;
+  `base_sha caf387b9…` / `avx2_sha 916d7a06…`). All BIT-IDENTICAL (per-kernel checksums match):
+
+  | fsci kernel | role | CAND median | null range | verdict |
+  | --- | --- | ---: | --- | --- |
+  | `simd_dot4` | **dsyrk** (dominant, 40-50% of dpotrf) | **1.527x** | [0.924,1.110] | DECIDED |
+  | `simd_dot` | dgemm/dtrsm inner dot | **1.349x** | [0.735,1.131] | DECIDED |
+  | `simd_dot2` | MR2 panel dtrsm (cod's shipped kernel) | **1.176x** | [0.876,1.133] | DECIDED |
+  | `syrk_axpy` | trailing-update axpy | 1.260x | [0.873,1.307] | IN-FLOOR |
+
+  The flag moves EVERY compute-bound dense kernel, strongest on the dominant `dsyrk` (1.53x). `syrk_axpy` is
+  IN-FLOOR — it is store-heavy and memory-bandwidth-bound, so AVX2 helps less and the null range is wide;
+  reported honestly as undecidable, not a win.
+- REAL fsci `cho_factor` n=1000, blocked/production path, AVX2 build (worker `vmi1227854`, `perf_chol_gate`
+  with n=1000 added, cv 2.1/5.6%, differing_bits=160888 = execution proof):
+  - banked SSE2 build (older algo): **31.945 ms** → NOW **16.19 ms best / 17.46 mean** = **1.83x combined**.
+  - **Gap vs SciPy DEFAULT (all cores): 7.4x → 4.0x. Vs SciPy 1-thread: 3.7x → 2.0x.** The wall dropped ~2x.
+- ATTRIBUTION (honest — the 1.83x conflates my flag with cod's algo commits `770c4d490`/`ce839d2dd`/
+  `a6d7ba897`): Amdahl on the MEASURED per-kernel flag speedups + the dominance weights (syrk 45% @1.53x,
+  trsm 35% @1.30x, movement 20% @~1.1x) ⇒ **~1.34x is the flag alone**, the remaining ~1.36x is cod's algo.
+  The flag's contribution is isolated cleanly by the microbench; the real-cholesky number is the combined
+  effect and is labelled as such.
+- Constraint: single-file `rustc` + Python for the flag microbench (no cargo, ~0 disk); one remote
+  `perf_chol_gate` build+run via `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec` for the real number.
+  Only my own files touched: `perf_chol_gate.rs` (my probe from `176bccc67`, added n=1000 — no kernel code),
+  artifacts, ledgers. cod owns the dense-BLAS kernels; I measured, did not modify them.
+- FOLLOW-ON for cod: cod's register-blocked micro-kernel now compounds on the widened baseline; and the
+  memory-bound `syrk_axpy`/copy/pack phase (IN-FLOOR here, ~21% of the factor) is the next non-ISA target.
+
 ## 2026-07-10 - BlackThrush (cc) - KEEP (WORKSPACE-WIDE, bit-identical): build for the fleet ISA — `.cargo/config.toml` `+avx2,+fma`. fsci dense inner loop **1.745x**, fleet uniformly AVX2.
 
 - Closes the fleet-wide ISA-baseline question (frankenscipy + frankenredis both found it). **What fsci

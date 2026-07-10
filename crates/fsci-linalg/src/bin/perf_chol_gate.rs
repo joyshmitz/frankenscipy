@@ -49,7 +49,7 @@ fn main() {
     println!("# CHOL_FACTOR_FLAT_MIN_DIM=256 today; it was 1000 before 176bccc67, so the blocked");
     println!("# path was DEAD CODE for 256<=n<1000 in every cholesky A/B measured before then.");
     println!("# differing_bits>0 is the execution proof that both arms are distinct code paths.");
-    for &n in &[128usize, 256, 384, 512, 768] {
+    for &n in &[128usize, 256, 384, 512, 768, 1000] {
         let m: Vec<Vec<f64>> = (0..n)
             .map(|_| (0..n).map(|_| r() - 0.5).collect())
             .collect();

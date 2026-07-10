@@ -4,6 +4,64 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-10 - frankenscipy-cc-isa-generalize - the +avx2,+fma flag moves EVERY dense kernel (dtrsm/dgemm/dsyrk); real cholesky n=1000 gap 7.4x -> 4.0x
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`). Generalizes the fleet-ISA fix `d89ca19f6`. No kernel code
+  touched — only my own probe `perf_chol_gate.rs` (added n=1000 to its size list) + artifacts + ledgers.
+  cod owns the dense-BLAS kernels; I measured them, did not modify.
+
+### 1. Does +avx2,+fma move the OTHER dense kernels? (median-gated, bit-identical)
+
+Faithful copies of fsci-linalg's REAL inner loops (`simd_dot`, `simd_dot2_shared_rhs`, `simd_dot4`,
+`syrk_axpy` — the dtrsm/dgemm/dsyrk/trailing families), same source compiled SSE2 vs AVX2, run interleaved
+base/avx2/base on `thinkstation1`, K=21, median null gate. Artifact
+`tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernel_families_ab.txt`;
+`base_sha caf387b9f34805c0`, `avx2_sha 916d7a06c91e4e97`.
+
+| fsci kernel | role | base µs | avx2 µs | CAND median | NULL median | null range | avx2 YMM | verdict |
+| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |
+| `simd_dot4` | dsyrk (dominant, 40-50%) | 1.0441 | 0.6806 | **1.527x** | 0.986 | [0.924,1.110] | 26 | DECIDED |
+| `simd_dot` | dgemm/dtrsm inner | 0.3288 | 0.2381 | **1.349x** | 0.973 | [0.735,1.131] | 8 | DECIDED |
+| `simd_dot2` | MR2 panel dtrsm (cod's) | 0.5089 | 0.4447 | **1.176x** | 1.014 | [0.876,1.133] | 14 | DECIDED |
+| `syrk_axpy` | trailing update | 0.3466 | 0.3304 | 1.260x | 1.025 | [0.873,1.307] | 9 | IN-FLOOR |
+
+All four BIT-IDENTICAL (per-kernel FNV checksum matches SSE2↔AVX2). The flag moves every compute-bound
+dense kernel, strongest on the dominant `dsyrk` (1.53x). `syrk_axpy` is IN-FLOOR — store-heavy,
+memory-bandwidth-bound, so AVX2 helps less and the null range widens; reported as undecidable, NOT a win
+(a median-gate honesty check working as intended).
+
+### 2. Real cholesky n=1000 under the new build — the wall dropped ~2x
+
+`perf_chol_gate` (mine, n=1000 added), AVX2 build, worker `vmi1227854`, cv 2.1%/5.6%, differing_bits=160888
+(execution proof that blocked ≠ unblocked):
+
+| fsci `cho_factor` n=1000 | time | vs SciPy default (4.319 ms) | vs SciPy 1-thread (8.539 ms) |
+| --- | ---: | ---: | ---: |
+| banked SSE2 build (older algo) | 31.945 ms | 7.4x | 3.7x |
+| NOW: AVX2 build + cod algo | 16.19 best / 17.46 mean | **4.0x** | **2.0x** |
+
+**Combined 1.83x drop; the gap vs default SciPy collapsed 7.4x → 4.0x.** Exactly the "may collapse
+substantially from this alone" the fleet predicted.
+
+### 3. Attribution (honest — the 1.83x conflates flag + cod's algo)
+
+The 16.19 ms includes cod's recent commits (`770c4d490` syrk XMM tile, `ce839d2dd` panel movement,
+`a6d7ba897` MR2 TRSM) AS WELL AS my flag. The flag's share is isolated by the microbench above, not by the
+conflated real number. Amdahl on the MEASURED per-kernel flag speedups + the dominance weights
+(syrk 45% @1.53x, trsm 35% @1.30x, movement 20% @~1.1x) ⇒ **~1.34x is the flag alone**; the remaining
+~1.36x is cod's algo. Do not attribute the full 1.83x to either lever.
+
+### Guards / constraints
+
+- Flag microbench: single-file `rustc` + Python, no cargo build, ~0 disk. Real cholesky: one remote
+  `perf_chol_gate` build+run via `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec`. No local build, no
+  maturin, no new target tree/worktree, nothing stashed or deleted. `git diff --check` clean.
+- RETRY / follow-on for cod: (1) cod's register-blocked "native width, never pad" micro-kernel now compounds
+  on the AVX2 baseline; (2) the memory-bound trailing axpy + copy/pack/upper-zero (~21% of the factor,
+  IN-FLOOR under the flag) is the next non-ISA lever — cache-blocking, not wider registers; (3) SciPy still
+  wins because its `dgemm_kernel_HASWELL` is hand-tuned register-blocked AVX2 with software pipelining —
+  matching it is the remaining ~4x.
+
 ## 2026-07-10 - frankenscipy-cc-fleet-isa-avx2 - KEEP (WORKSPACE-WIDE, bit-identical): `.cargo/config.toml` +avx2,+fma — fleet was building SSE2 on AVX2 hardware; dense inner loop 1.745x
 
 - Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`). User-approved to land the workspace build-flag change.
