@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - KEEP (byte-identical): interpolate `Aaa::eval_many` parallel across queries — 1.553x DECIDED on large batches
+
+- DIFFERENT module (interpolate, my compact-support/parallel-eval vein; NOT cod's linalg). Profile-first:
+  audited all interpolate `eval_many` — `Aaa` (AAA rational approximation) was the LAST serial one
+  (`xs.iter().map(|&x| self.eval(x)).collect()`); every other interpolator already fans queries via
+  `par_query_map`. Each AAA query is an independent O(support) barycentric reduction over the support set,
+  so distribute the queries across cores (the proven `BSpline.eval_many` 11.5x vein).
+- FIX: `Aaa::eval_many` → `par_query_map(xs, support.len(), |&x| self.eval(x))`. Work-gated at
+  `m·support ≥ 2^23`, so small batches stay serial (the 128x2048-class benches are below the gate and
+  unchanged); large batches fan out.
+- BYTE-IDENTICAL: `par_query_map` preserves query order (chunks concatenated in order) and each per-query
+  `eval` (its own reduction) is unchanged — only the owning core differs. `eval` reads
+  `support_points/values/weights` only (Sync). New `aaa_eval_many_parallel_matches_serial_bitexact`
+  (`to_bits`, batch sized ABOVE the gate so the threaded chunked path runs, queries incl. exact support
+  points = the early-exit branch) passed; fsci-interpolate 183/0.
+- MEASURED (same-binary A/B, median null gate, `perf_aaa_par`, worker hz2, support=11, queries=3.06M,
+  m·support=33.6M > 8.4M gate): serial 50.16ms → parallel 27.51ms, **CAND median 1.553x DECIDED** (outside
+  A/A null [0.932, 1.090], null median 1.004x), `bitmism=0`. (cores are latency-hidden here; the reduction
+  is div-heavy so it scales well.)
+- SHARED-TREE HANDLING: `interpolate/lib.rs` had 514 lines of a peer's uncommitted `cargo fmt` reformatting.
+  Per AGENTS.md I committed ONLY my change: `git cat-file blob HEAD > lib.rs`, reapplied my 2 edits
+  (eval_many + test), verified the staged diff was exactly those 2 hunks, committed, then restored the
+  peer's working-tree version. Did not disturb their work.
+- Constraint: build/test/bench via `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec`. No local build,
+  no maturin, ~0 disk, nothing stashed or deleted.
+
 ## 2026-07-10 - BlackThrush (cc) - REJECT (reverted, bit-identical but no real win): ndimage tensor-leaf SIMD reduction — 1.37x in a microbench, IN-FLOOR on the real transforms
 
 - DIFFERENT hot path from the (already-rejected) inner-dot register-blocking. Profile-first: the captured

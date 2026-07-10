@@ -1833,7 +1833,13 @@ impl Aaa {
     }
 
     pub fn eval_many(&self, xs: &[f64]) -> Vec<f64> {
-        xs.iter().map(|&x| self.eval(x)).collect()
+        // Each query is an independent O(support) barycentric reduction over the AAA support set,
+        // so distribute the queries across cores. BYTE-IDENTICAL: `par_query_map` preserves query
+        // order and the per-query `eval` (its own reduction) is unchanged; only the owning core
+        // differs. Work-gated (`work = m·support ≥ 2^23`), so small batches stay serial — this
+        // brings AAA in line with every other interpolator's `eval_many`, which was the last serial
+        // one. `eval` reads `support_points/values/weights` only, so it is `Sync`.
+        par_query_map(xs, self.support_points.len().max(1), |&x| self.eval(x))
     }
 }
 
@@ -10486,6 +10492,41 @@ mod tests {
             err,
             InterpError::InvalidArgument { detail } if detail == "0<=der=3<=k=2 must hold"
         ));
+    }
+
+    #[test]
+    fn aaa_eval_many_parallel_matches_serial_bitexact() {
+        // `Aaa::eval_many` now fans queries across cores via `par_query_map`. It must be
+        // BYTE-IDENTICAL to the serial `xs.iter().map(eval)`, at a batch large enough to cross the
+        // parallel gate (`m·support ≥ 2^23`) so the multi-threaded chunked path actually runs.
+        let z: Vec<f64> = (0..100).map(|i| -1.0 + i as f64 * (2.0 / 99.0)).collect();
+        let f: Vec<f64> = z
+            .iter()
+            .map(|&x| 1.0 / (x + 1.5) + 0.5 / (x - 2.0) + (3.0 * x).sin())
+            .collect();
+        let a = Aaa::new(&z, &f, None, 100).unwrap();
+        let support = a.support_points().len().max(1);
+        // Choose m so m·support ≥ 2^23; wide-ranging queries incl. exact support points and poles-ish.
+        let m = (1usize << 23) / support + 4096;
+        let xs: Vec<f64> = (0..m)
+            .map(|i| {
+                if i % 997 == 0 {
+                    a.support_points()[i % support] // exact support point (early-exit branch)
+                } else {
+                    -1.3 + (i as f64) * 2.6 / (m as f64)
+                }
+            })
+            .collect();
+        assert!(
+            (m as u64) * (support as u64) >= (1 << 23),
+            "batch must cross the parallel gate ({m}·{support})"
+        );
+        let parallel = a.eval_many(&xs);
+        let serial: Vec<f64> = xs.iter().map(|&x| a.eval(x)).collect();
+        assert_eq!(parallel.len(), serial.len());
+        for (i, (p, s)) in parallel.iter().zip(serial.iter()).enumerate() {
+            assert_eq!(p.to_bits(), s.to_bits(), "aaa eval_many mismatch at query {i}");
+        }
     }
 
     #[test]
