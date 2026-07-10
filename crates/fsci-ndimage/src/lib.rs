@@ -11567,6 +11567,14 @@ pub fn spline_filter(
     Ok(spline.coeffs)
 }
 
+/// Same-binary A/B toggle for `spline_filter1d`. When `true`, the coefficients are computed by the
+/// serial per-line walk (the ORIG behaviour). When `false` (default), the bspline-reflect kernel
+/// reuses the vectorized/parallel machinery from `prefilter_spline_coefficients`. Byte-identical
+/// either way. Benchmark knob.
+#[doc(hidden)]
+pub static NDIMAGE_SPLINE_FILTER1D_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute spline filter coefficients along a single axis.
 ///
 /// Matches `scipy.ndimage.spline_filter1d`. Computes spline coefficients
@@ -11610,6 +11618,58 @@ pub fn spline_filter1d(
 
     let stride: usize = result.shape[axis + 1..].iter().product();
     let outer: usize = result.shape[..axis].iter().product();
+
+    // The per-line kernel choice depends only on (mode, order, axis_len), which are the same for
+    // every line, so it is decided once here. When it is the bspline-reflect kernel, reuse the
+    // vectorized/parallel machinery that `prefilter_spline_coefficients` uses (byte-identical to the
+    // per-line walk below): the strided stride>1 case sweeps the IIR in place over the contiguous
+    // inner dim (cache-friendly instead of a per-column strided gather) and both cases fan the
+    // independent outer blocks / rows across cores. Other kernels keep the serial per-line walk.
+    let use_reflect =
+        mode == BoundaryMode::Reflect && (2..=5).contains(&order) && axis_len > order;
+    if use_reflect && !NDIMAGE_SPLINE_FILTER1D_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        if stride > 1 {
+            let block = axis_len * stride;
+            let nthreads = spline_axis_threads(outer, block);
+            if nthreads <= 1 {
+                bspline_reflect_axis_inplace(&mut result.data, outer, axis_len, stride, order);
+            } else {
+                let per = outer.div_ceil(nthreads);
+                std::thread::scope(|scope| {
+                    for chunk in result.data.chunks_mut(per * block) {
+                        let chunk_outer = chunk.len() / block;
+                        scope.spawn(move || {
+                            bspline_reflect_axis_inplace(
+                                chunk, chunk_outer, axis_len, stride, order,
+                            );
+                        });
+                    }
+                });
+            }
+            return Ok(result);
+        }
+        // stride == 1: each row is an independent contiguous `axis_len` block.
+        let nthreads = spline_axis_threads(outer, axis_len);
+        if nthreads > 1 {
+            let per = outer.div_ceil(nthreads);
+            std::thread::scope(|scope| {
+                for chunk in result.data.chunks_mut(per * axis_len) {
+                    scope.spawn(move || {
+                        let mut line = Vec::with_capacity(axis_len);
+                        for row in chunk.chunks_mut(axis_len) {
+                            line.clear();
+                            line.extend_from_slice(row);
+                            let coeffs = bspline_reflect_coefficients(&line, order);
+                            row.copy_from_slice(&coeffs);
+                        }
+                    });
+                }
+            });
+            return Ok(result);
+        }
+        // Small last-axis input: fall through to the serial walk (same reflect kernel).
+    }
 
     for outer_idx in 0..outer {
         for inner_idx in 0..stride {
@@ -16193,6 +16253,48 @@ mod tests {
         let input = NdArray::new(vec![0.0; 9], vec![3, 3]).unwrap();
         let err = distance_transform_edt(&input, Some(&[1.0, 2.0, 3.0])).unwrap_err();
         assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn spline_filter1d_fastpath_matches_serial_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The reflect fast path (vectorized/parallel) must be BYTE-IDENTICAL to the serial per-line
+        // walk across orders, axes, modes, and shapes (including strided and last-axis cases, and
+        // sizes above and below the parallel gate).
+        let shapes: &[Vec<usize>] = &[
+            vec![37],
+            vec![9, 11],
+            vec![64, 40],
+            vec![130, 90], // > 1<<20 elements after a couple axes -> exercises the parallel gate
+            vec![5, 7, 6],
+            vec![48, 20, 18],
+        ];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let data: Vec<f64> = (0..total)
+                .map(|k| ((k as f64 * 0.421).sin() * 7.0 - 1.3) * if k % 3 == 0 { 100.0 } else { 1.0 })
+                .collect();
+            let input = NdArray::new(data, shape.clone()).unwrap();
+            for order in 2..=5usize {
+                for axis in 0..shape.len() {
+                    for mode in [BoundaryMode::Reflect, BoundaryMode::Nearest] {
+                        NDIMAGE_SPLINE_FILTER1D_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                        let serial = spline_filter1d(&input, order, axis, mode).unwrap();
+                        NDIMAGE_SPLINE_FILTER1D_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                        let fast = spline_filter1d(&input, order, axis, mode).unwrap();
+                        assert_eq!(serial.shape, fast.shape);
+                        for (i, (a, b)) in serial.data.iter().zip(&fast.data).enumerate() {
+                            assert_eq!(
+                                a.to_bits(),
+                                b.to_bits(),
+                                "shape={shape:?} order={order} axis={axis} mode={mode:?} idx={i}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        NDIMAGE_SPLINE_FILTER1D_FORCE_SERIAL.store(false, Ordering::Relaxed);
     }
 
     #[test]

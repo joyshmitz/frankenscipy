@@ -9037,3 +9037,24 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   exactly (xv-nonfinite -> whole-row NaN; y-build fail -> whole-row NaN; per-yv finite check);
   x-spline build failure falls back to the exact per-cell path. Safe Rust; no external
   BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN ndimage spline_filter1d reflect fast path (2.3-2.8x, byte-identical)
+
+- **WIN; shipped.** The public `spline_filter1d` ran a fully SERIAL per-line loop with a cache-hostile
+  strided gather (`for i: line.push(data[base+i*stride])`, compute coeffs, scatter back), while its
+  internal N-D sibling `prefilter_spline_coefficients` already uses the vectorized/parallel machinery.
+  The per-line kernel choice depends only on (mode, order, axis_len) — identical for every line — so
+  for the bspline-reflect kernel (`mode==Reflect && order in 2..=5 && axis_len>order`) reuse that
+  machinery: stride>1 sweeps the IIR in place over the CONTIGUOUS inner dim (`bspline_reflect_axis_inplace`,
+  cache-friendly) and fans the independent outer blocks across cores; stride==1 fans the contiguous
+  rows across cores. Nearest / short-axis / low-order keep the serial walk.
+- Same-binary A/B (NDIMAGE_SPLINE_FILTER1D_FORCE_SERIAL knob, serial/fast/serial interleaved,
+  black-boxed): **3000x3000x1 axis=0 order=3 DECIDED 2.769x** (193.58ms->67.45ms, cv1.5%, outer=1 so
+  NO threads — PURE cache/vectorization win from killing the strided gather), NULL(A/A) 0.994x
+  [0.910,1.028] worker hz1; **200x500x200 axis=1 order=3 DECIDED 2.266x** (207.61ms->91.57ms,
+  parallel+vectorized), NULL 1.007x [0.862,1.129] worker ovh-a.
+- **Byte-identical: bitmism=0** both probes; test `spline_filter1d_fastpath_matches_serial_bitexact`
+  (orders 2-5, all axes, Reflect+Nearest, 1/2/3-D shapes incl. strided + above/below the parallel
+  gate, to_bits equality) passes; fsci-ndimage suite 266/0. `bspline_reflect_axis_inplace` is the same
+  byte-identical substitute `prefilter_spline_coefficients` already relies on. Safe Rust; no external
+  BLAS/LAPACK/MKL/XLA.
