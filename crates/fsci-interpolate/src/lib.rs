@@ -9108,6 +9108,14 @@ pub struct SmoothBivariateSpline {
     smoothing_factor: f64,
 }
 
+/// Same-binary A/B toggle for `SmoothBivariateSpline::eval_grid`. When `true`, every grid cell goes
+/// through the per-cell `eval` path (which rebuilds the ny x-direction splines for every (x,y) — the
+/// ORIG behaviour). When `false` (default), the x-splines are built once for the whole grid and the
+/// row's y-spline once per row. Byte-identical either way. Benchmark knob.
+#[doc(hidden)]
+pub static SMOOTHBISPLINE_EVAL_GRID_FORCE_PERCELL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl SmoothBivariateSpline {
     pub fn new(
         x: &[f64],
@@ -9236,10 +9244,45 @@ impl SmoothBivariateSpline {
     }
 
     pub fn eval_grid(&self, x: &[f64], y: &[f64]) -> Vec<Vec<f64>> {
-        // Each output row (fixed x) is an independent sweep of `self.eval(xv, yv)` over
-        // the y-columns → fan the x-rows across cores byte-identically (see
-        // `par_grid_rows`).
-        let row_fn = |xv: f64| -> Vec<f64> { y.iter().map(|&yv| self.eval(xv, yv)).collect() };
+        // Per-cell path (also the A/B baseline): each (xv, yv) rebuilds the ny x-direction splines.
+        // Each output row (fixed x) is an independent sweep, fanned across cores by `par_grid_rows`.
+        let percell = |xv: f64| -> Vec<f64> { y.iter().map(|&yv| self.eval(xv, yv)).collect() };
+        if SMOOTHBISPLINE_EVAL_GRID_FORCE_PERCELL.load(std::sync::atomic::Ordering::Relaxed) {
+            return par_grid_rows(x, y.len(), &percell);
+        }
+
+        // `eval` -> `eval_impl` rebuilds the ny x-direction BSplines for EVERY cell, though they
+        // depend only on the spline; and for a FIXED row (xv) the x-reduction — and thus the whole
+        // y-spline — is the same for every column. Build the x-splines ONCE for the grid and the
+        // y-spline ONCE per row, then evaluate the y-spline at each yv (shared-predictor lever).
+        // BYTE-IDENTICAL to the per-cell path: the same deterministic builds, clamps, and order.
+        // Any x-spline build failure falls back to the exact per-cell path.
+        let x_splines: Option<Vec<BSpline>> = self
+            .coeffs
+            .chunks(self.nx_coeffs)
+            .map(|row| BSpline::new(self.tx.clone(), row.to_vec(), self.kx).ok())
+            .collect();
+        let Some(x_splines) = x_splines else {
+            return par_grid_rows(x, y.len(), &percell);
+        };
+        let row_fn = |xv: f64| -> Vec<f64> {
+            if !xv.is_finite() {
+                return vec![f64::NAN; y.len()];
+            }
+            let xi = xv.clamp(self.bbox[0], self.bbox[1]);
+            let intermediate: Vec<f64> = x_splines.iter().map(|s| s.eval(xi)).collect();
+            let Ok(y_spline) = BSpline::new(self.ty.clone(), intermediate, self.ky) else {
+                return vec![f64::NAN; y.len()];
+            };
+            y.iter()
+                .map(|&yv| {
+                    if !yv.is_finite() {
+                        return f64::NAN;
+                    }
+                    y_spline.eval(yv.clamp(self.bbox[2], self.bbox[3]))
+                })
+                .collect()
+        };
         par_grid_rows(x, y.len(), &row_fn)
     }
 
@@ -12115,6 +12158,53 @@ mod tests {
             "integral: got {}, expected 1.0",
             integral
         );
+    }
+
+    #[test]
+    fn smooth_bivariate_eval_grid_hoist_matches_percell_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The hoisted eval_grid (x-splines built once, y-spline once per row) must be
+        // BYTE-IDENTICAL to the per-cell path, across degrees and finite/out-of-bounds/non-finite
+        // query grids.
+        for (kx, ky) in [(1usize, 1usize), (3, 3), (2, 3)] {
+            // Scattered samples on a jittered grid — enough for a stable (kx,ky) fit.
+            let mut xs = Vec::new();
+            let mut ys = Vec::new();
+            let mut zs = Vec::new();
+            for i in 0..9 {
+                for j in 0..9 {
+                    let xv = i as f64 * 0.5 + ((i * 3 + j) % 5) as f64 * 0.01;
+                    let yv = j as f64 * 0.4 - 1.0 + ((i + j * 2) % 4) as f64 * 0.01;
+                    xs.push(xv);
+                    ys.push(yv);
+                    zs.push((xv * 1.3).sin() * 2.0 + (yv * 0.9).cos() - 0.3 * xv * yv);
+                }
+            }
+            let options = SmoothBivariateSplineOptions {
+                kx,
+                ky,
+                smoothing: Some(0.5),
+                ..SmoothBivariateSplineOptions::default()
+            };
+            let Ok(spline) = SmoothBivariateSpline::new(&xs, &ys, &zs, options) else {
+                continue;
+            };
+            // Query grid: interior, out-of-bounds (clamped both ends), and non-finite.
+            let gx = vec![-3.0, 0.0, 0.75, 1.6, 2.5, 4.0, 9.0, f64::NAN];
+            let gy = vec![-5.0, -0.9, 0.0, 0.5, 1.1, 3.0, f64::NAN, 0.2];
+            SMOOTHBISPLINE_EVAL_GRID_FORCE_PERCELL.store(true, Ordering::Relaxed);
+            let percell = spline.eval_grid(&gx, &gy);
+            SMOOTHBISPLINE_EVAL_GRID_FORCE_PERCELL.store(false, Ordering::Relaxed);
+            let hoisted = spline.eval_grid(&gx, &gy);
+            assert_eq!(percell.len(), hoisted.len());
+            for (ri, (pr, hr)) in percell.iter().zip(&hoisted).enumerate() {
+                assert_eq!(pr.len(), hr.len());
+                for (ci, (a, b)) in pr.iter().zip(hr).enumerate() {
+                    assert_eq!(a.to_bits(), b.to_bits(), "kx={kx} ky={ky} cell ({ri},{ci})");
+                }
+            }
+        }
+        SMOOTHBISPLINE_EVAL_GRID_FORCE_PERCELL.store(false, Ordering::Relaxed);
     }
 
     #[test]

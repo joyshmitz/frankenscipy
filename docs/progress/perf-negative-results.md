@@ -9017,3 +9017,23 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   exactly; the shared x-spline builds are deterministic and query-independent; build-failure or the
   knob falls back to the exact per-query path. scipy RectBivariateSpline.ev is single-threaded FITPACK.
   Safe Rust; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN SmoothBivariateSpline eval_grid hoist per-cell x-spline rebuild (5.1-8.4x)
+
+- **WIN; shipped.** `SmoothBivariateSpline::eval_grid` called `self.eval(xv,yv)` per CELL ->
+  `eval_impl`, rebuilding the `ny_coeffs` x-direction BSplines (each `BSpline::new(tx.clone(),
+  row.to_vec(), kx)`) for EVERY (x,y). The x-splines depend only on the spline, and for a FIXED row
+  (xv) the x-reduction — hence the whole y-spline `BSpline::new(ty, intermediate, ky)` — is identical
+  across all columns. New eval_grid builds the x-splines ONCE for the grid and the y-spline ONCE per
+  row, then evaluates that y-spline at each yv (shared-predictor lever; sibling of RectBivariate
+  d380511db and interpn pchip d42308be7). par_grid_rows keeps the across-x parallelism.
+- Same-binary A/B (SMOOTHBISPLINE_EVAL_GRID_FORCE_PERCELL knob, percell/hoisted/percell interleaved,
+  black-boxed): **30x30 samples/200x200 grid DECIDED 5.146x** (4.56ms->0.87ms), NULL(A/A) 1.099x
+  [0.523,1.922] (noisy small workload); **45x45 samples/500x500 grid DECIDED 8.396x**
+  (25.36ms->3.30ms), NULL 0.948x [0.807,1.033], worker hz1. Win scales with ny_coeffs and grid size.
+- **Byte-identical: bitmism=0** both probes; test `smooth_bivariate_eval_grid_hoist_matches_percell_bitexact`
+  (kx/ky in {1,2,3}^2, interior/out-of-bounds-clamp/non-finite grids, to_bits equality) passes;
+  fsci-interpolate suite 186/0. row_fn reproduces `eval`'s finite guards and `eval_impl`'s clamp/order
+  exactly (xv-nonfinite -> whole-row NaN; y-build fail -> whole-row NaN; per-yv finite check);
+  x-spline build failure falls back to the exact per-cell path. Safe Rust; no external
+  BLAS/LAPACK/MKL/XLA.
