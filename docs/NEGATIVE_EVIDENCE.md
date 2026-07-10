@@ -18285,3 +18285,47 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   unless a same-binary A/B switch or dedicated Criterion row proves the direct factor row with p<0.05 and no 500-row
   regression. The local n=2048 probe suggests a possible separate large-n-only vein, but it needs its own honest
   runtime-gated A/B harness before code can land.
+
+## 2026-07-09 - cod_fsc (cod) - WIN dense Cholesky flat row-major workspace (cho_factor 14-30% faster)
+
+- Lane: `frankenscipy-8l8r1` dense-BLAS / `linalg.cholesky`. Negative-evidence grep was done before coding this
+  follow-up. Explicitly avoided retrying the rejected public-`matmul` Cholesky route, naive blocking/packing, NB retunes,
+  MR=6/4x4 kernel retunes, TRSM thread fan-out, and the 2026-07-09 packed-SYRK panel-order traversal. This lever is a
+  storage-layout primitive: keep the same blocked Cholesky and packed 4-row x 8-col SYRK arithmetic, but replace the
+  `Vec<Vec<f64>>` in-function working matrix with one row-major `Vec<f64>`.
+- Ranked hotspot input came from the immediately prior profile: `perf record -F 197 -m 1 -g` captured named frames in
+  `fsci_linalg::cholesky` / `cholesky_syrk_rows`; Criterion routed the n=1000 direct factor row as the target wall.
+  Baseline local probe after reverting the rejected panel-order code was n=512 7.18 ms, n=1024 29.78 ms, n=2048
+  157.30 ms.
+- Lever kept: `cholesky_lower_blocked` now copies the input into one contiguous row-major buffer, factors and updates it
+  in place, passes flat row slices into a new `cholesky_syrk_flat_rows` helper, and zeroes the strict upper triangle
+  before return. This removes per-row Vec headers/chasing and the final `Vec<Vec>` -> flat output repack. Safe Rust only;
+  no BLAS/LAPACK/FFI linkage.
+- Local no-rebuild release-perf probe after the change:
+  - First candidate run: n=512 5.85 ms, n=1024 26.34 ms, n=2048 146.03 ms.
+  - Repeats: n=512 5.99 / 6.35 ms, n=1024 26.22 / 25.80 ms, n=2048 136.63 / 131.04 ms.
+  - `perf stat` candidate binary run: n=512 6.08 ms, n=1024 24.70 ms, n=2048 126.93 ms; counters:
+    38.018B cycles, 147.142B instructions, IPC 3.87, cache-miss rate 4.94%, task-clock 9.778 s.
+- Official same-worker Criterion on RCH `hz2`, `cargo bench -p fsci-linalg --profile release-perf --bench
+  linalg_bench -- cho_factor_gauntlet_scipy --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`, compared
+  against the previous hz2 history:
+  - `500x500_rust_cho_factor` [4.0918, 4.1774, 4.3279] ms, change [-34.773%, -29.848%, -23.780%], p=0.00:
+    performance improved.
+  - `1000x1000_rust_cho_factor` [34.525, 37.631, 39.966] ms, change [-23.461%, -14.370%, -4.3012%], p=0.02:
+    performance improved.
+  - Solve-inclusive rows were neutral/no significant regression: 500x500 solve change [-3.7754%, -0.5235%, +3.5036%],
+    p=0.82; 1000x1000 solve change [-17.026%, -8.5027%, +2.4091%], p=0.13.
+  - SciPy rows skipped on that worker because `python3` could not import `scipy.linalg`; same-worker Rust history is the
+    keep proof.
+- Behavior proof: storage offsets changed but panel, TRSM, and SYRK accumulation order remain the same as the accepted
+  blocked factor path; the returned matrix is still lower-triangular with the strict upper triangle zero-filled. The
+  Cholesky factor is unique for SPD inputs and the targeted parity test passed.
+- Gates: RCH release-perf
+  `cargo test -p fsci-linalg --profile release-perf cholesky_lower_blocked_matches_unblocked_factorization -- --nocapture`
+  passed; RCH `cargo check -p fsci-linalg --all-targets` passed; RCH
+  `cargo clippy -p fsci-linalg --lib -- -D warnings` passed; `rustfmt --edition 2024 --check
+  crates/fsci-linalg/src/lib.rs` passed; `ubs crates/fsci-linalg/src/lib.rs` completed with 0 critical issues and only
+  pre-existing broad warnings in the large linalg file.
+- Decision: KEEP. Retry boundary: do not fold this result into the rejected panel-order or NB-retune ideas. The next
+  Cholesky vein should profile whether the duplicated solve/factor path or panel TRSM has a distinct flat-workspace
+  opportunity, with its own A/B row.

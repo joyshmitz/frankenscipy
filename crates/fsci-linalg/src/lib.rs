@@ -5029,7 +5029,10 @@ fn cholesky_lower_simd(a: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
 #[allow(clippy::needless_range_loop)]
 fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
     const NB: usize = 128;
-    let mut lower = a_in.to_vec();
+    let mut lower = vec![0.0f64; n * n];
+    for (i, row) in a_in.iter().enumerate() {
+        lower[i * n..i * n + n].copy_from_slice(row);
+    }
 
     let mut k = 0;
     while k < n {
@@ -5039,52 +5042,58 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
             // the two TRSM loops below were scalar over `p`; each is a `simd_dot` of two
             // row slices `L[·][k..j]` (byte-close reassociation — the Cholesky factor is
             // unique, validated to 1e-10). Immutable slice borrows end before each write.
-            let d = lower[j][j] - simd_dot(&lower[j][k..j], &lower[j][k..j]);
+            let jrow = j * n;
+            let d =
+                lower[jrow + j] - simd_dot(&lower[jrow + k..jrow + j], &lower[jrow + k..jrow + j]);
             if d <= 0.0 || !d.is_finite() {
                 return None;
             }
             let ljj = d.sqrt();
-            lower[j][j] = ljj;
+            lower[jrow + j] = ljj;
             for i in (j + 1)..kb {
-                let dot = simd_dot(&lower[i][k..j], &lower[j][k..j]);
-                let val = (lower[i][j] - dot) / ljj;
+                let irow = i * n;
+                let dot = simd_dot(&lower[irow + k..irow + j], &lower[jrow + k..jrow + j]);
+                let val = (lower[irow + j] - dot) / ljj;
                 if !val.is_finite() {
                     return None;
                 }
-                lower[i][j] = val;
+                lower[irow + j] = val;
             }
         }
         for i in kb..n {
+            let irow = i * n;
             for j in k..kb {
-                let dot = simd_dot(&lower[i][k..j], &lower[j][k..j]);
-                let val = (lower[i][j] - dot) / lower[j][j];
+                let jrow = j * n;
+                let dot = simd_dot(&lower[irow + k..irow + j], &lower[jrow + k..jrow + j]);
+                let val = (lower[irow + j] - dot) / lower[jrow + j];
                 if !val.is_finite() {
                     return None;
                 }
-                lower[i][j] = val;
+                lower[irow + j] = val;
             }
         }
         if kb < n {
             let m2 = n - kb;
             let nb = kb - k;
             let mut l21 = vec![0.0f64; m2 * nb];
-            for (ii, row) in lower.iter().take(n).skip(kb).enumerate() {
-                l21[ii * nb..ii * nb + nb].copy_from_slice(&row[k..kb]);
+            for ii in 0..m2 {
+                let src = (kb + ii) * n + k;
+                l21[ii * nb..ii * nb + nb].copy_from_slice(&lower[src..src + nb]);
             }
             let l21_ref = &l21;
             let l21t = pack_l21_transpose(&l21, m2, nb);
             let l21t_ref = &l21t;
             let nthreads = matmul_thread_count(m2, nb, m2);
-            let (_, trailing) = lower.split_at_mut(kb);
+            let trailing = &mut lower[kb * n..];
             if nthreads <= 1 {
-                cholesky_syrk_rows(trailing, 0, l21_ref, l21t_ref, nb, kb);
+                cholesky_syrk_flat_rows(trailing, 0, n, l21_ref, l21t_ref, nb, kb);
             } else {
                 let chunk = m2.div_ceil(nthreads);
                 std::thread::scope(|scope| {
-                    for (t, rows) in trailing.chunks_mut(chunk).enumerate() {
+                    for (t, rows) in trailing.chunks_mut(chunk * n).enumerate() {
                         let row_offset = t * chunk;
                         scope.spawn(move || {
-                            cholesky_syrk_rows(rows, row_offset, l21_ref, l21t_ref, nb, kb)
+                            cholesky_syrk_flat_rows(rows, row_offset, n, l21_ref, l21t_ref, nb, kb)
                         });
                     }
                 });
@@ -5093,11 +5102,11 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
         k = kb;
     }
 
-    let mut l_flat = vec![0.0f64; n * n];
     for i in 0..n {
-        l_flat[i * n..i * n + i + 1].copy_from_slice(&lower[i][..i + 1]);
+        let row = i * n;
+        lower[row + i + 1..row + n].fill(0.0);
     }
-    Some(l_flat)
+    Some(lower)
 }
 
 /// `cholesky` blocked-factor gate — the parallel-SYRK blocked Cholesky beats the
@@ -18635,6 +18644,59 @@ fn cholesky_syrk_rows(
     }
     for local_i in base..m {
         cholesky_syrk_row_tail(&mut rows[local_i], row_offset + local_i, 0, l21, nb, kb);
+    }
+}
+
+#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+fn cholesky_syrk_flat_rows(
+    rows: &mut [f64],
+    row_offset: usize,
+    n: usize,
+    l21: &[f64],
+    l21t: &[f64],
+    nb: usize,
+    kb: usize,
+) {
+    let m = rows.len() / n;
+    let mut base = 0;
+    while base + 4 <= m {
+        let ii = row_offset + base;
+        let a0 = &l21[ii * nb..ii * nb + nb];
+        let a1 = &l21[(ii + 1) * nb..(ii + 1) * nb + nb];
+        let a2 = &l21[(ii + 2) * nb..(ii + 2) * nb + nb];
+        let a3 = &l21[(ii + 3) * nb..(ii + 3) * nb + nb];
+        let mut j = 0;
+        while j + 8 <= ii {
+            let pbase = (j / 8) * nb * 8;
+            let panel = &l21t[pbase..pbase + nb * 8];
+            let mut c0 = Simd::<f64, 8>::splat(0.0);
+            let mut c1 = Simd::<f64, 8>::splat(0.0);
+            let mut c2 = Simd::<f64, 8>::splat(0.0);
+            let mut c3 = Simd::<f64, 8>::splat(0.0);
+            for p in 0..nb {
+                let bvec = Simd::<f64, 8>::from_slice(&panel[p * 8..p * 8 + 8]);
+                c0 += Simd::splat(a0[p]) * bvec;
+                c1 += Simd::splat(a1[p]) * bvec;
+                c2 += Simd::splat(a2[p]) * bvec;
+                c3 += Simd::splat(a3[p]) * bvec;
+            }
+            let col = kb + j;
+            let r0 = base * n;
+            syrk_sub8(&mut rows[r0..r0 + n], col, c0);
+            syrk_sub8(&mut rows[r0 + n..r0 + 2 * n], col, c1);
+            syrk_sub8(&mut rows[r0 + 2 * n..r0 + 3 * n], col, c2);
+            syrk_sub8(&mut rows[r0 + 3 * n..r0 + 4 * n], col, c3);
+            j += 8;
+        }
+        for mrow in 0..4 {
+            let r0 = (base + mrow) * n;
+            cholesky_syrk_row_tail(&mut rows[r0..r0 + n], ii + mrow, j, l21, nb, kb);
+        }
+        base += 4;
+    }
+    for local_i in base..m {
+        let r0 = local_i * n;
+        cholesky_syrk_row_tail(&mut rows[r0..r0 + n], row_offset + local_i, 0, l21, nb, kb);
     }
 }
 

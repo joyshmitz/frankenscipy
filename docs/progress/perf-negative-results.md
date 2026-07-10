@@ -7449,3 +7449,35 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   `cho_factor` improvement with p<0.05 and no 500-row regression. The local
   n=2048 probe may justify a separate large-n-only experiment, but not a keep for
   the n=1000 wall.
+
+## 2026-07-09 - frankenscipy-8l8r1/cod_fsc - WIN Cholesky flat row-major workspace
+
+- Agent: cod_fsc / Codex.
+- Lane: dense-BLAS `linalg.cholesky` / `cho_factor`. Negative-evidence grep done
+  before coding; this was not a retry of public-`matmul` Cholesky, naive
+  blocking/packing, NB retunes, TRSM parallelization, MR=6, 4x4 dot kernels, or
+  the rejected packed-SYRK panel-order traversal.
+- Lever kept: store the blocked Cholesky working matrix as one row-major
+  `Vec<f64>` and run the existing packed 4-row x 8-col SYRK arithmetic through
+  `cholesky_syrk_flat_rows`, then zero the strict upper triangle before return.
+  This removes row-Vec chasing and the final repack into the public flat output.
+- Baseline local probe after the rejected panel-order code was removed:
+  n=512 7.18 ms, n=1024 29.78 ms, n=2048 157.30 ms. Candidate repeats:
+  n=512 5.85 / 5.99 / 6.35 ms, n=1024 26.34 / 26.22 / 25.80 ms,
+  n=2048 146.03 / 136.63 / 131.04 ms. Candidate `perf stat` binary run:
+  n=512 6.08 ms, n=1024 24.70 ms, n=2048 126.93 ms; IPC 3.87, cache-miss
+  rate 4.94%.
+- Official same-worker RCH `hz2` Criterion keep proof, release-perf
+  `cho_factor_gauntlet_scipy`: 500x500 `cho_factor`
+  [4.0918, 4.1774, 4.3279] ms, change [-34.773%, -29.848%, -23.780%], p=0.00;
+  1000x1000 `cho_factor` [34.525, 37.631, 39.966] ms, change
+  [-23.461%, -14.370%, -4.3012%], p=0.02. Solve-inclusive rows were neutral:
+  500x500 p=0.82, 1000x1000 p=0.13. SciPy rows skipped on hz2 because
+  `python3` could not import `scipy.linalg`.
+- Behavior/gates: targeted blocked-vs-unblocked Cholesky test passed on RCH;
+  RCH `cargo check -p fsci-linalg --all-targets` passed; RCH
+  `cargo clippy -p fsci-linalg --lib -- -D warnings` passed; scoped rustfmt
+  passed; UBS on `crates/fsci-linalg/src/lib.rs` reported 0 critical issues.
+- Decision: KEEP. Next distinct vein: profile a flat-workspace opportunity in
+  the duplicate solve/factor path or panel TRSM; do not confuse this keep with
+  the rejected panel-order traversal.
