@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - KEEP (byte-identical): special `zeta` affine block loop parallel — 3.97x on the scipy-compared n=100k+ bench
+
+- DIFFERENT module (special, my domain; NOT cod's linalg). Profile-first: the special bench's scipy
+  comparison targets `erfinv` and `zeta` at n=100000. `erfinv` is already gate-tuned parallel (serial < 1M
+  by design; a prior A/B found lowering the gate lost 18.8x). `zeta` over an affine `s`-grid hits
+  `zeta_positive_affine_vec`, whose block loop was SERIAL.
+- MECHANISM: `zeta_positive_affine_vec` exploits an affine `s` sequence with a per-block multiplicative
+  RECURRENCE (`direct_terms *= ratio`, `tail_neg_s *= tail_ratio`) — O(1)/element after a per-block `exp()`
+  re-seed. Blocks (`ZETA_AFFINE_BLOCK=64`) are INDEPENDENT: each re-seeds from its own `values[block_start]`
+  and the `direct_ratios`/`tail_ratio` are `x`-invariant. So the block loop fans across cores.
+- FIX: extract `fill_zeta_affine_blocks(values, out, direct_ratios, tail_ratio)`; dispatch it over
+  BLOCK-ALIGNED `chunks_mut` under `std::thread::scope` when `len ≥ 2^15`. BLOCK-aligned chunks keep the
+  block partition identical to the serial one, so each output element is computed by exactly the serial
+  recurrence — BYTE-IDENTICAL. New `zeta_affine_parallel_matches_serial_bitexact` (`to_bits`, batches above
+  the gate, non-block-multiple lengths for the remainder/alignment) passed; fsci-special **1152/0**.
+- MEASURED (in-crate `#[ignore]` A/B `zeta_affine_parallel_ab`, median null gate via `ZETA_AFFINE_FORCE_SERIAL`,
+  n=300000): serial **41.83ms → parallel 10.47ms, CAND median 3.971x DECIDED** (A/A null median 1.000x, range
+  [0.983, 1.015]). The recurrence is compute-bound (exp re-seed + tail eval), so it scales cleanly.
+- SHARED-TREE HANDLING: `gamma.rs` had a peer's uncommitted `t0` fmt reflow (not near zeta). Committed ONLY
+  my change via reset-reapply (`git cat-file blob HEAD > gamma.rs`, reapplied my 3 edits, verified the diff
+  was exactly my regions with NO `t0`, committed) then restored the peer's `t0`. lib.rs is peer-contested too,
+  so I kept the bench knob's use inside gamma.rs's own tests (`super::`) rather than re-exporting it.
+- Constraint: build/test via `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec`. No local build, no
+  maturin, ~0 disk, nothing stashed or deleted. ubs on gamma.rs: 6 pre-existing findings (lines 3570-4864),
+  none in my regions.
+
 ## 2026-07-10 - BlackThrush (cc) - KEEP (byte-identical): interpolate `Aaa::eval_many` parallel across queries — 1.553x DECIDED on large batches
 
 - DIFFERENT module (interpolate, my compact-support/parallel-eval vein; NOT cod's linalg). Profile-first:

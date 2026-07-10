@@ -2745,6 +2745,49 @@ const ZETA_POSITIVE_TAIL_INV: f64 = 1.0 / ZETA_POSITIVE_TAIL_NA;
 const ZETA_POSITIVE_TAIL_INV_SQ: f64 = ZETA_POSITIVE_TAIL_INV * ZETA_POSITIVE_TAIL_INV;
 const ZETA_AFFINE_MIN_LEN: usize = 1024;
 const ZETA_AFFINE_BLOCK: usize = 64;
+/// Batch length at/above which the affine-`zeta` block loop fans across cores. Each
+/// `ZETA_AFFINE_BLOCK`-sized block re-seeds its own recurrence, so blocks are independent; the
+/// per-element work (8-term direct sum + `zeta_positive_tail`) amortises the spawn from ~32k up.
+const ZETA_AFFINE_PARALLEL_MIN_LEN: usize = 1 << 15;
+
+/// Same-binary A/B toggle for the affine-`zeta` block parallelism. Byte-identical either way (each
+/// block re-seeds identically and writes a disjoint output slice); benchmark knob, read once.
+#[doc(hidden)]
+pub static ZETA_AFFINE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Fill `out` with affine-`zeta` values, processing `ZETA_AFFINE_BLOCK`-sized blocks of `values`.
+/// `values`/`out` are a block-aligned slice (block boundaries fall on `ZETA_AFFINE_BLOCK` multiples
+/// from the slice start), so this is BYTE-IDENTICAL whether the whole array is one call or split
+/// into aligned chunks across threads: every block re-seeds from its own `values[block_start]` and
+/// the shared `direct_ratios`/`tail_ratio` are `x`-invariant.
+fn fill_zeta_affine_blocks(
+    values: &[f64],
+    out: &mut [f64],
+    direct_ratios: &[f64; ZETA_POSITIVE_DIRECT_LN.len()],
+    tail_ratio: f64,
+) {
+    for block_start in (0..values.len()).step_by(ZETA_AFFINE_BLOCK) {
+        let block_end = (block_start + ZETA_AFFINE_BLOCK).min(values.len());
+        let block_s = values[block_start];
+        let mut direct_terms = [0.0; ZETA_POSITIVE_DIRECT_LN.len()];
+        for (term, &ln_n) in direct_terms.iter_mut().zip(&ZETA_POSITIVE_DIRECT_LN) {
+            *term = (-block_s * ln_n).exp();
+        }
+        let mut tail_neg_s = (-block_s * ZETA_POSITIVE_TAIL_LN).exp();
+        for i in block_start..block_end {
+            let mut sum = 1.0;
+            for &term in &direct_terms {
+                sum += term;
+            }
+            out[i] = zeta_positive_tail(values[i], sum, tail_neg_s);
+            for (term, &ratio) in direct_terms.iter_mut().zip(direct_ratios) {
+                *term *= ratio;
+            }
+            tail_neg_s *= tail_ratio;
+        }
+    }
+}
 
 fn zeta_positive(s: f64) -> f64 {
     let mut sum = 1.0;
@@ -2811,27 +2854,29 @@ fn zeta_positive_affine_vec(values: &[f64]) -> Option<Vec<f64>> {
     let tail_ratio = (-step * ZETA_POSITIVE_TAIL_LN).exp();
 
     let mut out = vec![0.0; values.len()];
-    for block_start in (0..values.len()).step_by(ZETA_AFFINE_BLOCK) {
-        let block_end = (block_start + ZETA_AFFINE_BLOCK).min(values.len());
-        let block_s = values[block_start];
-        let mut direct_terms = [0.0; ZETA_POSITIVE_DIRECT_LN.len()];
-        for (term, &ln_n) in direct_terms.iter_mut().zip(&ZETA_POSITIVE_DIRECT_LN) {
-            *term = (-block_s * ln_n).exp();
-        }
-        let mut tail_neg_s = (-block_s * ZETA_POSITIVE_TAIL_LN).exp();
-
-        for i in block_start..block_end {
-            let mut sum = 1.0;
-            for &term in &direct_terms {
-                sum += term;
+    let nthreads = if values.len() < ZETA_AFFINE_PARALLEL_MIN_LEN
+        || ZETA_AFFINE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(values.len().div_ceil(ZETA_AFFINE_BLOCK))
+            .max(1)
+    };
+    if nthreads <= 1 {
+        fill_zeta_affine_blocks(values, &mut out, &direct_ratios, tail_ratio);
+    } else {
+        // Chunk BLOCK-aligned so each thread owns whole blocks and the block partition is identical
+        // to the serial one (block boundaries stay on `ZETA_AFFINE_BLOCK` multiples from index 0).
+        let nblocks = values.len().div_ceil(ZETA_AFFINE_BLOCK);
+        let chunk = nblocks.div_ceil(nthreads) * ZETA_AFFINE_BLOCK;
+        std::thread::scope(|scope| {
+            for (vc, oc) in values.chunks(chunk).zip(out.chunks_mut(chunk)) {
+                scope.spawn(|| fill_zeta_affine_blocks(vc, oc, &direct_ratios, tail_ratio));
             }
-            out[i] = zeta_positive_tail(values[i], sum, tail_neg_s);
-
-            for (term, &ratio) in direct_terms.iter_mut().zip(&direct_ratios) {
-                *term *= ratio;
-            }
-            tail_neg_s *= tail_ratio;
-        }
+        });
     }
     Some(out)
 }
@@ -3444,6 +3489,83 @@ fn complex_parameter_gammaincc_cf(a: Complex64, z: Complex64) -> Result<Complex6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zeta_affine_parallel_matches_serial_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The block-parallel affine-`zeta` path must be BYTE-IDENTICAL to the serial one, at a batch
+        // above the parallel gate so the multi-threaded chunked path actually runs. Affine `s` grids
+        // spanning several block boundaries with a non-block-multiple length exercise the last-chunk
+        // remainder and the chunk/block alignment.
+        for &n in &[1usize << 15, (1 << 15) + 37, 200_003] {
+            let values: Vec<f64> = (0..n)
+                .map(|i| 1.1 + 8.9 * (i as f64) / (n - 1) as f64)
+                .collect();
+            ZETA_AFFINE_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = zeta_positive_affine_vec(&values).expect("affine path applies");
+            ZETA_AFFINE_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = zeta_positive_affine_vec(&values).expect("affine path applies");
+            assert_eq!(serial.len(), parallel.len());
+            for (i, (s, p)) in serial.iter().zip(parallel.iter()).enumerate() {
+                assert_eq!(
+                    s.to_bits(),
+                    p.to_bits(),
+                    "zeta affine n={n} mismatch at {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "perf A/B; run with --ignored --nocapture"]
+    fn zeta_affine_parallel_ab() {
+        use std::sync::atomic::Ordering;
+        use std::time::Instant;
+        let n = 300_000usize;
+        let values: Vec<f64> = (0..n)
+            .map(|i| 1.1 + 8.9 * (i as f64) / (n - 1) as f64)
+            .collect();
+        let bench = |serial: bool| -> f64 {
+            ZETA_AFFINE_FORCE_SERIAL.store(serial, Ordering::Relaxed);
+            let _ = std::hint::black_box(zeta_positive_affine_vec(&values));
+            let reps = 5;
+            let t = Instant::now();
+            for _ in 0..reps {
+                let arg = std::hint::black_box(&values);
+                let _ = std::hint::black_box(zeta_positive_affine_vec(arg));
+            }
+            t.elapsed().as_secs_f64() / reps as f64 * 1e3
+        };
+        let (mut sv, mut pv, mut nv) = (Vec::new(), Vec::new(), Vec::new());
+        for _ in 0..15 {
+            sv.push(bench(true));
+            pv.push(bench(false));
+            nv.push(bench(true));
+        }
+        ZETA_AFFINE_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let med = |v: &[f64]| {
+            let mut w = v.to_vec();
+            w.sort_by(f64::total_cmp);
+            w[w.len() / 2]
+        };
+        let cand: Vec<f64> = sv.iter().zip(&pv).map(|(s, p)| s / p).collect();
+        let null: Vec<f64> = sv.iter().zip(&nv).map(|(s, n)| s / n).collect();
+        let nlo = null.iter().copied().fold(f64::MAX, f64::min);
+        let nhi = null.iter().copied().fold(f64::MIN, f64::max);
+        let cm = med(&cand);
+        let verdict = if cm > nhi || cm < nlo {
+            "DECIDED"
+        } else {
+            "IN-FLOOR"
+        };
+        println!(
+            "zeta_affine n={n}: serial {:.2}ms parallel {:.2}ms | CAND median {cm:.3}x | \
+             NULL(A/A) median {:.3}x range [{nlo:.3}, {nhi:.3}] | {verdict}",
+            med(&sv),
+            med(&pv),
+            med(&null),
+        );
+    }
 
     #[test]
     fn polygamma_match_scipy() {
