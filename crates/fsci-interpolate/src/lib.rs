@@ -3193,6 +3193,14 @@ pub struct RegularGridInterpolator {
     _spline_coeffs_per_axis: Option<Vec<Vec<[f64; 4]>>>,
 }
 
+/// Same-binary A/B toggle for batch PCHIP evaluation. When `true`, `eval_many` routes every PCHIP
+/// query through the generic per-query `eval` path (which re-fits the query-independent last-axis
+/// fibers on every query — the ORIG behaviour). When `false` (default), the last-axis fits are
+/// hoisted out of the per-query loop and computed once. Byte-identical either way. Benchmark knob.
+#[doc(hidden)]
+pub static INTERPN_PCHIP_BATCH_FORCE_SCALAR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl RegularGridInterpolator {
     pub fn new(
         points: Vec<Vec<f64>>,
@@ -3323,6 +3331,17 @@ impl RegularGridInterpolator {
             return self.eval_many_nearest_3d(xi);
         }
 
+        // PCHIP: the first (last-axis) reduction fits contiguous fibers of `self.values`, and those
+        // fits are query-INDEPENDENT — the generic path below re-runs `PchipInterpolator::new` for
+        // them on every query. Hoist them out of the per-query loop (shared-predictor lever). The
+        // knob restores the per-query path for the same-binary A/B.
+        if self.method == RegularGridMethod::Pchip
+            && !xi.is_empty()
+            && !INTERPN_PCHIP_BATCH_FORCE_SCALAR.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return self.eval_many_pchip(xi);
+        }
+
         // Each query is an independent `eval` (read-only lookup + interpolation over the
         // shared grid, no mutable state), so for a large batch the queries run on disjoint
         // cores and the per-query value is the same pure `eval` regardless of owning core.
@@ -3338,6 +3357,90 @@ impl RegularGridInterpolator {
             RegularGridMethod::Quintic => ndim * 128,
         };
         par_query_try_map(xi, work_per_query, |x| self.eval(x))
+    }
+
+    /// Batch PCHIP that HOISTS the query-independent last-axis fits.
+    ///
+    /// `eval_pchip`'s first reduction fits every contiguous last-axis fiber of `self.values` with
+    /// `PchipInterpolator::new`; those fits depend only on the grid, not the query, so the generic
+    /// `eval` path recomputes the same derivatives for all `nq` queries. Fit them ONCE here, then
+    /// each query only EVALUATES the shared fits (cheap bisect+Hermite) and re-fits the remaining,
+    /// genuinely query-dependent reductions. BYTE-IDENTICAL to the per-query path: the same fibers
+    /// are fitted with the same inputs and evaluated at the same points, in the same order. If the
+    /// shared fit fails (cannot happen for a construction-validated grid), fall back to the generic
+    /// per-query path so semantics are preserved exactly.
+    fn eval_many_pchip(&self, xi: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+        let ndim = self.ndim();
+        let last = ndim - 1;
+        let last_axis = &self.points[last];
+        let last_len = last_axis.len();
+        let last_fits: Result<Vec<PchipInterpolator>, InterpError> = self
+            .values
+            .chunks_exact(last_len)
+            .map(|slice| PchipInterpolator::new(last_axis, slice))
+            .collect();
+        let work_per_query = ndim.max(1) * 16;
+        match last_fits {
+            Ok(fits) => par_query_try_map(xi, work_per_query, |q| self.eval_pchip_prefit(q, &fits)),
+            Err(_) => par_query_try_map(xi, work_per_query, |x| self.eval(x)),
+        }
+    }
+
+    /// Per-query PCHIP evaluation reusing precomputed last-axis fits. Mirrors `eval`'s guards
+    /// (dimension count, NaN, bounds/fill) exactly, then runs the same reduction as `eval_pchip`
+    /// with the first (last-axis) fit step replaced by evaluating the shared `last_fits`.
+    fn eval_pchip_prefit(
+        &self,
+        xi: &[f64],
+        last_fits: &[PchipInterpolator],
+    ) -> Result<f64, InterpError> {
+        let ndim = self.ndim();
+        if xi.len() != ndim {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("expected {ndim}D, got {}D", xi.len()),
+            });
+        }
+        if xi.iter().any(|x| x.is_nan()) {
+            return Ok(f64::NAN);
+        }
+        let mut out_of_bounds = false;
+        for (dim, &x) in xi.iter().enumerate() {
+            let axis = &self.points[dim];
+            if x < axis[0] || x > axis[axis.len() - 1] {
+                if self.bounds_error {
+                    return Err(InterpError::OutOfBounds {
+                        value: format!(
+                            "dim {dim}: {x} outside [{}, {}]",
+                            axis[0],
+                            axis[axis.len() - 1]
+                        ),
+                    });
+                }
+                out_of_bounds = true;
+            }
+        }
+        if out_of_bounds && let Some(fill) = self.fill_value {
+            return Ok(fill);
+        }
+
+        let last = ndim - 1;
+        // First reduction: evaluate the shared last-axis fits at xi[last] (byte-identical to fitting
+        // each last-axis fiber and evaluating it, as `eval_pchip` does).
+        let mut reduced: Vec<f64> = last_fits.iter().map(|f| f.eval(xi[last])).collect();
+        let mut shape: Vec<usize> = self.points[..last].iter().map(Vec::len).collect();
+        for dim in (0..last).rev() {
+            let axis = &self.points[dim];
+            let axis_len = shape[dim];
+            let outer = reduced.len() / axis_len;
+            let mut next = Vec::with_capacity(outer);
+            for slice in reduced.chunks_exact(axis_len) {
+                let interp = PchipInterpolator::new(axis, slice)?;
+                next.push(interp.eval(xi[dim]));
+            }
+            reduced = next;
+            shape.pop();
+        }
+        Ok(reduced[0])
     }
 
     fn find_interval(axis: &[f64], x: f64) -> usize {
@@ -11375,6 +11478,65 @@ mod tests {
             RegularGridInterpolator::new(points, values, RegularGridMethod::Quintic, false, None)
                 .expect_err("too few points for quintic");
         assert!(matches!(err, InterpError::TooFewPoints { minimum: 6, .. }));
+    }
+
+    #[test]
+    fn regular_grid_pchip_batch_hoist_matches_scalar_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The hoisted-fit batch path (`eval_many_pchip`) must be BYTE-IDENTICAL to the generic
+        // per-query path, across ndim 1/2/3, interior/exact-node/edge queries, and out-of-bounds
+        // (fill) queries, over a wide-dynamic-range grid.
+        let axes: &[Vec<Vec<f64>>] = &[
+            vec![(0..12).map(|i| i as f64 * 0.5).collect()],
+            vec![
+                (0..9).map(|i| i as f64).collect(),
+                (0..11).map(|i| i as f64 * 0.3 - 1.0).collect(),
+            ],
+            vec![
+                (0..6).map(|i| i as f64).collect(),
+                (0..7).map(|i| i as f64 * 0.4).collect(),
+                (0..8).map(|i| i as f64 * 0.25 - 0.5).collect(),
+            ],
+        ];
+        for points in axes {
+            let total: usize = points.iter().map(Vec::len).product();
+            let values: Vec<f64> = (0..total)
+                .map(|k| ((k as f64 * 0.37).sin() * 3.0 - 0.4) * if k % 4 == 0 { 1e7 } else { 1.0 })
+                .collect();
+            let interp = RegularGridInterpolator::new(
+                points.clone(),
+                values,
+                RegularGridMethod::Pchip,
+                false,
+                Some(-9.5),
+            )
+            .unwrap();
+            let ndim = points.len();
+            let mut queries: Vec<Vec<f64>> = Vec::new();
+            for t in 0..64 {
+                queries.push(
+                    points
+                        .iter()
+                        .map(|ax| {
+                            let (lo, hi) = (ax[0], ax[ax.len() - 1]);
+                            lo + (hi - lo) * ((t * 7 + 3) % 100) as f64 / 100.0
+                        })
+                        .collect(),
+                );
+                queries.push(points.iter().map(|ax| ax[t % ax.len()]).collect());
+                // An out-of-bounds query (exercises the fill path in both routes).
+                queries.push(points.iter().map(|ax| ax[ax.len() - 1] + 5.0).collect());
+            }
+            INTERPN_PCHIP_BATCH_FORCE_SCALAR.store(true, Ordering::Relaxed);
+            let scalar = interp.eval_many(&queries).unwrap();
+            INTERPN_PCHIP_BATCH_FORCE_SCALAR.store(false, Ordering::Relaxed);
+            let hoisted = interp.eval_many(&queries).unwrap();
+            assert_eq!(scalar.len(), hoisted.len());
+            for (i, (a, b)) in scalar.iter().zip(&hoisted).enumerate() {
+                assert_eq!(a.to_bits(), b.to_bits(), "pchip ndim={ndim} query {i}");
+            }
+        }
+        INTERPN_PCHIP_BATCH_FORCE_SCALAR.store(false, Ordering::Relaxed);
     }
 
     #[test]

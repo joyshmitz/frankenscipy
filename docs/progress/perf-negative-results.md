@@ -8967,3 +8967,32 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   no local fallback occurred. **No timed candidate exists, so this is not a WIN/REJECT and binary SHA, candidate
   self-time, CV, and null median are N/A.** Unblock via explicit authority for a narrowly audited unsafe dispatcher
   or a build-level exception to the one-binary rule. No kernel code changed; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN interpn PCHIP eval_many hoist query-independent last-axis fits
+
+- **WIN; shipped.** `RegularGridInterpolator::eval_many` on PCHIP routed every query through the generic
+  per-query `eval` -> `eval_pchip`, whose FIRST (last-axis) reduction re-fits contiguous fibers of
+  `self.values` with `PchipInterpolator::new` (axis-clone + h/delta/derivative/coeff compute, all O(n)).
+  Those fits are query-INDEPENDENT, so an `nq`-query batch recomputed the same `total/last_len` derivative
+  sets `nq` times. New `eval_many_pchip` fits them ONCE, then each query only EVALUATES the shared fits
+  (cheap bisect+Hermite) and re-fits the genuinely query-dependent inner reductions. Shared-predictor lever
+  (cf. solve_toeplitz_many). Fits per batch fell ~804k -> ~4.2k at 200x200/4000q.
+- Same-binary A/B, INTERPN_PCHIP_BATCH_FORCE_SCALAR knob alternated scalar/hoisted/scalar per iter, both
+  arms black-boxed. **200x200 grid, 4000 queries: DECIDED 76.767x** (scalar 1027.45ms cv4.2% -> hoisted
+  11.92ms cv10.0%), NULL(A/A) median 1.018x range [0.959,1.064], worker vmi1293453. **8x8 grid, 20000
+  queries: DECIDED 4.847x** (scalar 18.97ms -> hoisted 3.93ms), NULL median 1.002x range [0.855,1.275],
+  worker vmi1149989. Strictly fewer fits at every size -> never a loss.
+- **Byte-identical: bitmism=0** both probes; test `regular_grid_pchip_batch_hoist_matches_scalar_bitexact`
+  (ndim 1/2/3, interior/exact-node/edge/out-of-bounds-fill, 1e7 dynamic range, to_bits equality) passes;
+  full fsci-interpolate suite 184/0. Same fibers fitted with same inputs, evaluated at same points, same
+  order; `eval_pchip_prefit` mirrors `eval`'s dim/NaN/bounds/fill guards verbatim; shared-fit failure falls
+  back to the generic path. Safe Rust only; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - REJECT interpn eval_pchip per-query whole-grid clone removal (IN-FLOOR)
+
+- **REJECT; reverted.** `eval_pchip` did `let mut reduced = self.values.clone();` per query (O(grid) copy
+  read once). Read `self.values` by reference on the first reduction instead. Bit-identical (bitmism=0) but
+  the clone is only ~5% of the per-query cost — the last-axis FITS dominate (see WIN above). Same-binary A/B
+  200x200/3000q: **IN-FLOOR** CAND(clone/noclone) median 1.023x (best-of 1.054x) inside NULL(A/A) range
+  [0.712,1.098], worker vmi1293453 (degraded fleet, +/-30% null). Not decidable; knob+path removed to avoid
+  cruft. The clone is subsumed by the hoist WIN (which reads fibers by reference anyway). Safe Rust only.
