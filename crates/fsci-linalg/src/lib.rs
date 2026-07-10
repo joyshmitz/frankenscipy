@@ -5031,7 +5031,7 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
     const NB: usize = 128;
     let mut lower = vec![0.0f64; n * n];
     for (i, row) in a_in.iter().enumerate() {
-        lower[i * n..i * n + n].copy_from_slice(row);
+        lower[i * n..i * n + i + 1].copy_from_slice(&row[..i + 1]);
     }
 
     let mut k = 0;
@@ -5075,13 +5075,8 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
         if kb < n {
             let m2 = n - kb;
             let nb = kb - k;
-            let mut l21 = vec![0.0f64; m2 * nb];
-            for ii in 0..m2 {
-                let src = (kb + ii) * n + k;
-                l21[ii * nb..ii * nb + nb].copy_from_slice(&lower[src..src + nb]);
-            }
+            let (l21, l21t) = copy_l21_and_pack_transpose(&lower, n, kb, k, m2, nb);
             let l21_ref = &l21;
-            let l21t = pack_l21_transpose(&l21, m2, nb);
             let l21t_ref = &l21t;
             let nthreads = matmul_thread_count(m2, nb, m2);
             let trailing = &mut lower[kb * n..];
@@ -5102,10 +5097,6 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
         k = kb;
     }
 
-    for i in 0..n {
-        let row = i * n;
-        lower[row + i + 1..row + n].fill(0.0);
-    }
     Some(lower)
 }
 
@@ -18546,6 +18537,30 @@ fn pack_l21_transpose(l21: &[f64], m2: usize, nb: usize) -> Vec<f64> {
         }
     }
     packed
+}
+
+fn copy_l21_and_pack_transpose(
+    lower: &[f64],
+    n: usize,
+    kb: usize,
+    k: usize,
+    m2: usize,
+    nb: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let npanels = m2.div_ceil(8);
+    let mut l21 = vec![0.0f64; m2 * nb];
+    let mut packed = vec![0.0f64; npanels * nb * 8];
+    for ii in 0..m2 {
+        let src = (kb + ii) * n + k;
+        let dst = ii * nb;
+        let packed_lane = (ii / 8) * nb * 8 + (ii % 8);
+        for p in 0..nb {
+            let value = lower[src + p];
+            l21[dst + p] = value;
+            packed[packed_lane + p * 8] = value;
+        }
+    }
+    (l21, packed)
 }
 
 /// `row[col..col+8] -= c` (8-wide).

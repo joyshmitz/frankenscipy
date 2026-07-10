@@ -7547,3 +7547,37 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   a measured joint panel primitive that reduces panel TRSM/exact-tail dot
   instruction count and panel copy/pack overhead together, with its own
   same-binary A/B. Safe Rust only; no C BLAS/LAPACK/MKL/XLA linkage.
+
+## 2026-07-10 - frankenscipy-8l8r1/cod_fsc - WIN Cholesky redundant panel/output data movement removal
+
+- Agent: cod_fsc / Codex. Ledger-grep done before coding; did not retry
+  public-`matmul` Cholesky, naive blocking/packing, NB retunes, TRSM row fan-out,
+  MR=6, 4x4 dot kernels, panel-order SYRK, or 4x16 SYRK.
+- SciPy attribution first: local SciPy 1.17.1 / NumPy 2.4.3 low-level
+  `dpotrf` with `OPENBLAS_NUM_THREADS=1` showed OpenBLAS time mostly in
+  `dgemm_kernel_HASWELL` 37.25% and `dtrsm_RN_solve_opt` 18.91%; direct
+  `dsyrk_kernel_L` was only 0.14% no-children / 0.78% children. So this was not
+  routed to another SYRK shape.
+- Lever kept: `cholesky_lower_blocked` copies only the input lower triangle into
+  the zeroed flat output and removes the final strict-upper zero pass. It also
+  builds row-major `L21` and packed `L21^T` in one source pass through
+  `copy_l21_and_pack_transpose`; the previous `pack_l21_transpose` remains for
+  other callers.
+- FP-bit-identical proof: strict-upper input values are never read by the lower
+  factor path and were zeroed before return; lower values, panel factorization,
+  TRSM dot products, packed SYRK, exact tails, and per-output accumulation order
+  are unchanged. Fused packing writes the same `L21` and packed slots with the
+  same zero padding.
+- Same-worker RCH `hz2` release-perf Criterion:
+  baseline `1000x1000_rust_cho_factor` [31.954, 35.013, 39.736] ms; candidate
+  [29.250, 32.569, 35.975] ms, change [-23.691%, -14.300%, -2.3871%], p=0.03.
+  Mean ratio 35.013 / 32.569 = 1.075x; Criterion centered estimate about 1.17x.
+  SciPy rows skipped on `hz2` because `python3` cannot import `scipy.linalg`.
+- Gates: RCH `hz2` release-perf blocked-vs-unblocked Cholesky passed; RCH `hz2`
+  release-perf `cargo test -p fsci-linalg ... cholesky --lib` passed 15/0; RCH
+  `cargo clippy -p fsci-linalg --lib -- -D warnings` passed; scoped rustfmt and
+  `git diff --check` passed; UBS on `crates/fsci-linalg/src/lib.rs` reported 0
+  critical issues with broad pre-existing warnings only.
+- Decision: KEEP. Next Cholesky pass should profile again and attack
+  `dtrsm`/exact-tail dot instruction count or thread-scope overhead rather than
+  reopening standalone SYRK tile-shape guesses.

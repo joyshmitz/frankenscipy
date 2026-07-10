@@ -18470,3 +18470,47 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   measured joint panel primitive: reduce `dtrsm`/exact-tail dot instruction count and panel copy/pack overhead together,
   or build a same-binary A/B for panel residency that proves the phase table moves. Do not optimize only `dsyrk` again
   until a fresh profile shows it dominates by itself. Safe Rust only; no C BLAS/LAPACK/MKL/XLA linkage.
+
+## 2026-07-10 - cod_fsc (cod) - WIN dense Cholesky redundant panel/output data movement removal (cho_factor n=1000 1.075x mean, -14.3% Criterion)
+
+- Lane: `frankenscipy-8l8r1` dense-BLAS / `linalg.cholesky` and `cho_factor`. Ledger-grep was done before coding.
+  Explicitly avoided the closed/rejected families: public-`matmul` blocked Cholesky, naive blocking/packing, NB retunes,
+  TRSM row fan-out, MR=6, 4x4 dot kernels, packed-SYRK panel-order traversal, and 4x16/two-panel packed-SYRK on AVX2.
+- SciPy attribution before optimizing: local SciPy 1.17.1 / NumPy 2.4.3 uses bundled OpenBLAS
+  `libscipy_openblas-6cdc3b4a.so`. `OPENBLAS_NUM_THREADS=1 perf record -F 997 -g` on 120 low-level `dpotrf` calls for
+  the same n=1000 fixture captured 1524 samples. Top no-children frames: `dgemm_kernel_HASWELL` 37.25%,
+  `dtrsm_RN_solve_opt` 18.91%, `dgemm_otcopy_HASWELL` 3.06%, `dgemm_itcopy_HASWELL` 2.84%,
+  `dtrsm_oltncopy_HASWELL` 0.80%, `dtrsm_kernel_RN_HASWELL` 0.29%, and `dsyrk_kernel_L` 0.14% direct / 0.78%
+  children. Conclusion: SciPy's `dpotrf` wall is mostly GEMM plus TRSM, not a standalone SYRK shape problem.
+- Primitive selected from the attribution: data movement around the panel/update path, not accumulator widening.
+  AVX2-class accumulator widening already failed (MR=6 and 4x16), and changing row grouping would not be an
+  FP-bit-identical lever. This lever preserves all dot/SYRK per-output accumulation order.
+- Lever kept:
+  - `cholesky_lower_blocked` now copies only the lower triangle from the symmetric input into the flat output buffer;
+    the buffer starts zeroed, so the strict upper triangle is already the public result and the final upper-zero pass is
+    removed.
+  - A new `copy_l21_and_pack_transpose` helper builds row-major `L21` and the packed `L21^T` micro-panels from the same
+    source read. The existing `pack_l21_transpose` remains for other callers.
+- FP-bit-identical proof: the removed full-row copy only wrote strict-upper input values that are never read by the lower
+  Cholesky factor path and were overwritten to zero before return. The fused panel copy writes exactly the same row-major
+  `L21` values and packed slots as `pack_l21_transpose`; padded lanes still come from the zero-initialized packed buffer.
+  Panel factorization, TRSM dot products, packed SYRK, exact tails, and output storage offsets are otherwise unchanged.
+- Same-worker A/B, RCH `hz2`, release-perf Criterion, direct factor row only:
+  - Baseline current main:
+    `cho_factor_gauntlet_scipy/1000x1000_rust_cho_factor` [31.954, 35.013, 39.736] ms.
+  - Candidate:
+    `cho_factor_gauntlet_scipy/1000x1000_rust_cho_factor` [29.250, 32.569, 35.975] ms,
+    change [-23.691%, -14.300%, -2.3871%], p=0.03; performance improved.
+  - Ratio from means: 35.013 / 32.569 = 1.075x. Criterion's change estimate centers at 14.3% faster (about 1.17x).
+    SciPy rows were skipped on `hz2` because `python3` cannot import `scipy.linalg`.
+- Validation/gates:
+  - RCH `hz2` release-perf `cholesky_lower_blocked_matches_unblocked_factorization` passed.
+  - RCH `hz2` release-perf `cargo test -p fsci-linalg --profile release-perf cholesky --lib -- --nocapture` passed
+    15/0.
+  - RCH `hz2` `cargo clippy -p fsci-linalg --lib -- -D warnings` passed.
+  - `rustfmt --edition 2024 --check crates/fsci-linalg/src/lib.rs` passed; `git diff --check` passed.
+  - `ubs crates/fsci-linalg/src/lib.rs` reported 0 critical issues; the many warnings are broad pre-existing inventory
+    in the large linalg file, not introduced by this small data-movement edit.
+- Decision: KEEP. This does not reopen blind SYRK micro-kernel shape work. The next Cholesky primitive should again
+  start from a fresh phase table; likely targets are `dtrsm`/exact-tail dot instruction count or thread-scope overhead,
+  not another standalone SYRK tile.
