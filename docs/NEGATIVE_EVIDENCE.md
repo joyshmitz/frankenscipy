@@ -18915,3 +18915,32 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - Decision: KEEP and ratchet the n=1000 direct-factor mean to 19.064166 ms on this same-binary harness. Next pass must
   reprofile this landed binary and take the highest open frame; neither this win nor a rejected vein establishes a
   parity ceiling.
+
+## 2026-07-10 - cod_fsc (cod) - LEDGER-INTEGRITY CORRECTION; INVALID high-CV MR4xNR4 pilot
+
+- Historical reject audit under the candidate-specific self-time rule (this supersedes any same-day claim that
+  current production helper self-time validates a removed historical candidate):
+  - Naive B=48 blocking/packing (`c7c913d5cb`): no candidate perf artifact or self-time survives. INVALID; REOPENED.
+  - Panel-order SYRK (`244dbb82d3`): the archived profile ended at 21:45:47 EDT, 4m35s before the exact candidate
+    patch. Its 2.13% helper self is baseline; candidate self is 0.00% because the binary lacks the candidate. The
+    gate-512 n=512 row is independently DEAD: the first trailing slice has 384 rows and only shrinks. INVALID;
+    REOPENED.
+  - 4x16 packed SYRK (`58ae6859b3`): the archived profile ended at 22:35:12 EDT, 94s before the patch. Its 1.57%
+    helper self is MR4xNR8 baseline; candidate self is 0.00% because the binary lacks 4x16. INVALID; REOPENED.
+  - Invalid MR2 comparator (`78298b22d9`): the saved profile predates that candidate too. It remains INVALID; its
+    retry condition was already satisfied by corrected WIN `a6d7ba897`, so shipped MR2 is not a rejected family.
+- SciPy dominance is valid: the n=1000 `dpotrf` profile has 1,524 samples / zero lost and ranks GEMM-family 43.15%
+  (`dgemm_kernel` 37.25% + packs 3.06/2.84), TRSM-family 20.00%, direct SYRK 0.14% (0.78% children).
+- Fresh landed-MR2 routing profile, one remote release-perf binary, official n=1000 fixture, 160 factors, 28,415
+  cycles samples / zero lost, mean 23.763037 ms. Every self frame >=0.1%: packed SYRK 64.99%, blocked body 22.37%,
+  copy+pack 3.34%, exact tail 2.08%, kernel 0.85%, unresolved 0.67/0.51/0.42/0.35/0.34/0.32/0.30/0.29/0.24/
+  0.22/0.19/0.18/0.15/0.15%. Exact-current codegen attributes 20.37% of local SYRK samples to accumulator spills.
+- Pilot lever: split packed-broadcast MR4xNR8 into two MR4xNR4 half-panels (about 14/16 XMM including operands).
+  Row grouping, exact-dot tail boundary, and every output's monotonic p-chain are unchanged.
+- Integrity proof: candidate profile captured 25,899 samples / zero lost and recorded candidate-specific
+  `cholesky_syrk_flat_rows_mr4_nr4` at 61.02% self (TRSM 22.30%, copy+pack 3.35%, generic 2.79%, tail 2.60%).
+  Full n=1000 factor `to_bits()` parity passed; digest `0x72c49d6e97a4d60a`.
+- One-binary paired pilot, 20 alternating samples x 8 factors/sample with inputs/results black-boxed: ORIG 23.257404
+  ms (CV 7.026%), CAND 22.193594 ms (CV 12.067%), apparent mean 1.047933x / paired 1.057669x.
+- Decision: INVALID measurement, neither keep nor reject, because both CVs exceed 5%. Retry only with more work per
+  paired sample in the same binary/worker until both CVs are below 5%; do not use this apparent win for the ratchet.

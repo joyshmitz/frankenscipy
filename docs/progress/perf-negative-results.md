@@ -8108,3 +8108,20 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   `git diff --check`, and UBS (0 critical, no unsafe) passed. Workspace clippy/fmt and conformance remain red only in
   unrelated peer-owned `fsci-opt` lint, formatting, and cluster-linkage surfaces recorded in the canonical ledger.
 - Decision: KEEP. Ratchet this harness to 19.064166 ms; reprofile the landed binary before choosing the next primitive.
+
+## 2026-07-10 - cod_fsc - LEDGER-INTEGRITY CORRECTION; INVALID high-CV MR4xNR4 pilot
+
+- Candidate-specific historical audit: naive B=48 blocking/packing has no surviving perf/self-time (INVALID,
+  REOPENED); panel-order's saved 2.13% helper profile predates its patch by 4m35s and its gate-512 n=512 sub-row is
+  dead because the largest trailing slice is 384 rows (candidate self 0.00%, INVALID, REOPENED); 4x16's saved 1.57%
+  helper profile predates its patch by 94s and is MR4xNR8 baseline (candidate self 0.00%, INVALID, REOPENED). The
+  MR2 comparator remains INVALID, but corrected WIN `a6d7ba897` already satisfied its retry condition.
+- SciPy n=1000 `dpotrf`: GEMM family 43.15% > TRSM family 20.00% >> direct SYRK 0.14%, 1,524 samples / zero lost.
+- Fresh landed-MR2 profile: 28,415 samples / zero lost, 23.763037 ms. All >=0.1% self frames: packed SYRK 64.99%,
+  blocked body 22.37%, copy+pack 3.34%, exact tail 2.08%, kernel 0.85%, unresolved 0.67/0.51/0.42/0.35/0.34/0.32/
+  0.30/0.29/0.24/0.22/0.19/0.18/0.15/0.15%. Matching codegen spends 20.37% of local SYRK samples on spills.
+- Pilot MR4xNR4 half-panel candidate: exact n=1000 factor bits, digest `0x72c49d6e97a4d60a`; candidate-specific
+  self-time 61.02% in 25,899 samples / zero lost. One-binary 20x8 alternating paired samples: ORIG 23.257404 ms
+  (CV 7.026%), CAND 22.193594 ms (CV 12.067%), apparent 1.047933x mean / 1.057669x paired.
+- INVALID measurement: both CVs exceed 5%, so neither keep nor reject. Retry with more factors per paired sample in
+  the same binary/worker; this pilot does not move the ratchet.
