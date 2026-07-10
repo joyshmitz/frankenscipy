@@ -6,6 +6,39 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - PER-KERNEL ISA #3/dgemm: `simd_dot` +avx2 = 1.349x (self-time + wall-clock agree), bit-identical. TRIO COMPLETE.
+
+- Kernel #3, completing the dtrsm/dgemm/dsyrk trio. **dgemm = `simd_dot`** (the `matmul_flat` rank-update /
+  TRSM back-substitution inner dot).
+- BIT-IDENTICAL: checksum `fd49bd3466961f00` for BOTH builds.
+- SELF-TIME FRAME (profile-verified): `simd_dot` = **98.63% (sse2) / 98.72% (avx2)** of the microbench.
+- SELF-TIME GATE (perf stat cycles, K=15 interleaved): base 1.741e8 → avx2 1.278e8 cycles; **CAND median
+  1.3492x, DECIDED** (outside A/A null [0.8695, 1.0512], null median 0.9962x). WALL-CLOCK cross-check (K=31):
+  1.351x, DECIDED — agrees.
+- Artifact `tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernel_dgemm.txt`.
+
+### PER-KERNEL ISA SUMMARY (trio complete, all bit-identical, self-time gated)
+
+| kernel | role | self-time speedup | verdict |
+| --- | --- | ---: | --- |
+| `simd_dot4` (#1 dsyrk) | cholesky trailing SYRK | **1.555x** | DECIDED |
+| `simd_dot` (#3 dgemm) | matmul rank-update dot | **1.349x** | DECIDED |
+| `simd_dot2` (#2 dtrsm) | MR2 panel TRSM (cod's) | **1.125x** | DECIDED (self-time only; wall-clock IN-FLOOR) |
+| `syrk_axpy` (trailing) | `dst -= l*src` | ~1.0x | IN-FLOOR (memory-bound) |
+
+- The speedup tracks how compute-bound each kernel is: `dot4` (4 independent accumulators, highest reuse per
+  load) benefits most; `dot2` (shares one RHS load across 2 dots ⇒ load-bound) least; the trailing `axpy` is
+  store/bandwidth-bound and gets ~nothing from wider registers (that's a cache-blocking lever, not ISA).
+- ALL FOUR bit-identical (`+fma` emits no `vfmadd`, `fp-contract=off`). The workspace `+avx2,+fma` flag
+  (`d89ca19f6`) is verified per-kernel: every compute-bound dense kernel is faster, and the one memory-bound
+  kernel is honestly IN-FLOOR.
+- METHOD (unchanged, surfaced twice): `cargo bench` cannot do the in-binary SSE2-vs-AVX2 A/B —
+  `forbid(unsafe_code)` blocks per-fn `#[target_feature]` (E0133, proven `9d6f44b9e`). Valid method is two
+  whole-binary `rustc` builds interleaved. Self-time (perf cycles, ~4% floor) gates modest wins that
+  wall-clock (~30% floor) cannot (`d97283534`).
+- SCOPE: no kernel code touched (kernels copied verbatim); cod owns the real ones. Constraint: single-file
+  `rustc` + perf + Python only; no cargo build, no maturin, ~0 disk, nothing stashed or deleted.
+
 ## 2026-07-10 - BlackThrush (cc) - PER-KERNEL ISA #2/dtrsm: `simd_dot2` (MR2) +avx2 = 1.125x, DECIDED on SELF-TIME (wall-clock could not) — bit-identical
 
 - Kernel #2 (after #1 dsyrk). **dtrsm = `simd_dot2_shared_rhs`** — cod's MR2 panel-TRSM kernel actually

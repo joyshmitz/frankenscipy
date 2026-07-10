@@ -1,0 +1,24 @@
+# PER-KERNEL ISA verification #3: dgemm (simd_dot -- the matmul_flat rank-update / TRSM back-sub inner dot)
+# host thinkstation1, single-file rustc two-build A/B; base_sha=caf387b9f34805c0 avx2_sha=916d7a06c91e4e97
+
+BIT-IDENTICAL: checksum fd49bd3466961f00 for BOTH builds
+SELF-TIME FRAME (perf record): simd_dot = 98.63% (sse2) / 98.72% (avx2) -> genuinely the kernel
+
+SELF-TIME GATE (perf stat cycles, K=15 interleaved base/avx2/base):
+  base(sse2) median 1.741e8 cycles   avx2 median 1.278e8 cycles
+  NULL(A/A base cycles) median 0.9962x  range [0.8695, 1.0512]
+  CAND(sse2/avx2 self-time) median 1.3492x   DECIDED (outside null range)
+WALL-CLOCK cross-check (K=31): CAND 1.351x, null [0.667,1.299] -> DECIDED (agrees)
+
+=> dgemm/simd_dot gets 1.349x from +avx2, bit-identical.
+
+=== PER-KERNEL ISA SUMMARY (dtrsm/dgemm/dsyrk complete) ===
+  kernel                role                     self-time speedup   verdict
+  simd_dot4  (#1 dsyrk)  cholesky trailing SYRK   1.555x              DECIDED
+  simd_dot   (#3 dgemm)  matmul rank-update dot   1.349x              DECIDED
+  simd_dot2  (#2 dtrsm)  MR2 panel TRSM (cod's)   1.125x              DECIDED (self-time only)
+  syrk_axpy  (trailing)  dst -= l*src             ~1.0x               IN-FLOOR (memory-bound)
+
+  All BIT-IDENTICAL. Speedup tracks compute-boundness: dot4 (4 independent accumulators, highest
+  reuse) benefits most; dot2 (shares one RHS load across 2 dots, load-bound) least; the trailing
+  axpy is store/bandwidth-bound and gets nothing from wider registers (a cache-blocking lever, not ISA).
