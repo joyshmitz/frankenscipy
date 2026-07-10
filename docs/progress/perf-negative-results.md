@@ -7481,3 +7481,30 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - Decision: KEEP. Next distinct vein: profile a flat-workspace opportunity in
   the duplicate solve/factor path or panel TRSM; do not confuse this keep with
   the rejected panel-order traversal.
+
+## 2026-07-09 - frankenscipy-8l8r1/cod_fsc - REJECT Cholesky 4x16 packed-SYRK micro-kernel
+
+- Agent: cod_fsc / Codex.
+- Lane: dense-BLAS `linalg.cholesky` / `cho_factor`. Negative-evidence grep done
+  before coding; this did not retry public-`matmul` Cholesky, naive
+  blocking/packing, NB retunes, TRSM parallelization, MR=6, 4x4 dot kernels,
+  panel-order SYRK, or the flat row-major workspace keep.
+- Profile/routing: current-head `perf record -F 197 -m 1 -g` captured 4227
+  samples; LTO folded most cycles into the probe main, but named samples still
+  routed through `fsci_linalg::cholesky`. Ranked hotspot table kept the trailing
+  packed SYRK helper first, panel/TRSM second, copy/zeroing third.
+- Lever tried then removed: add a 4-row x 16-column two-panel inner loop in
+  `cholesky_syrk_flat_rows`, reusing the four broadcast lhs scalars across two
+  packed 8-column panels. Per-lane `p` order was monotonic, so the attempt was
+  intended to be bit-identical to two adjacent 4x8 tiles.
+- Same-worker RCH `vmi1152480` Criterion A/B, release-perf
+  `cho_factor_gauntlet_scipy`: baseline flat-workspace `1000x1000_cho_factor`
+  [44.501, 50.789, 58.577] ms; candidate [55.651, 76.565, 108.43] ms,
+  change [+14.501%, +62.049%, +123.54%], p=0.03, regression. The solve-inclusive
+  1000x1000 row also regressed [46.740, 51.032, 56.294] -> [55.589, 63.125,
+  74.954] ms, p=0.02. The 500x500 factor row was neutral/no change. SciPy rows
+  skipped because `python3` could not import `scipy.linalg` on that worker.
+- Decision: REJECT, code removed. Retry condition: only revisit 4x16/two-panel
+  Cholesky SYRK on a proven wider-register target such as AVX-512, with its own
+  worker-pinned A/B. On current AVX2-class workers, MR=4 x NR=8 remains the
+  register-fitting sweet spot.

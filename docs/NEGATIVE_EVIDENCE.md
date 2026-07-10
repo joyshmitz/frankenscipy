@@ -18329,3 +18329,37 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - Decision: KEEP. Retry boundary: do not fold this result into the rejected panel-order or NB-retune ideas. The next
   Cholesky vein should profile whether the duplicated solve/factor path or panel TRSM has a distinct flat-workspace
   opportunity, with its own A/B row.
+
+## 2026-07-09 - cod_fsc (cod) - REJECT dense Cholesky 4x16 packed-SYRK micro-kernel (register pressure regression)
+
+- Lane: `frankenscipy-8l8r1` dense-BLAS / `linalg.cholesky`. Ledger-grep before coding excluded the already-closed
+  public-`matmul` Cholesky route, naive blocking/packing, NB retunes, TRSM thread fan-out, MR=6, 4x4 dot kernels, the
+  2026-07-09 packed-SYRK panel-order traversal, and the just-landed flat row-major workspace keep. This attempt was a
+  distinct inner micro-kernel shape only.
+- Profile/routing evidence:
+  - Current-head `perf record -F 197 -m 1 -g -o /tmp/frankenscipy-chol-current.perf -- perf_chol_probe` captured 4227
+    samples. LTO folded most cycles into `perf_chol_probe::main`, with named samples still routing through
+    `fsci_linalg::cholesky`; existing ledgers rank the trailing packed SYRK micro-kernel as the dense Cholesky residual.
+  - Hotspot table used for this attempt:
+    1. trailing `A22 -= L21*L21^T` packed SYRK (`cholesky_syrk_flat_rows`): dominant O(n^3) work, already MR=4 x NR=8.
+    2. panel/TRSM dot loops in `cholesky_lower_blocked`: O(n^2*NB), prior thread fan-out measured ~0 gain.
+    3. final upper-triangle zeroing / input copy: O(n^2), handled by the flat-workspace keep.
+- Lever tried then removed: add a 4-row x 16-column two-panel inner loop before the existing 4x8 loop in
+  `cholesky_syrk_flat_rows`. For each `p`, it loaded two packed 8-column panels and reused the four broadcast lhs
+  scalars across eight SIMD accumulators. The per-lane `p` accumulation order remained monotonic, so this was intended
+  to be bit-identical to two adjacent 4x8 tiles while cutting lhs scalar reloads.
+- Local release-perf probe was noisy but not sufficient proof:
+  - First candidate after rebuild: n=512 6.14 ms, n=1024 31.21 ms, n=2048 181.64 ms.
+  - No-rebuild repeats recovered to n=512 6.23 / 5.87 ms, n=1024 24.44 / 24.32 ms, n=2048 126.71 / 126.19 ms.
+- Official same-worker A/B on RCH `vmi1152480`, release-perf Criterion `cho_factor_gauntlet_scipy`:
+  - Baseline current flat-workspace code: `500x500_rust_cho_factor` [5.1915, 6.4760, 8.1878] ms;
+    `1000x1000_rust_cho_factor` [44.501, 50.789, 58.577] ms; solve row [46.740, 51.032, 56.294] ms.
+  - Candidate 4x16 micro-kernel: `500x500_rust_cho_factor` [4.8305, 6.6807, 8.7263] ms, p=0.20, no change;
+    `1000x1000_rust_cho_factor` [55.651, 76.565, 108.43] ms, change [+14.501%, +62.049%, +123.54%], p=0.03:
+    performance regressed; `1000x1000_rust_cho_factor_solve` [55.589, 63.125, 74.954] ms, change
+    [+7.0371%, +32.320%, +61.968%], p=0.02: performance regressed.
+  - SciPy rows skipped on this worker because `python3` could not import `scipy.linalg`.
+- Decision: REJECT and remove code. Do not retry 4x16 / two-packed-panel Cholesky SYRK on AVX2-class workers unless a
+  fresh target with a wider register file (for example AVX-512) is explicitly detected and measured separately. The
+  result matches the earlier lesson: widening this kernel past the MR=4 x NR=8 sweet spot increases register pressure
+  enough to erase/reverse the lhs-reuse benefit.
