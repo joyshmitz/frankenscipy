@@ -8125,3 +8125,9 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   (CV 7.026%), CAND 22.193594 ms (CV 12.067%), apparent 1.047933x mean / 1.057669x paired.
 - INVALID measurement: both CVs exceed 5%, so neither keep nor reject. Retry with more factors per paired sample in
   the same binary/worker; this pilot does not move the ratchet.
+
+## 2026-07-10 - cod_fsc - INVALID MR4xNR4 stabilization rerun
+
+- One remote binary, 20x32 alternating samples: candidate-specific self 60.10% (25,643 samples, zero lost).
+- ORIG 40.660139 ms (CV 3.659%); CAND 40.563001 ms (CV 6.976%); apparent 1.002395x mean / 1.006716x paired.
+- INVALID: candidate CV exceeds 5%. Retry with per-factor interleaving inside each paired sample.

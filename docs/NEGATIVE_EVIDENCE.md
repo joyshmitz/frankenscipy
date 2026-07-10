@@ -18944,3 +18944,13 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   ms (CV 7.026%), CAND 22.193594 ms (CV 12.067%), apparent mean 1.047933x / paired 1.057669x.
 - Decision: INVALID measurement, neither keep nor reject, because both CVs exceed 5%. Retry only with more work per
   paired sample in the same binary/worker until both CVs are below 5%; do not use this apparent win for the ratchet.
+
+## 2026-07-10 - cod_fsc (cod) - INVALID MR4xNR4 stabilization rerun (candidate CV 6.976%)
+
+- Strict remote one-binary rerun on `vmi1264463`, 20 alternating samples x 32 factors/sample. Candidate profile:
+  25,643 cycles samples / zero lost; `cholesky_syrk_flat_rows_mr4_nr4` 60.10% self, panel TRSM 22.53%, exact
+  tail 4.34%, blocked generic 3.03%, copy+pack 2.69%. The function under test is definitively live.
+- ORIG mean 40.660139 ms, CV 3.659%, p50 40.559963, p95/p99 42.448593. CAND mean 40.563001 ms, CV 6.976%,
+  p50 39.881862, p95/p99 46.565430. Apparent mean ratio 1.002395x; paired-ratio mean 1.006716x.
+- Decision: INVALID again, because candidate CV exceeds 5%; neither keep nor reject. Retry by timing/interleaving
+  each factor pair inside the sample so scheduler drift cannot land entirely on one 32-factor arm block.
