@@ -7528,6 +7528,13 @@ pub fn maximum(
         .collect())
 }
 
+/// Same-binary A/B toggle for `median`. When `true`, the per-label medians are computed serially
+/// (the ORIG behaviour). When `false` (default), the independent per-label sorts fan across cores.
+/// Byte-identical either way. Benchmark knob.
+#[doc(hidden)]
+pub static NDIMAGE_MEDIAN_LABELS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Median of values in optionally labeled regions.
 ///
 /// Matches `scipy.ndimage.median`; scalar SciPy results are returned as a
@@ -7537,10 +7544,34 @@ pub fn median(
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<Vec<f64>, NdimageError> {
-    Ok(measurement_label_groups(input, labels, index)?
-        .iter()
-        .map(|values| median_of_values(values))
-        .collect())
+    let groups = measurement_label_groups(input, labels, index)?;
+
+    // Each label's median is an INDEPENDENT sort of its own values, written to its own output slot,
+    // so distributing the groups across cores is BYTE-IDENTICAL to the serial map (median_of_values
+    // is deterministic; only the owning core changes). scipy.ndimage.median is single-threaded.
+    let total: usize = groups.iter().map(Vec::len).sum();
+    let nthreads = if NDIMAGE_MEDIAN_LABELS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || groups.len() < 2
+    {
+        1
+    } else {
+        ndimage_filter_thread_count(total, 8).min(groups.len())
+    };
+    if nthreads <= 1 {
+        return Ok(groups.iter().map(|values| median_of_values(values)).collect());
+    }
+    let mut out = vec![0.0f64; groups.len()];
+    let chunk = groups.len().div_ceil(nthreads);
+    std::thread::scope(|scope| {
+        for (gchunk, ochunk) in groups.chunks(chunk).zip(out.chunks_mut(chunk)) {
+            scope.spawn(move || {
+                for (values, slot) in gchunk.iter().zip(ochunk.iter_mut()) {
+                    *slot = median_of_values(values);
+                }
+            });
+        }
+    });
+    Ok(out)
 }
 
 /// Apply a reducer to optionally labeled regions.
@@ -15594,6 +15625,39 @@ mod tests {
             0.0, 0.0, 0.0,
         ], vec![3, 3]).unwrap();
         assert!(label_with_structure(&input, &nonsymmetric).is_err());
+    }
+
+    #[test]
+    fn median_labels_parallel_matches_serial_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The parallel per-label median must be BYTE-IDENTICAL to the serial map, across label
+        // counts and group sizes, including even/odd group sizes and adversarial values.
+        for (npix, nlabels) in [(50usize, 3usize), (4000, 7), (60000, 12), (60000, 1)] {
+            let mut data: Vec<f64> = (0..npix)
+                .map(|k| ((k as f64 * 0.53).sin() * 9.0 - 1.1) + (k % 11) as f64)
+                .collect();
+            if npix > 40 {
+                data[3] = f64::NAN;
+                data[7] = -0.0;
+                data[8] = 0.0;
+                data[20] = f64::NEG_INFINITY;
+                data[21] = f64::INFINITY;
+            }
+            let labels_vec: Vec<f64> = (0..npix).map(|k| (k % nlabels + 1) as f64).collect();
+            let input = NdArray::new(data, vec![npix]).unwrap();
+            let labels = NdArray::new(labels_vec, vec![npix]).unwrap();
+            let index: Vec<usize> = (1..=nlabels).collect();
+
+            NDIMAGE_MEDIAN_LABELS_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let ser = median(&input, Some(&labels), Some(&index)).unwrap();
+            NDIMAGE_MEDIAN_LABELS_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let par = median(&input, Some(&labels), Some(&index)).unwrap();
+            assert_eq!(ser.len(), par.len());
+            for (i, (a, b)) in ser.iter().zip(&par).enumerate() {
+                assert_eq!(a.to_bits(), b.to_bits(), "npix={npix} nlabels={nlabels} label {i}");
+            }
+        }
+        NDIMAGE_MEDIAN_LABELS_FORCE_SERIAL.store(false, Ordering::Relaxed);
     }
 
     #[test]

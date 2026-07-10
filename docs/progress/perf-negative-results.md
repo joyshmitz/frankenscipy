@@ -9160,3 +9160,23 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   compile under +Sync). Each pixel's neighborhood gather + reducer is independent, writes its own slot;
   chunk partition is the only change. gate ndimage_filter_thread_count(n, filter_size). API note: the
   `+ Sync` bound tightening matches generic_filter's existing bound. Safe Rust; no external BLAS/LAPACK.
+
+## 2026-07-10 - cc_fsc - WIN ndimage median (labeled) parallel-across-labels (1.69x, byte-identical)
+
+- **WIN; shipped.** `ndimage::median` mapped `median_of_values` (clone + sort + pick middle) over the
+  label groups SERIALLY. The groups are independent (each an isolated sort into its own output slot),
+  so distribute them across cores — bit-identical to the serial map, NO API change (median_of_values
+  is a fixed fn, unlike generic_filter1d's user callback). scipy.ndimage.median is single-threaded.
+- Same-binary A/B (NDIMAGE_MEDIAN_LABELS_FORCE_SERIAL knob, serial/parallel/serial interleaved,
+  black-boxed, 4,000,000 pixels / 64 labels): **DECIDED 1.685x** (126.37->68.47ms), NULL(A/A) 1.013x
+  [0.972,1.168], worker hz2. Bounded by the shared SERIAL O(N) HashMap bucketing
+  (measurement_label_groups) — the per-label sort is ~half the total, so parallelizing it caps ~2x;
+  win grows with group size (sort ∝ g log g vs bucket ∝ N).
+- **Byte-identical: bitmism=0** probe; test `median_labels_parallel_matches_serial_bitexact` (label
+  counts 1/3/7/12, even/odd groups, adversarial NaN/±0.0/±inf, to_bits equality) passes; fsci-ndimage
+  suite 271/0. gate ndimage_filter_thread_count(total,8).min(groups.len()), serial for <2 groups.
+- SWEEP NOTE: verified FFT (transpose path + twiddle cache + radix fusion; cache-blocking a proven
+  NEGATIVE + OliveSnow-reserved), special (3-tier par_map w/ tuned gates, fused _all builders), signal
+  (savgol/resample hoisted, 2-D axis filters parallel), interpolate (hoists done) are all worked;
+  remaining ndimage callback-loop stragglers (labeled_comprehension) are bucketing-capped like this.
+  Safe Rust; no external BLAS/LAPACK/MKL/XLA.
