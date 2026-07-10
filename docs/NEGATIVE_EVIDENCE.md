@@ -19209,3 +19209,38 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - Reopened means the old evidence no longer forbids a fresh, provenance-complete experiment. It is not a win and does
   not authorize cross-owner duplication: cc retains the SYRK-tile lane; cod retains structural packing, panel
   residency, and cache-oblivious blocking. Safe Rust only; no C BLAS/LAPACK/MKL/XLA linkage.
+
+## 2026-07-10 - cod_fsc (cod) - INVALID fused panel-TRSM pack A/B (paired CV 11.564%)
+
+- Ledger grep came first. This does not retry public-`matmul` SYRK, TRSM row fan-out, constant-only NB tuning, or the
+  cc-owned MR4xNR4 tile. SciPy `dpotrf(n=1000)` remains provenance-backed as dgemm-family 43.15% > dtrsm-family
+  20.00% >> direct dsyrk 0.14%.
+- Current post-tile routing profile: worker `vmi1264463`, profile SHA-256
+  `5ff0c71d92b2029721bee622844ceb789ea638f541d4de70809dd197fb818e86`, exact ELF SHA-256
+  `26d737ccecf7e01dc45f2f2d1793f10e9dc5083a36050f56d392b1141ec102f8`, Build ID
+  `209f38a7a7e9598a366f4e6a7b672c3a71cdda68`, 35,627 cycles samples / zero lost. Every self frame >=0.1%:
+  MR4xNR4 SYRK 59.21%, panel TRSM 22.34%, exact tail 4.20%, blocked body 3.17%, copy+pack 2.95%, libc
+  1.12/0.83/0.73/0.61/0.54/0.42/0.36/0.29/0.23/0.20/0.19/0.19/0.19/0.18/0.14/0.12%, and `cfree` 0.10%.
+  The tile is cc-owned; allocator-only reuse is unsupported by the 0.10% frame. The open structural seam is the
+  22.34% MR2 producer followed by a distinct 2.95% panel reread/dual-pack pass.
+- One lever under test: while MR2 TRSM computes each `L21` value, store that exact value directly into the existing
+  row-major and packed-transpose destinations, deleting only the later reread loop. Dot, subtraction, division,
+  increasing `j` order, dependency chain, NB=128, thread partition, and cc's SYRK tile are unchanged.
+- FP proof passed bit-for-bit at n=130/131/270/271 in strict-remote release-perf and across the full n=1000 scored
+  factor. Full-factor digest: `0x72c49d6e97a4d60a`.
+- Candidate integrity is valid: one scored release-perf binary on worker `vmi1152480`, binary SHA-256
+  `e14af7349fc0abf1020de8e0dd7e2a0396106648008df3cd3a5fe10673d25434`, 58,296,800 bytes. Candidate-only
+  profile SHA-256 `cb9be7581487bca07e6b985576da7198a253004f82832381435328a439363dc8`, 1,933,300 bytes, 12,942 samples /
+  zero lost. The function under test, `cholesky_panel_trsm_rows2_and_pack`, has **23.05% self-time**. Every profile
+  frame >=0.1%: MR4xNR4 SYRK 56.31%, fused producer 23.05%, candidate driver 5.87%, exact tail 2.76%, unresolved
+  0.79%, thread scope 0.72%, unresolved/libc 0.62/0.57%, `pthread_create` 0.50%, unresolved 0.49/0.41/0.34/0.32/
+  0.30/0.30/0.28/0.26/0.19%, `cfree` 0.19%, `pthread_mutex_lock` 0.19%, `malloc` 0.18%, unresolved 0.18%,
+  thread-new 0.14/0.12%, unresolved/drop/path 0.12/0.11/0.10/0.10%.
+- Honest substrate: one binary / one RCH invocation, 20 samples x 64 individually timed and alternating factor pairs;
+  every input and whole returned factor was black-boxed. ORIG mean 71.775275 ms, raw CV 17.733%, p50 69.373385,
+  p95/p99 88.309109. CAND mean 70.949598 ms, raw CV 18.163%, p50 71.495155, p95/p99 89.356108. Apparent mean
+  ratio 1.011638x; paired-ratio mean 1.019996x; **paired `cv_pct=11.564%`**.
+- Decision: **INVALID measurement**, neither WIN nor REJECT, because paired CV exceeds 5%. The benchmark intentionally
+  failed closed at the CV assertion; RCH itself remained strict-remote. Retry condition: a new one-binary interleaved
+  run on a stable remote reservation, or more paired work per sample, until paired CV is below 5%. No performance
+  conclusion is allowed from the apparent 1-2% signal.

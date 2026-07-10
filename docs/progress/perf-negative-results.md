@@ -8450,3 +8450,23 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   20.00% >> direct dsyrk 0.14%**.
 - These invalidations reopen evidence, not ownership. cc owns the SYRK tile; cod owns structural packing/panel
   residency/cache-oblivious blocking. Safe Rust only; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cod_fsc - INVALID fused panel-TRSM pack A/B (paired CV 11.564%)
+
+- Profile route: exact post-tile profile/ELF SHA-256 `5ff0c71d...` / `26d737cc...`, worker `vmi1264463`, 35,627
+  samples / zero lost. All >=0.1% self: tile 59.21%, panel TRSM 22.34%, exact tail 4.20%, blocked body 3.17%,
+  copy+pack 2.95%, libc 1.12/0.83/0.73/0.61/0.54/0.42/0.36/0.29/0.23/0.20/0.19/0.19/0.19/0.18/0.14/0.12%,
+  `cfree` 0.10%. Skipped the cc-owned tile; targeted the MR2 producer -> separate dual-pack boundary.
+- Lever: write each exact MR2 TRSM result directly to lower, row-major L21, and packed L21T; remove only the later
+  reread. FP bits passed n=130/131/270/271/1000; digest `0x72c49d6e97a4d60a`.
+- Integrity: strict-remote one-binary worker `vmi1152480`; binary SHA-256
+  `e14af7349fc0abf1020de8e0dd7e2a0396106648008df3cd3a5fe10673d25434` (58,296,800 bytes); perf SHA-256
+  `cb9be7581487bca07e6b985576da7198a253004f82832381435328a439363dc8` (1,933,300 bytes), 12,942 samples / zero
+  lost; candidate-specific fused producer **23.05% self**. Remaining >=0.1%: tile 56.31%, driver 5.87%, tail 2.76%,
+  unresolved 0.79%, scope 0.72%, then 0.62/0.57/0.50/0.49/0.41/0.34/0.32/0.30/0.30/0.28/0.26/0.19/0.19/
+  0.19/0.18/0.18/0.14/0.12/0.12/0.11/0.10/0.10%.
+- One invocation, 20x64 individually alternating pairs, black-boxed inputs/results: ORIG 71.775275 ms (CV 17.733%,
+  p50 69.373385, p95/p99 88.309109); CAND 70.949598 ms (CV 18.163%, p50 71.495155, p95/p99 89.356108).
+  Apparent mean 1.011638x / paired 1.019996x, but paired `cv_pct=11.564%`.
+- **INVALID**, neither win nor reject. Retry on a stable strict-remote reservation or with more work per paired sample
+  until paired CV <5%; the current apparent signal cannot move the ratchet.
