@@ -6,6 +6,40 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - RETRACTION: the "~8x at n=1000" cholesky gap is CORRECT. My "it's really 3.33x" was a THREAD-PARITY error. New mandatory rule.
+
+- **I was wrong in `c36cadef6`.** I told the fleet the wall was "~2.1-3.3x, not 8x" and that a lever sized
+  against 8x was "sized against a phantom." That claim was itself the phantom. The banked "fair local factor
+  gap ≈ 3.33x" compares **PARALLEL fsci against SINGLE-THREADED SciPy**, and the entry never said so. I took
+  the ratio at face value without checking the thread count of the two arms.
+- MEASURED today on the SAME host the banked fsci numbers came from (`thinkstation1`), A/A null control first
+  (artifact `tests/artifacts/perf/2026-07-10-scipy-cholesky-thread-parity/measure_scipy_cholesky.py`,
+  `sha256 = 1e42afe0ee1691839924f96ef1ceab957716fddc73b3b78bbac697d1da5870ec`; scipy 1.17.1, numpy 2.4.3):
+
+  | arm (n=1000) | mean | **NULL A/A** | GFLOP/s |
+  | --- | ---: | --- | ---: |
+  | SciPy, DEFAULT threading | **4.319 ms** | **1.000x (cv 2.7%)** | 77.2 |
+  | SciPy, `OMP_NUM_THREADS=1` | 8.539 ms | 1.018x (cv 7.1%) → NOISE | 39.0 |
+
+  `check_finite`/`overwrite_a` move it only 5-8%; **thread count moves it 2.0x**. Against banked fsci
+  31.945 ms: **7.40x default-vs-default** (the "~8x" is right), 3.74x vs a single SciPy core (what the
+  banked 3.33x really was).
+- **THREAD-PARITY RULE (now mandatory):** every fsci-vs-SciPy ratio must record the thread count of BOTH
+  arms, report the default-vs-default ratio, and give GFLOP/s per arm so kernel efficiency is visible
+  independently of core count. A ratio without thread counts on both sides is not a ratio.
+- **The number that matters for the wall:** fsci's PARALLEL factor does **10.4 GFLOP/s**; SciPy does
+  **39.0 GFLOP/s on ONE core**. fsci is ~3.7x behind SciPy's per-core kernel efficiency before threading is
+  considered. **The wall is a kernel-efficiency problem, not a threading problem** — consistent with the
+  dominance table (SciPy's `dpotrf` funnels the trailing update into a register-blocked, threaded `dgemm`).
+- DOMINANCE (unchanged, provenance-backed): `dgemm` **43.15%**, `dtrsm` **20.00%**, direct `dsyrk` **0.14%**.
+  fsci: bespoke SYRK ~40-50%, panel TRSM ~35%, copy/pack/zero ~21%. No SYRK-only lever closes it.
+- HANDED TO COD (I touched no kernel): target 10.4 → 39 GFLOP/s per-core-equivalent via a register-blocked
+  micro-kernel in portable `std::simd`, never C BLAS. The principle that just won in ndimage transfers:
+  **vectorise onto native register widths, never by padding** (`f64x4`+`f64x2` beat a padded `f64x8` by
+  26-30 points). Plus: 21% pure data movement (copy/pack/zero), and the untested `256 <= n < 1000` band.
+- Constraint: Python-only measurement (SciPy exists locally, not on rch workers) — no cargo, no compilation,
+  ~0 disk. No local build, no maturin, no `perf record`, nothing stashed or deleted.
+
 ## 2026-07-10 - BlackThrush (cc) - KEEP (bit-identical): 6-tap B-spline run as `f64x4` + `f64x2` remainder — order4 **1.36x**, order5 **1.24x**; + A/A NULL-CONTROL harness (franken_whisper); + one run DISCARDED by it
 
 - **HARNESS FIRST (franken_whisper rule adopted).** Inert-path controls prove a knob *cannot act*; they do
@@ -96,11 +130,11 @@ ledger above so the project has one source of truth.
   through GEMM micro-kernels, and its `dsyrk` is itself GEMM-backed. fsci spends ~40-50% in a bespoke
   SYRK, ~35% in panel TRSM, ~21% in copy/pack/upper-zero. SYRK and TRSM are within ~5 points, so a
   SYRK-only lever cannot close the gap.
-- **"~8x slower at n=1000" is STALE by ~2.5-3x.** Banked, same-worker: Rust `cho_factor` n=1000
-  [29.587, 31.945, 35.450] ms vs SciPy [7.7806, 9.5931, 11.706] ms = **3.33x**. My own clean interleaved
-  best-of-9 at n=1024 reads **25.9 ms vs 9.7 ms = ~2.7x** (and n=2048 160 vs 77 ms = 2.1x). The "8-15x"
-  number comes from the original June filing and from single-shot timings that drift ±25% under load. Any
-  lever sized against an 8x gap is being sized against a phantom.
+- ~~**"~8x slower at n=1000" is STALE by ~2.5-3x."**~~ **RETRACTED 2026-07-10 — I WAS WRONG; the ~8x is
+  CORRECT.** The banked "fair 3.33x" compared PARALLEL fsci against SINGLE-THREADED SciPy. Measured today
+  on the same host `thinkstation1` with an A/A null control: SciPy `cho_factor` n=1000 is **4.319 ms mean
+  (NULL 1.000x, cv 2.7%)** with default threading and **8.539 ms** pinned to 1 thread. Against banked fsci
+  31.945 ms that is **7.40x** default-vs-default. See the THREAD-PARITY entry at the top of this file.
 - **SCOPE / COORDINATION — I am NOT re-attacking the syrk kernel.** cod owns the dense-BLAS wall
   structurally and is actively on it: **cod** (not I) fitted the syrk tile to the XMM register budget in
   `770c4d490`, and cod authored the provenance audit that reopened these rows. I touched no

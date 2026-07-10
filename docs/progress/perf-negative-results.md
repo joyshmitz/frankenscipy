@@ -4,6 +4,90 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+**THREAD-PARITY RULE (mandatory, adopted 2026-07-10 after it invalidated one of my own claims).** Any
+fsci-vs-SciPy ratio MUST record the THREAD COUNT OF BOTH ARMS. SciPy's LAPACK is multi-threaded by
+default; a benchmark harness that pins it (or that inherits `OMP_NUM_THREADS=1`) silently compares a
+PARALLEL fsci against a SINGLE-CORE SciPy and understates the gap by ~2x. Report the default-vs-default
+ratio (what a user experiences) AND, separately, GFLOP/s per arm so kernel efficiency is visible
+independently of core count. A ratio without thread counts on both sides is not a ratio.
+
+## 2026-07-10 - frankenscipy-cc-cholesky-thread-parity - RETRACTION: the "~8x at n=1000" is CORRECT; my "3.33x, the 8x is stale" claim was a thread-parity error
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`). Measurement + docs only. **No `crates/fsci-linalg/`
+  code touched — cod owns that wall structurally and fitted the syrk XMM tile in `770c4d490`.**
+
+### I was wrong, and here is the measurement that shows it
+
+In `c36cadef6` I asserted the cholesky wall was "~2.1-3.3x, not 8x" and told the fleet it was "sizing a
+lever against a phantom." That was itself the phantom. The banked "fair local factor gap ≈ 3.33x" compared
+**PARALLEL fsci against SINGLE-THREADED SciPy**, and the entry never said so. I took the ratio at face
+value without checking thread parity of the two arms.
+
+Re-measured today on the SAME host the banked fsci Criterion numbers came from (`thinkstation1`), with an
+A/A null control run before the comparison:
+
+- artifact: `tests/artifacts/perf/2026-07-10-scipy-cholesky-thread-parity/measure_scipy_cholesky.py`
+  `sha256 = 1e42afe0ee1691839924f96ef1ceab957716fddc73b3b78bbac697d1da5870ec`
+- host `thinkstation1`, 64 cores, python 3.13.7 / scipy 1.17.1 / numpy 2.4.3
+- `scipy.linalg.cho_factor(lower=True, check_finite=False, overwrite_a=True)`
+
+  | arm | n | mean | best | cv_pct | **NULL A/A** | GFLOP/s |
+  | --- | ---: | ---: | ---: | ---: | --- | ---: |
+  | SciPy, DEFAULT threading | 1000 | **4.319 ms** | 4.119 | 3.4 | **1.000x (cv 2.7%)** | 77.2 |
+  | SciPy, `OMP_NUM_THREADS=1` | 1000 | 8.539 ms | 8.000 | 4.6 | 1.018x (cv 7.1%) → NOISE | 39.0 |
+  | SciPy, DEFAULT threading | 2048 | 65.960 ms | 57.447 | 21.8 | 0.994x (cv 0.6%) | 43.4 |
+  | SciPy, `OMP_NUM_THREADS=1` | 2048 | 101.213 ms | 95.316 | 4.4 | 0.998x (cv 4.2%) | 28.3 |
+
+  `check_finite` and `overwrite_a` together move the number by only 5-8% — they are NOT the explanation.
+  Thread count is: 4.3 ms vs 8.5 ms, a clean 2.0x.
+
+- Against the banked same-box fsci `cho_factor` n=1000 mean **31.945 ms**:
+
+  | comparison | ratio | what it means |
+  | --- | ---: | --- |
+  | fsci (parallel) vs SciPy (default, all cores) | **7.40x** | what a user actually experiences — the "~8x" is right |
+  | fsci (parallel) vs SciPy (1 core) | 3.74x | what the banked "3.33x" was really measuring |
+
+- **The most useful number for the wall:** fsci's PARALLEL factor achieves **10.4 GFLOP/s**; SciPy achieves
+  **39.0 GFLOP/s ON A SINGLE CORE**. So fsci is ~3.7x behind SciPy's *per-core kernel efficiency* before
+  threading is even considered. **The wall is a kernel-efficiency problem, not a threading problem** — which
+  is consistent with the dominance table: SciPy's `dpotrf` funnels its trailing update into a
+  register-blocked, multi-threaded `dgemm`.
+
+### Dominance (asked again; unchanged, provenance-backed)
+
+`dgemm`-family **43.15%**, `dtrsm`-family **20.00%**, direct `dsyrk` **0.14%** in SciPy's `dpotrf`
+(cod's profile, SHA `b1c40ea6…`, host `thinkstation1`). fsci: bespoke SYRK ~40-50% self, panel TRSM ~35%,
+copy/pack/upper-zero ~21%. SYRK and TRSM are within ~5 points ⇒ no SYRK-only lever closes the gap.
+
+### Handed to cod (I did not touch the kernel)
+
+1. The target is **10.4 → 39 GFLOP/s per-core-equivalent**, i.e. a register-blocked micro-kernel, portable
+   `std::simd` only, never C BLAS/LAPACK/MKL. The principle that just won in ndimage applies directly:
+   **vectorise onto native register widths, never by padding** (`f64x4` + `f64x2` beat a padded `f64x8` by
+   26-30 points there).
+2. `copy + pack + upper-zero = 21.0%` is pure data movement, orthogonal to both SYRK and TRSM.
+3. The `256 <= n < 1000` band was never evaluated pre-`176bccc67` (the gate excluded it); blocked now beats
+   unblocked 1.23-1.59x there.
+4. Any re-attack must carry, per row: candidate `binary_sha256`, **candidate-specific** self-time, `worker`,
+   `cv_pct`, **`null_ratio` from a paired(base,base) A/A run**, and **thread counts for both arms**.
+
+### Guards / constraints
+
+No cargo, no compilation, ~0 disk for this measurement (Python only — SciPy exists locally, not on the rch
+workers). No local cargo build/bench/test, no maturin, no new target tree or worktree, no `perf record`,
+nothing stashed, nothing deleted. The fsci half is the banked same-box Criterion row; re-measuring it needs a
+remote build and cannot be paired in-process with a local SciPy — that limitation is itself worth fixing.
+
+### Still-open items in my lane (verified a fifth time, mechanically)
+
+The ndimage geometric-transform separable precompute is LIVE at three call sites
+(`build_axis_offset_supports`: zoom / shift / diagonal-affine). `rotate` computes
+`ny = cy + cos·dy − sin·dx`, so `ny` depends on BOTH output indices ⇒ rotate / general affine /
+`map_coordinates` are provably non-separable and there is nothing further to land. All seven `*_many`
+wrappers (`itj0y0`, `iti0k0`, `expn`, `shichi`, `fresnel`, `sici`, `poch`) exist in HEAD in
+`crates/fsci-special/src/convenience.rs` on `par_map_indices`. Both items are closed.
+
 **A/A NULL-CONTROL RULE (mandatory, adopted 2026-07-10 from franken_whisper, which rejected an SDPA BR
 tile sweep whose A/A self-comparison measured 1.1163x at cv 29.0% — i.e. the "effects" were all floor).**
 An inert-path control proves a knob *cannot act*; it does NOT measure the harness's noise floor. Before
@@ -146,7 +230,13 @@ disqualifies the row under the cv gate, independent of the missing SHA-256 and p
 through GEMM micro-kernels (its `dsyrk` is GEMM-backed). fsci's SYRK and TRSM are within ~5 points of each
 other, so no SYRK-only lever closes the gap.
 
-### The "~8x slower at n=1000" target figure is STALE
+### ~~The "~8x slower at n=1000" target figure is STALE~~ — **RETRACTED 2026-07-10: the ~8x is CORRECT**
+
+> **RETRACTED.** This section compared PARALLEL fsci against SINGLE-THREADED SciPy without saying so.
+> Re-measured on the same host with an A/A null control: SciPy n=1000 = **4.319 ms** (default threading,
+> NULL 1.000x cv 2.7%) vs **8.539 ms** (1 thread). Default-vs-default gap vs banked fsci 31.945 ms is
+> **7.40x**, not 3.33x. The rows below are a fsci-parallel vs scipy-1-thread comparison and are labelled
+> as such. See the THREAD-PARITY entry at the top of this file.
 
 | source | fsci | SciPy | ratio |
 | --- | ---: | ---: | ---: |
