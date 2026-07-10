@@ -9123,3 +9123,21 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   fsci-signal suite 673/0. resample_poly_apply reproduces resample_poly's post-firwin block verbatim
   (same pad/gcd-simplified rate/tap order/indices); the single-signal resample_poly path is untouched.
   Safe Rust; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN ndimage fourier filter family parallel per-element fill (1.16-2.05x, byte-identical)
+
+- **WIN; shipped.** All four Fourier-domain filters (fourier_gaussian/uniform/shift/ellipsoid) ran a
+  fully SERIAL `for (idx, val) in output.iter_mut().enumerate()` loop; each element's filter value is a
+  pure function of its flat index (odometer recomputed per element, no carry). Added a shared
+  `fourier_fill_parallel(output, |idx, val| ...)` driver that fans the disjoint output chunks across
+  cores; converted all four loop bodies to the closure form. scipy's fourier_* are single-threaded.
+- Same-binary A/B (NDIMAGE_FOURIER_FORCE_SERIAL knob, serial/parallel/serial interleaved, black-boxed,
+  2048x2048): **ellipsoid DECIDED 2.049x** (150.53->65.62ms), **shift DECIDED 1.646x**
+  (107.60->63.71ms) — COMPUTE-bound (non-separable per-element sqrt+sin/cos / sin_cos(phase));
+  **gaussian 1.161x**, uniform similar — MEMORY-bound (the separable factor tables already removed the
+  per-element transcendental, so the loop is table-lookup + complex-mult streaming). worker hz2/hz1.
+- **Byte-identical: bitmism=0** all probes; test `fourier_filters_parallel_match_serial_bitexact`
+  (all 4 filters, ndim 1/2/3, above & below the gate, re+im to_bits equality) passes; fsci-ndimage
+  suite 269/0. Each output element depends only on its flat index; the chunk partition is the only
+  change. Gate `ndimage_filter_thread_count(total, 8)` (>= 32K elems). Safe Rust; no external
+  BLAS/LAPACK/MKL/XLA.

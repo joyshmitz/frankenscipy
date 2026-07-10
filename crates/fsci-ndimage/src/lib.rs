@@ -11135,6 +11135,48 @@ use std::f64::consts::PI;
 pub static NDIMAGE_FOURIER_SEPARABLE_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Same-binary A/B toggle: when `true`, the Fourier-domain filters fill their output serially (the
+/// ORIG behaviour). When `false` (default), the independent per-element fill fans across cores.
+/// Byte-identical either way. Benchmark knob.
+#[doc(hidden)]
+pub static NDIMAGE_FOURIER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Fill each element of a Fourier-domain filter output independently via `f(flat_index, &mut value)`,
+/// distributing the disjoint output indices across cores. Each element's filter value is a pure
+/// function of its flat index (the odometer is recomputed per element, no carry state), so the
+/// parallel result is BYTE-IDENTICAL to the serial loop — only the owning core changes. Gated on the
+/// element count (the per-element transcendental is the dominant work).
+fn fourier_fill_parallel<G>(output: &mut [Complex64], f: G)
+where
+    G: Fn(usize, &mut Complex64) + Sync,
+{
+    let total = output.len();
+    let nthreads = if NDIMAGE_FOURIER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        1
+    } else {
+        ndimage_filter_thread_count(total, 8)
+    };
+    if nthreads <= 1 {
+        for (idx, val) in output.iter_mut().enumerate() {
+            f(idx, val);
+        }
+        return;
+    }
+    let chunk = total.div_ceil(nthreads);
+    let f = &f;
+    std::thread::scope(|scope| {
+        for (t, out_chunk) in output.chunks_mut(chunk).enumerate() {
+            let base = t * chunk;
+            scope.spawn(move || {
+                for (local, val) in out_chunk.iter_mut().enumerate() {
+                    f(base + local, val);
+                }
+            });
+        }
+    });
+}
+
 /// Apply a Gaussian filter in the Fourier domain.
 ///
 /// Matches `scipy.ndimage.fourier_gaussian`. The input is assumed to be
@@ -11185,7 +11227,7 @@ pub fn fourier_gaussian(input: &[Complex64], shape: &[usize], sigma: &[f64]) -> 
             .collect()
     };
 
-    for (idx, val) in output.iter_mut().enumerate() {
+    fourier_fill_parallel(&mut output, |idx, val| {
         let mut filter_val = 1.0;
         let mut remaining = idx;
 
@@ -11207,7 +11249,7 @@ pub fn fourier_gaussian(input: &[Complex64], shape: &[usize], sigma: &[f64]) -> 
         }
 
         *val = (val.0 * filter_val, val.1 * filter_val);
-    }
+    });
 
     output
 }
@@ -11263,7 +11305,7 @@ pub fn fourier_uniform(input: &[Complex64], shape: &[usize], size: &[f64]) -> Ve
             .collect()
     };
 
-    for (idx, val) in output.iter_mut().enumerate() {
+    fourier_fill_parallel(&mut output, |idx, val| {
         let mut filter_val = 1.0;
         let mut remaining = idx;
 
@@ -11289,7 +11331,7 @@ pub fn fourier_uniform(input: &[Complex64], shape: &[usize], size: &[f64]) -> Ve
         }
 
         *val = (val.0 * filter_val, val.1 * filter_val);
-    }
+    });
 
     output
 }
@@ -11341,7 +11383,7 @@ pub fn fourier_shift(input: &[Complex64], shape: &[usize], shift: &[f64]) -> Vec
             .collect()
     };
 
-    for (idx, val) in output.iter_mut().enumerate() {
+    fourier_fill_parallel(&mut output, |idx, val| {
         let mut phase = 0.0;
         let mut remaining = idx;
 
@@ -11363,7 +11405,7 @@ pub fn fourier_shift(input: &[Complex64], shape: &[usize], shift: &[f64]) -> Vec
 
         let (sin_p, cos_p) = phase.sin_cos();
         *val = (val.0 * cos_p - val.1 * sin_p, val.0 * sin_p + val.1 * cos_p);
-    }
+    });
 
     output
 }
@@ -11416,7 +11458,7 @@ pub fn fourier_ellipsoid(input: &[Complex64], shape: &[usize], size: &[f64]) -> 
             .collect()
     };
 
-    for (idx, val) in output.iter_mut().enumerate() {
+    fourier_fill_parallel(&mut output, |idx, val| {
         let mut sum_sq = 0.0;
         let mut remaining = idx;
 
@@ -11451,7 +11493,7 @@ pub fn fourier_ellipsoid(input: &[Complex64], shape: &[usize], size: &[f64]) -> 
         };
 
         *val = (val.0 * filter_val, val.1 * filter_val);
-    }
+    });
 
     output
 }
@@ -19420,6 +19462,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fourier_filters_parallel_match_serial_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The parallel per-element fill must be BYTE-IDENTICAL to the serial loop for every
+        // Fourier-domain filter, across ndim and shapes above and below the parallel gate.
+        let shapes: &[Vec<usize>] = &[
+            vec![37],
+            vec![9, 11],
+            vec![600, 600], // > gate -> exercises the parallel path
+            vec![7, 8, 9],
+            vec![40, 30, 24],
+        ];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let input: Vec<Complex64> = (0..total)
+                .map(|k| ((k as f64 * 0.13).sin() * 3.0 - 0.4, (k as f64 * 0.07).cos() * 2.0))
+                .collect();
+            let param: Vec<f64> = shape
+                .iter()
+                .enumerate()
+                .map(|(d, _)| 1.5 + 0.7 * d as f64)
+                .collect();
+            let runs: &[(&str, fn(&[Complex64], &[usize], &[f64]) -> Vec<Complex64>)] = &[
+                ("gaussian", fourier_gaussian),
+                ("uniform", fourier_uniform),
+                ("shift", fourier_shift),
+                ("ellipsoid", fourier_ellipsoid),
+            ];
+            for (name, filt) in runs {
+                NDIMAGE_FOURIER_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                let serial = filt(&input, shape, &param);
+                NDIMAGE_FOURIER_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                let parallel = filt(&input, shape, &param);
+                assert_eq!(serial.len(), parallel.len());
+                for (i, (a, b)) in serial.iter().zip(&parallel).enumerate() {
+                    assert_eq!(a.0.to_bits(), b.0.to_bits(), "{name} shape={shape:?} re idx={i}");
+                    assert_eq!(a.1.to_bits(), b.1.to_bits(), "{name} shape={shape:?} im idx={i}");
+                }
+            }
+        }
+        NDIMAGE_FOURIER_FORCE_SERIAL.store(false, Ordering::Relaxed);
     }
 
     #[test]
