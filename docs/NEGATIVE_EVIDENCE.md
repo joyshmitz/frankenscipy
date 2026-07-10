@@ -6,6 +6,51 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - CERTIFY the lane-parallel `cardinal_bspline` KEEP (binary sha256 + worker + self-time + cv) and CORRECT a silently-ignored sample-count claim
+
+- **COORDINATION:** cod owns the dense-BLAS cholesky wall and already landed `770c4d490 perf(linalg):
+  fit cholesky syrk tile to XMM budget`. That tile IS the primitive the n=1000 attribution pointed at
+  (packed SYRK 40.00% self / `cholesky_syrk_flat_rows` 49.77%) — chosen by the profile, not guessed.
+  I did NOT touch `crates/fsci-linalg/` this turn; no collision.
+- ROW METADATA RULE ADOPTED (frankenredis: 67 of 70 reject rows had no sha256 ⇒ unreproducible).
+  Every WIN/REJECT must now carry `binary_sha256` (computed IN-PROCESS on the producing machine),
+  `self_time` of the function under test, `worker` identity, and per-arm `cv_pct` + a null control.
+  `perf_perpixel_leaf` now emits all four automatically, using a self-contained SHA-256 that
+  KNOWN-ANSWER-TESTS itself (FIPS 180-4 vectors) before hashing — an unverified certification tool is
+  worse than none, because it makes an unreproducible row *look* reproducible.
+- CERTIFIED RE-RUN of the shipped lever, ONE invocation, arms alternating in-process:
+  `binary_sha256 = 749f858f974ac7f6a27d6e6e75ed76bff551770bc5d31daa92d91cb1bdedbf99`,
+  `worker = hetzner2` (rch `hz2`), `reps = 5`, `iters = 11`,
+  `self_time = 61.39%` (`cardinal_bspline` inlined into `compute_axis_support`; `perf annotate`: all
+  scalar FP, zero `idiv`).
+
+  | order | taps | width | best | cv_pct | verdict |
+  | ---: | ---: | --- | ---: | --- | --- |
+  | 0 | – | – | 1.00x | 1.1 / 3.0 | CONTROL |
+  | 1 | 2 | scalar | 1.00x | 4.2 / 12.9 | CONTROL |
+  | 2 | 4 | f64x4 | **1.32x** | 0.2 / 0.3 | keep |
+  | 3 | 4 | f64x4 | **1.26x** | 1.3 / 0.3 | keep |
+  | 4 | 6 | scalar | 1.00x | 3.2 / 2.1 | x8 gate holds |
+  | 5 | 6 | scalar | 1.00x | 2.8 / 1.4 | x8 gate holds |
+
+  All `Constant` controls 1.00-1.01x; every row `bitmism=0`, `maxdiff=0.0e0`. The order 4/5 rows at
+  1.00x independently confirm the `f64x8` REJECT's `ntaps == 4` gate.
+- **CORRECTION (found by the new header, not by inspection):** `7612f5a22`'s entry records
+  `FSCI_AB_REPS=5 FSCI_AB_ITERS=11`, but **env does not survive `rch exec`** — `.rch.env` pins
+  `RCH_ENV_ALLOWLIST=CARGO_TARGET_DIR,FSCI_REQUIRE_SCIPY_ORACLE` and everything else is dropped, so
+  both runs silently used the defaults `reps=3, iters=7`. The RATIOS stand (this certified run at
+  genuine 5/11 reproduces them with cleaner controls), but the stated sample counts were wrong. Fix:
+  tuning knobs are now CLI ARGS (which propagate) and the probe ECHOES them.
+- RETROFIT of my own rejects (honest, nothing invented): `bac0359e5` (fold interior, 1.01-1.05x) and
+  the `f64x8` width reject both recorded self-time (61.39% frame; and `0.000%` `idiv`, which is *why*
+  the fold lever failed) and cv_pct, but NOT worker or binary_sha256 — those predate the rule. Both
+  verdicts remain SOUND and neither is a dead-code measurement. `6c53716ff`'s FP-derived-bound reject
+  was a BIT-IDENTITY failure (46 mismatches / 1870 adversarial `cc`), not a timing A/B, so the rule
+  does not apply. Reproduce recipe is recorded in the canonical ledger.
+- Constraint: every build/bench via `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo
+  ...`; no local build, no maturin, no new target tree/worktree, no `perf record`, nothing stashed or
+  deleted. fsci-ndimage unchanged this turn (265/0 at `7612f5a22`).
+
 ## 2026-07-10 - BlackThrush (cc) - KEEP: ndimage lane-parallel `cardinal_bspline` tap run (order2 1.24-1.31x, order3 1.28-1.33x, BIT-IDENTICAL) + REJECT of the 6-tap f64x8 width (order5 0.98x)
 
 - SELF-TIME OF CODE UNDER TEST (mandatory): `cardinal_bspline` is INLINED into

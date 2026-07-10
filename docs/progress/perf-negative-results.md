@@ -12,6 +12,86 @@ because the shell exports `CARGO_TARGET_DIR=/data/tmp/cargo-target` globally, wh
 artifact retrieval return ~0 bytes. If rch then errors, that is a BLOCKER: wait and retry, or do
 analysis-only work. NEVER fall back to a local build. Never run `maturin build`.
 
+**ENV DOES NOT SURVIVE `rch exec` (measured 2026-07-10).** `.rch.env` sets
+`RCH_ENV_ALLOWLIST=CARGO_TARGET_DIR,FSCI_REQUIRE_SCIPY_ORACLE`; ANY other env var is dropped before
+it reaches the worker and the run silently uses the probe's defaults. Pass tuning knobs (sample
+counts, sizes) as COMMAND ARGS, and have the probe ECHO them, so a silently-ignored setting is
+visible in the output. A row whose stated `reps`/`iters` were never applied is not what it claims.
+
+**REJECT/WIN ROW METADATA (mandatory, adopted 2026-07-10 from frankenredis, which found 67 of its 70
+reject rows carried no sha256 and were unreproducible).** Every WIN and REJECT row must record:
+1. `binary_sha256` of the benchmarked binary, computed IN-PROCESS on the machine that produced the
+   numbers (`rch` assigns workers non-deterministically, so a hash computed anywhere else is a
+   different binary);
+2. `self_time` of the function under test on that benchmark — profile-verify BEFORE trusting or
+   writing the row; a reject measured where the code never runs is INVALID and must be reopened;
+3. `worker` identity (hostname AND rch label — they differ: `hetzner2` = `hz2`,
+   `fixmydocuments` = `ovh-a`);
+4. `cv_pct` per arm, plus a NULL-CONTROL row that provably cannot move.
+`crates/fsci-ndimage/src/bin/perf_perpixel_leaf.rs` implements this: a self-tested (FIPS 180-4
+known-answer vectors) in-process SHA-256 over its own `current_exe()`, plus `worker`, `reps` and
+`iters` in a header line. Copy that pattern into any new probe.
+
+## 2026-07-10 - frankenscipy-cc-bspline-simd-certification - CERTIFY the lane-parallel `cardinal_bspline` KEEP (7612f5a22) + CORRECT a silently-ignored sample-count claim
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`). No kernel code changed; probe + ledger only.
+  **COORDINATION: cod owns the dense-BLAS cholesky wall and landed `770c4d490 perf(linalg): fit
+  cholesky syrk tile to XMM budget` at 10:20. I did NOT touch `crates/fsci-linalg/` this turn.**
+  The XMM-budget tile is exactly the primitive the n=1000 attribution pointed at (packed SYRK 40.00%
+  self / `cholesky_syrk_flat_rows` 49.77%), i.e. chosen by the profile rather than guessed.
+
+- CERTIFIED RE-RUN of the shipped lever (`NDIMAGE_BSPLINE_SIMD_DISABLE`), ONE `rch exec` invocation,
+  both arms in one binary ALTERNATED per iteration, `map_coords_serial` sized under the parallel gate
+  so it runs SERIAL by construction:
+  - `binary_sha256 = 749f858f974ac7f6a27d6e6e75ed76bff551770bc5d31daa92d91cb1bdedbf99`
+  - `worker = hetzner2` (rch label `hz2`), `reps = 5`, `iters = 11`
+  - `self_time` of the function under test: `cardinal_bspline` is inlined into
+    `compute_axis_support` = **61.39% self** (captured `rotate` order=3 / 512² / Reflect profile);
+    `perf annotate` of that symbol is entirely scalar FP, zero `idiv`. Live and hot.
+  - Command:
+    `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo run --profile release-perf -p fsci-ndimage --bin perf_perpixel_leaf simd all 5 11`
+
+  | order | taps | width | orig | cand | best | cv_pct (orig/cand) | verdict |
+  | ---: | ---: | --- | ---: | ---: | ---: | --- | --- |
+  | 0 | – | – | 0.19 ms | 0.19 ms | 1.00x | 1.1 / 3.0 | CONTROL |
+  | 1 | 2 | scalar | 0.53 ms | 0.53 ms | 1.00x | 4.2 / 12.9 | CONTROL |
+  | 2 | 4 | f64x4 | 1.21 ms | 0.92 ms | **1.32x** | 0.2 / 0.3 | keep |
+  | 3 | 4 | f64x4 | 1.60 ms | 1.27 ms | **1.26x** | 1.3 / 0.3 | keep |
+  | 4 | 6 | scalar | 2.83 ms | 2.83 ms | 1.00x | 3.2 / 2.1 | gate holds |
+  | 5 | 6 | scalar | 3.74 ms | 3.74 ms | 1.00x | 2.8 / 1.4 | gate holds |
+
+  Every `Constant`-mode control reads 1.00-1.01x. All rows `bitmism=0`, `maxdiff=0.0e0`. The order
+  4/5 rows at 1.00x independently confirm the `f64x8` REJECT's gate (`ntaps == 4`) does what it says.
+
+- **CORRECTION to `7612f5a22`'s entry.** It records the command as
+  `FSCI_AB_REPS=5 FSCI_AB_ITERS=11 rch exec -- ...`. Those env vars NEVER REACHED THE WORKER (they
+  are not in `RCH_ENV_ALLOWLIST`), so both runs actually used the probe defaults `reps=3, iters=7`.
+  The RATIOS are unaffected — this certified re-run at genuine `reps=5, iters=11` reproduces them
+  (order2 1.32x vs 1.24-1.31x; order3 1.26x vs 1.28-1.33x) with cleaner controls — but the stated
+  sample counts were wrong. The probe now takes `reps`/`iters` as ARGS and echoes them, so this
+  cannot recur silently. Found by the certification header, not by inspection.
+
+- RETROFIT of my own REJECT rows under the new metadata rule (honest status, nothing invented):
+
+  | Reject | self_time recorded? | cv_pct? | worker? | binary_sha256? | status |
+  | --- | --- | --- | --- | --- | --- |
+  | `bac0359e5` fold interior fast path (1.01-1.05x) | YES — `compute_axis_support` 61.39% self, and `perf annotate` shows **0.000%** `idiv`, which is *why* it failed | YES (0.7-2.4%) | NO | NO (pre-rule) | verdict SOUND; re-certify by re-adding the knob and re-running |
+  | `7612f5a22` 6-tap `f64x8` width (order5 0.98x) | YES — same 61.39% frame | YES | NO | NO (pre-rule) | verdict SOUND (its gate is independently confirmed above by the order 4/5 = 1.00x rows) |
+  | `6c53716ff` FP-derived tap bound | N/A — rejected on a BIT-IDENTITY failure (46 mismatches / 1870 adversarial `cc`), not a timing A/B | N/A | N/A | N/A | unaffected by the metadata rule |
+
+  None of these is a dead-code measurement: all sat in the 61.39%-self frame, verified by
+  `perf annotate` on the captured profile. Reproduce recipe for the two timing rejects: re-add the
+  knob, then
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo run --profile release-perf -p fsci-ndimage --bin perf_perpixel_leaf <lever> all 5 11`,
+  which now emits `binary_sha256`, `worker`, `reps`, `iters` and per-arm `cv_pct` automatically.
+
+- Guards: `cargo fmt --check` clean on the touched probe; `ubs` 0 critical; `git diff --check` clean.
+  fsci-ndimage unchanged this turn (265/0 stands at `7612f5a22`). Constraint honored: every build and
+  bench via `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo ...`; no local build, no
+  maturin, no new target tree or worktree, no `perf record`, nothing stashed, nothing deleted.
+- Retry conditions (unchanged): 6-tap as `f64x4` + 2-lane remainder; re-measure `f64x8` on AVX-512
+  only; re-profile `compute_axis_support` now that its 4-tap recursion is vectorised.
+
 ## 2026-07-10 - frankenscipy-cc-bspline-simd-run - KEEP (bit-identical): lane-parallel `cardinal_bspline` tap run, order2 1.24-1.31x / order3 1.28-1.33x; REJECT the 6-tap f64x8 width (order5 0.98x)
 
 - Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`)
