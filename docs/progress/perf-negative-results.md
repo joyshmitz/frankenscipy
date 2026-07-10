@@ -9058,3 +9058,28 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   gate, to_bits equality) passes; fsci-ndimage suite 266/0. `bspline_reflect_axis_inplace` is the same
   byte-identical substitute `prefilter_spline_coefficients` already relies on. Safe Rust; no external
   BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN ndimage van Herk min/max filter parallel-across-slabs (1.14-1.39x, byte-identical)
+
+- **WIN; shipped.** `minmax_along_axis_hgw` (the van Herk / Gil-Werman kernel; the DEFAULT path for
+  the N-D `maximum_filter`/`minimum_filter` via `separable_minmax_filter` -> `minmax_filter_along_axis`
+  since MINMAX_FILTER_HGW=true) ran a fully SERIAL loop over `outer x inner` independent lines. The
+  outer slabs are contiguous & disjoint, so factored the per-slab-group work into a `process(in_chunk,
+  out_chunk)` closure (own ext/g/h scratch) and fanned the outer blocks across cores via
+  `chunks(slab*slabs_per).zip(chunks_mut(...))` — the same pattern uniform_filter1d uses. Gate on pixel
+  count (>=1<<20) since van Herk is O(1)/output element.
+- Same-binary A/B (MINMAX_HGW_FORCE_SERIAL knob, serial/parallel/serial interleaved, black-boxed, N-D
+  maximum_filter entry point): **160^3 size=15 DECIDED 1.142x** (88.0->75.6ms), NULL(A/A) 0.991x
+  [0.965,1.022]; **256^3 size=21 DECIDED 1.393x** (707->503ms), NULL 0.999x [0.942,1.036], worker hz1.
+  Modest — van Herk is compute-light/memory-leaning, and the separable axis-0 pass stays serial
+  (outer=1); win grows with array/window size.
+- **Byte-identical: bitmism=0** both probes; test `minmax_hgw_parallel_matches_serial_bitexact` (N-D
+  max/min filter, sizes 2/3/5/8, 4 modes, adversarial NaN/±0.0/±inf, 1/2/3-D incl. above-gate shapes,
+  to_bits equality) passes; fsci-ndimage suite 267/0. Each line independent (own scratch, disjoint
+  slabs) -> partition is the only change.
+- GOTCHA (recorded): the 1-D public `maximum_filter1d`/`minimum_filter1d` use a DIFFERENT (deque/queue)
+  path (`minmax_filter1d_nanprop_queue`), NOT hgw — an initial probe against maximum_filter1d measured
+  IN-FLOOR parity because the knob wasn't on that path. hgw is only reached via the N-D separable
+  filter. FOLLOW-UP available: van Herk cache-vectorization across the inner dim (analog of
+  bspline_reflect_axis_inplace) would make the strided axes cache-friendly AND parallelize axis-0 —
+  potentially the 2-3x that spline_filter1d's vectorization got. Safe Rust; no external BLAS/LAPACK/MKL/XLA.

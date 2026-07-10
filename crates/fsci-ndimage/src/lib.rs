@@ -3503,7 +3503,14 @@ fn nanprop_min(a: f64, b: f64) -> f64 {
 /// boundary-resolved line: a block prefix `g`, a block suffix `h`, and the combine
 /// `out[i] = op(h[i], g[i+size-1])`. Lines are addressed directly (outer × inner)
 /// rather than scanning every flat index to find the line heads.
-fn minmax_along_axis_hgw<F: Fn(f64, f64) -> f64 + Copy>(
+/// Same-binary A/B toggle for the van Herk / Gil-Werman min/max axis filter. When `true`, the
+/// independent outer slabs are processed serially (the ORIG behaviour). When `false` (default), they
+/// fan across cores. Byte-identical either way. Benchmark knob.
+#[doc(hidden)]
+pub static MINMAX_HGW_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn minmax_along_axis_hgw<F: Fn(f64, f64) -> f64 + Copy + Sync>(
     arr: &NdArray,
     axis: usize,
     size: usize,
@@ -3523,65 +3530,101 @@ fn minmax_along_axis_hgw<F: Fn(f64, f64) -> f64 + Copy>(
     let slab = mid * inner;
 
     let mut out = NdArray::zeros(arr.shape.clone());
-    let mut ext = vec![0.0f64; ext_len];
-    let mut g = vec![0.0f64; ext_len];
-    let mut h = vec![0.0f64; ext_len];
 
-    for o in 0..outer {
-        let outer_base = o * slab;
-        for j in 0..inner {
-            let base = outer_base + j;
-            // Materialize the boundary-resolved line: ext[t] is the input value at
-            // axis-coord (t - lo), so the window for output i is ext[i..i+size]. Only
-            // the ~size-1 edge cells touch the boundary; the `mid`-cell interior is
-            // in-bounds (coord in [0, mid)), where `boundary_index_1d` is the identity
-            // for every mode — read it directly (contiguous memcpy when stride==1),
-            // skipping the per-element boundary match. Byte-identical.
-            let interior_start = lo as usize; // t where coord == 0 (lo >= 0 always)
-            let interior_end = interior_start + mid; // t where coord == mid (exclusive)
-            for t in 0..interior_start {
-                let coord = t as i64 - lo;
-                ext[t] = match boundary_index_1d(coord, n, mode) {
-                    Some(m) => arr.data[base + (m as usize) * stride],
-                    None => cval,
-                };
-            }
-            if stride == 1 {
-                ext[interior_start..interior_end].copy_from_slice(&arr.data[base..base + mid]);
-            } else {
-                for t in interior_start..interior_end {
-                    ext[t] = arr.data[base + (t - interior_start) * stride];
+    // Process one contiguous group of slabs (`in_chunk`/`out_chunk` are slab-aligned blocks of
+    // arr.data / out.data), reusing one ext/g/h scratch set across its lines. Each line (o, j) is
+    // independent — the same boundary-resolved `ext`, the same block prefix/suffix `g`/`h`, and the
+    // same combine — so this is BYTE-IDENTICAL to the serial walk regardless of how the outer slabs
+    // are partitioned across threads.
+    let process = |in_chunk: &[f64], out_chunk: &mut [f64]| {
+        let mut ext = vec![0.0f64; ext_len];
+        let mut g = vec![0.0f64; ext_len];
+        let mut h = vec![0.0f64; ext_len];
+        let n_slabs = in_chunk.len() / slab;
+        for o in 0..n_slabs {
+            let outer_base = o * slab;
+            for j in 0..inner {
+                let base = outer_base + j;
+                // Materialize the boundary-resolved line: ext[t] is the input value at
+                // axis-coord (t - lo), so the window for output i is ext[i..i+size]. Only
+                // the ~size-1 edge cells touch the boundary; the `mid`-cell interior is
+                // in-bounds (coord in [0, mid)), where `boundary_index_1d` is the identity
+                // for every mode — read it directly (contiguous memcpy when stride==1),
+                // skipping the per-element boundary match. Byte-identical.
+                let interior_start = lo as usize; // t where coord == 0 (lo >= 0 always)
+                let interior_end = interior_start + mid; // t where coord == mid (exclusive)
+                for t in 0..interior_start {
+                    let coord = t as i64 - lo;
+                    ext[t] = match boundary_index_1d(coord, n, mode) {
+                        Some(m) => in_chunk[base + (m as usize) * stride],
+                        None => cval,
+                    };
                 }
-            }
-            for t in interior_end..ext_len {
-                let coord = t as i64 - lo;
-                ext[t] = match boundary_index_1d(coord, n, mode) {
-                    Some(m) => arr.data[base + (m as usize) * stride],
-                    None => cval,
-                };
-            }
-            // Block prefix g and block suffix h, blocks of length `size` aligned to 0.
-            // The final block may be short; h resets at its true end (ext_len-1).
-            let mut bstart = 0usize;
-            while bstart < ext_len {
-                let bend = (bstart + size).min(ext_len);
-                g[bstart] = ext[bstart];
-                for t in bstart + 1..bend {
-                    g[t] = op(g[t - 1], ext[t]);
+                if stride == 1 {
+                    ext[interior_start..interior_end]
+                        .copy_from_slice(&in_chunk[base..base + mid]);
+                } else {
+                    for t in interior_start..interior_end {
+                        ext[t] = in_chunk[base + (t - interior_start) * stride];
+                    }
                 }
-                h[bend - 1] = ext[bend - 1];
-                for t in (bstart..bend - 1).rev() {
-                    h[t] = op(h[t + 1], ext[t]);
+                for t in interior_end..ext_len {
+                    let coord = t as i64 - lo;
+                    ext[t] = match boundary_index_1d(coord, n, mode) {
+                        Some(m) => in_chunk[base + (m as usize) * stride],
+                        None => cval,
+                    };
                 }
-                bstart = bend;
-            }
-            // Combine: window [i, i+size-1] splits across at most two blocks, and
-            // h[i] (suffix to its block end) ∪ g[i+size-1] (prefix from its block
-            // start) covers it exactly. Idempotent op handles the single-block case.
-            for i in 0..mid {
-                out.data[base + i * stride] = op(h[i], g[i + size - 1]);
+                // Block prefix g and block suffix h, blocks of length `size` aligned to 0.
+                // The final block may be short; h resets at its true end (ext_len-1).
+                let mut bstart = 0usize;
+                while bstart < ext_len {
+                    let bend = (bstart + size).min(ext_len);
+                    g[bstart] = ext[bstart];
+                    for t in bstart + 1..bend {
+                        g[t] = op(g[t - 1], ext[t]);
+                    }
+                    h[bend - 1] = ext[bend - 1];
+                    for t in (bstart..bend - 1).rev() {
+                        h[t] = op(h[t + 1], ext[t]);
+                    }
+                    bstart = bend;
+                }
+                // Combine: window [i, i+size-1] splits across at most two blocks, and
+                // h[i] (suffix to its block end) ∪ g[i+size-1] (prefix from its block
+                // start) covers it exactly. Idempotent op handles the single-block case.
+                for i in 0..mid {
+                    out_chunk[base + i * stride] = op(h[i], g[i + size - 1]);
+                }
             }
         }
+    };
+
+    // The outer slabs are contiguous & disjoint, so fan them across cores when there are enough
+    // and the pixel count amortizes spawn (van Herk is O(1) per output element, so gate on pixels,
+    // like uniform_filter1d). Byte-identical: the partition is the only change.
+    let nthreads = if arr.size() < (1 << 20) {
+        1
+    } else {
+        ndimage_filter_thread_count(arr.size(), size).min(outer.max(1))
+    };
+    if MINMAX_HGW_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nthreads <= 1
+        || outer < 2
+    {
+        process(&arr.data, &mut out.data);
+    } else {
+        let slabs_per = outer.div_ceil(nthreads);
+        let process = &process;
+        std::thread::scope(|scope| {
+            for (in_chunk, out_chunk) in arr
+                .data
+                .chunks(slab * slabs_per)
+                .zip(out.data.chunks_mut(slab * slabs_per))
+            {
+                scope.spawn(move || process(in_chunk, out_chunk));
+            }
+        });
     }
     out
 }
@@ -12244,6 +12287,69 @@ mod tests {
     }
 
     /// HGW must be bit-for-bit identical to the legacy monotonic-deque path across
+    #[test]
+    fn minmax_hgw_parallel_matches_serial_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The parallel-across-outer-slabs path in `minmax_along_axis_hgw` (reached via the N-D
+        // maximum_filter/minimum_filter, which is the van Herk path since MINMAX_FILTER_HGW defaults
+        // true) must be BYTE-IDENTICAL to the serial walk, across window sizes, modes, adversarial
+        // data (NaN, ±0.0, ±inf), and shapes above the parallel gate.
+        MINMAX_FILTER_HGW.store(true, Ordering::Relaxed); // ensure the van Herk path is active
+        let shapes: &[Vec<usize>] = &[
+            vec![40],
+            vec![9, 11],
+            vec![520, 130], // > 1<<20 elements -> exercises the parallel path
+            vec![5, 6, 4],
+            vec![40, 30, 24],
+        ];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let mut data: Vec<f64> = (0..total)
+                .map(|i| (i as f64 * 0.37).sin() * 5.0 + (i % 7) as f64)
+                .collect();
+            if total > 25 {
+                data[3] = f64::NAN;
+                data[7] = -0.0;
+                data[8] = 0.0;
+                data[20] = f64::NEG_INFINITY;
+                data[21] = f64::INFINITY;
+            }
+            let input = NdArray::new(data, shape.clone()).unwrap();
+            for &size in &[2usize, 3, 5, 8] {
+                for mode in [
+                    BoundaryMode::Reflect,
+                    BoundaryMode::Nearest,
+                    BoundaryMode::Constant,
+                    BoundaryMode::Wrap,
+                ] {
+                    MINMAX_HGW_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                    let ser_max = maximum_filter(&input, size, mode, 2.5);
+                    let ser_min = minimum_filter(&input, size, mode, 2.5);
+                    MINMAX_HGW_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                    let par_max = maximum_filter(&input, size, mode, 2.5);
+                    let par_min = minimum_filter(&input, size, mode, 2.5);
+                    for (a, b) in [(ser_max, par_max), (ser_min, par_min)] {
+                        match (a, b) {
+                            (Ok(a), Ok(b)) => {
+                                assert_eq!(a.shape, b.shape);
+                                for (x, y) in a.data.iter().zip(&b.data) {
+                                    assert_eq!(
+                                        x.to_bits(),
+                                        y.to_bits(),
+                                        "shape={shape:?} size={size} mode={mode:?}"
+                                    );
+                                }
+                            }
+                            (Err(_), Err(_)) => {}
+                            _ => panic!("serial/parallel disagree on Ok/Err"),
+                        }
+                    }
+                }
+            }
+        }
+        MINMAX_HGW_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    }
+
     /// dimensions, window sizes, origins, boundary modes, and adversarial data
     /// (NaN, ±0.0, duplicates). Serialized via a mutex because both paths share the
     /// global `MINMAX_FILTER_HGW` toggle.
