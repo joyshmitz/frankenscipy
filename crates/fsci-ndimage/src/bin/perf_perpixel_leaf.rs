@@ -11,6 +11,10 @@
 //!               recomputed `Σ idx[d]·stride[d]` via `coeffs.get`. Premultiply taps by stride once
 //!               per pixel ⇒ the leaf is a single `data[base]` load. Shipped 6347c4045.
 //!
+//!   `simd`    — `NDIMAGE_BSPLINE_SIMD_DISABLE`: `cardinal_bspline` is >60% self and entirely scalar
+//!               FP. The compact window leaves a contiguous run of `order+1` = 2/4/6 taps, each an
+//!               INDEPENDENT evaluation of the same recursion ⇒ one tap per lane, bit-identical.
+//!
 //! REJECTED lever (2026-07-10, do not re-add): a `fold` interior fast path skipping `rem_euclid`
 //! for tap runs inside `0..=len-1`. Byte-identical but only 1.01-1.05x — `perf annotate` shows
 //! ZERO `idiv` in `compute_axis_support` (61.39% self), so there was no division to remove.
@@ -20,9 +24,10 @@
 //! SERIAL path by construction — the honest way to time a per-pixel arithmetic lever.
 //!
 //! Each lever carries its own NULL CONTROL, a row where the knob provably cannot act:
-//!   `offs`    → `order=0` (`sample_interpolated` returns before the leaf).
-//!   `compact` → `Constant` mode (routes to `fold_wrap_cubic` / `bspline_local_support`, never the
-//!               cardinal loop). `order=0` is inert for `compact` too.
+//!   `offs`            → `order=0` (`sample_interpolated` returns before the leaf).
+//!   `compact`, `simd` → `Constant` mode (routes to `fold_wrap_cubic` / `bspline_local_support`,
+//!                       never the cardinal loop); `order=0` is inert for both, and `order=1` is
+//!                       inert for `simd` (empty recursion ⇒ the scalar kernel is used).
 //! Any run whose control drifts off 1.00x is noise-dominated and must be discarded.
 //!
 //! SUBSTRATE (rule v2): both arms live in THIS binary, are selected by an in-process atomic, and are
@@ -34,10 +39,10 @@
 //! so no arm can be dead-code-eliminated (a DCE'd arm shows 0% self-time — the integrity rule's
 //! other catch; here `compute_axis_support` measures 61.39% self, so nothing was eliminated).
 //!
-//! Usage: `perf_perpixel_leaf <compact|offs> [order]`
+//! Usage: `perf_perpixel_leaf <compact|offs|simd> [order]`
 use fsci_ndimage::{
-    BoundaryMode, NDIMAGE_BSPLINE_COMPACT_DISABLE, NDIMAGE_SPLINE_OFFSET_DISABLE, NdArray,
-    affine_transform, map_coordinates, rotate,
+    BoundaryMode, NDIMAGE_BSPLINE_COMPACT_DISABLE, NDIMAGE_BSPLINE_SIMD_DISABLE,
+    NDIMAGE_SPLINE_OFFSET_DISABLE, NdArray, affine_transform, map_coordinates, rotate,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -103,18 +108,21 @@ fn main() {
     };
 
     let offs_lever = lever == "offs";
+    let simd_lever = lever == "simd";
     println!(
         "# same-binary A/B lever={lever}: {}",
-        if offs_lever {
-            "ORIG index-space leaf vs flat-offset leaf (per-pixel path)"
-        } else {
-            "ORIG full tap window vs compact support window"
+        match lever {
+            "offs" => "ORIG index-space leaf vs flat-offset leaf (per-pixel path)",
+            "simd" => "ORIG per-tap scalar cardinal_bspline vs one lane-parallel run",
+            _ => "ORIG full tap window vs compact support window",
         }
     );
     println!("# CONTROL rows must read ~1.00x; otherwise the run is noise-dominated.");
     let set_orig = |orig: bool| {
         if offs_lever {
             NDIMAGE_SPLINE_OFFSET_DISABLE.store(orig, Ordering::Relaxed);
+        } else if simd_lever {
+            NDIMAGE_BSPLINE_SIMD_DISABLE.store(orig, Ordering::Relaxed);
         } else {
             NDIMAGE_BSPLINE_COMPACT_DISABLE.store(orig, Ordering::Relaxed);
         }
@@ -200,6 +208,9 @@ fn main() {
                 let cb = cv.iter().copied().fold(f64::MAX, f64::min);
                 let is_control = if offs_lever {
                     order == 0
+                } else if simd_lever {
+                    // order 0 has no cardinal loop; order 1 has an empty recursion and stays scalar.
+                    order <= 1 || mode == BoundaryMode::Constant
                 } else {
                     order == 0 || mode == BoundaryMode::Constant
                 };

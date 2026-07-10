@@ -4,6 +4,96 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+**BUILD/BENCH INVOCATION (mandatory while the disk constraint holds).** Use exactly:
+`RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo <subcommand> ...`
+`rch` defaults to "Strict remote: off", so a bare `rch exec` silently BUILDS LOCALLY when it cannot
+reserve a slot; `RCH_REQUIRE_REMOTE=1` makes it fail closed. `env -u CARGO_TARGET_DIR` is required
+because the shell exports `CARGO_TARGET_DIR=/data/tmp/cargo-target` globally, which makes rch's
+artifact retrieval return ~0 bytes. If rch then errors, that is a BLOCKER: wait and retry, or do
+analysis-only work. NEVER fall back to a local build. Never run `maturin build`.
+
+## 2026-07-10 - frankenscipy-cc-bspline-simd-run - KEEP (bit-identical): lane-parallel `cardinal_bspline` tap run, order2 1.24-1.31x / order3 1.28-1.33x; REJECT the 6-tap f64x8 width (order5 0.98x)
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`)
+- SELF-TIME OF CODE UNDER TEST (mandatory field): `cardinal_bspline` is inlined into
+  `compute_axis_support` = **61.39% self** on the captured `rotate` order=3 / 512² / Reflect profile.
+  `perf annotate` of that symbol: 1879 instruction lines, entirely scalar FP (`movapd` 169, `movsd`
+  72, `addsd` 59, `mulsd` 44, `subsd`/`subpd` 57), ZERO `idiv`. Live, hot, vectorisable.
+- Ledger consulted first: this is the sole surviving ndimage lever recorded by `bac0359e5`
+  ("SIMD `cardinal_bspline` itself... tap count already compacted to 2/4/6"). No prior attempt.
+- Lever: the compact window (`6c53716ff`) leaves a CONTIGUOUS run of `order+1` taps. Each tap is an
+  INDEPENDENT evaluation of the same de Boor recursion at a different `x`, so put one tap per lane
+  and evaluate the entire run in ONE lane-parallel recursion instead of `order+1` scalar ones.
+- Graveyard/artifact route tested: SIMD/lane-parallelism over an independent-evaluation set, packed
+  register-width kernel selection, avoiding const-generic lane bounds by emitting concrete widths.
+- Decision: KEEP the `f64x4` (exactly-4-tap) width. REJECT and revert the `f64x8` padded width.
+
+- Baseline/candidate command (ONE invocation, both arms in ONE binary, ALTERNATED per iteration):
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR FSCI_AB_REPS=5 FSCI_AB_ITERS=11 rch exec -- cargo run --profile release-perf -p fsci-ndimage --bin perf_perpixel_leaf simd`
+- Same-binary A/B knob: `NDIMAGE_BSPLINE_SIMD_DISABLE` (read once per support build).
+- `map_coords_serial` is sized under the parallel gate (`npts·(order+1)^ndim < 2^18`) so it takes the
+  SERIAL path by construction — remote workers cannot be `taskset`-pinned.
+- Two independent clean runs, all rows `bitmism=0` / `maxdiff=0.0e0`:
+
+  | order | taps | width | run A | run B | Verdict |
+  | ---: | ---: | --- | ---: | ---: | --- |
+  | 0 | – | – | 1.00x | 1.00x | CONTROL (no cardinal loop) |
+  | 1 | 2 | scalar | 1.00x | 0.99x | CONTROL (empty recursion) |
+  | 2 | 4 | f64x4 | **1.24x** | **1.31x** | keep |
+  | 3 | 4 | f64x4 | **1.33x** | **1.28x** | keep (scipy default order) |
+  | 4 | 6 | scalar | 1.00x | 0.99x | neutral (post-reject) |
+  | 5 | 6 | scalar | 1.00x | 1.00x | neutral (post-reject) |
+
+  cv 0.3-1.7% on run A's clean rows; 5-9% on run B (busier worker). Every `Constant`-mode control
+  reads 1.00-1.01x, and `order<=1` is a second, independent control class.
+- Same-worker internal keep/loss/neutral: `4/0/8` (the 8 neutrals are the two control classes).
+
+- REJECTED SUB-VARIANT, measured then reverted: **the 6-tap `f64x8` width.** Orders 4/5 leave 6 taps,
+  which fits no native width; padding into `f64x8` costs TWO YMM registers on AVX2 with 2 lanes idle,
+  over a longer recursion (`len` = 9 and 11). Measured with clean controls: order4 **1.06x**, order5
+  **0.98x (a regression)**. Gated the SIMD path to `ntaps == 4` exactly; orders 4/5 then fall back to
+  the scalar kernel and read 1.00x / 0.99x, which confirms the gate did what it claims. The rejected
+  code sat in the SAME 61.39%-self frame, so this is a reject on LIVE code, not dead code.
+- Why 4 is the magic width: a 4-tap run is exactly one `f64x4` = one YMM register, and the compact
+  window gives exactly 4 taps at orders 2 AND 3.
+
+- Correctness / behavior parity:
+  - BIT-IDENTICAL BY CONSTRUCTION: each lane runs the scalar operation sequence in the scalar order;
+    nothing is reassociated across lanes and no `mul_add` is introduced (Rust does not contract
+    `a*b + c` absent an explicit `mul_add`).
+  - VERIFIED, not assumed. New `cardinal_bspline_lanes_matches_scalar_bitexact`: per-lane `to_bits()`
+    equality against the scalar kernel over ~200k random `x` per order PLUS the support edges
+    `±(order+1)/2`, integers, half-integers and their ±1/±2 ULP neighbours; and `cardinal_bspline_run`
+    vs the per-tap scalar calls for every run length it can produce.
+  - New `bspline_simd_run_matches_scalar_transforms_bitexact`: `to_bits()` A/B over the knob across
+    zoom / shift (fractional + integer) / diagonal affine / general affine / rotate /
+    `map_coordinates`, orders 0..=5 × 5 boundary modes × ndim 1/2/3, coords pinned on exact integers
+    and ±1 ULP, plus a 256² parallel-chunked rotate.
+  - PASS: `cargo test -p fsci-ndimage` → **265 passed; 0 failed** (remote).
+  - PASS: `cargo fmt --check` on both touched files → clean. `ubs` → 0 critical. `git diff --check`
+    clean.
+  - BLOCKED (environmental, unchanged): the scipy differential packet cannot run remotely
+    (`.rch.env` pins `FSCI_REQUIRE_SCIPY_ORACLE=1`; workers have no SciPy). Outputs are bit-identical
+    to the ORIG arm, so the packet that passed on this code path still passes. Re-run locally when the
+    disk constraint lifts.
+
+- CONSTRAINT / METHOD: every build, test and bench went through
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo ...`. rch FAILED CLOSED twice this
+  turn — once on a stale peer `crates/fsci-fft/src/bin/probe_sweep.rs` on the assigned worker (the
+  file is tracked and present locally; a remote sync gap), then with `no worker assigned` for ~7
+  minutes as slots drained 28/76 → 12/76. I waited and retried; no local build was run. No maturin,
+  no new target tree or worktree, no `perf record`, nothing stashed, nothing deleted.
+
+- Retry conditions:
+  1. A 6-tap run split as `f64x4` + a 2-lane remainder (~1.5 YMM-equivalents vs the rejected x8's 2)
+     may still pay at orders 4/5. Worth one same-binary A/B; re-record self-time.
+  2. On an AVX-512 host, re-measure the `f64x8` width — the reject is AVX2-specific (2 YMM, 2 idle
+     lanes). Do not re-add it on this host.
+  3. Re-profile `compute_axis_support` now that its 4-tap recursion is vectorised, to see whether the
+     residual is the recursion, `support.push`, or `map_interpolation_coordinate` (whose f64 `fmod` is
+     1.44% and is the ONLY genuine `fmod` in this path — see the `bac0359e5` correction). Needs a
+     fresh `perf record`, hence the disk constraint must lift.
+
 **LEDGER-INTEGRITY RULE (adopted 2026-07-10, from frankenmermaid `5feb977`).** Every REJECT row must
 record the SELF-TIME of the function under test on the benchmark that produced the ratio. A reject
 measured on an input that never reaches the code is INVALID and must be reopened. A profile SYMBOL is
@@ -8137,3 +8227,16 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - 20x64 individual alternating pairs; candidate self 53.88% (25,795 samples, zero lost), exact factor bits.
 - ORIG 35.715026 ms (CV 11.242%); CAND 34.316969 ms (CV 12.163%); apparent 1.040740x mean / 1.043623x paired.
 - INVALID on raw CV. Retry without trimming and gate per-sample ratio CV, which cancels common worker drift.
+
+## 2026-07-10 - cod_fsc - WIN Cholesky spill-free MR4xNR4 packed SYRK (1.066x paired, exact bits)
+
+- Fresh landed-MR2 n=1000 profile: packed SYRK 64.99% self in 28,415 samples / zero lost; current codegen spends
+  20.37% of local SYRK samples on accumulator spills. SciPy `dpotrf`: GEMM 43.15%, TRSM 20.00%, SYRK 0.14%.
+- Lever: split each packed NR8 panel into two NR4 p-loops. MR4xNR4 fits about 14/16 XMM including operands;
+  row grouping, tail boundary, and per-output p order are unchanged. Exact factor bits passed n=130/131/270/271/1000.
+- Scored candidate profile: 35,627 samples / zero lost; candidate-specific SYRK 59.21% self, TRSM 22.34%, tail
+  4.20%, generic 3.17%, copy+pack 2.95%. Candidate path is live.
+- One strict-remote binary, 20x64 individually alternating pairs, no trimming: ORIG 43.232781 ms (raw CV 9.917%),
+  CAND 40.535228 ms (raw CV 9.643%); paired mean 1.066441x with paired CV 1.535%, candidate -6.24%. Criterion
+  paired routine [73.127, 76.100, 79.053] ms. Inputs/results black-boxed; artifact retrieval non-empty.
+- KEEP. Safe Rust only; no external BLAS/LAPACK/MKL/XLA.

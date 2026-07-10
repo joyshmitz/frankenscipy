@@ -11,6 +11,8 @@
 //! - Distance transforms: distance_transform_edt
 
 use fsci_interpolate::make_interp_spline;
+use std::simd::Simd;
+use std::simd::num::SimdFloat;
 
 /// Error type for ndimage operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -870,6 +872,82 @@ fn cardinal_bspline(order: usize, x: f64) -> f64 {
     vals[span as usize]
 }
 
+/// Lane-parallel [`cardinal_bspline`]: lane `j` evaluates the kernel at `xs[j]`.
+///
+/// BIT-IDENTICAL to the scalar kernel. The taps of a support run are INDEPENDENT evaluations of the
+/// same de Boor recursion at different `x`, so putting one tap per lane keeps every lane's operation
+/// sequence — and its rounding — exactly the scalar one. Nothing is reassociated across lanes, and
+/// no `mul_add` is introduced (Rust does not contract `a*b + c` without an explicit `mul_add`), so
+/// each lane reproduces `cardinal_bspline` to the bit.
+///
+/// Emitted as a concrete width rather than over a const-generic lane count, so no
+/// `LaneCount`/`SupportedLaneCount` bound is required.
+macro_rules! cardinal_bspline_lanes {
+    ($name:ident, $lanes:literal) => {
+        #[inline]
+        fn $name(order: usize, xs: Simd<f64, $lanes>) -> Simd<f64, $lanes> {
+            let span = order as isize;
+            let len = 2 * order + 1;
+            let zero = Simd::<f64, $lanes>::splat(0.0);
+            let one = Simd::<f64, $lanes>::splat(1.0);
+            let mut vals = [zero; 11];
+            for (i, slot) in vals[..len].iter_mut().enumerate() {
+                let m = (i as isize - span) as f64;
+                let t = (xs + Simd::splat(0.5 * m)).abs();
+                *slot = (one - t).simd_max(zero);
+            }
+            for d in 2..=order {
+                let n = d as f64;
+                let half = (n + 1.0) / 2.0;
+                let mut next = [zero; 11];
+                for idx in 1..len - 1 {
+                    let m = (idx as isize - span) as f64;
+                    let arg = xs + Simd::splat(0.5 * m);
+                    next[idx] = ((arg + Simd::splat(half)) * vals[idx + 1]
+                        + (Simd::splat(half) - arg) * vals[idx - 1])
+                        / Simd::splat(n);
+                }
+                vals = next;
+            }
+            vals[span as usize]
+        }
+    };
+}
+cardinal_bspline_lanes!(cardinal_bspline_x4, 4);
+
+/// Cardinal B-spline weights for the CONTIGUOUS tap run `k in lo..=hi`, i.e.
+/// `out[j] = cardinal_bspline(order, cc - (lo + j))`.
+///
+/// `cardinal_bspline` is >60% of a per-pixel geometric transform's self time and is entirely scalar
+/// FP (`perf annotate`: `movapd`/`mulsd`/`addsd`/`subpd`, zero `idiv`). The compact window leaves a
+/// run of `order+1` = 2/4/6 taps, which maps onto one f64 vector — so evaluate the whole run in a
+/// single lane-parallel recursion instead of `order+1` independent scalar ones.
+fn cardinal_bspline_run(order: usize, cc: f64, lo: isize, hi: isize, out: &mut [f64]) {
+    debug_assert!(hi >= lo);
+    let ntaps = (hi - lo + 1) as usize;
+    let x_of = |j: usize| cc - (lo + j as isize) as f64;
+    // order<2 has an EMPTY recursion loop (the kernel is one subtract + one max), so a vector
+    // round-trip costs more than it saves. The A/B knob also routes here.
+    if order < 2 || NDIMAGE_BSPLINE_SIMD_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        for (j, w) in out[..ntaps].iter_mut().enumerate() {
+            *w = cardinal_bspline(order, x_of(j));
+        }
+        return;
+    }
+    // ONLY the exact-4-tap run vectorises profitably. A 4-tap run is one f64x4 = one YMM register
+    // (orders 2 and 3 under the compact window). MEASURED REJECT: padding a 6-tap run (orders 4/5)
+    // into f64x8 costs TWO YMM registers with 2 lanes idle, over a longer recursion (len 9/11), and
+    // reads 1.06x at order 4 and **0.98x (a regression) at order 5** — so those stay scalar.
+    if ntaps == 4 {
+        let xs = Simd::<f64, 4>::from_array(std::array::from_fn(x_of));
+        out[..4].copy_from_slice(&cardinal_bspline_x4(order, xs).to_array());
+    } else {
+        for (j, w) in out[..ntaps].iter_mut().enumerate() {
+            *w = cardinal_bspline(order, x_of(j));
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct LinearAxisSupport {
     lo: usize,
@@ -1635,8 +1713,14 @@ fn compute_axis_support(
         // costs essentially nothing here, and the `fmod` visible in the profile is the f64 `fmod`
         // from `map_interpolation_coordinate`, NOT this integer fold. Do not retry unless
         // `cardinal_bspline` gets much cheaper (SIMD), which would raise `fold`'s share.
-        for k in (floor - span.0)..=(floor + span.1) {
-            let weight = cardinal_bspline(order, cc - k as f64);
+        // Evaluate the whole contiguous tap run in ONE lane-parallel recursion (one tap per lane);
+        // bit-identical to the per-tap scalar calls this replaced.
+        let (lo, hi) = (floor - span.0, floor + span.1);
+        let ntaps = (hi - lo + 1) as usize;
+        let mut weights = [0.0f64; 12]; // max window = 2*order+1 = 11
+        cardinal_bspline_run(order, cc, lo, hi, &mut weights[..ntaps]);
+        for (j, k) in (lo..=hi).enumerate() {
+            let weight = weights[j];
             if weight != 0.0 {
                 support.push((fold(k), weight));
             }
@@ -8842,6 +8926,15 @@ pub static NDIMAGE_SPLINE_OFFSET_DISABLE: std::sync::atomic::AtomicBool =
 /// identical either way. Benchmark knob; read ONCE per call.
 #[doc(hidden)]
 pub static NDIMAGE_BSPLINE_COMPACT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Same-binary A/B toggle for the lane-parallel cardinal-B-spline tap run: when `true`, each tap of
+/// the support run is evaluated by an independent SCALAR `cardinal_bspline` call — the ORIG
+/// comparator. When `false` (default) the whole run is evaluated by one `cardinal_bspline_lanes`
+/// recursion, one tap per lane. Bit-identical either way (per-lane operation order is the scalar
+/// one). Benchmark knob; read ONCE per support build.
+#[doc(hidden)]
+pub static NDIMAGE_BSPLINE_SIMD_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Zoom (rescale) an array by the given factors.
@@ -19351,6 +19444,230 @@ mod tests {
                         "parallel shift order={order} {mode:?}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn cardinal_bspline_lanes_matches_scalar_bitexact() {
+        // The lane-parallel kernel must reproduce the scalar one BIT-for-BIT, per lane, for every
+        // order, at the one lane width that ships (f64x4). Adversarial x: support edges
+        // ±(n+1)/2, integers, half-integers, ±1/±2 ULP neighbours, and 200k pseudo-random values.
+        let mut s = 0x243f_6a88_85a3_08d3u64;
+        let mut rnd = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for order in 2..=5usize {
+            let half = (order as f64 + 1.0) * 0.5;
+            let mut xs: Vec<f64> = Vec::new();
+            for sgn in [-1.0f64, 1.0] {
+                for b in [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, half] {
+                    let v = sgn * b;
+                    xs.push(v);
+                    xs.push(f64::from_bits(v.to_bits().wrapping_add(1)));
+                    xs.push(f64::from_bits(v.to_bits().wrapping_add(2)));
+                    if v != 0.0 {
+                        xs.push(f64::from_bits(v.to_bits().wrapping_sub(1)));
+                        xs.push(f64::from_bits(v.to_bits().wrapping_sub(2)));
+                    }
+                }
+            }
+            for _ in 0..200_000 {
+                xs.push(rnd() * 16.0 - 8.0);
+            }
+            for chunk in xs.chunks(4) {
+                if chunk.len() < 4 {
+                    continue;
+                }
+                let v = Simd::<f64, 4>::from_slice(chunk);
+                let got = cardinal_bspline_x4(order, v).to_array();
+                for (j, &x) in chunk.iter().enumerate() {
+                    assert_eq!(
+                        got[j].to_bits(),
+                        cardinal_bspline(order, x).to_bits(),
+                        "f64x4 order={order} x={x:e}"
+                    );
+                }
+            }
+        }
+
+        // `cardinal_bspline_run` must equal the per-tap scalar calls it replaces, for every run
+        // length it can see (compact 2/4/6 and the ORIG comparator's 3/5/7/9/11).
+        for order in 1..=5usize {
+            for &(lo, hi) in &[
+                (-3isize, -2isize),
+                (0, 3),
+                (-2, 3),
+                (5, 10),
+                (-5, 5),
+                (7, 7 + 2 * order as isize),
+            ] {
+                let ntaps = (hi - lo + 1) as usize;
+                if ntaps > 12 {
+                    continue;
+                }
+                for t in [0.0, 0.25, 0.5, 0.75, 1.0 / 3.0] {
+                    let cc = lo as f64 + 1.5 + t;
+                    let mut simd = [0.0f64; 12];
+                    let mut scalar = [0.0f64; 12];
+                    NDIMAGE_BSPLINE_SIMD_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+                    cardinal_bspline_run(order, cc, lo, hi, &mut simd[..ntaps]);
+                    NDIMAGE_BSPLINE_SIMD_DISABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+                    cardinal_bspline_run(order, cc, lo, hi, &mut scalar[..ntaps]);
+                    NDIMAGE_BSPLINE_SIMD_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+                    for j in 0..ntaps {
+                        assert_eq!(
+                            simd[j].to_bits(),
+                            scalar[j].to_bits(),
+                            "run order={order} lo={lo} hi={hi} cc={cc} lane={j}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bspline_simd_run_matches_scalar_transforms_bitexact() {
+        use std::sync::atomic::Ordering;
+        // End-to-end: every consumer of the cardinal kernel must be BYTE-IDENTICAL with the
+        // lane-parallel run vs the per-tap scalar calls — separable (zoom/shift/diag-affine) and
+        // per-pixel (rotate/general-affine/map_coordinates) alike.
+        let modes = [
+            BoundaryMode::Reflect,
+            BoundaryMode::Mirror,
+            BoundaryMode::Nearest,
+            BoundaryMode::Constant,
+            BoundaryMode::Wrap,
+        ];
+        let shapes: &[Vec<usize>] = &[vec![7], vec![9, 11], vec![7, 6, 8], vec![23], vec![17, 19]];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let arr = NdArray::new(
+                (0..total)
+                    .map(|k| (k as f64 * 0.29).sin() * 1.9 - 0.6)
+                    .collect(),
+                shape.clone(),
+            )
+            .unwrap();
+            let zooms: Vec<f64> = shape.iter().map(|_| 1.7).collect();
+            let shifts: Vec<f64> = shape.iter().map(|_| -1.35).collect();
+            let int_shifts: Vec<f64> = shape.iter().map(|_| 2.0).collect();
+            for order in 0..=5usize {
+                for &mode in &modes {
+                    let variants = |orig: bool| {
+                        NDIMAGE_BSPLINE_SIMD_DISABLE.store(orig, Ordering::Relaxed);
+                        (
+                            zoom(&arr, &zooms, order, mode, 0.75).unwrap(),
+                            shift(&arr, &shifts, order, mode, 0.75).unwrap(),
+                            shift(&arr, &int_shifts, order, mode, 0.75).unwrap(),
+                        )
+                    };
+                    let (z_o, s_o, i_o) = variants(true);
+                    let (z_c, s_c, i_c) = variants(false);
+                    NDIMAGE_BSPLINE_SIMD_DISABLE.store(false, Ordering::Relaxed);
+                    for (tag, o, c) in [
+                        ("zoom", &z_o, &z_c),
+                        ("shift", &s_o, &s_c),
+                        ("shift_int", &i_o, &i_c),
+                    ] {
+                        for (a, b) in o.data.iter().zip(c.data.iter()) {
+                            assert_eq!(
+                                a.to_bits(),
+                                b.to_bits(),
+                                "{tag} {shape:?} order={order} {mode:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let arr = NdArray::new(
+            (0..15 * 13)
+                .map(|k| (k as f64 * 0.23).cos() + 1.3)
+                .collect(),
+            vec![15, 13],
+        )
+        .unwrap();
+        let diag = [[0.75, 0.0, 1.2], [0.0, 1.35, -0.5]];
+        let general = [[0.88, 0.22, 1.2], [-0.18, 1.02, -0.5]];
+        let coords: Vec<Vec<f64>> = {
+            let (mut rr, mut cc) = (Vec::new(), Vec::new());
+            for i in 0..15usize {
+                for j in 0..13usize {
+                    rr.push(match (i + j) % 4 {
+                        0 => 0.0,
+                        1 => 14.0,
+                        2 => f64::from_bits((i as f64).to_bits() + 1),
+                        _ => i as f64 + 0.41,
+                    });
+                    cc.push(match (i + j) % 4 {
+                        0 => 12.0,
+                        1 => 0.0,
+                        2 => j as f64 + 0.63,
+                        _ => f64::from_bits((j as f64).to_bits().wrapping_sub(1)),
+                    });
+                }
+            }
+            vec![rr, cc]
+        };
+        for order in 0..=5usize {
+            for &mode in &modes {
+                let variants = |orig: bool| {
+                    NDIMAGE_BSPLINE_SIMD_DISABLE.store(orig, Ordering::Relaxed);
+                    (
+                        affine_transform(&arr, &diag, order, mode, 0.75).unwrap(),
+                        affine_transform(&arr, &general, order, mode, 0.75).unwrap(),
+                        rotate(&arr, 29.0, false, order, mode, 0.75).unwrap(),
+                        map_coordinates(&arr, &coords, order, mode, 0.75).unwrap(),
+                    )
+                };
+                let (d_o, g_o, r_o, m_o) = variants(true);
+                let (d_c, g_c, r_c, m_c) = variants(false);
+                NDIMAGE_BSPLINE_SIMD_DISABLE.store(false, Ordering::Relaxed);
+                for (a, b) in d_o.data.iter().zip(d_c.data.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "diag order={order} {mode:?}");
+                }
+                for (a, b) in g_o.data.iter().zip(g_c.data.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "general order={order} {mode:?}");
+                }
+                for (a, b) in r_o.data.iter().zip(r_c.data.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "rotate order={order} {mode:?}");
+                }
+                for (a, b) in m_o.iter().zip(m_c.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "map_coords order={order} {mode:?}"
+                    );
+                }
+            }
+        }
+
+        // Parallel chunked fan-out.
+        let big = NdArray::new(
+            (0..256 * 256).map(|k| (k as f64 * 0.015).sin()).collect(),
+            vec![256, 256],
+        )
+        .unwrap();
+        assert!(
+            ndimage_filter_thread_count(256 * 256, 4usize.pow(2)) > 1,
+            "big rotate case must exercise the parallel chunked path"
+        );
+        for order in [1usize, 3, 5] {
+            let variants = |orig: bool| {
+                NDIMAGE_BSPLINE_SIMD_DISABLE.store(orig, Ordering::Relaxed);
+                rotate(&big, 33.0, false, order, BoundaryMode::Reflect, 0.5).unwrap()
+            };
+            let r_o = variants(true);
+            let r_c = variants(false);
+            NDIMAGE_BSPLINE_SIMD_DISABLE.store(false, Ordering::Relaxed);
+            for (a, b) in r_o.data.iter().zip(r_c.data.iter()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "parallel rotate order={order}");
             }
         }
     }

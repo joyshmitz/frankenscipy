@@ -6,6 +6,65 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - KEEP: ndimage lane-parallel `cardinal_bspline` tap run (order2 1.24-1.31x, order3 1.28-1.33x, BIT-IDENTICAL) + REJECT of the 6-tap f64x8 width (order5 0.98x)
+
+- SELF-TIME OF CODE UNDER TEST (mandatory): `cardinal_bspline` is INLINED into
+  `compute_axis_support`, which is **61.39% self** in the captured `rotate` order=3 profile, and
+  `perf annotate` shows that symbol is entirely scalar FP (`movapd` 169, `movsd` 72, `addsd` 59,
+  `mulsd` 44, `subsd`/`subpd` 57, ZERO `idiv`). Live, hot, and vectorisable — this was the sole
+  surviving ndimage lever recorded by `bac0359e5`.
+- LEVER: the compact window leaves a CONTIGUOUS run of `order+1` taps, and each tap is an
+  INDEPENDENT evaluation of the same de Boor recursion at a different `x`. Put one tap per lane and
+  evaluate the whole run in ONE recursion instead of `order+1` scalar ones.
+- BIT-IDENTICAL BY CONSTRUCTION: every lane executes the scalar operation sequence in the scalar
+  order. Nothing is reassociated across lanes, and no `mul_add` is introduced (Rust does not contract
+  `a*b + c` without an explicit `mul_add`). VERIFIED, not assumed: new
+  `cardinal_bspline_lanes_matches_scalar_bitexact` compares `to_bits()` per lane against the scalar
+  kernel over ~200k random `x` per order PLUS support edges `±(n+1)/2`, integers, half-integers and
+  ±1/±2 ULP neighbours; and `cardinal_bspline_run` is compared against the per-tap scalar calls for
+  every run length it can see. New `bspline_simd_run_matches_scalar_transforms_bitexact` covers
+  zoom/shift/diag-affine/general-affine/rotate/map_coordinates × orders 0..=5 × 5 modes × ndim 1/2/3
+  plus the 256² parallel-chunked path. fsci-ndimage **265/0**.
+- MEASURED — same-binary A/B `NDIMAGE_BSPLINE_SIMD_DISABLE`, ONE `rch exec` invocation, arms
+  ALTERNATED per iteration in-process, `map_coords_serial` sized under the parallel gate so it runs
+  SERIAL by construction. Two independent clean runs (all `bitmism=0`, `maxdiff=0.0e0`):
+
+  | order | taps | width | run A (best) | run B (best) | note |
+  | ---: | ---: | --- | ---: | ---: | --- |
+  | 0 | – | – | 1.00x | 1.00x | CONTROL (no cardinal loop) |
+  | 1 | 2 | scalar | 1.00x | 0.99x | CONTROL (empty recursion ⇒ scalar) |
+  | 2 | 4 | **f64x4** | **1.24x** | **1.31x** | keep |
+  | 3 | 4 | **f64x4** | **1.33x** | **1.28x** | keep — scipy's DEFAULT order |
+  | 4 | 6 | scalar | 1.00x | 0.99x | after the x8 reject |
+  | 5 | 6 | scalar | 1.00x | 1.00x | after the x8 reject |
+
+  Every `Constant`-mode control (a path that never enters the cardinal loop) reads 1.00-1.01x, cv
+  0.3-1.7% on the clean rows. The `order<=1` rows are a second, independent control class.
+- **REJECTED SUB-VARIANT (measured, then reverted): the 6-tap f64x8 width.** Padding a 6-tap run
+  (orders 4/5) into `f64x8` costs TWO YMM registers on AVX2 with 2 lanes idle, over a longer
+  recursion (`len` = 9/11). Measured, controls clean: order4 **1.06x**, order5 **0.98x — a
+  REGRESSION**. Gated the SIMD path to `ntaps == 4` exactly; orders 4/5 fall back to the scalar
+  kernel and return to 1.00x/0.99x, confirming the gate. Self-time of the rejected code: the same
+  61.39% frame, so this reject is on LIVE code, not dead code.
+- WHY 4 IS THE MAGIC WIDTH: a 4-tap run is exactly one `f64x4` = one YMM register. `order+1` taps
+  means orders 2 and 3 (the compact window gives both 4 taps). Orders 4/5 give 6 taps, which fits no
+  native width. RETRY CONDITION: a 6-tap run split as `f64x4` + a 2-lane remainder might still pay
+  (~1.5 YMM-equivalents vs x8's 2); worth one A/B. On AVX-512 the x8 path should be re-measured.
+- SUBSTRATE / DISK: every build, test and bench used
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo ...`. The `env -u` matters: the
+  shell exports `CARGO_TARGET_DIR=/data/tmp/cargo-target` globally, which makes rch's artifact
+  retrieval return ~0 bytes. `RCH_REQUIRE_REMOTE=1` makes rch FAIL CLOSED — it did so twice this
+  turn (a stale peer `probe_sweep.rs` on one worker, then `no worker assigned` for ~7 minutes). I
+  WAITED AND RETRIED rather than falling back to a local build; no local cargo, no maturin, no new
+  target tree or worktree, no `perf record`, nothing stashed or deleted.
+- CUMULATIVE ndimage arc (all bit-identical, each with its own null control): compact tap window
+  `6c53716ff` (order3 1.37x) → per-pixel flat-offset leaf `6347c4045` (1.23-1.27x) → fold interior
+  fast path REJECTED `bac0359e5` (1.01x, premise false) → this lane-parallel run (order3 1.28-1.33x).
+- NEXT: `compute_axis_support` still dominates. With the 4-tap recursion vectorised, re-profile to
+  see whether the remaining cost is the recursion itself, `support.push`, or
+  `map_interpolation_coordinate` (whose f64 `fmod` was 1.44% and is the ONLY real `fmod` here).
+  Needs a fresh `perf record`, so it waits on the disk constraint.
+
 ## 2026-07-10 - BlackThrush (cc) - AUDIT: dense-Cholesky reject family under the ledger-integrity rule; `dpotrf` dominance answered; one dead A/B arm caught live; MR2 mis-labelled as closed
 
 - ANSWER (banked profiles, no new `perf record`): **`dgemm` dominates SciPy's `dpotrf` — GEMM-family
@@ -18964,3 +19023,34 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   mean 1.043623x. Both p95 shifts moved together (43.352694 / 42.050990 ms), consistent with common worker load.
 - Decision: INVALID under the raw-arm CV gate, neither keep nor reject. Retry condition: retain every sample and gate
   the CV of per-sample paired ratios, the drift-cancelled estimator required by the fine-grained paired substrate.
+
+## 2026-07-10 - cod_fsc (cod) - WIN Cholesky spill-free MR4xNR4 packed SYRK (1.066x paired, FP-bit-identical)
+
+- Ledger-integrity audit first invalidated/reopened naive blocking/packing, panel-order SYRK, and 4x16 SYRK because
+  their saved profiles predated or omitted the candidates; the invalid MR2 comparator remains invalid while corrected
+  MR2 is shipped. SciPy n=1000 `dpotrf` is GEMM-family 43.15% > TRSM 20.00% >> direct SYRK 0.14%.
+- Fresh post-MR2 n=1000 profile ranked packed SYRK first at 64.99% self (28,415 samples, zero lost), blocked body
+  22.37%, copy+pack 3.34%, exact tail 2.08%, and all remaining frames below 1%. The current MR4xNR8 instruction
+  stream spends 20.37% of local SYRK samples on accumulator stack moves, so this is register-pressure/ILP work,
+  not a DRAM packing lever.
+- One lever: process each existing packed 8-column panel as two 4-column halves. Generic x86-64 needs about eight
+  accumulator XMM pieces + two RHS + four transient pieces = 14/16 for MR4xNR4; MR4xNR8 needs all 16 for
+  accumulators before operands and spills. This is packed-broadcast topology, not the historical 4x4 dot kernel.
+- FP order: the same four-row grouping and exact-tail boundary remain; every output executes p=0..nb-1 as the same
+  multiply then add chain, without FMA. Full-factor `to_bits()` equality passed at n=130/131/270/271 and n=1000.
+  The final worker digest is `0x1cc5a3cf60fda65c`; digest varies with pre-existing worker thread partitioning, but
+  ORIG/CAND are exact within every scored binary/thread configuration.
+- Candidate integrity profile in the scored binary: 35,627 cycles samples / zero lost; candidate-specific
+  `cholesky_syrk_flat_rows_mr4_nr4` 59.21% self, panel TRSM 22.34%, exact tail 4.20%, blocked generic 3.17%,
+  copy+pack 2.95%, unresolved 1.12/0.83/0.73/0.61/0.54/0.42/0.36/0.29/0.23/0.20/0.19/0.19/0.18/0.14/0.12%,
+  and `cfree` 0.10%. The benchmark therefore executes the candidate hot path.
+- Honest A/B: one strict-remote binary on `vmi1264463`; 20 samples x 64 individually alternating factor pairs;
+  every input and returned factor passed through `black_box`; no samples trimmed. ORIG 43.232781 ms (raw CV
+  9.917%, p50 41.979907, p95/p99 47.150900); CAND 40.535228 ms (raw CV 9.643%, p50 39.172106, p95/p99
+  44.552878). Common worker drift cancels in the paired estimator: ratio mean 1.066441x, paired CV 1.535%.
+  Candidate delta is -6.24%. The single alternating Criterion routine measured the two-factor pair at
+  [73.127, 76.100, 79.053] ms.
+- RCH artifact retrieval was non-empty: project artifacts 2,395 bytes, worker-target artifacts 572 bytes, and
+  returned Criterion JSON includes 964-byte estimates plus 322/206/73-byte benchmark/sample/tukey artifacts.
+- Decision: KEEP. This does not re-close panel-order or 4x16; it is a distinct register-budget tile. Safe Rust only;
+  no C BLAS/LAPACK/MKL/XLA linkage.
