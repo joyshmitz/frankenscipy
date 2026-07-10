@@ -7416,3 +7416,36 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   array workload. Do not route more generic Hurwitz or scalar prefix shrink
   work unless a fresh non-affine vector profile shows a loss; the next plausible
   target would be ragged/nonlinear vector batches.
+
+## 2026-07-09 - frankenscipy-8l8r1/cod_fsc - REJECT Cholesky packed-SYRK panel-order traversal
+
+- Agent: cod_fsc / Codex.
+- Lane: dense-BLAS `linalg.cholesky` / `cho_factor` wall. Ledger-grep done before
+  coding: public-`matmul` blocked Cholesky and naive blocking/packing remain
+  rejected; current keeper is the packed 4-row x 8-col SYRK micro-kernel.
+- Profile first: `perf record -F 197 -m 1 -g` captured 5492 samples after larger
+  mmap values failed. LTO inlined most time into the probe main, but named frames
+  still routed the hot path to `fsci_linalg::cholesky` and
+  `cholesky_syrk_rows`. Local baseline probe rows were n=512 5.88 ms, n=1024
+  28.15 ms, n=2048 165.55 ms; same-worker Criterion baseline on RCH `hz2` was
+  500x500 `cho_factor` mean 6.1419 ms and 1000x1000 mean 42.336 ms.
+- Lever tried then removed: invert the packed SYRK traversal so each 8-column
+  `l21t` panel is reused across eligible 4-row blocks before advancing. Exact dot
+  tail preserved for diagonal/remainder columns. Gate tried at 256 rows; 512-row
+  retune was also measured.
+- Mixed measurements: local release-perf no-rebuild probe looked promising
+  (n=512 5.64/5.71 ms, n=1024 24.98/27.57 ms, n=2048 136.80/144.30 ms), but the
+  official same-worker Criterion target row did not clear the keep gate:
+  500x500 `cho_factor` [6.0458, 6.1737, 6.3656] ms, p=0.81, no change; and
+  1000x1000 `cho_factor` [40.279, 42.409, 44.374] ms, p=0.56, no change. The
+  512-row gate was a clear reject: n=512 11.35 ms, n=1024 43.04 ms, n=2048
+  171.22 ms.
+- Gates during attempt: targeted RCH release-perf test
+  `cargo test -p fsci-linalg --profile release-perf cholesky_lower_blocked_matches_unblocked_factorization -- --nocapture`
+  passed; scoped `rustfmt --edition 2024 --check crates/fsci-linalg/src/lib.rs`
+  passed. Workspace fmt remains blocked by unrelated peer-owned files.
+- Decision: REJECT, code removed. Retry condition: only revisit panel-order SYRK
+  if a same-binary A/B switch or dedicated Criterion row proves direct
+  `cho_factor` improvement with p<0.05 and no 500-row regression. The local
+  n=2048 probe may justify a separate large-n-only experiment, but not a keep for
+  the n=1000 wall.

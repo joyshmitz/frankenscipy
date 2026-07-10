@@ -18189,3 +18189,42 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   earlier "1.6× at m=10000" was NOISE: m·d=30000 < the 2^15 gate so BOTH paths were serial) → NOT landed. codex agent
   (separate CARGO_TARGET_DIR=scipy-cod, same loop) is racing obvious parallel targets in io/fft/spatial; PIVOT to
   algorithmic/cache wins in uncontested crates.
+
+## 2026-07-09 - cod_fsc (cod) - REJECT dense Cholesky SYRK panel-order traversal (local n=2048 probe win, no Criterion keep at n=1000)
+
+- Lane: `frankenscipy-8l8r1` dense-BLAS / `linalg.cholesky`. Ledger-grep checked the prior Cholesky rows before
+  coding: public-`matmul` blocked Cholesky remains rejected, naive blocked/packed Cholesky remains zero-gain, and the
+  existing packed 4-row x 8-col SYRK kernel is the current keeper. The only untried note in this vein was cache
+  blocking / panel reuse for the packed SYRK update.
+- Profile first:
+  - Flamegraph path: `perf record -F 197 -m 1 -g -o /tmp/frankenscipy-chol-baseline.perf -- .../perf_chol_probe`
+    succeeded after larger mmap values failed; 5492 samples captured. Optimized/LTO symbolization inlined most time
+    into `perf_chol_probe::main`, but named frames still routed the hot linalg work to `fsci_linalg::cholesky` and
+    `fsci_linalg::cholesky_syrk_rows`.
+  - Local `perf stat -- cargo run -p fsci-linalg --profile release-perf --bin perf_chol_probe` baseline printed
+    cholesky rows n=512 5.88 ms, n=1024 28.15 ms, n=2048 165.55 ms; whole-command counters included cargo/tooling and
+    are not used as direct kernel counters.
+  - Same-worker Criterion baseline on RCH `hz2`:
+    `cho_factor_gauntlet_scipy/500x500_rust_cho_factor` mean 6.1419 ms and
+    `1000x1000_rust_cho_factor` mean 42.336 ms. SciPy rows skipped because that worker could not import
+    `scipy.linalg`.
+- Lever tried then removed: make `cholesky_syrk_rows` traverse packed 8-column `l21t` panels outermost and update all
+  eligible 4-row blocks before moving to the next panel, gated at `rows.len() >= 256`, preserving the exact dot tail
+  for the diagonal remainder. This targets packed-panel reuse, not the already-rejected public `matmul` route.
+- Measurements:
+  - Local release-perf probe after candidate showed attractive large-n samples: n=512 5.64 / 5.71 ms, n=1024
+    24.98 / 27.57 ms, n=2048 136.80 / 144.30 ms on no-rebuild repeats.
+  - Gate retune to 512 rows was a clear reject: n=512 11.35 ms, n=1024 43.04 ms, n=2048 171.22 ms. Restored the
+    256-row gate before final decision.
+  - Official same-worker Criterion on `hz2` did NOT clear the keep gate for the target factor row:
+    `500x500_rust_cho_factor` [6.0458, 6.1737, 6.3656] ms, change [-7.1419%, -0.8875%, +6.0346%], p=0.81; and
+    `1000x1000_rust_cho_factor` [40.279, 42.409, 44.374] ms, change [-11.072%, -2.7840%, +5.9557%], p=0.56.
+    `1000x1000_rust_cho_factor_solve` also reported no significant change.
+- Validation during attempt: targeted RCH release-perf test
+  `cargo test -p fsci-linalg --profile release-perf cholesky_lower_blocked_matches_unblocked_factorization -- --nocapture`
+  passed; scoped `rustfmt --edition 2024 --check crates/fsci-linalg/src/lib.rs` passed. Workspace `cargo fmt --check
+  --all` is currently blocked by unrelated peer-owned formatting/conflict-marker debt in other crates, not this lane.
+- Decision: REJECT and remove code. Do not retry this panel-order traversal or 512-row retune for `cho_factor` n=1000
+  unless a same-binary A/B switch or dedicated Criterion row proves the direct factor row with p<0.05 and no 500-row
+  regression. The local n=2048 probe suggests a possible separate large-n-only vein, but it needs its own honest
+  runtime-gated A/B harness before code can land.
