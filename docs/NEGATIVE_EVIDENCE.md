@@ -6,6 +6,33 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - SURFACE (audit, no lever landed): interpolate + special parallelization/hoist veins are exhausted this sweep; the tempting erfinv gate is a DEAD END (measured)
+
+- Profile-first audit of my lane (interpolate + special) for the next bit-identical parallelize/hoist lever,
+  after landing AAA `eval_many` (`9a024905f`) and zeta affine blocks (`591796eb4`). Result: the clean veins
+  are worked out; the remaining candidates are already-optimal, measured-to-lose, or algorithmic.
+- INTERPOLATE — every `eval_many` audited: BSpline/cubic/pchip/UnivariateSpline 1-D → parallel
+  (`par_query_map`); NdBSpline / RegularGridInterpolator / NearestND / LinearND / CloughTocher2D → parallel;
+  `Interp1d` LINEAR → correctly SERIAL (merge-advance cursor + O(1) uniform finder; ~4 flops/pt is too cheap
+  to parallelize — matches the BPoly-evaluate_many 0.88x revert). Constructors (lagrange/cubic) are gated out
+  at benched sizes. AAA was the last serial gap, landed last turn.
+- SPECIAL — bessel `jv`/`yv`/`iv` (RealVec) → parallel via `bessel_dispatch`+`par_map_indices`, no dominant
+  hoistable v-invariant (the per-z series is the cost). `zeta` affine → landed (heavy per-element ⇒ 3.97x).
+- **DEAD END, don't retry (already measured): the erfinv/erfcinv parallel gate (1<<20).** It looks
+  conservative for the n=100k scipy bench, but the code comment records a prior BlackThrush A/B:
+  erfcinv "default-256 gate lost 36.9x@4096, **STILL LOSES AT 262k**"; erfinv "~23ns, lost 18.8x@4096". These
+  kernels are 12-23ns/element, so `par_map_indices`'s fixed overhead dominates even at hundreds of thousands
+  of elements. The 1M gate is CORRECT; lowering it regresses. (This is exactly why zeta — exp re-seed + tail
+  eval per element, far heavier — parallelised while erfinv cannot.) LESSON: parallelising an array kernel
+  pays only when per-element work ≫ the ~O(0.1-1ms) thread-spawn overhead; sub-100ns/element kernels need
+  ~1M+ elements or stay serial.
+- REMAINING gaps in this lane are NOT one-turn bit-identical levers: (1) mathieu_a/mathieu_b 2x slower than
+  scipy — the 60-iter Sturm bisection (`tridiagonal_kth_eigenvalue`) is 96% of it and needs a Zhang-Jin
+  specfun port (algorithmic, multi-turn; Newton-on-pivot already rejected 0.70%); (2) erfinv/erf SIMD to
+  match scipy's vectorized kernel (branchy ndtri+Newton, non-bit-identical risk). Both are documented walls.
+- No code changed this turn (audit only). Constraint honoured: reads/greps + scratchpad microbench probes
+  only; no local cargo build, no maturin, ~0 disk, nothing stashed or deleted.
+
 ## 2026-07-10 - BlackThrush (cc) - KEEP (byte-identical): special `zeta` affine block loop parallel — 3.97x on the scipy-compared n=100k+ bench
 
 - DIFFERENT module (special, my domain; NOT cod's linalg). Profile-first: the special bench's scipy
