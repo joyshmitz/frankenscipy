@@ -6,6 +6,57 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - RETRACTION of my own cholesky audit verdicts (6863e8244); cod's provenance audit v2 is authoritative. Plus: the "~8x at n=1000" figure is STALE.
+
+- **I WAS WRONG, and the error is exactly the one the integrity rule exists to catch.** My audit
+  (`6863e8244`) marked the panel-order-SYRK and 4x16-microkernel rejects "VALID, reject stands" on the
+  strength of `cholesky_syrk_flat_rows` = **49.77% self**. But that is the self-time of the CURRENT
+  PRODUCTION helper, not of the REMOVED CANDIDATE kernel. A profile of today's binary contains no frame
+  for a candidate that no longer exists — and cod showed the saved profiles predate the patches by 4m35s
+  and 94s respectively, so they cannot contain the candidate at all. **Production-helper self-time is not
+  candidate self-time.** My "VALID" verdicts on rows 2 and 3 are unsupported and are RETRACTED.
+- cod's `ae0dc389f` (PROVENANCE AUDIT v2) supersedes my audit and is authoritative: **0/4** rows carry a
+  candidate binary SHA-256, **0/4** have candidate-specific non-zero self-time, **0/4** meet the
+  provenance rule. All four are **INVALID / REOPENED**. cod additionally recovered what could be
+  recovered (4x16 candidate `cv_pct` = **50.855%** — by itself disqualifying; the MR2 comparator's exact
+  ELF; a SciPy profile SHA + host `thinkstation1`).
+- INDEPENDENTLY CORROBORATED (I re-derived it rather than take it on faith): cod's "the n=512 gate-512
+  sub-arm was dead" is arithmetically forced. `const NB: usize = 128`, so at `n=512` the trailing slices
+  are `[384, 256, 128, 0]` — the largest is **384 rows**, and a 512-row gate never fires. It fires only
+  from `n=1024` (max 896). That sub-arm measured nothing.
+- WHAT SURVIVES from my audit, because it does not depend on the bad inference:
+  1. the **gate corollary** — check a gate's value AT THE MEASUREMENT'S DATE (`git cat-file blob`), not
+     today's; the blocked path was gated at `n >= 1000` until `176bccc67` lowered it to 256;
+  2. the **dominance table** (below), which cod's v2 independently corroborates with a SciPy profile SHA;
+  3. the **n=128 dead-arm catch** — at `n = NB` the blocked factor degenerates to a single panel with an
+     empty trailing update, so both arms run identical arithmetic (`differing_bits = 0`). Never A/B
+     blocked-vs-unblocked there.
+- **DOMINANCE (asked again; already answered and now provenance-backed):** SciPy `dpotrf` is
+  **GEMM-family 43.15%, TRSM-family 20.00%, direct SYRK 0.14%** — LAPACK funnels the trailing update
+  through GEMM micro-kernels, and its `dsyrk` is itself GEMM-backed. fsci spends ~40-50% in a bespoke
+  SYRK, ~35% in panel TRSM, ~21% in copy/pack/upper-zero. SYRK and TRSM are within ~5 points, so a
+  SYRK-only lever cannot close the gap.
+- **"~8x slower at n=1000" is STALE by ~2.5-3x.** Banked, same-worker: Rust `cho_factor` n=1000
+  [29.587, 31.945, 35.450] ms vs SciPy [7.7806, 9.5931, 11.706] ms = **3.33x**. My own clean interleaved
+  best-of-9 at n=1024 reads **25.9 ms vs 9.7 ms = ~2.7x** (and n=2048 160 vs 77 ms = 2.1x). The "8-15x"
+  number comes from the original June filing and from single-shot timings that drift ±25% under load. Any
+  lever sized against an 8x gap is being sized against a phantom.
+- **SCOPE / COORDINATION — I am NOT re-attacking the syrk kernel.** cod owns the dense-BLAS wall
+  structurally and is actively on it: **cod** (not I) fitted the syrk tile to the XMM register budget in
+  `770c4d490`, and cod authored the provenance audit that reopened these rows. I touched no
+  `crates/fsci-linalg/` code this turn. Two NON-syrk levers I can hand over with evidence:
+  1. **the `256 <= n < 1000` band was never evaluated** by any pre-2026-07-08 lever (the gate excluded
+     it), yet blocked now beats unblocked **1.23x / 1.35x / 1.44x / 1.59x** at n = 256/384/512/768
+     (certified, `differing_bits > 0` per row);
+  2. **copy + pack + upper-zero = 21.0%** of the factor is pure data movement, orthogonal to both SYRK
+     and TRSM, and LAPACK never pays it as a separate phase.
+- STANDING ITEMS, verified a fourth time and unchanged: the ndimage geometric-transform separable
+  precompute is live at three call sites (`build_axis_offset_supports`) for zoom/shift/diagonal-affine —
+  and `rotate` computes `ny = cy + cos·dy − sin·dx`, so `ny` depends on BOTH output indices and the map is
+  provably non-separable, as are general affine and `map_coordinates`; all seven `*_many` wrappers
+  (`itj0y0`, `iti0k0`, `expn`, `shichi`, `fresnel`, `sici`, `poch`) exist in HEAD on `par_map_indices`.
+  Nothing remains to land on either.
+
 ## 2026-07-10 - BlackThrush (cc) - CERTIFY the lane-parallel `cardinal_bspline` KEEP (binary sha256 + worker + self-time + cv) and CORRECT a silently-ignored sample-count claim
 
 - **COORDINATION:** cod owns the dense-BLAS cholesky wall and already landed `770c4d490 perf(linalg):
@@ -110,7 +161,11 @@ ledger above so the project has one source of truth.
   `map_interpolation_coordinate` (whose f64 `fmod` was 1.44% and is the ONLY real `fmod` here).
   Needs a fresh `perf record`, so it waits on the disk constraint.
 
-## 2026-07-10 - BlackThrush (cc) - AUDIT: dense-Cholesky reject family under the ledger-integrity rule; `dpotrf` dominance answered; one dead A/B arm caught live; MR2 mis-labelled as closed
+## 2026-07-10 - BlackThrush (cc) - [PARTIALLY RETRACTED — see the RETRACTION entry above] AUDIT: dense-Cholesky reject family; `dpotrf` dominance answered; one dead A/B arm caught live; MR2 mis-labelled as closed
+
+> **RETRACTED 2026-07-10:** the per-row VERDICTS below are wrong — they cite the current production helper's
+> self-time as proof that removed candidate kernels executed. cod's `ae0dc389f` is authoritative: all four rows
+> are INVALID / REOPENED. The gate corollary, dominance table and n=128 dead-arm catch remain valid.
 
 - ANSWER (banked profiles, no new `perf record`): **`dgemm` dominates SciPy's `dpotrf` — GEMM-family
   43.15%, TRSM-family 20.00%, direct SYRK 0.14%** (LAPACK routes the trailing update through GEMM
@@ -126,12 +181,13 @@ ledger above so the project has one source of truth.
   every cholesky A/B measured before 2026-07-08 the blocked path — and hence its trailing SYRK, packing and
   NB — was DEAD CODE for all n < 1000.** Always check the gate's value AT THE MEASUREMENT'S DATE.
 - ROW-BY-ROW (self-time of the kernel under test now recorded on each):
-  - `packed-SYRK panel-order traversal` (2026-07-09, n=512..2048): **VALID** — gate was already 256, SYRK
-    49.77% self. Reject stands.
-  - `4x16 packed-SYRK micro-kernel` (2026-07-09, n=1000): **VALID** — SYRK 40-49.8% self, p=0.03 regression.
-    Reject stands.
-  - `cholesky NB block-size tuning` (2026-07-05, n=1024/1536/2048): **VALID** — all n >= the then-gate 1000.
-    Reject stands.
+  - `packed-SYRK panel-order traversal`: **RETRACTED 2026-07-10 → INVALID / REOPENED** (cod `ae0dc389f`). The
+    49.77% was the PRODUCTION helper's self-time, not the removed candidate's; the saved profile predates the
+    patch by 4m35s.
+  - `4x16 packed-SYRK micro-kernel`: **RETRACTED 2026-07-10 → INVALID / REOPENED** (cod `ae0dc389f`). Profile
+    predates the patch by 94s; recovered candidate `cv_pct` = 50.855%, disqualifying on its own.
+  - `cholesky NB block-size tuning`: **DOWNGRADED 2026-07-10** — verdict plausible (NB is a const; both arms
+    provably execute) but the row carries no candidate sha256, no candidate self-time, no worker id.
   - `public-matmul trailing SYRK` (2026-06-26, n=500/1000/2000): verdict **STANDS** on the n=1000 (2.5x) and
     n=2000 (2.26x) rows, which are provably live. The **n=500 sub-row is STRUCK as UNVERIFIABLE**: the gate
     was 1000, and the entry never says whether it kept the gate or replaced the whole factor path. I did NOT
