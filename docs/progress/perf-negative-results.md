@@ -7508,3 +7508,42 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   Cholesky SYRK on a proven wider-register target such as AVX-512, with its own
   worker-pinned A/B. On current AVX2-class workers, MR=4 x NR=8 remains the
   register-fitting sweet spot.
+
+## 2026-07-09 - frankenscipy-8l8r1/cod_fsc - ATTRIBUTION Cholesky n=1000 wall; reject blind SYRK tile guessing
+
+- Agent: cod_fsc / Codex. Ledger-grep done before measurement; did not retry
+  public-`matmul` Cholesky, naive blocking/packing, NB retunes, TRSM row fan-out,
+  MR=6, 4x4 dot kernels, panel-order SYRK, flat-workspace keep, or 4x16 SYRK.
+  No code lever landed; temporary attribution hooks were removed before commit.
+- Same local release-perf Criterion row, `cho_factor_gauntlet_scipy/1000x1000`:
+  Rust `cho_factor` [29.587, 31.945, 35.450] ms; SciPy `cho_factor`
+  [7.7806, 9.5931, 11.706] ms, so current fair local factor gap is about 3.33x.
+  Rust factor+solve mean 36.522 ms; SciPy factor+solve mean 11.098 ms.
+- Phase attribution for direct `cholesky_lower_blocked` on the same n=1000
+  fixture, warm omitted, three measured reps: copy 3.593 ms (12.1%), panel
+  factor 0.917 ms (3.1%), panel TRSM 10.654 ms (35.8%), pack 2.169 ms (7.3%),
+  trailing SYRK 11.953 ms (40.2%), upper zero 0.464 ms (1.6%), total 29.762 ms.
+  This confirms the SciPy/LAPACK lesson: the wall is split across `dtrsm` and
+  `dsyrk`/`dgemm`-like update, not just SYRK.
+- Perf evidence: `cargo flamegraph` wrote
+  `/data/tmp/frankenscipy-cholesky-n1000-attr-20260710.svg` (6780 samples, 26
+  lost chunks; routing-only). Top named frames: `cholesky_syrk_flat_rows` about
+  49.77%, `simd_dot` about 24.15%, scoped thread overhead about 6.4%, and
+  `pack_l21_transpose` about 2.61%.
+- `perf stat` on the already-built local release-perf test binary, 30 direct
+  factors with no attribution timers: mean 21.814 ms, digest
+  `0x9f9becf3c61af80a`, 4.018690845B cycles, 14.558563940B instructions, IPC
+  3.62, 757.885M cache refs, 190.939M cache misses (25.19%), frontend stalls
+  156.430M cycles (3.89%); backend-stall event unsupported. `n^3/3` gives about
+  15.28 GFLOP/s, roughly 24% of a 4.0 GHz single-core AVX2 DP FMA peak and under
+  1% of ideal full-socket peak on the 32-core Threadripper PRO 5975WX. Estimated
+  cache-miss traffic is about 17.5 GB/s, below expected DRAM bandwidth.
+- Classification: not DRAM-bandwidth-bound and not frontend issue-bound. The
+  residual is mixed compute/instruction-mix plus locality/parallel overhead:
+  TRSM/exact-dot tails are nearly as large as SYRK, and copy+pack+zero are over
+  20% of the direct factor body. Because MR=6 and 4x16 already regressed on the
+  AVX2 16-YMM register budget, do not widen accumulators again on this host.
+- Decision: REJECT more blind SYRK micro-kernel shape work. Next lever should be
+  a measured joint panel primitive that reduces panel TRSM/exact-tail dot
+  instruction count and panel copy/pack overhead together, with its own
+  same-binary A/B. Safe Rust only; no C BLAS/LAPACK/MKL/XLA linkage.

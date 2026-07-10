@@ -18417,3 +18417,56 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   fresh target with a wider register file (for example AVX-512) is explicitly detected and measured separately. The
   result matches the earlier lesson: widening this kernel past the MR=4 x NR=8 sweet spot increases register pressure
   enough to erase/reverse the lhs-reuse benefit.
+
+## 2026-07-09 - cod_fsc (cod) - ATTRIBUTION dense Cholesky n=1000 bottleneck; REJECT blind SYRK tile-shape guessing
+
+- Lane: `frankenscipy-8l8r1` dense-BLAS / `linalg.cholesky` and `cho_factor`. Ledger-grep was done before any new
+  experiment. Closed/rejected ideas still include public-`matmul` blocked Cholesky, naive blocking/packing, NB retunes,
+  TRSM row fan-out, MR=6, 4x4 dot kernels, packed-SYRK panel-order traversal, and 4x16/two-panel packed-SYRK on AVX2.
+  This pass intentionally made no persistent code change: it attributes the wall before choosing the next primitive.
+- Criterion row, same local machine, release-perf, `cho_factor_gauntlet_scipy/1000x1000`, sample-size 10:
+  - Rust `cho_factor`: [29.587, 31.945, 35.450] ms.
+  - Rust `cho_factor+cho_solve`: [31.732, 36.522, 41.164] ms.
+  - SciPy `cho_factor`: [7.7806, 9.5931, 11.706] ms.
+  - SciPy `cho_factor+cho_solve`: [10.067, 11.098, 12.292] ms.
+  - Current fair local direct-factor gap is about 3.33x, not the stale unpinned 8-9x figure. The wall remains real, but
+    the next lever must be selected from measured phase/counter attribution, not from another guessed micro-kernel size.
+- Temporary profile-only instrumentation of `cholesky_lower_blocked` was added, measured, and removed before commit. It
+  used the exact `make_symmetric_eigh_matrix(1000)` fixture shape from the Criterion row. Warm factor omitted; three
+  measured factors averaged:
+
+  | Phase | Mean ms | Share | LAPACK analog |
+  | --- | ---: | ---: | --- |
+  | input copy into flat workspace | 3.593 | 12.1% | pre/post overhead |
+  | diagonal block factorization | 0.917 | 3.1% | `dpotf2` panel |
+  | panel solve below diagonal | 10.654 | 35.8% | `dtrsm` |
+  | `L21` + packed transpose build | 2.169 | 7.3% | packing overhead |
+  | trailing lower-triangle update | 11.953 | 40.2% | `dsyrk` / `dgemm`-like update |
+  | strict-upper zero fill | 0.464 | 1.6% | post overhead |
+  | total direct blocked factor | 29.762 | 100.0% | factor body |
+
+- Flamegraph evidence: `cargo flamegraph` generated
+  `/data/tmp/frankenscipy-cholesky-n1000-attr-20260710.svg` for the same release-perf unit-test harness. It captured
+  6780 samples and reported 26 lost chunks, so use it only for routing. Named frames still agree with the phase table:
+  `cholesky_syrk_flat_rows` about 49.77% of samples, `simd_dot` about 24.15%, scoped thread spawn/scope about 6.4%, and
+  `pack_l21_transpose` about 2.61%.
+- Hardware counter attribution, same local binary path, no attribution timers, `perf stat` on 30 direct blocked factors:
+  `FSCI_CHOL_ATTR_SUMMARY n=1000 reps=30 mean_ms=21.814 digest=0x9f9becf3c61af80a`; counters were 4.018690845B cycles,
+  14.558563940B instructions, IPC 3.62, 757.885M cache references, 190.939M cache misses (25.19%), 156.430M
+  frontend-stalled cycles (3.89%); `stalled-cycles-backend` was not supported by this PMU. The direct factor's
+  theoretical work is `n^3/3 = 333,333,333` flops, so the measured direct-factor throughput is about 15.28 GFLOP/s.
+  For the 32-core Threadripper PRO 5975WX AVX2/FMA host, that is roughly 24% of a 4.0 GHz single-core DP FMA peak
+  (~64 GFLOP/s) and under 1% of a full-socket ideal peak (~2 TFLOP/s). Cache-miss traffic at 64 B/miss is about
+  12.2 GB over 0.698 s, or roughly 17.5 GB/s, far below expected socket DRAM bandwidth.
+- Classification:
+  - Not a DRAM-bandwidth-bound kernel at n=1000: miss rate is high, but absolute miss bandwidth is low and the 128 MiB
+    L3 can hold the working set. This argues against another pure packing-residency-only attempt as the first move.
+  - Not frontend instruction-issue bound: IPC is high and frontend stalls are under 4%.
+  - The residual is mixed compute/instruction-mix plus locality/parallel overhead: `dtrsm`-like panel solves and exact
+    `simd_dot` tails are nearly as large as trailing SYRK, while copy+pack+zero are over 20% of the direct factor body.
+    Because MR=6 and 4x16 already regressed on the AVX2 16-YMM register budget, simply widening the accumulator count is
+    not justified on this machine.
+- Decision: REJECT any further blind Cholesky SYRK micro-kernel shape work on this host. The next code lever should be a
+  measured joint panel primitive: reduce `dtrsm`/exact-tail dot instruction count and panel copy/pack overhead together,
+  or build a same-binary A/B for panel residency that proves the phase table moves. Do not optimize only `dsyrk` again
+  until a fresh profile shows it dominates by itself. Safe Rust only; no C BLAS/LAPACK/MKL/XLA linkage.
