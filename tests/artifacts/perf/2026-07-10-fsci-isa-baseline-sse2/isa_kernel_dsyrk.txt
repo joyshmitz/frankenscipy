@@ -1,0 +1,23 @@
+# PER-KERNEL ISA verification #1: dsyrk (simd_dot4), self-time + median null gate
+# host thinkstation1, single-file rustc two-build A/B (the ONLY valid method: forbid(unsafe_code)
+# blocks per-fn #[target_feature], so criterion cannot hold both ISA arms in one binary)
+# base_sha=caf387b9f34805c0 avx2_sha=916d7a06c91e4e97
+
+BIT-IDENTICAL: checksum b27df98589396e00 for BOTH builds
+SELF-TIME (perf -F 1999): simd_dot4 = 98.30% (sse2) / 98.23% (avx2) of the microbench
+  => the benchmark genuinely measures the kernel, not loop/black_box overhead (ledger rule)
+SELF-TIME ABSOLUTE: sse2 3.731e9 events -> avx2 2.398e9 events = 1.556x fewer cycles in the kernel
+
+WALL-CLOCK (K=31 interleaved, median null gate):
+  base(sse2) median 1.1015 us/call   avx2 median 0.6658 us/call
+  NULL(A/A base) median 0.992x  range [0.878, 1.137]
+  CAND(sse2/avx2) median 1.555x  DECIDED (outside null range)
+
+=> dsyrk, the dominant cholesky kernel (40-50% of dpotrf), gets 1.555x from +avx2,+fma, bit-identical.
+   self-time (1.556x) and wall-clock (1.555x) agree, confirming the speedup is IN THE KERNEL.
+
+METHOD NOTE: cargo bench CANNOT do this A/B. An in-binary SSE2-vs-AVX2 comparison needs two
+target-feature versions of one fn, which requires #[target_feature] on an unsafe fn; the crates
+are #![forbid(unsafe_code)]. Proven: rustc E0133 on a forbid(unsafe_code) + #[target_feature] fn.
+The valid method is two whole-binary builds from identical source, interleaved (single-file rustc,
+not cargo, ~0 disk). This is why cod added pulp (runtime dispatch) for the production path.

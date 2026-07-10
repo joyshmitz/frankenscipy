@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - PER-KERNEL ISA #1/dsyrk: `simd_dot4` +avx2 = 1.555x (self-time + wall-clock agree), bit-identical + a method finding
+
+- Per-kernel granular verification of the fleet-ISA flag (`d89ca19f6`), ONE kernel per commit, starting
+  with the dominant one: **dsyrk / `simd_dot4`** (fsci `cholesky_syrk_flat_rows` inner, 40-50% of dpotrf).
+- **METHOD FINDING (surfaced): `cargo bench` CANNOT do the SSE2-vs-AVX2 A/B in this codebase.** An in-binary
+  ISA A/B needs two `#[target_feature]` versions of one fn — which requires an `unsafe fn` — but the crates
+  are `#![forbid(unsafe_code)]`. PROVEN: `rustc` rejects a `forbid(unsafe_code)` + `#[target_feature]` fn with
+  E0133. Criterion holds one binary ⇒ it cannot hold both ISA arms. The ONLY valid method is two whole-binary
+  builds from identical source, interleaved (single-file `rustc`, not cargo, ~0 disk). This is exactly why cod
+  added `pulp` (runtime dispatch) for the production path.
+- BIT-IDENTICAL: FNV checksum `b27df98589396e00` for BOTH builds (`+fma` emits no `vfmadd`; `fp-contract=off`).
+- SELF-TIME (perf -F 1999, profile-verified per the ledger rule): `simd_dot4` = **98.30% self (sse2) / 98.23%
+  (avx2)** of the microbench ⇒ it genuinely measures the kernel, not loop/`black_box` overhead. Absolute:
+  **3.731e9 → 2.398e9 events = 1.556x fewer cycles in the kernel.**
+- WALL-CLOCK (K=31 interleaved, median null gate, `thinkstation1`, `base_sha caf387b9`/`avx2_sha 916d7a06`):
+  base(sse2) median **1.1015 µs/call** → avx2 **0.6658 µs/call**; **CAND median 1.555x, DECIDED** (outside the
+  A/A null range [0.878, 1.137], null median 0.992x). Self-time (1.556x) and wall-clock (1.555x) agree ⇒ the
+  speedup is IN THE KERNEL, not measurement artifact.
+- Artifact `tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernel_dsyrk.txt` + `dsyrk_ab.py`.
+- SCOPE: no kernel code touched (`simd_dot4` copied verbatim into the microbench). cod owns the real kernels.
+- NEXT (one per commit): #2 dtrsm (`simd_dot` + `simd_dot2`), #3 dgemm (`simd_dot` in `matmul_flat`). The
+  memory-bound `syrk_axpy` was IN-FLOOR last turn — it needs cache-blocking, not registers, and is a
+  separate (non-ISA) lever.
+- Constraint: single-file `rustc` + perf + Python only; no cargo build, no maturin, ~0 disk, nothing stashed
+  or deleted. rch not needed (no cargo build this turn).
+
 ## 2026-07-10 - BlackThrush (cc) - GENERALIZED: the +avx2,+fma flag moves EVERY dense kernel; the ~8x cholesky gap COLLAPSED to ~4x
 
 - Follows the fleet-ISA fix (`d89ca19f6`). Question: does `+avx2,+fma` move dtrsm/dgemm/dsyrk the same way
