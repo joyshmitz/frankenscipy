@@ -4647,6 +4647,13 @@ where
     output
 }
 
+/// Same-binary A/B toggle for `generic_filter1d`. When `true`, the output pixels are computed
+/// serially (the ORIG behaviour). When `false` (default), the independent per-pixel neighborhood
+/// gather + callback fans across cores. Byte-identical either way. Benchmark knob.
+#[doc(hidden)]
+pub static GENERIC_FILTER1D_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Apply a generic function along one axis.
 ///
 /// Matches the common `scipy.ndimage.generic_filter1d` sliding-window behavior
@@ -4660,7 +4667,7 @@ pub fn generic_filter1d<F>(
     cval: f64,
 ) -> Result<NdArray, NdimageError>
 where
-    F: Fn(&[f64]) -> f64,
+    F: Fn(&[f64]) -> f64 + Sync,
 {
     generic_filter1d_with_origin(input, function, filter_size, axis, 0, mode, cval)
 }
@@ -4675,7 +4682,7 @@ pub fn generic_filter1d_signed_axis<F>(
     cval: f64,
 ) -> Result<NdArray, NdimageError>
 where
-    F: Fn(&[f64]) -> f64,
+    F: Fn(&[f64]) -> f64 + Sync,
 {
     let axis = normalize_signed_axis(axis, input.ndim())?;
     generic_filter1d(input, function, filter_size, axis, mode, cval)
@@ -4690,7 +4697,7 @@ pub fn generic_filter1d_default_axis<F>(
     cval: f64,
 ) -> Result<NdArray, NdimageError>
 where
-    F: Fn(&[f64]) -> f64,
+    F: Fn(&[f64]) -> f64 + Sync,
 {
     generic_filter1d_signed_axis(input, function, filter_size, -1, mode, cval)
 }
@@ -4706,7 +4713,7 @@ pub fn generic_filter1d_with_origin<F>(
     cval: f64,
 ) -> Result<NdArray, NdimageError>
 where
-    F: Fn(&[f64]) -> f64,
+    F: Fn(&[f64]) -> f64 + Sync,
 {
     if filter_size == 0 {
         return Err(NdimageError::InvalidArgument(
@@ -4725,19 +4732,42 @@ where
 
     let mut output = NdArray::zeros(input.shape.clone());
     let offset = filter_size as i64 / 2;
-    for flat_out in 0..input.size() {
-        let out_idx = input.unravel(flat_out);
-        let mut neighborhood = Vec::with_capacity(filter_size);
+    let n = input.size();
 
-        for k in 0..filter_size {
-            let mut in_idx: Vec<i64> = out_idx.iter().map(|&coord| coord as i64).collect();
-            in_idx[axis] += k as i64 - offset - origin;
-            neighborhood.push(input.get_boundary(&in_idx, mode, cval));
+    // Each output pixel gathers its own `filter_size` neighborhood along `axis` and calls the
+    // (pure, Sync) reducer — the pixels are independent and write disjoint slots, so distributing
+    // the output indices across cores is BYTE-IDENTICAL to the serial loop (the reducer is
+    // deterministic; only the owning core changes). scipy's generic_filter1d is single-threaded.
+    let function = &function;
+    let work = |start: usize, os: &mut [f64]| {
+        let mut neighborhood = vec![0.0f64; filter_size];
+        for (li, slot) in os.iter_mut().enumerate() {
+            let out_idx = input.unravel(start + li);
+            for (k, cell) in neighborhood.iter_mut().enumerate() {
+                let mut in_idx: Vec<i64> = out_idx.iter().map(|&coord| coord as i64).collect();
+                in_idx[axis] += k as i64 - offset - origin;
+                *cell = input.get_boundary(&in_idx, mode, cval);
+            }
+            *slot = function(&neighborhood);
         }
+    };
 
-        output.data[flat_out] = function(&neighborhood);
+    let nthreads = if GENERIC_FILTER1D_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        1
+    } else {
+        ndimage_filter_thread_count(n, filter_size)
+    };
+    if nthreads <= 1 {
+        work(0, &mut output.data);
+        return Ok(output);
     }
-
+    let chunk = n.div_ceil(nthreads);
+    let work = &work;
+    std::thread::scope(|scope| {
+        for (t, out_chunk) in output.data.chunks_mut(chunk).enumerate() {
+            scope.spawn(move || work(t * chunk, out_chunk));
+        }
+    });
     Ok(output)
 }
 
@@ -18221,6 +18251,68 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn generic_filter1d_parallel_matches_serial_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The parallel per-pixel path must be BYTE-IDENTICAL to the serial loop, across axes, window
+        // sizes, origins, boundary modes, and shapes above and below the parallel gate. A non-linear
+        // reducer (order-sensitive) makes any accidental reordering visible.
+        let reducer = |w: &[f64]| -> f64 {
+            let mut acc = 0.0;
+            for (i, &v) in w.iter().enumerate() {
+                acc = (acc + (v * (i as f64 + 1.3)).sin()).mul_add(1.000_001, v.abs().ln_1p());
+            }
+            acc
+        };
+        let shapes: &[Vec<usize>] = &[vec![40], vec![9, 11], vec![320, 320], vec![12, 10, 9]];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let data: Vec<f64> = (0..total)
+                .map(|k| ((k as f64 * 0.37).sin() * 5.0 - 0.3) + (k % 5) as f64)
+                .collect();
+            let input = NdArray::new(data, shape.clone()).unwrap();
+            for &size in &[2usize, 3, 5] {
+                for axis in 0..shape.len() {
+                    for mode in [
+                        BoundaryMode::Reflect,
+                        BoundaryMode::Nearest,
+                        BoundaryMode::Constant,
+                        BoundaryMode::Wrap,
+                    ] {
+                        for origin in [-1i64, 0, 1] {
+                            if (size as i64) / 2 + origin < 0 || (size as i64) / 2 - origin < 0 {
+                                continue;
+                            }
+                            GENERIC_FILTER1D_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                            let ser = generic_filter1d_with_origin(
+                                &input, reducer, size, axis, origin, mode, 1.5,
+                            );
+                            GENERIC_FILTER1D_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                            let par = generic_filter1d_with_origin(
+                                &input, reducer, size, axis, origin, mode, 1.5,
+                            );
+                            match (ser, par) {
+                                (Ok(a), Ok(b)) => {
+                                    assert_eq!(a.shape, b.shape);
+                                    for (x, y) in a.data.iter().zip(&b.data) {
+                                        assert_eq!(
+                                            x.to_bits(),
+                                            y.to_bits(),
+                                            "shape={shape:?} size={size} axis={axis} mode={mode:?} origin={origin}"
+                                        );
+                                    }
+                                }
+                                (Err(_), Err(_)) => {}
+                                _ => panic!("serial/parallel disagree on Ok/Err"),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        GENERIC_FILTER1D_FORCE_SERIAL.store(false, Ordering::Relaxed);
     }
 
     #[test]

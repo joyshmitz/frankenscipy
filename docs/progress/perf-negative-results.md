@@ -9141,3 +9141,22 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   suite 269/0. Each output element depends only on its flat index; the chunk partition is the only
   change. Gate `ndimage_filter_thread_count(total, 8)` (>= 32K elems). Safe Rust; no external
   BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN ndimage generic_filter1d parallel per-pixel (8.36x compute-bound, byte-identical)
+
+- **WIN; shipped.** `generic_filter1d` (1-D user-callback filter) was a SERIAL straggler (`F: Fn(&[f64])
+  -> f64`, `for flat_out in 0..size` loop) while the N-D sibling `generic_filter` already parallelizes
+  with `F: Fn + Sync` + chunked output-index fan-out. Tightened the four generic_filter1d bounds to
+  `+ Sync` (consistent with generic_filter) and rewrote the core `generic_filter1d_with_origin` to the
+  same chunked `thread::scope` output dispatch (each thread gathers its pixels' neighborhoods + calls
+  the reducer). scipy's generic_filter1d is single-threaded.
+- Same-binary A/B (GENERIC_FILTER1D_FORCE_SERIAL knob, serial/parallel/serial interleaved,
+  black-boxed, 1500x1500 size=7 axis=1, reducer = a couple transcendentals per window elem):
+  **DECIDED 8.364x** (696.47->71.38ms), NULL(A/A) 0.993x [0.948,1.026], worker hz2. Compute-bound
+  (user reducer) → near-linear core scaling, much stronger than the memory-bound filters.
+- **Byte-identical: bitmism=0** probe; test `generic_filter1d_parallel_matches_serial_bitexact` (axes,
+  sizes 2/3/5, origins ±1/0, 4 modes, 1/2/3-D above & below the gate, ORDER-SENSITIVE nonlinear
+  reducer, to_bits equality) passes; fsci-ndimage suite 270/0 (existing generic_filter1d callers still
+  compile under +Sync). Each pixel's neighborhood gather + reducer is independent, writes its own slot;
+  chunk partition is the only change. gate ndimage_filter_thread_count(n, filter_size). API note: the
+  `+ Sync` bound tightening matches generic_filter's existing bound. Safe Rust; no external BLAS/LAPACK.
