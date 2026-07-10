@@ -1611,8 +1611,24 @@ fn compute_axis_support(
             }
         };
         let floor = cc.floor() as isize;
-        let span = order as isize;
-        for k in (floor - span)..=(floor + span) {
+        // COMPACT SUPPORT. `cardinal_bspline(n, x)` vanishes EXACTLY (bit-zero, verified over
+        // 1.5M adversarial args) outside `|x| < (n+1)/2`, so at most `n+1` of the taps the ORIG
+        // loop evaluated over `floor ± order` can be nonzero — it spent `2n+1` kernel calls to
+        // keep `n+1` (7→4 at order 3, 11→6 at order 5), and `cardinal_bspline` is 61.7% of a
+        // per-pixel transform's self time. The nonzero taps are contiguous and, in terms of
+        // `f = floor(cc)`, always lie in `[f - n/2, f + n/2 + 1]` (integer division):
+        // odd `n` pins them exactly; even `n` straddles by one, which the retained
+        // `weight != 0.0` filter drops. Deriving the bounds from `f` by INTEGER arithmetic is
+        // load-bearing — the obvious `(cc - half).floor()` rounds a coordinate one ULP below an
+        // integer back onto it and silently drops a legitimate ~8.9e-16 tap.
+        let span = if NDIMAGE_BSPLINE_COMPACT_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            // ORIG comparator: the full `2·order+1` window.
+            (order as isize, order as isize)
+        } else {
+            let hn = (order / 2) as isize;
+            (hn, hn + 1)
+        };
+        for k in (floor - span.0)..=(floor + span.1) {
             let weight = cardinal_bspline(order, cc - k as f64);
             if weight != 0.0 {
                 support.push((fold(k), weight));
@@ -8777,6 +8793,14 @@ pub static NDIMAGE_ZOOM_SEPARABLE_DISABLE: std::sync::atomic::AtomicBool =
 /// single load. Byte-identical either way. Benchmark knob; each transform reads it ONCE per call.
 #[doc(hidden)]
 pub static NDIMAGE_SPLINE_OFFSET_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Same-binary A/B toggle for `compute_axis_support`'s cardinal-B-spline tap loop: when `true`,
+/// the loop spans the ORIG `floor(cc) ± order` (`2·order+1` taps) and discards the zero-weight
+/// ones; when `false` (default) it spans only the `order+1` taps that can be nonzero. Byte-
+/// identical either way. Benchmark knob; read ONCE per call.
+#[doc(hidden)]
+pub static NDIMAGE_BSPLINE_COMPACT_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Zoom (rescale) an array by the given factors.
@@ -19184,6 +19208,182 @@ mod tests {
                         a.to_bits(),
                         b.to_bits(),
                         "parallel shift order={order} {mode:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bspline_compact_support_matches_full_window_bitexact() {
+        use std::sync::atomic::Ordering;
+        // `compute_axis_support`'s compact tap window (`floor - n/2 ..= floor + n/2 + 1`) must be
+        // BYTE-IDENTICAL to the ORIG full `floor ± order` window, which evaluated `2·order+1`
+        // taps and discarded the zero-weight ones. Covers the cardinal Nearest/Reflect/Mirror
+        // kernel (the only path the lever touches) plus Constant/Wrap as controls, across the
+        // separable (zoom/shift/diag-affine) and per-pixel (rotate/general-affine/map_coordinates)
+        // branches.
+        let modes = [
+            BoundaryMode::Reflect,
+            BoundaryMode::Mirror,
+            BoundaryMode::Nearest,
+            BoundaryMode::Constant,
+        ];
+        let shapes: &[Vec<usize>] = &[vec![19], vec![13, 11], vec![7, 6, 8]];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let data: Vec<f64> = (0..total)
+                .map(|k| (k as f64 * 0.31).cos() * 1.7 - 0.3)
+                .collect();
+            let arr = NdArray::new(data, shape.clone()).unwrap();
+            let zooms: Vec<f64> = shape.iter().map(|_| 1.6).collect();
+            // INTEGER shifts drive coords exactly onto integers (support-edge taps evaluate to
+            // exact 0.0); the 1-ULP perturbation is the case that breaks an FP-derived bound.
+            let int_shifts: Vec<f64> = shape.iter().map(|_| 1.0).collect();
+            let ulp_shifts: Vec<f64> = shape
+                .iter()
+                .map(|_| f64::from_bits(1.0f64.to_bits() + 1))
+                .collect();
+            let frac_shifts: Vec<f64> = shape
+                .iter()
+                .enumerate()
+                .map(|(d, _)| 0.7 - d as f64)
+                .collect();
+            for order in 0..=5usize {
+                for &mode in &modes {
+                    let variants = |orig: bool| {
+                        NDIMAGE_BSPLINE_COMPACT_DISABLE.store(orig, Ordering::Relaxed);
+                        (
+                            zoom(&arr, &zooms, order, mode, 1.25).unwrap(),
+                            shift(&arr, &frac_shifts, order, mode, 1.25).unwrap(),
+                            shift(&arr, &int_shifts, order, mode, 1.25).unwrap(),
+                            shift(&arr, &ulp_shifts, order, mode, 1.25).unwrap(),
+                        )
+                    };
+                    let (z_o, s_o, i_o, u_o) = variants(true);
+                    let (z_c, s_c, i_c, u_c) = variants(false);
+                    NDIMAGE_BSPLINE_COMPACT_DISABLE.store(false, Ordering::Relaxed);
+                    for (a, b) in z_o.data.iter().zip(z_c.data.iter()) {
+                        assert_eq!(
+                            a.to_bits(),
+                            b.to_bits(),
+                            "zoom {shape:?} order={order} {mode:?}"
+                        );
+                    }
+                    for (tag, o, c) in [
+                        ("frac", &s_o, &s_c),
+                        ("integer", &i_o, &i_c),
+                        ("integer+1ulp", &u_o, &u_c),
+                    ] {
+                        for (a, b) in o.data.iter().zip(c.data.iter()) {
+                            assert_eq!(
+                                a.to_bits(),
+                                b.to_bits(),
+                                "shift[{tag}] {shape:?} order={order} {mode:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2-D: diagonal affine (separable) + general affine / rotate / map_coordinates
+        // (per-pixel, where `compute_axis_support` is 61.7% of self time).
+        let arr = NdArray::new(
+            (0..14 * 12)
+                .map(|k| (k as f64 * 0.19).sin() + 1.4)
+                .collect(),
+            vec![14, 12],
+        )
+        .unwrap();
+        let diag = [[0.8, 0.0, 1.1], [0.0, 1.3, -0.4]];
+        let general = [[0.9, 0.2, 1.1], [-0.15, 1.05, -0.4]];
+        // Coordinates pinned exactly on integers and one ULP either side of them.
+        let coords: Vec<Vec<f64>> = {
+            let (mut rr, mut cc) = (Vec::new(), Vec::new());
+            for i in 0..14usize {
+                for j in 0..12usize {
+                    let (y, x) = (i as f64, j as f64);
+                    rr.push(match (i + j) % 3 {
+                        0 => y,
+                        1 => f64::from_bits(y.to_bits() + 1),
+                        _ => y + 0.37,
+                    });
+                    cc.push(match (i + j) % 3 {
+                        0 => x,
+                        1 => f64::from_bits(x.to_bits().wrapping_sub(1)),
+                        _ => x + 0.63,
+                    });
+                }
+            }
+            vec![rr, cc]
+        };
+        for order in 0..=5usize {
+            for &mode in &modes {
+                let variants = |orig: bool| {
+                    NDIMAGE_BSPLINE_COMPACT_DISABLE.store(orig, Ordering::Relaxed);
+                    (
+                        affine_transform(&arr, &diag, order, mode, 1.25).unwrap(),
+                        affine_transform(&arr, &general, order, mode, 1.25).unwrap(),
+                        rotate(&arr, 23.0, false, order, mode, 1.25).unwrap(),
+                        map_coordinates(&arr, &coords, order, mode, 1.25).unwrap(),
+                    )
+                };
+                let (d_o, g_o, r_o, m_o) = variants(true);
+                let (d_c, g_c, r_c, m_c) = variants(false);
+                NDIMAGE_BSPLINE_COMPACT_DISABLE.store(false, Ordering::Relaxed);
+                for (a, b) in d_o.data.iter().zip(d_c.data.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "diag affine order={order} {mode:?}"
+                    );
+                }
+                for (a, b) in g_o.data.iter().zip(g_c.data.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "general affine order={order} {mode:?}"
+                    );
+                }
+                for (a, b) in r_o.data.iter().zip(r_c.data.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "rotate order={order} {mode:?}");
+                }
+                for (a, b) in m_o.iter().zip(m_c.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "map_coordinates order={order} {mode:?}"
+                    );
+                }
+            }
+        }
+
+        // Multi-threaded chunking: the lever sits inside the per-pixel closure, so exercise it
+        // on the parallel fan-out too.
+        let big = NdArray::new(
+            (0..256 * 256).map(|k| (k as f64 * 0.011).cos()).collect(),
+            vec![256, 256],
+        )
+        .unwrap();
+        assert!(
+            ndimage_filter_thread_count(256 * 256, 4usize.pow(2)) > 1,
+            "big rotate case must exercise the parallel chunked path"
+        );
+        for order in [1usize, 3, 5] {
+            for &mode in &[BoundaryMode::Reflect, BoundaryMode::Mirror] {
+                let variants = |orig: bool| {
+                    NDIMAGE_BSPLINE_COMPACT_DISABLE.store(orig, Ordering::Relaxed);
+                    rotate(&big, 33.0, false, order, mode, 0.5).unwrap()
+                };
+                let r_o = variants(true);
+                let r_c = variants(false);
+                NDIMAGE_BSPLINE_COMPACT_DISABLE.store(false, Ordering::Relaxed);
+                for (a, b) in r_o.data.iter().zip(r_c.data.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "parallel rotate order={order} {mode:?}"
                     );
                 }
             }

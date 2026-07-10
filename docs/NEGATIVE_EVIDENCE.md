@@ -6,6 +6,96 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - KEEP: ndimage `compute_axis_support` compact cardinal-B-spline tap window (order3 1.33-1.40x, order5 1.51-1.56x self, BYTE-IDENTICAL) + REJECT of the FP-derived bound
+
+- LEDGER FIRST. The two tasks I was handed were BOTH already landed, so this entry also records
+  the stale-scorecard finding (see NEUTRAL below) before digging a fresh frame.
+- PROFILE FIRST (this is the whole story — my first guess was WRONG). I assumed the unlanded lever
+  was extending `c396459ef`'s flat-offset leaf from the separable path to the per-pixel path.
+  `perf record` of `rotate` order=3 (512², release-perf) ranked, self-time:
+  `compute_axis_support` **61.68%**, `sample_spline_recursive` 19.92%, `sample_interpolated` 3.08%,
+  `fmod` 1.15%, `bspline_reflect_coefficients` 0.96%, `floor` 0.74%. The leaf is the #2 frame, not
+  the #1 — the flat-offset extension would have chased ~20%. Took the top frame instead.
+- ROOT CAUSE (`compute_axis_support`, lib.rs ~1613): the cardinal Nearest/Reflect/Mirror kernel
+  looped `k in floor(cc)-order ..= floor(cc)+order`, calling `cardinal_bspline(order, cc-k)` on all
+  `2·order+1` taps and DISCARDING the zero-weight ones via `if weight != 0.0`. But a cardinal
+  B-spline of order n has support `|x| < (n+1)/2` ⇒ at most `n+1` taps can be nonzero, and they are
+  CONTIGUOUS. It spent 7 kernel calls to keep 4 (order 3) and 11 to keep 6 (order 5).
+- FIX: narrow the window to `[f - n/2, f + n/2 + 1]` (integer division on `f = floor(cc)`). Odd `n`
+  pins the nonzero taps exactly; even `n` straddles by one, which the RETAINED `!= 0.0` filter
+  drops. Kernel-call counts: order1 3→2, order2 5→4, order3 7→4, order4 9→6, order5 11→6.
+- REJECTED SUB-VARIANT (caught BEFORE it shipped, by an adversarial edge probe): the obvious bound
+  `k_lo = (cc - half).floor() + 1`, `k_hi = (cc + half).ceil() - 1`. For `cc` ONE ULP below an
+  integer (e.g. `cc = -7 - 2^-50`), `cc - half` rounds to exactly `-8.0` (ties-to-even; ulp near 8
+  is 2^-49, twice the offset), so `k_lo` lands at -7 and DROPS the legitimate `k=-8` tap whose
+  weight is ~8.9e-16. 46 bit-mismatches over 1870 adversarial `cc`. The FP subtraction is the bug:
+  derive the bounds from `floor(cc)` by INTEGER arithmetic and the hazard vanishes.
+- BYTE-IDENTICAL, and the identity rests on a property I verified rather than assumed:
+  `|x| >= (n+1)/2 ⇒ cardinal_bspline(n,x) == 0.0` EXACTLY (bit-zero). Standalone probe: 3,000,120
+  outside-support args over orders 1..=5 → **0 violations**; compact-range coverage → **0 misses**.
+  Then the full tap-set compared bit-for-bit over **1,504,990** `cc` values (integers, halves,
+  quarters, thirds, and ±1/±2 ULP neighbours of each, plus 300k random per order) → **0 mismatches**.
+- NEW TEST `bspline_compact_support_matches_full_window_bitexact` (to_bits, A/B via the new
+  `NDIMAGE_BSPLINE_COMPACT_DISABLE` knob): zoom/shift × order 0..=5 × 4 modes × ndim 1/2/3, with
+  shifts pinned to INTEGER and INTEGER+1ULP (the case the rejected variant broke); plus
+  diag-affine / general-affine / rotate / map_coordinates with coords on integers and ±1 ULP; plus
+  a 256² parallel-chunked rotate. fsci-ndimage **263/0**.
+- MEASURED, same-binary A/B `NDIMAGE_BSPLINE_COMPACT_DISABLE`, `taskset -c 56` (single core ⇒
+  `available_parallelism()==1` ⇒ SERIAL path: the honest way to measure a per-pixel arithmetic
+  lever), reps=3 × 7-9 interleaves, best-of, all **bitmism=0**, maxdiff=0.0e0 on all 45 rows:
+
+  | order | rotate | affine_gen | map_coords | kernel calls |
+  | ---: | ---: | ---: | ---: | --- |
+  | 1 | 1.13x | 1.03x | 1.02x | 3→2 |
+  | 2 | 1.07x | 1.08x | 1.12x | 5→4 |
+  | 3 | **1.37x** | **1.38x** | **1.37x** | 7→4 |
+  | 4 | 1.30x | 1.31x | 1.30x | 9→6 |
+  | 5 | **1.51x** | **1.54x** | **1.53x** | 11→6 |
+
+  (Reflect; Mirror within ±0.05x. cv 0.7-2.5% on the clean rows. order=3 is scipy's DEFAULT.)
+- HARNESS NULL CONTROL (the reading that makes the table trustworthy): `Constant` mode never enters
+  the cardinal loop — order 3 routes to `fold_wrap_cubic`, other orders to `bspline_local_support` —
+  so the knob MUST read ~1.00x there. It does, at EVERY order: 0.98-1.04x best, ~1.00x mean.
+  NOISE DISCIPLINE: the first (multi-threaded, load-avg 37) runs read 0.90-1.21x on that control
+  with cv 8-30% and were DISCARDED, not published. Pinning to one core dropped cv to 0.7-2.5% and
+  the control snapped to 1.00x. A `rch exec -- sh -c 'cat /proc/loadavg'` "remote" probe silently
+  ran LOCALLY (rch fails open on non-compile commands) — all 4 workers reporting an identical load
+  average was the tell.
+- PROFILE MOVED (proof the lever hit the ranked target): re-profile of the compact arm ranks
+  `sample_spline_recursive` 19.92% → **27.51%** with its ABSOLUTE cost unchanged (share rises only
+  because total time fell), i.e. `compute_axis_support` 61.68% → 61.39% of a 1.37x-smaller total =
+  **1.38x less absolute time** in the frame we attacked. Predicted-vs-measured agree: the 7→4
+  call ratio (1.75x) minus the loop's fixed costs (`fold`'s `rem_euclid`, `push`,
+  `map_interpolation_coordinate`, `floor`) lands exactly on 1.37x.
+- SCOPE: lifts EVERY consumer of the cardinal kernel — the per-pixel transforms
+  (`rotate`, general `affine_transform`, `map_coordinates`, `geometric_transform`) AND the
+  separable precompute (`build_axis_offset_supports` calls the same `compute_axis_support`), so
+  zoom/shift/diag-affine inherit it on their `Σ out_shape[d]` support builds.
+- GUARDS: `cargo test -p fsci-ndimage` **263/0**. scipy differential packet (now unblocked, see
+  NEUTRAL): `diff_ndimage` 5/0, `diff_ndimage_zoom` 1/0, `diff_ndimage_affine_transform_properties`
+  1/0, all with `FSCI_REQUIRE_SCIPY_ORACLE=1` against live local SciPy. `cargo fmt -p fsci-ndimage
+  --check` 0 diffs. `ubs` on both touched files: 0 critical. `git diff --check` clean.
+- NEUTRAL / STALE-SCORECARD (recorded so the next agent doesn't re-dig): the ndimage
+  "geometric-transform separable precompute" and the special `*_many` wrappers for
+  `itj0y0, iti0k0, expn, shichi, fresnel, sici, poch` were BOTH already landed — the separable
+  precompute at `c396459ef`/`0a7086e76` (zoom/shift/diag-affine; `rotate`/general-affine/
+  `map_coordinates` have COUPLED coords and can never be separable), and all seven `*_many`
+  wrappers already exist in `convenience.rs` on `par_map_indices`. Also: bead
+  `frankenscipy-2p2hv` (fsci-special conflict markers) is RESOLVED and CLOSED — 0 markers remain,
+  `cargo check -p fsci-special --all-targets` and `-p fsci-conformance --all-targets` both pass, so
+  the scipy differential packet runs again for every crate.
+- LEVER (generalizes): grep kernels that evaluate a COMPACT-SUPPORT basis over its full window and
+  filter zeros afterwards — B-spline taps, wavelet filters, windowed resamplers — and shrink the
+  loop to the `n+1` nonzero span. Sibling of the interpolate compact-support tensor win. GOTCHA:
+  derive the span from `floor(coord)` with INTEGER arithmetic; an FP-derived bound silently drops
+  sub-ULP-boundary taps and is NOT bit-identical.
+- RETRY CONDITION for the flat-offset leaf on the per-pixel path (NOT done here, one lever per
+  commit): `sample_spline_recursive` is now the #2 frame at 27.51% and its leaf still recomputes
+  `Σ idx[d]·stride[d]`. Premultiply the per-pixel taps by `coeffs.strides[axis]` and route to the
+  existing `sample_spline_offsets`. Expect ~1.10-1.15x on top of this. Next lever after that:
+  `fold`'s `rem_euclid` (visible as `fmod` ~1.2%) is only needed for taps that actually cross a
+  boundary — the interior-run fast path.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP (modest): geometric-transform per-pixel `unravel_with_shape` → per-chunk odometer (zoom 1.04-1.10x, BYTE-IDENTICAL) + BUGFIX: torn A/B-flag read introduced by c396459ef
 
 - Follows the ranked hotspot the previous commit's re-profile exposed: after the flat-offset leaf

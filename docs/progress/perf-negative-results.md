@@ -4,6 +4,146 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-10 - frankenscipy-cc-bspline-compact - KEEP (byte-identical): ndimage `compute_axis_support` compact cardinal-B-spline tap window — order3 1.37x, order5 1.53x self; plus REJECT of the FP-derived tap bound
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`)
+- Lever: shrink the cardinal Nearest/Reflect/Mirror tap loop in
+  `compute_axis_support` from the full `floor(cc) ± order` window (`2·order+1`
+  `cardinal_bspline` calls, zero-weight taps discarded afterwards) to the
+  `order+1` contiguous taps that can actually be nonzero, derived as
+  `[f - n/2, f + n/2 + 1]` by INTEGER arithmetic on `f = floor(cc)`.
+- Ledger consulted first. No prior rejection covers this frame. The nearest
+  prior art is `frankenscipy-wm14d` (order=1 zoom bilinear fast path, KEEP) and
+  the 2026-07-09 separable-support/flat-offset keeps, none of which touch the
+  tap-window width. Entry 12133 of `docs/NEGATIVE_EVIDENCE.md` explicitly named
+  "a SIMD/cache-blocked `sample_interpolated`" as the actionable geometric-transform
+  lever; this is the arithmetic half of that.
+- Graveyard/artifact route tested: compact-support basis evaluation (skip
+  provably-zero no-ops), integer-domain bound derivation to avoid FP boundary
+  rounding, retained exact-zero filter as a correctness backstop.
+- Decision: KEEP. Byte-identical, no gate, no branch in the hot path beyond a
+  single relaxed atomic load for the A/B knob.
+
+- PROFILE (mechanism came from the profile, and REFUTED the initial guess).
+  `perf record -F 999 -g`, `release-perf`, `rotate` 512² order=3 Reflect, ranked
+  self-time (frames >= 0.1%):
+
+  | Frame | Self |
+  | --- | ---: |
+  | `compute_axis_support` | **61.68%** |
+  | `sample_spline_recursive` | 19.92% |
+  | `sample_interpolated` | 3.08% |
+  | `fill_pixels_parallel::{closure}` | 1.38% |
+  | `libm fmod` | 1.15% |
+  | `bspline_reflect_coefficients` | 0.96% |
+  | `floor` | 0.74% |
+  | `prefilter_spline_coefficients` | 0.42% |
+  | `bspline_reflect_axis_inplace` | 0.37% |
+
+  The lever I was handed (extend `c396459ef`'s flat-offset leaf to the per-pixel
+  path) targets frame #2 at 19.92%. Took frame #1 instead.
+
+- Baseline/candidate command (single core ⇒ `available_parallelism()==1` ⇒ the
+  transforms take the SERIAL path, which is the honest measurement for a
+  per-pixel arithmetic lever; the parallel fan-out only adds scheduler noise):
+  `FSCI_AB_REPS=3 FSCI_AB_ITERS=9 taskset -c 56 /data/tmp/cargo-target/release-perf/perf_perpixel_leaf both <order>`
+- Same-binary A/B knob: `NDIMAGE_BSPLINE_COMPACT_DISABLE` (read ONCE per call).
+- Same-worker interleaved A/B, best-of, all rows `bitmism=0` / `maxdiff=0.0e0`:
+
+  | Workload (512², Reflect) | full window | compact | Ratio | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `rotate` order=3 | 118.63 ms | 86.60 ms | 1.37x | keep |
+  | `affine_transform` (general) order=3 | 116.76 ms | 84.47 ms | 1.38x | keep |
+  | `map_coordinates` order=3 | 119.37 ms | 87.19 ms | 1.37x | keep |
+  | `rotate` order=5 | 305.93 ms | 202.84 ms | 1.51x | keep |
+  | `affine_transform` (general) order=5 | 307.87 ms | 200.08 ms | 1.54x | keep |
+  | `map_coordinates` order=5 | 312.91 ms | 204.32 ms | 1.53x | keep |
+  | `rotate` order=4 | 201.03 ms | 154.40 ms | 1.30x | keep |
+  | `rotate` order=2 | 68.64 ms | 63.97 ms | 1.07x | keep |
+  | `rotate` order=1 | 31.98 ms | 28.37 ms | 1.13x | keep |
+  | NULL CONTROL `rotate` order=3 Constant | 37.01 ms | 37.36 ms | 0.99x | control ok |
+  | NULL CONTROL `rotate` order=5 Constant | 225.91 ms | 227.09 ms | 0.99x | control ok |
+  | NULL CONTROL `map_coordinates` order=1 Constant | 39.60 ms | 40.34 ms | 0.98x | control ok |
+
+  cv 0.7-2.5% on the clean rows. Mirror mode within ±0.05x of Reflect.
+- Same-worker internal keep/loss/neutral: `30/0/15` (the 15 neutrals are the
+  `Constant` null-control rows, which MUST be ~1.00x and are).
+- NULL CONTROL rationale: `Constant` never reaches the compact loop (order 3 →
+  `fold_wrap_cubic`, other orders → `bspline_local_support`), so the knob is inert
+  there. Any run whose control drifts off 1.00x is noise-dominated and discarded.
+- NOISE DISCIPLINE (two readings discarded before publishing): the first A/B ran
+  multi-threaded on a box at load-avg 37 and read 0.90-1.21x on the null control
+  with cv 8-30%. Discarded. A follow-up "remote" run via
+  `rch exec -- sh -c 'cat /proc/loadavg'` reported an identical load average from
+  all four workers — the tell that `rch` fails OPEN on non-compile commands and had
+  run locally the whole time. Pinning to a single core dropped cv to 0.7-2.5% and
+  snapped the control to 1.00x.
+
+- PROFILE MOVED (the ranked target actually shrank): re-profiling the compact arm
+  ranks `sample_spline_recursive` at **27.51%** (was 19.92%) while its ABSOLUTE
+  cost is unchanged — its share rises only because total time fell 1.37x. Equivalently
+  `compute_axis_support` holds 61.39% of a 1.37x-smaller total = **1.38x less absolute
+  time** in the attacked frame. The residual gap vs the naive 7/4 = 1.75x call ratio is
+  the loop's fixed cost: `fold`'s `rem_euclid` (surfaces as `fmod`), the `support.push`,
+  `map_interpolation_coordinate`, and `floor`.
+
+- Correctness / behavior parity:
+  - The identity rests on `|x| >= (n+1)/2 ⇒ cardinal_bspline(n,x) == 0.0` EXACTLY.
+    VERIFIED, not assumed: standalone probe over **3,000,120** outside-support
+    arguments (orders 1..=5, exact support edges, ±{0,1e-18..3.0} offsets, and every
+    `cc - k` the real loop produces for 200k random `cc` per order) → **0 violations**;
+    compact-range coverage over the same set → **0 misses**.
+  - Full tap-set bit-comparison (index AND `to_bits()` weight, in push order) over
+    **1,504,990** `cc` values — integers, halves, quarters, thirds, tenths, and ±1/±2
+    ULP neighbours of each, plus 300k random per order → **0 mismatches**.
+  - PASS: new `bspline_compact_support_matches_full_window_bitexact` (`to_bits` A/B over
+    the knob): zoom/shift × order 0..=5 × 4 modes × ndim 1/2/3, with shifts pinned to
+    INTEGER and INTEGER+1ULP; diag-affine / general-affine / rotate / map_coordinates with
+    coordinates on integers and ±1 ULP; 256² parallel-chunked rotate.
+  - PASS: `cargo test -p fsci-ndimage` → `263 passed; 0 failed`.
+  - PASS (scipy oracle, live local SciPy, `FSCI_REQUIRE_SCIPY_ORACLE=1`):
+    `diff_ndimage` 5/0, `diff_ndimage_zoom` 1/0,
+    `diff_ndimage_affine_transform_properties` 1/0.
+  - PASS: `cargo fmt -p fsci-ndimage -- --check` → 0 diffs. `git diff --check` clean.
+  - PASS: `ubs crates/fsci-ndimage/src/lib.rs crates/fsci-ndimage/src/bin/perf_perpixel_leaf.rs`
+    → 0 critical.
+
+- REJECTED SUB-VARIANT (killed by an adversarial edge probe BEFORE it shipped — the
+  reason this entry exists): the natural FP bound
+  `k_lo = (cc - half).floor() + 1`, `k_hi = (cc + half).ceil() - 1` with
+  `half = (order+1)/2`. It passed 200k random `cc` per order cleanly, then failed the
+  boundary probe: for `cc` one ULP below an integer (e.g. `cc = -7 - 2^-50`), the exact
+  difference `-8 - 2^-50` is exactly halfway between two f64s near -8 (ulp there is
+  2^-49), so ties-to-even rounds it to **exactly -8.0**; `k_lo` becomes -7 and the
+  legitimate `k = -8` tap — weight ~8.9e-16, which ORIG pushes — is silently dropped.
+  46 bit-mismatches / 1870 adversarial `cc`. NOT byte-identical. Do not retry any
+  tap-window bound computed by subtracting in floating point; derive it from
+  `floor(cc)` with integer arithmetic (as shipped) so no rounding can cross a tap.
+
+- Negative evidence / stale scorecard (so the next agent does not re-dig): the two
+  tasks queued for this lane were ALREADY LANDED. (1) The ndimage
+  "geometric-transform separable precompute" shipped at `c396459ef` + `0a7086e76`
+  for zoom / shift / diagonal-affine; `rotate`, general affine and `map_coordinates`
+  have COUPLED coordinates and can never be axis-separable, so there is nothing left
+  to land there. (2) All seven scalar-only special ufuncs — `itj0y0`, `iti0k0`, `expn`,
+  `shichi`, `fresnel`, `sici`, `poch` — already have parallel `*_many` wrappers in
+  `crates/fsci-special/src/convenience.rs` built on `par_map_indices`. Additionally
+  bead `frankenscipy-2p2hv` is resolved and closed: 0 conflict markers remain and both
+  `cargo check -p fsci-special --all-targets` and `-p fsci-conformance --all-targets`
+  pass, so the scipy differential packet is unblocked for every crate.
+
+- Retry condition / next levers, in ranked order from the post-change profile:
+  1. `sample_spline_recursive` is now #2 at **27.51%** and its leaf still recomputes
+     `Σ idx[d]·stride[d]` via `coeffs.get`. Premultiply the per-pixel taps by
+     `coeffs.strides[axis]` and route to the existing `sample_spline_offsets` (the
+     separable paths already do exactly this, `c396459ef`). Expect ~1.10-1.15x on top.
+     Held back here to keep ONE lever per commit.
+  2. `fold`'s `rem_euclid` (visible as `fmod` ~1.2%) runs on every tap, but only taps
+     that cross a boundary need folding — split the compact run into an interior fast
+     path (no fold) and the boundary remainder.
+  3. Only then consider SIMD across the `order+1` taps: with the window compacted, the
+     tap count is 2/4/6, which maps onto 2/4-lane f64 vectors cleanly.
+
 ## 2026-07-09 - BlackThrush (codex) - KEEP: BetaNegativeBinomial `cdf_many` prefix table (38-351x vs ORIG)
 
 Land-or-dig audit: consulted `docs/NEGATIVE_EVIDENCE.md` first. Avoided
