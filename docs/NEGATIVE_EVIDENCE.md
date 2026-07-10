@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - PER-KERNEL ISA #2/dtrsm: `simd_dot2` (MR2) +avx2 = 1.125x, DECIDED on SELF-TIME (wall-clock could not) — bit-identical
+
+- Kernel #2 (after #1 dsyrk). **dtrsm = `simd_dot2_shared_rhs`** — cod's MR2 panel-TRSM kernel actually
+  shipped for the cholesky panel solve (`a6d7ba897`/`770c4d490`). It was the WEAKEST speedup last turn
+  (1.176x), so it most needed the rigorous gate.
+- BIT-IDENTICAL: checksum `a75a7aa618732200` for BOTH builds.
+- **THE METHODOLOGY POINT (why the task gates on SELF-TIME, not wall-clock).** The two gates DISAGREE here,
+  and self-time is right:
+  - WALL-CLOCK (K=41): CAND median 1.125x, but the A/A null range is [0.875, **1.168**] (~30% floor from
+    subprocess-launch + scheduling noise) ⇒ **IN-FLOOR, undecidable.**
+  - SELF-TIME (perf stat cycles, K=15 interleaved): CAND median **1.1248x**, A/A null range
+    [0.9557, **1.0161**] (~4% floor — cycles count retired work, immune to scheduling) ⇒ **DECIDED.**
+  Perf-cycle self-time has a ~4x tighter null floor than wall-clock, so it RESOLVES a modest 1.13x win that
+  wall-clock cannot. Cross-check: `perf record -F 1999` over 900k iters gave 1.789e9/1.581e9 = 1.132x (agrees).
+- SELF-TIME FRAME (profile-verified): `simd_dot2` = **98.82% (sse2) / 98.97% (avx2)** of the microbench.
+- WHY MODEST (honest, vs dsyrk's 1.555x): `simd_dot2` shares ONE RHS load across two dots (2 FLOPs/load), so
+  it is more load-bound and wider registers help less. Not every kernel gets the big win; the compute-bound
+  ones (dsyrk) do, the load-bound ones (MR2 TRSM) get ~1.13x.
+- Artifact `tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernel_dtrsm.txt` + `dtrsm_ab.py` +
+  `selftime_gate.sh`. `base_sha caf387b9` / `avx2_sha 916d7a06`, host `thinkstation1`.
+- SCOPE: no kernel code touched (`simd_dot2` copied verbatim); cod owns the real kernel. NEXT: #3 dgemm
+  (`simd_dot` in `matmul_flat`).
+- Constraint: single-file `rustc` + perf + Python only; no cargo build, no maturin, ~0 disk, nothing stashed
+  or deleted. (cargo bench still cannot do this A/B — `forbid(unsafe_code)` blocks per-fn `#[target_feature]`,
+  proven in `9d6f44b9e`.)
+
 ## 2026-07-10 - BlackThrush (cc) - PER-KERNEL ISA #1/dsyrk: `simd_dot4` +avx2 = 1.555x (self-time + wall-clock agree), bit-identical + a method finding
 
 - Per-kernel granular verification of the fleet-ISA flag (`d89ca19f6`), ONE kernel per commit, starting

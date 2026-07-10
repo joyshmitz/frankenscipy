@@ -1,0 +1,21 @@
+# PER-KERNEL ISA verification #2: dtrsm (simd_dot2_shared_rhs = cod's MR2 panel TRSM)
+# host thinkstation1, single-file rustc two-build A/B; base_sha=caf387b9f34805c0 avx2_sha=916d7a06c91e4e97
+
+BIT-IDENTICAL: checksum a75a7aa618732200 for BOTH builds
+
+SELF-TIME GATE (perf stat cycles, K=15 interleaved base/avx2/base) -- the gate the task asks for:
+  base(sse2) median 3.004e8 cycles   avx2 median 2.670e8 cycles
+  NULL(A/A base cycles) median 0.9969x  range [0.9557, 1.0161]   <- tight ~4% floor
+  CAND(sse2/avx2 self-time) median 1.1248x   DECIDED (outside null range)
+  cross-check: perf record -F 1999 over 900k iters gave 1.789e9/1.581e9 = 1.132x (agrees)
+  self-time frame: simd_dot2 = 98.82% (sse2) / 98.97% (avx2) -> genuinely the kernel
+
+WALL-CLOCK GATE (K=41), for contrast -- CANNOT decide this modest win:
+  CAND median 1.125x  but NULL range [0.875, 1.168] (~30% floor) => IN-FLOOR / undecidable
+
+=> KEY METHODOLOGY: perf-cycle self-time has a ~4% null floor vs wall-clock's ~30%, so it RESOLVES
+   a modest 1.13x win that wall-clock leaves undecidable. This is exactly why the task gates on
+   MEDIAN SELF-TIME, not wall-clock.
+
+=> dtrsm/MR2 gets a MODEST 1.125x from +avx2 (vs dsyrk's 1.555x): simd_dot2 shares one RHS load
+   across 2 dots, so it is more load-bound (2 FLOPs/load) and wider registers help less. Honest.

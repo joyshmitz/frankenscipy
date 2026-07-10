@@ -10,3 +10,6 @@ d412221f45721fc39bac25407f4d52ab1034ce466082ca9a681a96e3bb90f138  tests/artifact
 fd09369054f8cf3cfa5b7649c1644a5c36aeca35fefdffba26a3dabaa336c828  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernel_families_ab.txt
 def4352027cb4c438357ff723208b7115d14beeeca21810aee19f17725862b8f  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/dsyrk_ab.py
 6826dbcec092a05f33bc06dac69222fe5d4aec15a6f2cdbb0083596dbfff28f1  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernel_dsyrk.txt
+36c66b2260a8f5fc4492675dc2693fa521655eaf34a3beb3a651f9f901e11907  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/dtrsm_ab.py
+5ec072536fcea145941dbeb2822b8325da3452ae394f8168c3f45e2d34bb2536  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/selftime_gate.sh
+35627e504c377141f5e8ef35c5c4b378d9849acaf8a7981b7fc8bb1a2bdc554e  tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/isa_kernel_dtrsm.txt
