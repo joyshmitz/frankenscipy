@@ -1363,10 +1363,16 @@ fn sample_spline_offsets(data: &[f64], bases: &[&[(usize, f64)]], base: usize) -
 ///
 /// A separable transform (zoom, shift, diagonal affine) maps each output axis-index to an input
 /// coordinate that depends ONLY on that axis, so the support along axis `a` takes just
-/// `out_shape[a]` distinct values. `coord_of(axis, o)` supplies that coordinate. Taps are stored
-/// pre-multiplied by `coeffs.strides[axis]` so the per-pixel combine indexes `coeffs.data`
-/// directly (see `sample_spline_offsets`). `None` marks an output position that maps out of
-/// range along that axis (⇒ the pixel is `cval`).
+/// `out_shape[a]` distinct values. `coord_of(axis, o)` supplies that coordinate. When
+/// `premultiply` the taps are scaled by `coeffs.strides[axis]` so the per-pixel combine indexes
+/// `coeffs.data` directly (see `sample_spline_offsets`); otherwise they stay in index space for
+/// the ORIG comparator. `None` marks an output position that maps out of range along that axis
+/// (⇒ the pixel is `cval`).
+///
+/// `premultiply` MUST be the same value the caller passes to `sample_separable_pixel` as
+/// `offsets` — read `NDIMAGE_SPLINE_OFFSET_DISABLE` ONCE per call and thread it through both.
+/// (Reading the atomic separately in each let a concurrent toggle tear the pair: taps scaled by
+/// stride but combined by the index leaf, indexing `coeffs.data` out of bounds.)
 fn build_axis_offset_supports(
     coeffs: &NdArray,
     in_shape: &[usize],
@@ -1374,10 +1380,9 @@ fn build_axis_offset_supports(
     coord_offsets: &[f64],
     order: usize,
     mode: BoundaryMode,
+    premultiply: bool,
     coord_of: impl Fn(usize, usize) -> f64,
 ) -> Vec<Vec<Option<Vec<(usize, f64)>>>> {
-    // ORIG comparator keeps taps in index space (see `NDIMAGE_SPLINE_OFFSET_DISABLE`).
-    let premultiply = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
     (0..out_shape.len())
         .map(|axis| {
             let stride = coeffs.strides[axis];
@@ -2873,6 +2878,64 @@ where
                     *slot = pixel(start + li, &mut scratch);
                 }
             });
+        }
+    });
+}
+
+/// Like `fill_pixels_parallel`, but hands the pixel closure the output's row-major MULTI-INDEX
+/// alongside the flat index.
+///
+/// The geometric transforms all need `out_idx`, and every one of them obtained it by calling
+/// `unravel_with_shape(flat, shape)` per pixel — which heap-allocates TWO `Vec`s (the strides
+/// table and the index itself) for what is pure index arithmetic. Since each thread walks a
+/// CONTIGUOUS run of flat indices in row-major order, seed the index once per chunk and then
+/// advance it with an in-place odometer (`idx[d] += 1; carry`), O(1) amortized and zero allocs.
+///
+/// BYTE-IDENTICAL: at step `flat` the odometer holds exactly `unravel_with_shape(flat, shape)`.
+/// `NDIMAGE_UNRAVEL_ODOMETER_DISABLE` restores the per-pixel unravel as the same-binary ORIG arm.
+fn fill_pixels_parallel_indexed<G>(output: &mut NdArray, kernel_work: usize, pixel: G)
+where
+    G: Fn(usize, &[usize]) -> f64 + Sync,
+{
+    let n = output.data.len();
+    let shape = output.shape.clone();
+    let ndim = shape.len();
+    let orig = NDIMAGE_UNRAVEL_ODOMETER_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let nthreads = ndimage_filter_thread_count(n, kernel_work);
+
+    // One chunk's worth of work: seed the odometer at `start`, then advance per pixel.
+    let run = |start: usize, out_chunk: &mut [f64]| {
+        if orig {
+            for (li, slot) in out_chunk.iter_mut().enumerate() {
+                let idx = unravel_with_shape(start + li, &shape);
+                *slot = pixel(start + li, &idx);
+            }
+            return;
+        }
+        let mut idx = unravel_with_shape(start, &shape);
+        for (li, slot) in out_chunk.iter_mut().enumerate() {
+            *slot = pixel(start + li, &idx);
+            // Row-major increment; the final overflow past the last pixel wraps to zeros
+            // and is never observed.
+            for d in (0..ndim).rev() {
+                idx[d] += 1;
+                if idx[d] < shape[d] {
+                    break;
+                }
+                idx[d] = 0;
+            }
+        }
+    };
+
+    if nthreads <= 1 {
+        run(0, &mut output.data);
+        return;
+    }
+    let chunk = n.div_ceil(nthreads);
+    let run = &run;
+    std::thread::scope(|scope| {
+        for (t, out_chunk) in output.data.chunks_mut(chunk).enumerate() {
+            scope.spawn(move || run(t * chunk, out_chunk));
         }
     });
 }
@@ -8643,6 +8706,8 @@ pub fn shift(
     if !NDIMAGE_ZOOM_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
         if order >= 2 {
             let coeffs = &spline.coeffs;
+            // ONE read: the tap representation and the leaf kind must agree (see the fn doc).
+            let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
             let axis_supports = build_axis_offset_supports(
                 coeffs,
                 &in_shape,
@@ -8650,17 +8715,15 @@ pub fn shift(
                 &spline.coord_offsets,
                 order,
                 mode,
+                offsets,
                 |axis, o| o as f64 - shift_values[axis],
             );
             let axis_supports = &axis_supports;
-            let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
-            fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
-                let oidx = unravel_with_shape(flat, &out_shape);
-                sample_separable_pixel(coeffs, axis_supports, &oidx, cval, offsets)
+            fill_pixels_parallel_indexed(&mut output, kernel_work, |_flat, oidx| {
+                sample_separable_pixel(coeffs, axis_supports, oidx, cval, offsets)
             });
         } else {
-            fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
-                let out_idx = unravel_with_shape(flat, &out_shape);
+            fill_pixels_parallel_indexed(&mut output, kernel_work, |_flat, out_idx| {
                 let coords: Vec<f64> = out_idx
                     .iter()
                     .enumerate()
@@ -8709,9 +8772,10 @@ pub static NDIMAGE_ZOOM_SEPARABLE_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Same-binary A/B toggle for the separable paths' tensor-product combine: when `true`, taps stay
-/// in INDEX space and every leaf recomputes `Σ idx[d]·stride[d]` via `coeffs.get` (plus the old
-/// per-pixel support copies) — the ORIG comparator. When `false` (default) taps are pre-multiplied
-/// into FLAT OFFSETS and the leaf is a single load. Byte-identical either way.
+/// in INDEX space and every leaf recomputes `Σ idx[d]·stride[d]` via `coeffs.get` — the ORIG
+/// comparator. When `false` (default) taps are pre-multiplied into FLAT OFFSETS and the leaf is a
+/// single load. Byte-identical either way. Benchmark knob; each transform reads it ONCE per call.
+#[doc(hidden)]
 pub static NDIMAGE_SPLINE_OFFSET_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -8777,6 +8841,8 @@ pub fn zoom(
     // while orders 2-5 win 2.0-3.7x (more support taps ⇒ more per-pixel recompute avoided).
     if order >= 2 && !NDIMAGE_ZOOM_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
         let coeffs = &spline.coeffs;
+        // ONE read: the tap representation and the leaf kind must agree (see the fn doc).
+        let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
         let axis_supports = build_axis_offset_supports(
             coeffs,
             &in_shape,
@@ -8784,6 +8850,7 @@ pub fn zoom(
             &spline.coord_offsets,
             order,
             mode,
+            offsets,
             |axis, o| {
                 if out_shape[axis] <= 1 || in_shape[axis] <= 1 {
                     0.0
@@ -8793,16 +8860,13 @@ pub fn zoom(
             },
         );
         let axis_supports = &axis_supports;
-        let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
-        fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
-            let oidx = unravel_with_shape(flat, &out_shape);
-            sample_separable_pixel(coeffs, axis_supports, &oidx, cval, offsets)
+        fill_pixels_parallel_indexed(&mut output, kernel_work, |_flat, oidx| {
+            sample_separable_pixel(coeffs, axis_supports, oidx, cval, offsets)
         });
         return Ok(output);
     }
 
-    fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
-        let out_idx = unravel_with_shape(flat, &out_shape);
+    fill_pixels_parallel_indexed(&mut output, kernel_work, |_flat, out_idx| {
         let coords: Vec<f64> = out_idx
             .iter()
             .enumerate()
@@ -10096,6 +10160,8 @@ pub fn affine_transform(
         let out_shape = output.shape.clone();
         let in_shape = input.shape.clone();
         let coeffs = &spline.coeffs;
+        // ONE read: the tap representation and the leaf kind must agree (see the fn doc).
+        let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
         let axis_supports = build_axis_offset_supports(
             coeffs,
             &in_shape,
@@ -10103,13 +10169,12 @@ pub fn affine_transform(
             &spline.coord_offsets,
             order,
             mode,
+            offsets,
             |axis, o| matrix[axis][axis] * o as f64 + matrix[axis][2],
         );
         let axis_supports = &axis_supports;
-        let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
-        fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
-            let oidx = unravel_with_shape(flat, &out_shape);
-            sample_separable_pixel(coeffs, axis_supports, &oidx, cval, offsets)
+        fill_pixels_parallel_indexed(&mut output, kernel_work, |_flat, oidx| {
+            sample_separable_pixel(coeffs, axis_supports, oidx, cval, offsets)
         });
         return Ok(output);
     }
@@ -18979,6 +19044,147 @@ mod tests {
                 NDIMAGE_SPLINE_OFFSET_DISABLE.store(false, Ordering::Relaxed);
                 for (a, b) in a_o.data.iter().zip(a_c.data.iter()) {
                     assert_eq!(a.to_bits(), b.to_bits(), "affine order={order} {mode:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn geometric_transform_odometer_matches_unravel_bitexact() {
+        use std::sync::atomic::Ordering;
+        // `fill_pixels_parallel_indexed`'s per-chunk row-major odometer must be BYTE-IDENTICAL to
+        // the ORIG per-pixel `unravel_with_shape`, for every geometric transform that consumes the
+        // output multi-index — covering BOTH the separable (order>=2) and generic (order<2)
+        // branches, and both the serial and multi-threaded chunkings.
+        let modes = [
+            BoundaryMode::Reflect,
+            BoundaryMode::Mirror,
+            BoundaryMode::Nearest,
+            BoundaryMode::Constant,
+        ];
+        let shapes: &[Vec<usize>] = &[vec![19], vec![13, 11], vec![7, 6, 8]];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let data: Vec<f64> = (0..total)
+                .map(|k| (k as f64 * 0.29).sin() * 2.0 - 0.4)
+                .collect();
+            let arr = NdArray::new(data, shape.clone()).unwrap();
+            let zooms: Vec<f64> = shape.iter().map(|_| 1.6).collect();
+            let shifts: Vec<f64> = shape
+                .iter()
+                .enumerate()
+                .map(|(d, _)| 0.7 - d as f64)
+                .collect();
+            for order in 0..=5usize {
+                for &mode in &modes {
+                    let variants = |orig: bool| {
+                        NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(orig, Ordering::Relaxed);
+                        let z = zoom(&arr, &zooms, order, mode, 1.25).unwrap();
+                        let s = shift(&arr, &shifts, order, mode, 1.25).unwrap();
+                        (z, s)
+                    };
+                    let (z_o, s_o) = variants(true);
+                    let (z_c, s_c) = variants(false);
+                    NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(false, Ordering::Relaxed);
+                    assert_eq!(z_o.shape, z_c.shape);
+                    for (a, b) in z_o.data.iter().zip(z_c.data.iter()) {
+                        assert_eq!(
+                            a.to_bits(),
+                            b.to_bits(),
+                            "zoom {shape:?} order={order} {mode:?}"
+                        );
+                    }
+                    for (a, b) in s_o.data.iter().zip(s_c.data.iter()) {
+                        assert_eq!(
+                            a.to_bits(),
+                            b.to_bits(),
+                            "shift {shape:?} order={order} {mode:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // 2-D transforms: diagonal affine (separable branch), general affine + rotate (generic
+        // per-pixel branch, which also reaches `fill_pixels_parallel_indexed`).
+        let arr = NdArray::new(
+            (0..14 * 12)
+                .map(|k| (k as f64 * 0.17).cos() + 1.1)
+                .collect(),
+            vec![14, 12],
+        )
+        .unwrap();
+        let diag = [[0.8, 0.0, 1.1], [0.0, 1.3, -0.4]];
+        let general = [[0.9, 0.2, 1.1], [-0.15, 1.05, -0.4]];
+        for order in 0..=5usize {
+            for &mode in &modes {
+                let variants = |orig: bool| {
+                    NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(orig, Ordering::Relaxed);
+                    (
+                        affine_transform(&arr, &diag, order, mode, 1.25).unwrap(),
+                        affine_transform(&arr, &general, order, mode, 1.25).unwrap(),
+                        rotate(&arr, 23.0, false, order, mode, 1.25).unwrap(),
+                    )
+                };
+                let (d_o, g_o, r_o) = variants(true);
+                let (d_c, g_c, r_c) = variants(false);
+                NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(false, Ordering::Relaxed);
+                for (a, b) in d_o.data.iter().zip(d_c.data.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "diag affine order={order} {mode:?}"
+                    );
+                }
+                for (a, b) in g_o.data.iter().zip(g_c.data.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "general affine order={order} {mode:?}"
+                    );
+                }
+                for (a, b) in r_o.data.iter().zip(r_c.data.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "rotate order={order} {mode:?}");
+                }
+            }
+        }
+
+        // The odometer is SEEDED PER THREAD CHUNK (`start != 0`), so a seeding bug only shows on
+        // the multi-threaded path. `ndimage_filter_thread_count` needs pixels·(order+1)^ndim >=
+        // 2^18: 256²→1.5x is 147_456 output pixels, so order>=1 fans out across every core.
+        let big = NdArray::new(
+            (0..256 * 256).map(|k| (k as f64 * 0.013).sin()).collect(),
+            vec![256, 256],
+        )
+        .unwrap();
+        assert!(
+            ndimage_filter_thread_count(384 * 384, 2usize.pow(2)) > 1,
+            "big zoom case must exercise the parallel chunked path"
+        );
+        for order in [1usize, 3, 5] {
+            for &mode in &[BoundaryMode::Reflect, BoundaryMode::Constant] {
+                let variants = |orig: bool| {
+                    NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(orig, Ordering::Relaxed);
+                    (
+                        zoom(&big, &[1.5, 1.5], order, mode, 0.5).unwrap(),
+                        shift(&big, &[2.6, -1.4], order, mode, 0.5).unwrap(),
+                    )
+                };
+                let (z_o, s_o) = variants(true);
+                let (z_c, s_c) = variants(false);
+                NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(false, Ordering::Relaxed);
+                for (a, b) in z_o.data.iter().zip(z_c.data.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "parallel zoom order={order} {mode:?}"
+                    );
+                }
+                for (a, b) in s_o.data.iter().zip(s_c.data.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "parallel shift order={order} {mode:?}"
+                    );
                 }
             }
         }

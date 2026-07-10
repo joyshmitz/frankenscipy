@@ -6,6 +6,60 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP (modest): geometric-transform per-pixel `unravel_with_shape` → per-chunk odometer (zoom 1.04-1.10x, BYTE-IDENTICAL) + BUGFIX: torn A/B-flag read introduced by c396459ef
+
+- Follows the ranked hotspot the previous commit's re-profile exposed: after the flat-offset leaf
+  landed, `unravel_with_shape` was **11.57%** + allocator (cfree 6.39% + calloc 4.37%) ≈ **22.3%**.
+  It heap-allocates TWO `Vec`s per OUTPUT PIXEL (`compute_strides` + `idx`) for pure index
+  arithmetic, and every geometric transform called it per pixel.
+- FIX: new `fill_pixels_parallel_indexed` hands the closure the row-major multi-index. Each thread
+  walks a CONTIGUOUS run of flat indices, so seed the index once per chunk (`unravel_with_shape`
+  at `start`) then advance an in-place odometer (`idx[d]+=1; carry`) — O(1) amortized, ZERO allocs.
+  Converted all 5 sites: zoom (separable + generic), shift (separable + generic), diagonal affine.
+  rotate/general-affine/map_coordinates/geometric_transform derive `r,c` straight from `flat` and
+  never allocated, so they were already clean (grep confirmed: only 5 sites).
+- BYTE-IDENTICAL: at step `flat` the odometer holds exactly `unravel_with_shape(flat, shape)`.
+  New test `geometric_transform_odometer_matches_unravel_bitexact` (to_bits) over zoom/shift ×
+  order 0..=5 × 4 modes × ndim 1/2/3, PLUS diag-affine/general-affine/rotate, PLUS an explicit
+  256²→1.5x case with `assert!(ndimage_filter_thread_count(..) > 1)` so the PER-CHUNK SEED
+  (`start != 0`) — the only place a seeding bug can hide — is actually exercised in parallel.
+  fsci-ndimage **262/0** (stress: 14/14 consecutive full-suite runs green).
+- MEASURED, same-binary A/B `NDIMAGE_UNRAVEL_ODOMETER_DISABLE`, 5x interleaved best-of, QUIET box
+  (cv 2.0-7.8%), all **bitmism=0**: zoom 512²→2× order2 Reflect **1.10x** / Mirror 1.08x; order3
+  **1.05x** / 1.07x; order4 **1.07x** / 1.07x; order5 **1.04x** / 1.05x; order1 Mirror 1.09x
+  (generic path). HARNESS CONTROL: order1 **Reflect reads 1.01x** — that mode takes
+  `zoom_order1_reflect_2d_fast`, which never calls `fill_pixels_parallel`, so ~1.00x is the
+  expected null result and validates the probe.
+- WELL BELOW the naive 1/(1-0.223)=1.29x the profile predicted. Reason: glibc's tcache serves these
+  tiny same-size allocs from a thread-local freelist, so the `calloc`/`cfree` samples are far
+  cheaper per-sample than the leaf arithmetic they sit next to; profile SHARE ≠ removable TIME.
+  KEEP anyway: byte-identical, strictly less memory traffic, no gate/branch, and the win GROWS
+  under allocator contention (loaded-box runs read 1.10-1.24x as malloc lock contention bites).
+- NOISE DISCIPLINE (rejected two bad readings before publishing): a `taskset -c 48-63` pinned run
+  reported 1.05-1.63x with cv up to **39%** — but its order1-Reflect control read **1.16x** where
+  the code path guarantees ~1.00x, proving noise-domination. Any run whose null control drifts off
+  1.00x is discarded. A concurrent agent's `e2e_probe` was at 3656% CPU (load avg 35-44).
+- BUGFIX (found by this commit's test, defect shipped in `c396459ef`): `NDIMAGE_SPLINE_OFFSET_DISABLE`
+  was read TWICE per transform — once inside `build_axis_offset_supports` (should taps be
+  pre-multiplied by stride?) and again at the call site (which leaf kind?). A concurrent toggle
+  between the two reads TEARS the pair: taps scaled by stride but combined by the index leaf ⇒
+  `coeffs.get` indexes `data` out of bounds (observed: `index out of bounds: the len is 143 but the
+  index is 244`, a flaky 3-in-6 full-suite failure; isolated runs always passed). Fixed by reading
+  the atomic ONCE per call and threading it into `build_axis_offset_supports(premultiply)`.
+  Production impact was nil (the knob is never toggled at runtime, and Rust bounds-checks rather
+  than corrupting), but it is a real latent panic; the static is now `#[doc(hidden)]`.
+  LESSON: a same-binary A/B knob consumed at TWO decision points is a torn-read hazard — read once,
+  thread the value. Concurrent-toggle flakiness is a genuine bug signal, not test noise.
+- BLOCKER (surfaced, NOT touched): `fsci-conformance` cannot compile — `crates/fsci-special/src/
+  {lib.rs,orthopoly.rs}` and `benches/special_bench.rs` contain unresolved
+  `<<<<<<< Updated upstream` / `>>>>>>> Stashed changes` markers from another agent's failed
+  `git stash pop` (worktree only; HEAD is clean). Per AGENTS.md I did not revert/stash their work.
+  Consequence: the scipy differential packet could not run this turn. Correctness is instead
+  carried by the ndimage lib suite (262/0), which includes the scipy-PINNED reference tests
+  (`shift_order_three_half_pixel_matches_scipy_boundary_references`, `affine_transform_matches_scipy`,
+  `map_coordinates_order_three_matches_scipy_boundary_references`, `rotate_nonsquare_reshape_false_matches_scipy`),
+  plus to_bits equality against the ORIG arm for every path this commit touches.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage separable transforms — flat-offset tensor-product leaf (zoom 1.27-1.84x, shift 1.12-1.29x, diag-affine 1.18-1.30x self, BYTE-IDENTICAL)
 
 - LANE AUDIT FIRST (marching orders assigned two items; BOTH were already landed — do not redo):

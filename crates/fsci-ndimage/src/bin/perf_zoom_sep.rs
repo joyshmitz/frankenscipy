@@ -2,10 +2,12 @@
 //!
 //! Usage: `perf_zoom_sep [mode] [order]`
 //!   both (default) — interleaved A/B: per-pixel support recompute vs separable precompute
-//!   offs           — interleaved A/B: ORIG index-space leaf vs flat-offset leaf (this lever)
+//!   offs           — interleaved A/B: ORIG index-space leaf vs flat-offset leaf
+//!   odom           — interleaved A/B: ORIG per-pixel unravel vs per-chunk row-major odometer
 //!   sep | per      — run ONE path in a tight loop (for `perf record` isolation)
 use fsci_ndimage::{
-    BoundaryMode, NDIMAGE_SPLINE_OFFSET_DISABLE, NDIMAGE_ZOOM_SEPARABLE_DISABLE, NdArray, zoom,
+    BoundaryMode, NDIMAGE_SPLINE_OFFSET_DISABLE, NDIMAGE_UNRAVEL_ODOMETER_DISABLE,
+    NDIMAGE_ZOOM_SEPARABLE_DISABLE, NdArray, zoom,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -51,16 +53,26 @@ fn main() {
         return;
     }
 
-    // `offs` isolates THIS lever: same binary, same separable precompute, only the leaf
-    // address differs (ORIG recomputes Σ idx·stride per leaf; candidate uses flat offsets).
+    // `offs` isolates the leaf-address lever: same binary, same separable precompute, only the
+    // leaf address differs (ORIG recomputes Σ idx·stride per leaf; candidate uses flat offsets).
+    // `odom` isolates the index lever: ORIG heap-allocates two Vecs per pixel in
+    // `unravel_with_shape`; candidate seeds a row-major odometer once per thread chunk.
     let offs_ab = mode_sel == "offs";
-    if offs_ab {
+    let odom_ab = mode_sel == "odom";
+    if offs_ab || odom_ab {
         NDIMAGE_ZOOM_SEPARABLE_DISABLE.store(false, Ordering::Relaxed);
-        println!("# same-binary A/B: ORIG index-space leaf vs flat-offset leaf (separable path)");
+        let what = if offs_ab {
+            "ORIG index-space leaf vs flat-offset leaf"
+        } else {
+            "ORIG per-pixel unravel vs per-chunk odometer"
+        };
+        println!("# same-binary A/B: {what}");
     }
     let set_orig = |orig: bool| {
         if offs_ab {
             NDIMAGE_SPLINE_OFFSET_DISABLE.store(orig, Ordering::Relaxed);
+        } else if odom_ab {
+            NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(orig, Ordering::Relaxed);
         } else {
             NDIMAGE_ZOOM_SEPARABLE_DISABLE.store(orig, Ordering::Relaxed);
         }
@@ -70,7 +82,8 @@ fn main() {
         if only_order.is_some_and(|o| o != order) {
             continue;
         }
-        // order<2 has no separable path; the offs lever only exists there.
+        // order<2 has no separable path; the offs lever only exists there. The odometer lever
+        // covers BOTH the separable and the generic per-pixel path, so order=1 stays in.
         if offs_ab && order < 2 {
             continue;
         }
@@ -120,8 +133,13 @@ fn main() {
             let (cm, ccv) = mean_cv(&cv);
             let ob = ov.iter().copied().fold(f64::MAX, f64::min);
             let cb = cv.iter().copied().fold(f64::MAX, f64::min);
-            let label = if offs_ab { "idxleaf" } else { "perpixel" };
-            let clabel = if offs_ab { "offsleaf" } else { "separable" };
+            let (label, clabel) = if offs_ab {
+                ("idxleaf", "offsleaf")
+            } else if odom_ab {
+                ("unravel", "odometer")
+            } else {
+                ("perpixel", "separable")
+            };
             println!(
                 "order={order} {mode:?}: {label} {ob:.2}ms (mean {om:.2} cv {ocv:.1}%) \
                  {clabel} {cb:.2}ms (mean {cm:.2} cv {ccv:.1}%) best {:.2}x mean {:.2}x \
