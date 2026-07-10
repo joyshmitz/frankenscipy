@@ -19400,3 +19400,38 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   different representation eliminates one destination buffer/store entirely, or a future profile puts the separate
   copy+pack pass above 5% self. The source and benchmark feature are fully removed; safe Rust only, no external
   BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cod_fsc (cod) - ATTRIBUTION / BLOCKER: safe one-binary AVX2 build-flag A/B is not representable
+
+- Ledger grep came first. SciPy `dpotrf(n=1000)` is independently established as dgemm-family 43.15-44.84% >
+  dtrsm-family 18.76-20.00% >> direct dsyrk 0.14%. The exact current Rust routing profile remains worker
+  `vmi1264463`, profile SHA-256 `5ff0c71d92b2029721bee622844ceb789ea638f541d4de70809dd197fb818e86`,
+  matching ELF SHA-256 `26d737ccecf7e01dc45f2f2d1793f10e9dc5083a36050f56d392b1141ec102f8`, 35,627
+  cycles samples / zero lost: MR4xNR4 59.21%, panel TRSM 22.34%, exact tail 4.20%, blocked body 3.17%, and
+  copy+pack 2.95% before the remaining libc frames.
+- Release-perf uses rustc 1.99.0-nightly's generic x86-64 target (`sse2`, no `avx`/`avx2`/`fma`). Banked codegen
+  evidence `tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/asm_codegen.txt`, SHA-256
+  `b915974263ba8840ec52766decc933376fcef36493fc458e3c2e7d003bdb186a`, compiles identical
+  `Simd<f64, 8>` arithmetic as eight XMM mul/add instructions at baseline versus four YMM instructions with
+  `+avx2`; adding `+fma` emits no fused operation, so operation and rounding order stay unchanged.
+- The profile gives a hard bound before any noisy timing: halving only the 59.21% tile is at most
+  `1 / (0.4079 + 0.5921/2) = 1.421x`; halving all 85.75% named arithmetic is at most
+  `1 / (0.1425 + 0.8575/2) = 1.751x`. Even the impossible assumption that every cycle halves caps the flag at
+  2x, leaving a real 8x wall at >=4x (about 4.57x under the profile-weighted bound). AVX2 is worthwhile, but cannot
+  close most of this wall by itself.
+- A valid timed build-flag decision cannot satisfy the current rules simultaneously. Crate-wide `-C target-cpu` or
+  `-C target-feature=+avx2` compiles both functions in one executable with the same ISA, so no SSE2 ORIG arm remains;
+  two differently compiled executables violate substrate v2. Per-function `#[target_feature(enable = "avx2")]`
+  preserves one binary, but Rust requires an unsafe call from the generic fallback context, while
+  `crates/fsci-linalg/src/lib.rs` and the workspace both `forbid(unsafe_code)`. Runtime CPUID detection does not remove
+  that call-site requirement. Rust documents both constraints in the rustc codegen-options and Reference
+  `target_feature` sections.
+- Strict-remote analysis command
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo rustc -p fsci-linalg --lib --profile release-perf -- --print cfg`
+  failed closed with `RCH-E301` because RCH classifies `--print cfg` as non-compilation and refused local fallback.
+  No local Cargo command, maturin, source edit, or performance comparison followed.
+- This is deliberately **not a WIN or REJECT**: candidate binary SHA, candidate self-time, `cv_pct`, and per-function
+  null median are **N/A because no valid candidate arm was executed**. Unblock only by explicitly permitting one of:
+  (1) a narrowly audited unsafe runtime dispatcher with a safe SSE2 fallback, or (2) a build-level exception to the
+  one-binary rule. A fixed `target-cpu=native` artifact is not a portable library solution and is nondeterministic on
+  RCH's worker-selected fleet. Safe Rust only; no C BLAS/LAPACK/MKL/XLA.

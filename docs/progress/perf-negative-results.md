@@ -8765,3 +8765,24 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - **REJECT; code removed.** Write-through store pressure in the latency-sensitive TRSM producer outweighs the removed
   warm reread. Retry only with a representation that eliminates a destination buffer/store, or if copy+pack later
   profiles above 5% self. Safe Rust only; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cod_fsc - ATTRIBUTION / BLOCKER safe one-binary AVX2 build-flag A/B
+
+- Provenance-backed dominance remains dgemm 43.15-44.84% > dtrsm 18.76-20.00% >> direct dsyrk 0.14%. Current Rust
+  profile: worker `vmi1264463`, profile/ELF SHA-256 `5ff0c71d92b2029721bee622844ceb789ea638f541d4de70809dd197fb818e86` /
+  `26d737ccecf7e01dc45f2f2d1793f10e9dc5083a36050f56d392b1141ec102f8`, 35,627 samples / zero lost;
+  tile 59.21%, panel TRSM 22.34%, exact tail 4.20%, blocked body 3.17%, copy+pack 2.95%.
+- Release-perf defaults to SSE2. Codegen artifact SHA-256
+  `b915974263ba8840ec52766decc933376fcef36493fc458e3c2e7d003bdb186a` shows identical portable-SIMD source
+  lowering from eight XMM mul/add instructions to four YMM instructions under `+avx2`, with no FMA contraction.
+- Amdahl bounds: tile-only width doubling <=1.421x; all 85.75% named arithmetic doubled <=1.751x; absolute impossible
+  ceiling 2x. Thus a real 8x wall remains >=4x, about 4.57x under the profile-weighted bound. The build flag cannot
+  create near parity alone.
+- Measurement blocker: one crate-wide ISA flag removes the SSE2 arm from the executable; two executables violate
+  substrate v2. Safe per-function runtime dispatch is not expressible here because Rust requires an unsafe call into
+  `#[target_feature(enable = "avx2")]`, while the workspace and `fsci-linalg` forbid unsafe code. Fixed
+  `target-cpu=native` also sacrifices portability and varies with RCH's selected worker.
+- Exact strict-remote `cargo rustc ... -- --print cfg` analysis failed closed as `RCH-E301` (non-compilation command);
+  no local fallback occurred. **No timed candidate exists, so this is not a WIN/REJECT and binary SHA, candidate
+  self-time, CV, and null median are N/A.** Unblock via explicit authority for a narrowly audited unsafe dispatcher
+  or a build-level exception to the one-binary rule. No kernel code changed; no external BLAS/LAPACK/MKL/XLA.
