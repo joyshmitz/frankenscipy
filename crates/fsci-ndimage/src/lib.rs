@@ -1414,6 +1414,12 @@ const MAX_STACK_NDIM: usize = 8;
 /// recomputing that stride dot at every one of the `(order+1)^ndim` leaves; here each tap already
 /// carries `idx[d]·stride[d]`, so the leaf is a single `data[base]` load. Axes beyond `bases.len()`
 /// keep `idx[d] = 0` in the recursive version and contribute 0 to `base` here — identical.
+///
+/// NOTE (measured REJECT, 2026-07-10): SIMD-ing the innermost reduction (contiguous load + `vmulpd`
+/// + sequential horizontal sum, bit-identical) was 1.37x in a microbench but IN-FLOOR / a slight
+/// loss on the real transforms — the leaf gathers from rows strided by the image width, so it is
+/// GATHER-LATENCY-bound, not compute-bound, and vectorising the multiply does not touch the wall.
+/// The microbench's sequential-pixel scan was cache-friendlier than the real scattered access.
 fn sample_spline_offsets(data: &[f64], bases: &[&[(usize, f64)]], base: usize) -> f64 {
     match bases {
         [] => data[base],

@@ -6,6 +6,44 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - REJECT (reverted, bit-identical but no real win): ndimage tensor-leaf SIMD reduction — 1.37x in a microbench, IN-FLOOR on the real transforms
+
+- DIFFERENT hot path from the (already-rejected) inner-dot register-blocking. Profile-first: the captured
+  `rotate` order-3 profile ranks the tensor leaf (`sample_spline_offsets`, the `(order+1)^ndim` weighted
+  gather-sum) as the **#2 frame ~27%** after `compute_axis_support`. Lever: vectorise the innermost-axis
+  reduction — for a CONTIGUOUS (interior-pixel) run, load the taps as one vector, `vmulpd` by the weights,
+  then sum the products in the SAME sequential order (boundary-folded runs have non-consecutive offsets and
+  stay scalar).
+- BIT-IDENTICAL, verified thoroughly (this is NOT why it was rejected): the horizontal sum starts from `0.0`
+  and adds left-to-right exactly as the scalar loop (fixes the all-`-0.0` sign edge), and IEEE mul is
+  commutative. New `tensor_leaf_simd_matches_scalar_bitexact` (`to_bits`, WIDE-DYNAMIC-RANGE 1e12 data over
+  zoom/shift/diag-affine/general-affine/rotate/map_coordinates × orders 0..=5 × 5 modes × ndim 1/2/3 +
+  256² parallel) passed, and fsci-ndimage was **266/0** with the lever in.
+- MICROBENCH said 1.37x (single-file, K=15 median null gate, `perf` cycles): the isolated leaf with strided
+  rows (`s0 = 512`) went 223M → 160M cycles, DECIDED.
+- REAL WORKLOAD said NO (the decision): certified same-binary A/B `NDIMAGE_TENSOR_SIMD_DISABLE`, median null
+  gate, `binary_sha256 947307a8…`, workers hz2/hz1:
+  - 512² `rotate_par` order3 **CAND median 0.944x**, order5 **0.908x**; `affine_gen_par` order3 1.043x,
+    order5 0.932x — **all IN-FLOOR** (inside the null range), several a slight LOSS. `map_coords_serial`
+    (64²) 0.994-0.998x, IN-FLOOR. Every row `bitmism=0`.
+- WHY THE MICROBENCH MISLED (the lesson): the microbench scanned pixels SEQUENTIALLY, so consecutive pixels'
+  strided rows were adjacent and the hardware prefetcher hid the load latency — leaving the arithmetic as
+  the bottleneck, which SIMD helps. The REAL geometric transforms gather from SCATTERED rotated coordinates,
+  so the leaf is **GATHER-LATENCY-bound, not compute-bound**; vectorising the multiply does not touch the
+  wall, and the contiguity-check + vector-setup overhead makes it a slight net loss. **A microbench must
+  replicate the real ACCESS PATTERN (locality), not just the arithmetic and array strides.**
+- DECISION: REVERTED. `sample_spline_offsets` is byte-for-byte back to HEAD apart from a do-not-retry NOTE.
+  Suite back to **265/0**, fmt 0 diffs, ubs 0 critical.
+- Retry condition: only if the tensor leaf is made cache-resident (a cache-blocked transform loop nest that
+  keeps the input tile hot — reduces the gather latency the arithmetic optimisation can't), and even then
+  re-measure on the REAL scattered-access transform, not a sequential-scan microbench.
+- CONFIRMS the strategic finding: after the ISA flag, ndimage's remaining geometric-transform frames are
+  either compute-optimal (cardinal_bspline vectorised) or LATENCY-bound gathers (tensor leaf) — the
+  bit-identical compute levers are exhausted; the next lever is memory-layout/cache-blocking, not more SIMD.
+- Constraint: single-file `rustc` + perf for the microbench; the real A/B and suite via
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec`. No local cargo build, no maturin, ~0 disk,
+  nothing stashed or deleted.
+
 ## 2026-07-10 - BlackThrush (cc) - REJECT (bit-identity): hand register-blocking the dense dot (FMA + 4-acc) — measured 1.098x but NOT bit-identical; the remaining ~4x is structural, not inner-dot
 
 - Deeper follow-on to the per-kernel ISA trio. Question: does hand-tuned register-blocking beat the
