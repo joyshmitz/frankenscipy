@@ -4,6 +4,55 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-10 - frankenscipy-8l8r1.156 - KEEP: cache SPILU diagonal structural positions once (bit-identical, primary median -8.08%)
+
+- Agent: cod / ScarletChapel. Domain: `fsci-sparse`; interpolate remained peer-owned. The profile-first
+  remote Criterion sweep ranked `sparse_spilu/1024_bw32` at **2.4352 ms**. COO duplicate/conversion rows
+  were slower but already mined/rejected; SPILU was the highest fresh live row. Inspection attributed a
+  remaining repeated scan to `find_value_in_row(..., k, k)` for every lower entry eliminated from row `i`.
+- ONE LEVER: precompute the structural diagonal position for every immutable CSR row, then load the current
+  pivot value from that same `lu_data` index. The prior SPA workspace keep (`8310dbd9d`) cached `(i,j)`
+  membership during row updates; this lever removes the separate repeated `(k,k)` search. It retains the
+  first-match rule and maps a missing diagonal to the old helper's `0.0`, so singular-pivot behavior is
+  unchanged. It does not reorder or replace any floating-point operation.
+
+### Median self-time decision gate
+
+Same worker `hz2`, saved Criterion baseline `spilu_diag_before`, release-perf profile:
+
+| row | before median | candidate median | Criterion median change | confidence interval | p-value | verdict |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `sparse_spilu/1024_bw32/1024` (primary) | 2.3602 ms | 2.2313 ms | **-8.0769%** | [-10.321%, -5.6695%] | 0.00 | KEEP |
+| `sparse_spilu/512_bw16/512` (guard) | 372.29 us | 332.82 us | **-10.732%** | [-13.587%, -7.7060%] | 0.00 | KEEP |
+
+The decision is gated on median self-time, not mean, throughput, or cross-worker measurements. Both rows'
+intervals exclude zero on the same worker.
+
+### Behavior and quality proof
+
+- `spilu_row_workspace_matches_linear_scan_factor_bits`: PASS remotely; every emitted L/U factor is checked
+  with `to_bits()` against the verbatim linear-scan reference.
+- `cargo test -p fsci-sparse --lib`: **362 passed, 0 failed, 4 ignored**, remote worker `vmi1227854`.
+- `cargo check --workspace --all-targets`: PASS remotely. `rustfmt --edition 2024 --check`,
+  `git diff --check`, and targeted UBS (0 critical) also pass.
+- Clippy could not produce a clean workspace gate: the first remote workspace run failed in the
+  `num-traits` build script with `SIGILL`; a remote crate-scoped retry reached four pre-existing
+  `clippy::needless_range_loop` errors at `linalg.rs:4388`, `4413`, `5553`, and `11905`, all outside this
+  change. They were not mixed into this one-lever commit.
+
+### Remote execution and retry boundary
+
+All Cargo builds, tests, checks, and benchmarks used
+`RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- ...`. There was no local fallback. One comparison
+was routed to `ovh-a`, where the saved baseline did not exist (`exit 101`), and one strict-remote test attempt
+was refused because no worker was admissible; both errors were surfaced, then rerun remotely. The decisive
+comparison was on baseline owner `hz2`. Agent Mail reservations were unavailable because its SQLite database
+reported `database disk image is malformed`; shared Git/worktree truth was used without disturbing peer
+changes.
+
+Retry condition: none for this cache; it ships. Further SPILU work must begin from a new profile and a
+different primitive, preserve factor bits, and independently clear the median self-time floor.
+
 ## 2026-07-10 - frankenscipy-cc-isa-generalize - the +avx2,+fma flag moves EVERY dense kernel (dtrsm/dgemm/dsyrk); real cholesky n=1000 gap 7.4x -> 4.0x
 
 - Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`). Generalizes the fleet-ISA fix `d89ca19f6`. No kernel code

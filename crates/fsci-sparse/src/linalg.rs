@@ -1028,6 +1028,13 @@ pub fn spilu(a: &CscMatrix, options: IluOptions) -> SparseResult<SparseIluFactor
     // IKJ variant of ILU(0): for each row i, for each nonzero a[i,k] with k < i,
     // compute multiplier a[i,k] /= a[k,k], then for each nonzero a[k,j] with j > k,
     // if (i,j) is in the sparsity pattern, subtract multiplier * a[k,j].
+    let diagonal_positions: Vec<usize> = (0..n)
+        .map(|row| {
+            (lu_indptr[row]..lu_indptr[row + 1])
+                .find(|&idx| lu_indices[idx] == row)
+                .unwrap_or(usize::MAX)
+        })
+        .collect();
     let mut row_lookup = vec![usize::MAX; n];
     let mut row_lookup_touched = Vec::new();
     for i in 0..n {
@@ -1046,8 +1053,13 @@ pub fn spilu(a: &CscMatrix, options: IluOptions) -> SparseResult<SparseIluFactor
                 break; // only process lower triangle (k < i)
             }
 
-            // Find diagonal a[k,k]
-            let diag_k = find_value_in_row(&lu_data, lu_indices, lu_indptr, k, k);
+            // Read diagonal a[k,k] through the structural index cached above.
+            let diagonal_position = diagonal_positions[k];
+            let diag_k = if diagonal_position == usize::MAX {
+                0.0
+            } else {
+                lu_data[diagonal_position]
+            };
             if diag_k.abs() < f64::EPSILON * 100.0 {
                 return Err(SparseError::SingularMatrix {
                     message: format!("zero pivot at row {k} during ILU(0)"),

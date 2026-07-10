@@ -6,6 +6,31 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - ScarletChapel (cod) - KEEP (bit-identical): sparse SPILU cached diagonal positions - 8.08% median self-time reduction on 1024/bw32
+
+- DIFFERENT module: selected `fsci-sparse`, not peer-owned interpolate. A remote-only full sparse Criterion
+  ranking put `sparse_spilu/1024_bw32` at **2.4352 ms**; slower COO duplicate/conversion rows were already
+  mined or rejected, making SPILU the highest fresh row. Source attribution found every lower-entry
+  elimination rescanning row `k` for `(k,k)` even though ILU(0)'s CSR structure never changes.
+- ONE LEVER: cache each row's diagonal structural position once, then read the same mutable
+  `lu_data[diagonal_position]` on every elimination. This is distinct from the earlier `8310dbd9d` SPA keep,
+  which removed repeated `(i,j)` membership scans. Missing diagonals still produce `0.0`; the divide/update
+  sequence and all floating-point operations are unchanged.
+- **MEDIAN SELF-TIME GATE, same worker `hz2`, Criterion:** primary `1024_bw32` **2.3602 ms -> 2.2313 ms**
+  (change median **-8.0769%**, CI `[-10.321%, -5.6695%]`, `p=0.00`); guard `512_bw16`
+  **372.29 us -> 332.82 us** (change median **-10.732%**, CI `[-13.587%, -7.7060%]`, `p=0.00`). KEEP.
+- BIT IDENTITY: `spilu_row_workspace_matches_linear_scan_factor_bits` compares every L/U factor with
+  `to_bits()` against the verbatim linear-scan reference and passed remotely. Full `fsci-sparse` lib suite:
+  **362 passed, 0 failed, 4 ignored**. Workspace `cargo check --workspace --all-targets`, rustfmt, diff-check,
+  and UBS (0 critical) passed.
+- REMOTE-ONLY discipline: every Cargo command used
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- ...`; no local fallback. Surfaced failures: one
+  compare landed on a worker without saved baseline (`exit 101`), one strict-remote attempt found no
+  admissible worker, workspace clippy hit a remote `num-traits` build-script `SIGILL`, and the crate-scoped
+  retry exposed four pre-existing `needless_range_loop` lints at lines 4388/4413/5553/11905, all outside the
+  SPILU hunk. Agent Mail's SQLite database was malformed, so coordination fell back to shared Git truth.
+- Bead: `frankenscipy-8l8r1.156`.
+
 ## 2026-07-10 - BlackThrush (cc) - SURFACE (audit, no lever landed): interpolate + special parallelization/hoist veins are exhausted this sweep; the tempting erfinv gate is a DEAD END (measured)
 
 - Profile-first audit of my lane (interpolate + special) for the next bit-identical parallelize/hoist lever,
