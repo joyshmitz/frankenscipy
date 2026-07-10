@@ -30,6 +30,14 @@
 //!                       inert for `simd` (empty recursion ⇒ the scalar kernel is used).
 //! Any run whose control drifts off 1.00x is noise-dominated and must be discarded.
 //!
+//! A/A NULL CONTROL (franken_whisper). Inert-path controls prove a knob cannot act, but they do NOT
+//! measure the harness's own noise floor. So every row ALSO times a SECOND instance of the ORIG arm,
+//! interleaved with the other two in the same measured routine: `null = min(orig)/min(orig2)`. That
+//! is an A/A comparison of identical code, so it MUST read 1.000x. Its deviation and cv ARE the
+//! floor. A "win" smaller than the floor is indistinguishable from noise, and a REJECT of a lever
+//! whose effect is below the floor is meaningless. Rows whose null deviates >3% from 1.000 or whose
+//! null cv exceeds 5% are tagged NOISE and must not be used to decide a lever.
+//!
 //! SUBSTRATE (rule v2): both arms live in THIS binary, are selected by an in-process atomic, and are
 //! ALTERNATED per iteration inside one measured routine — NOT merely registered as two Criterion
 //! group members, which run sequentially and therefore do NOT cancel worker/thermal drift. A single
@@ -315,17 +323,24 @@ fn main() {
                     }
                     t.elapsed().as_secs_f64() / reps as f64 * 1000.0
                 };
-                // Interleave ORIG/candidate so slow drift hits both arms equally.
-                let (mut ov, mut cv) = (Vec::new(), Vec::new());
+                // Interleave ORIG / candidate / ORIG-again so slow drift hits all arms equally.
+                // The third arm is the A/A null control: identical code to the first.
+                let (mut ov, mut cv, mut nv) = (Vec::new(), Vec::new(), Vec::new());
                 for _ in 0..iters {
                     ov.push(bench(true));
                     cv.push(bench(false));
+                    nv.push(bench(true));
                 }
                 set_orig(false);
                 let (om, ocv) = mean_cv(&ov);
                 let (cm, ccv) = mean_cv(&cv);
+                let (_nm, ncv) = mean_cv(&nv);
                 let ob = ov.iter().copied().fold(f64::MAX, f64::min);
                 let cb = cv.iter().copied().fold(f64::MAX, f64::min);
+                let nb = nv.iter().copied().fold(f64::MAX, f64::min);
+                // A/A: identical code both sides, so this MUST be 1.000x. Its drift is the floor.
+                let null_ratio = ob / nb;
+                let noisy = (null_ratio - 1.0).abs() > 0.03 || ncv > 5.0;
                 let is_control = if offs_lever {
                     order == 0
                 } else if simd_lever {
@@ -334,11 +349,15 @@ fn main() {
                 } else {
                     order == 0 || mode == BoundaryMode::Constant
                 };
-                let tag = if is_control { "CONTROL" } else { "       " };
+                let tag = match (noisy, is_control) {
+                    (true, _) => "NOISE  ",
+                    (false, true) => "CONTROL",
+                    (false, false) => "       ",
+                };
                 println!(
-                    "{tag} order={order} {mode:?} {name}: orig {ob:.2}ms (mean {om:.2} cv {ocv:.1}%) \
-                     cand {cb:.2}ms (mean {cm:.2} cv {ccv:.1}%) best {:.2}x mean {:.2}x \
-                     maxdiff={md:.1e} bitmism={bits}",
+                    "{tag} order={order} {mode:?} {name}: orig {ob:.2}ms (cv {ocv:.1}%) \
+                     cand {cb:.2}ms (cv {ccv:.1}%) best {:.2}x mean {:.2}x \
+                     NULL(A/A) {null_ratio:.3}x (cv {ncv:.1}%) maxdiff={md:.1e} bitmism={bits}",
                     ob / cb,
                     om / cm
                 );

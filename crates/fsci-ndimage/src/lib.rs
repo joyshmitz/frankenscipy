@@ -914,6 +914,7 @@ macro_rules! cardinal_bspline_lanes {
     };
 }
 cardinal_bspline_lanes!(cardinal_bspline_x4, 4);
+cardinal_bspline_lanes!(cardinal_bspline_x2, 2);
 
 /// Cardinal B-spline weights for the CONTIGUOUS tap run `k in lo..=hi`, i.e.
 /// `out[j] = cardinal_bspline(order, cc - (lo + j))`.
@@ -934,16 +935,26 @@ fn cardinal_bspline_run(order: usize, cc: f64, lo: isize, hi: isize, out: &mut [
         }
         return;
     }
-    // ONLY the exact-4-tap run vectorises profitably. A 4-tap run is one f64x4 = one YMM register
-    // (orders 2 and 3 under the compact window). MEASURED REJECT: padding a 6-tap run (orders 4/5)
-    // into f64x8 costs TWO YMM registers with 2 lanes idle, over a longer recursion (len 9/11), and
-    // reads 1.06x at order 4 and **0.98x (a regression) at order 5** — so those stay scalar.
-    if ntaps == 4 {
-        let xs = Simd::<f64, 4>::from_array(std::array::from_fn(x_of));
-        out[..4].copy_from_slice(&cardinal_bspline_x4(order, xs).to_array());
-    } else {
-        for (j, w) in out[..ntaps].iter_mut().enumerate() {
-            *w = cardinal_bspline(order, x_of(j));
+    // Vectorise only where the run maps onto NATIVE register widths, never by padding.
+    //   4 taps (orders 2/3 compact) → one f64x4 = one YMM.
+    //   6 taps (orders 4/5 compact) → f64x4 + f64x2 = one YMM + one XMM, no idle lanes.
+    // MEASURED REJECT (do not re-add on AVX2): padding a 6-tap run into f64x8 costs TWO YMM with 2
+    // lanes idle over a longer recursion (len 9/11) and read 1.06x at order 4, 0.98x at order 5.
+    match ntaps {
+        4 => {
+            let xs = Simd::<f64, 4>::from_array(std::array::from_fn(x_of));
+            out[..4].copy_from_slice(&cardinal_bspline_x4(order, xs).to_array());
+        }
+        6 => {
+            let lo4 = Simd::<f64, 4>::from_array(std::array::from_fn(x_of));
+            out[..4].copy_from_slice(&cardinal_bspline_x4(order, lo4).to_array());
+            let hi2 = Simd::<f64, 2>::from_array(std::array::from_fn(|j| x_of(4 + j)));
+            out[4..6].copy_from_slice(&cardinal_bspline_x2(order, hi2).to_array());
+        }
+        _ => {
+            for (j, w) in out[..ntaps].iter_mut().enumerate() {
+                *w = cardinal_bspline(order, x_of(j));
+            }
         }
     }
 }
@@ -19451,7 +19462,7 @@ mod tests {
     #[test]
     fn cardinal_bspline_lanes_matches_scalar_bitexact() {
         // The lane-parallel kernel must reproduce the scalar one BIT-for-BIT, per lane, for every
-        // order, at the one lane width that ships (f64x4). Adversarial x: support edges
+        // order, at both shipped lane widths (f64x4 and the f64x2 remainder). Adversarial x: edges
         // ±(n+1)/2, integers, half-integers, ±1/±2 ULP neighbours, and 200k pseudo-random values.
         let mut s = 0x243f_6a88_85a3_08d3u64;
         let mut rnd = || {
@@ -19489,6 +19500,20 @@ mod tests {
                         got[j].to_bits(),
                         cardinal_bspline(order, x).to_bits(),
                         "f64x4 order={order} x={x:e}"
+                    );
+                }
+            }
+            for chunk in xs.chunks(2) {
+                if chunk.len() < 2 {
+                    continue;
+                }
+                let v = Simd::<f64, 2>::from_slice(chunk);
+                let got = cardinal_bspline_x2(order, v).to_array();
+                for (j, &x) in chunk.iter().enumerate() {
+                    assert_eq!(
+                        got[j].to_bits(),
+                        cardinal_bspline(order, x).to_bits(),
+                        "f64x2 order={order} x={x:e}"
                     );
                 }
             }

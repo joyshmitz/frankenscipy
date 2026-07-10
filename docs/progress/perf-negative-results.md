@@ -4,6 +4,99 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+**A/A NULL-CONTROL RULE (mandatory, adopted 2026-07-10 from franken_whisper, which rejected an SDPA BR
+tile sweep whose A/A self-comparison measured 1.1163x at cv 29.0% — i.e. the "effects" were all floor).**
+An inert-path control proves a knob *cannot act*; it does NOT measure the harness's noise floor. Before
+trusting ANY A/B ratio, run the identical arm twice inside the SAME interleaved measured routine and
+report `null_ratio` and `null_cv` alongside `binary_sha256`, `self_time`, `worker`, and per-arm `cv_pct`.
+If `|null_ratio − 1| > 3%` or `null_cv > 5%`, the harness is not fit to decide the lever: fix the harness
+first (more iterations, quieter/pinned worker, interleave within one measured routine, `black_box` both
+input and result). **Any WIN smaller than the floor, and any REJECT of an effect below the floor, is
+meaningless.** `crates/fsci-ndimage/src/bin/perf_perpixel_leaf.rs` implements this: a third ORIG arm
+interleaved per iteration, with rows auto-tagged `NOISE`. Composes with: two-invocation rch A/Bs are
+invalid; Criterion group members run sequentially and do not cancel drift; profile-verify candidate-
+specific non-zero self-time before honoring or writing a REJECT.
+
+## 2026-07-10 - frankenscipy-cc-bspline-x4x2 - KEEP (bit-identical): 6-tap run as `f64x4` + `f64x2` remainder — order4 1.36x, order5 1.24x; A/A null harness; one run DISCARDED by it
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`). `crates/fsci-ndimage/` only; **no `crates/fsci-linalg/`
+  code touched — cod owns that wall structurally and fitted the syrk XMM tile in `770c4d490`.**
+- Executes my own ledgered retry-condition #1 from `7612f5a22`.
+
+### Harness upgrade first (and it immediately voided a run)
+
+Added a per-row **A/A null control**: a THIRD arm, a second instance of ORIG, interleaved with ORIG and
+CAND in the same measured routine. `null = min(orig)/min(orig2)` compares identical code, so it must read
+1.000x; its deviation and cv ARE the floor. Rows are auto-tagged `NOISE` when `|null−1| > 3%` or
+`null_cv > 5%`.
+
+**DISCARDED RUN (not published as a win):** the first A/B of this lever, worker `vmi1293453`, showed
+order4 **1.25x** / order5 **1.32x** — but its inert controls read 0.83x–1.03x (order1 Reflect **0.83x**
+cv 17.8%; order5 Constant **0.85x** cv 12.0%). Noise-dominated. Re-ran on `fixmydocuments`.
+
+### Lever
+
+A 6-tap compact run (orders 4/5) fits no native register width. Padding into `f64x8` = TWO YMM with 2 idle
+lanes (previously rejected). Split it instead: **`f64x4` on taps 0–3 + `f64x2` on taps 4–5** = one YMM +
+one XMM, **no idle lanes**. Principle: *vectorise onto native widths, never by padding.*
+
+### Certified measurement (mandatory metadata)
+
+- Command (ONE invocation, three arms alternated per iteration inside one binary):
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo run --profile release-perf -p fsci-ndimage --bin perf_perpixel_leaf simd all 5 11`
+- `binary_sha256 = ccd434ac6256cbe00c5bf6524bc70cb8f516732c8160ff1b04979c63d3f9be60`
+- `worker = fixmydocuments` (rch label `ovh-a`); `reps = 5`, `iters = 11`
+- `self_time` (function under test): `cardinal_bspline` is inlined into `compute_axis_support` =
+  **61.39% self**; `perf annotate` of that symbol is entirely scalar FP with zero `idiv`. Live and hot.
+- Knob: `NDIMAGE_BSPLINE_SIMD_DISABLE`. `map_coords_serial` sized under the parallel gate
+  (`npts·(order+1)^ndim < 2^18`) so it runs SERIAL by construction.
+
+  | order | taps | width | orig | cand | best | cv_pct (orig/cand) | NULL A/A (cv) | verdict |
+  | ---: | ---: | --- | ---: | ---: | ---: | --- | --- | --- |
+  | 3 | 4 | f64x4 | 1.30 ms | 0.98 ms | 1.33x | 5.9 / 5.2 | 1.000x (2.5%) | corroborates |
+  | 4 | 6 | f64x4+f64x2 | 2.40 ms | 1.77 ms | **1.36x** | 0.4 / 2.3 | 0.999x (2.5%) | **keep** |
+  | 5 | 6 | f64x4+f64x2 | 3.09 ms | 2.48 ms | **1.24x** | 1.7 / 2.4 | 1.004x (0.6%) | **keep** |
+  | 2 | 4 | f64x4 | 0.97 ms | 0.75 ms | (1.29x) | 7.1 / 5.2 | 1.001x (**6.0%**) | NOISE — excluded |
+  | 0,1 | – | scalar | — | — | 1.00-1.02x | — | 1.019x / 0.998x | CONTROL (knob inert) |
+
+  Under the rejected `f64x8`, orders 4/5 read 1.06x / 0.98x; they now read 1.36x / 1.24x.
+- Same-worker keep/loss/neutral: `2/0/1` on decidable rows (order 2 excluded as NOISE), plus 6 control rows.
+
+### AMENDMENT to the `f64x8` REJECT (`7612f5a22`)
+
+That reject was decided **without** an A/A null control, and its headline effect (order5 0.98x, −2%) sits
+*below* a typical floor — so the specific claim "a regression" was NOT decidable from that data. What is
+established, and what the reject now rests on: `f64x4+f64x2` beats `f64x8` by ~26–30 points at the same
+orders on a harness whose null is 0.999x (cv 2.5%). Do not re-add `f64x8` on AVX2; re-measure only on
+AVX-512, with an A/A null.
+
+### Correctness
+
+- BIT-IDENTICAL by construction: each lane executes the scalar operation sequence in scalar order; nothing
+  reassociated across lanes; no `mul_add` introduced (Rust does not contract `a*b + c` absent an explicit
+  `mul_add`).
+- PASS: `cardinal_bspline_lanes_matches_scalar_bitexact`, extended to the `f64x2` width — per-lane
+  `to_bits()` vs the scalar kernel over ~200k random `x` per order plus support edges `±(order+1)/2`,
+  integers, half-integers and ±1/±2 ULP neighbours; and `cardinal_bspline_run` vs the per-tap scalar calls
+  for every run length it can produce (including the 6-tap split).
+- PASS: `bspline_simd_run_matches_scalar_transforms_bitexact` — `to_bits` A/B over the knob across
+  zoom / shift / diag-affine / general affine / rotate / `map_coordinates`, orders 0..=5 × 5 modes ×
+  ndim 1/2/3, plus the 256² parallel-chunked path.
+- PASS: `cargo test -p fsci-ndimage` → **265 passed; 0 failed** (remote). `cargo fmt --check` clean, `ubs`
+  0 critical, `git diff --check` clean. All A/B rows `bitmism=0`, `maxdiff=0.0e0`.
+- BLOCKED (environmental, unchanged): the scipy differential packet cannot run remotely (`.rch.env` pins
+  `FSCI_REQUIRE_SCIPY_ORACLE=1`; workers have no SciPy). Outputs are bit-identical to the ORIG arm, so the
+  packet that passed on this path still passes.
+
+### Retry conditions
+
+1. Re-measure `f64x8` on an AVX-512 host, with an A/A null control.
+2. Re-profile `compute_axis_support` now that orders 2–5 are all vectorised — is the residual the recursion,
+   `support.push`, or `map_interpolation_coordinate`? Needs a fresh `perf record`; blocked by the disk
+   constraint.
+3. The `vals = next` array copy in the recursion (`[Simd; 11]` per `d`-pass) is a plausible next target for
+   a ping-pong buffer — but that is a PROFILE question, and profiling is currently blocked. Do not guess.
+
 ## 2026-07-10 - frankenscipy-cc-cholesky-audit-RETRACTION - I retract my own audit's row verdicts; cod's provenance audit v2 (ae0dc389f) is authoritative
 
 - Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`). Docs only. **No `crates/fsci-linalg/` code touched.**

@@ -6,6 +6,66 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - KEEP (bit-identical): 6-tap B-spline run as `f64x4` + `f64x2` remainder — order4 **1.36x**, order5 **1.24x**; + A/A NULL-CONTROL harness (franken_whisper); + one run DISCARDED by it
+
+- **HARNESS FIRST (franken_whisper rule adopted).** Inert-path controls prove a knob *cannot act*; they do
+  NOT measure the harness's own noise floor. `perf_perpixel_leaf` now times a THIRD arm per row — a second
+  instance of the ORIG arm, interleaved with the other two in the same measured routine — giving an
+  **A/A null control**: `null = min(orig)/min(orig2)`, identical code, which MUST read 1.000x. Rows whose
+  null deviates >3% from 1.000, or whose null cv > 5%, are auto-tagged `NOISE` and cannot decide a lever.
+  A "win" below the floor is indistinguishable from noise; a REJECT below the floor is meaningless.
+- **IT IMMEDIATELY PAID FOR ITSELF: one run DISCARDED.** A first A/B of this lever on worker `vmi1293453`
+  showed order4 1.25x / order5 1.32x — but its inert controls read 0.83x-1.03x (order1 Reflect **0.83x**
+  cv 17.8%; order5 Constant **0.85x** cv 12.0%). Noise-dominated, thrown away, not published as a win.
+  Re-ran on `fixmydocuments`, where the A/A null is tight.
+- LEVER (my own ledgered retry-condition #1 from `7612f5a22`): a 6-tap compact run (orders 4/5) fits no
+  native width. Padding it into `f64x8` costs TWO YMM with 2 idle lanes (rejected). Instead split it:
+  **`f64x4` on taps 0-3 + `f64x2` on taps 4-5** = one YMM + one XMM, **no idle lanes**. Vectorise onto
+  native register widths, never by padding.
+- BIT-IDENTICAL by construction (each lane runs the scalar op sequence in scalar order; nothing reassociated
+  across lanes; no `mul_add` introduced). VERIFIED: `cardinal_bspline_lanes_matches_scalar_bitexact` extended
+  to the `f64x2` width — per-lane `to_bits()` vs the scalar kernel over ~200k random `x` per order plus
+  support edges, integers, half-integers and ±1/±2 ULP neighbours; end-to-end `to_bits` A/B across
+  zoom/shift/diag-affine/general-affine/rotate/map_coordinates × orders 0..=5 × 5 modes × ndim 1/2/3 and the
+  256² parallel path. fsci-ndimage **265/0**. All A/B rows `bitmism=0`, `maxdiff=0.0e0`.
+
+- CERTIFIED MEASUREMENT (one `rch exec`; ORIG, CAND and the A/A arm alternated per iteration in one binary):
+  - `binary_sha256 = ccd434ac6256cbe00c5bf6524bc70cb8f516732c8160ff1b04979c63d3f9be60`
+  - `worker = fixmydocuments` (rch label `ovh-a`), `reps = 5`, `iters = 11`
+  - `self_time` of the function under test: `cardinal_bspline` inlined into `compute_axis_support` =
+    **61.39% self** (captured `rotate` order=3 / 512² / Reflect profile); `perf annotate` of that symbol is
+    entirely scalar FP, zero `idiv`. Live and hot.
+
+  | order | taps | width | orig | cand | best | cv (orig/cand) | **NULL A/A** | verdict |
+  | ---: | ---: | --- | ---: | ---: | ---: | --- | --- | --- |
+  | 3 | 4 | f64x4 | 1.30 ms | 0.98 ms | 1.33x | 5.9 / 5.2 | 1.000x (cv 2.5%) | corroborates |
+  | 4 | 6 | **f64x4+f64x2** | 2.40 ms | 1.77 ms | **1.36x** | 0.4 / 2.3 | 0.999x (cv 2.5%) | **KEEP** |
+  | 5 | 6 | **f64x4+f64x2** | 3.09 ms | 2.48 ms | **1.24x** | 1.7 / 2.4 | 1.004x (cv 0.6%) | **KEEP** |
+  | 2 | 4 | f64x4 | 0.97 ms | 0.75 ms | (1.29x) | 7.1 / 5.2 | 1.001x (cv **6.0%**) | NOISE — excluded |
+
+  Inert-path controls on the deciding rows read 1.00-1.01x with null cv 0.3-2.4%. Under the previously
+  rejected `f64x8`, orders 4/5 read 1.06x / 0.98x; they now read **1.36x / 1.24x**.
+- **AMENDMENT to the `f64x8` REJECT (`7612f5a22`).** That reject was decided WITHOUT an A/A null control,
+  and its headline effect (order5 **0.98x**, i.e. −2%) sits *below* a typical floor, so the specific claim
+  "a regression" was not decidable from that data. What IS established, and what the reject should rest on:
+  `f64x4+f64x2` beats `f64x8` by ~26-30 points at the same orders on a harness whose null is 0.999x. Do not
+  re-add `f64x8` on AVX2; re-measure it only on AVX-512, with an A/A null.
+- SUBSTRATE: both arms and the A/A arm in ONE binary, ONE `rch exec` invocation, interleaved per iteration —
+  never two invocations, never two Criterion group members. Inputs fed THROUGH `black_box`, whole results
+  consumed BY it. `map_coords_serial` sized under the parallel gate so it runs SERIAL by construction. Every
+  build/bench via `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo ...`; rch fail-closed and
+  blocked twice — waited and retried. No local build, no maturin, no `perf record`, nothing stashed/deleted.
+- SCOPE: `crates/fsci-ndimage/` only. **cod owns `crates/fsci-linalg/` structurally** and fitted the syrk
+  tile to the XMM budget (`770c4d490`); I did not touch it. The same "native width, never pad" principle is
+  what a syrk register tile wants — cod's to apply.
+- CUMULATIVE ndimage arc (all bit-identical, each with its own control): compact tap window `6c53716ff`
+  (order3 1.37x) → per-pixel flat-offset leaf `6347c4045` (1.23-1.27x) → fold interior REJECTED `bac0359e5`
+  → lane-parallel 4-tap run `7612f5a22` (orders 2/3) → **6-tap x4+x2 (order4 1.36x, order5 1.24x)**. Orders
+  2-5 of every geometric transform are now vectorised.
+- RETRY: re-measure `f64x8` on AVX-512 only. Then re-profile `compute_axis_support` (needs `perf record`,
+  blocked by the disk constraint) to see whether the residual is the recursion, `support.push`, or
+  `map_interpolation_coordinate`.
+
 ## 2026-07-10 - BlackThrush (cc) - RETRACTION of my own cholesky audit verdicts (6863e8244); cod's provenance audit v2 is authoritative. Plus: the "~8x at n=1000" figure is STALE.
 
 - **I WAS WRONG, and the error is exactly the one the integrity rule exists to catch.** My audit
