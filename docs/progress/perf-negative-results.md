@@ -8996,3 +8996,24 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   200x200/3000q: **IN-FLOOR** CAND(clone/noclone) median 1.023x (best-of 1.054x) inside NULL(A/A) range
   [0.712,1.098], worker vmi1293453 (degraded fleet, +/-30% null). Not decidable; knob+path removed to avoid
   cruft. The clone is subsumed by the hoist WIN (which reads fibers by reference anyway). Safe Rust only.
+
+## 2026-07-10 - cc_fsc - WIN RectBivariateSpline eval_many hoist query-independent x-splines (3.0-25.2x)
+
+- **WIN; shipped.** `RectBivariateSpline::eval_many` (scattered points) mapped `self.eval` per query
+  -> `eval_impl(x,y,0,0)`, which rebuilds the `ny` x-direction BSplines on EVERY query — each
+  `BSpline::new(self.tx.clone(), coeffs_row.clone(), kx)` clones the whole knot vector + a coeff row +
+  runs knot validation. Those x-splines depend only on the spline, not the query point, so an
+  M-query batch rebuilt the same ny splines M times; the loop was also SERIAL. New eval_many builds
+  the ny x-splines ONCE, then each query only evaluates the shared x-splines (de Boor), builds its
+  query-dependent y-spline, and evaluates it — fanned across cores via par_query_map. Shared-predictor
+  lever (cf. interpn pchip d42308be7, solve_toeplitz_many).
+- Same-binary A/B (RECTBISPLINE_EVAL_MANY_FORCE_SCALAR knob, scalar/hoisted/scalar interleaved,
+  black-boxed): **60x60 grid/20000q DECIDED 2.996x** (99.47ms->33.17ms cv1.4%, below the par gate =
+  pure serial hoist), NULL(A/A) 0.992x [0.929,1.043], worker hz2; **100x100/100000q DECIDED 25.206x**
+  (1080ms->31.7ms, hoist+parallel above the 2^23 gate), NULL 1.002x [0.981,1.031], worker hz2.
+- **Byte-identical: bitmism=0** both probes; test `rect_bivariate_eval_many_hoist_matches_scalar_bitexact`
+  (kx/ky in {1,2,3}^2, interior/exact-node/out-of-bounds-clamp/non-finite, to_bits equality) passes;
+  fsci-interpolate suite 185/0. eval_one mirrors eval's is_finite guard + eval_impl's clamp/order
+  exactly; the shared x-spline builds are deterministic and query-independent; build-failure or the
+  knob falls back to the exact per-query path. scipy RectBivariateSpline.ev is single-threaded FITPACK.
+  Safe Rust; no external BLAS/LAPACK/MKL/XLA.

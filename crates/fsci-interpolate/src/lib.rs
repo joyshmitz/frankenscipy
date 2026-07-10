@@ -8641,6 +8641,14 @@ pub struct RectBivariateSpline {
     y_bounds: (f64, f64),
 }
 
+/// Same-binary A/B toggle for `RectBivariateSpline::eval_many`. When `true`, every scattered query
+/// goes through the per-query `eval` path (which rebuilds the query-independent x-direction splines
+/// on every point — the ORIG behaviour). When `false` (default), those x-splines are built once and
+/// reused across the batch. Byte-identical either way. Benchmark knob.
+#[doc(hidden)]
+pub static RECTBISPLINE_EVAL_MANY_FORCE_SCALAR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl RectBivariateSpline {
     /// Create a new bivariate spline over a rectangular mesh.
     ///
@@ -8817,7 +8825,41 @@ impl RectBivariateSpline {
                 ),
             });
         }
-        Ok(xi.iter().zip(yi).map(|(&x, &y)| self.eval(x, y)).collect())
+
+        // `eval` -> `eval_impl` rebuilds the `ny` x-direction BSplines (each cloning `tx` and a
+        // coefficient row) on EVERY query, though they depend only on the spline, not the point.
+        // Build them ONCE and reuse across the batch (shared-predictor lever); each query then only
+        // evaluates the shared x-splines, builds its query-dependent y-spline, and evaluates that.
+        // BYTE-IDENTICAL to the per-query path: the same deterministic builds, clamps, and
+        // evaluation order. The knob and any x-spline build failure fall back to the per-query path.
+        if xi.is_empty()
+            || RECTBISPLINE_EVAL_MANY_FORCE_SCALAR.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Ok(xi.iter().zip(yi).map(|(&x, &y)| self.eval(x, y)).collect());
+        }
+        let x_splines: Option<Vec<BSpline>> = self
+            .coeffs
+            .iter()
+            .map(|row| BSpline::new(self.tx.clone(), row.clone(), self.kx).ok())
+            .collect();
+        let Some(x_splines) = x_splines else {
+            return Ok(xi.iter().zip(yi).map(|(&x, &y)| self.eval(x, y)).collect());
+        };
+        let eval_one = |x: f64, y: f64| -> f64 {
+            if !x.is_finite() || !y.is_finite() {
+                return f64::NAN;
+            }
+            let xc = x.clamp(self.x_bounds.0, self.x_bounds.1);
+            let yc = y.clamp(self.y_bounds.0, self.y_bounds.1);
+            let intermediate: Vec<f64> = x_splines.iter().map(|s| s.eval(xc)).collect();
+            let Ok(y_spline) = BSpline::new(self.ty.clone(), intermediate, self.ky) else {
+                return f64::NAN;
+            };
+            y_spline.eval(yc)
+        };
+        let pairs: Vec<(f64, f64)> = xi.iter().zip(yi).map(|(&x, &y)| (x, y)).collect();
+        let work_per_query = self.coeffs.len().max(1);
+        Ok(par_query_map(&pairs, work_per_query, |&(x, y)| eval_one(x, y)))
     }
 
     /// Evaluate the spline on a grid and return a 2D array.
@@ -11811,6 +11853,47 @@ mod tests {
     }
 
     // ── RectBivariateSpline tests ────────────────────────────────────
+
+    #[test]
+    fn rect_bivariate_eval_many_hoist_matches_scalar_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The hoisted-x-spline batch path must be BYTE-IDENTICAL to the per-query `eval`, across
+        // degrees, interior/edge/out-of-bounds (clamped) and non-finite queries.
+        for (kx, ky) in [(1usize, 1usize), (3, 3), (2, 3), (3, 2)] {
+            let nx = (kx + 6).max(6);
+            let ny = (ky + 7).max(7);
+            let x: Vec<f64> = (0..nx).map(|i| i as f64 * 0.7).collect();
+            let y: Vec<f64> = (0..ny).map(|j| j as f64 * 0.4 - 1.0).collect();
+            let z: Vec<Vec<f64>> = (0..nx)
+                .map(|i| {
+                    (0..ny)
+                        .map(|j| ((i * 5 + j * 3) as f64 * 0.31).sin() * 4.0 - 0.7)
+                        .collect()
+                })
+                .collect();
+            let spline = RectBivariateSpline::new(&x, &y, &z, kx, ky).expect("spline");
+            // Scattered queries: interior, exact nodes, out-of-bounds (clamped), and non-finite.
+            let mut qx: Vec<f64> = Vec::new();
+            let mut qy: Vec<f64> = Vec::new();
+            for t in 0..80 {
+                qx.push(x[0] + (x[nx - 1] - x[0]) * ((t * 7 + 1) % 100) as f64 / 100.0);
+                qy.push(y[0] + (y[ny - 1] - y[0]) * ((t * 11 + 5) % 100) as f64 / 100.0);
+            }
+            qx.push(x[nx - 1] + 3.0); // out of bounds high -> clamp
+            qy.push(y[0] - 2.0); // out of bounds low -> clamp
+            qx.push(f64::NAN);
+            qy.push(0.5);
+            RECTBISPLINE_EVAL_MANY_FORCE_SCALAR.store(true, Ordering::Relaxed);
+            let scalar = spline.eval_many(&qx, &qy).unwrap();
+            RECTBISPLINE_EVAL_MANY_FORCE_SCALAR.store(false, Ordering::Relaxed);
+            let hoisted = spline.eval_many(&qx, &qy).unwrap();
+            assert_eq!(scalar.len(), hoisted.len());
+            for (i, (a, b)) in scalar.iter().zip(&hoisted).enumerate() {
+                assert_eq!(a.to_bits(), b.to_bits(), "kx={kx} ky={ky} query {i}");
+            }
+        }
+        RECTBISPLINE_EVAL_MANY_FORCE_SCALAR.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn rect_bivariate_spline_linear_plane() {
