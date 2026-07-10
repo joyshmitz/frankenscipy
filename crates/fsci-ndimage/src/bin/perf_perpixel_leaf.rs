@@ -1,18 +1,29 @@
-//! A/B probe for the compact cardinal-B-spline tap window in `compute_axis_support`.
+//! A/B probe for the two per-pixel B-spline levers in `sample_interpolated`.
 //!
-//! A `perf record` of `rotate` order=3 ranked `compute_axis_support` at **61.68%** self time
-//! (`sample_spline_recursive` 19.92%, `sample_interpolated` 3.08%). Its tap loop spanned
-//! `floor(cc) ± order` — `2·order+1` `cardinal_bspline` calls — but the kernel vanishes exactly
-//! outside `|x| < (order+1)/2`, so only `order+1` taps can be nonzero (7→4 at order 3, 11→6 at
-//! order 5). This probe isolates that lever on the transforms where supports are recomputed per
-//! pixel (coupled coords: `rotate`, general non-diagonal `affine_transform`, `map_coordinates`).
+//! `zoom`/`shift`/diagonal-`affine_transform` are axis-separable and precompute their per-axis
+//! supports once. `rotate`, a GENERAL (non-diagonal) `affine_transform`, and `map_coordinates`
+//! have coupled coordinates, so their supports are rebuilt per pixel. Two levers live there:
 //!
-//! Usage: `perf_perpixel_leaf [mode] [order]`
-//!   both (default) — interleaved A/B: ORIG full window vs compact window
-//!   full | compact — run ONE path in a tight loop (for `perf record` isolation)
+//!   `compact` — `NDIMAGE_BSPLINE_COMPACT_DISABLE`: the cardinal tap loop spanned
+//!               `floor(cc) ± order` (`2·order+1` `cardinal_bspline` calls) though only `order+1`
+//!               taps can be nonzero. Shipped 6c53716ff (order3 1.37x, order5 1.53x).
+//!   `offs`    — `NDIMAGE_SPLINE_OFFSET_DISABLE`: each of the `(order+1)^ndim` tensor leaves
+//!               recomputed `Σ idx[d]·stride[d]` via `coeffs.get`. Premultiply taps by stride once
+//!               per pixel ⇒ the leaf is a single `data[base]` load.
+//!
+//! NOISE: remote rch workers cannot be `taskset`-pinned, so the `map_coords_serial` workload is
+//! sized UNDER the parallel gate (`npts · (order+1)^ndim < 2^18`) and therefore runs on the
+//! SERIAL path by construction — the honest way to time a per-pixel arithmetic lever.
+//!
+//! Each lever carries its own NULL CONTROL, a row where the knob provably cannot act:
+//!   `offs`    → `order=0` (`sample_interpolated` returns before the leaf).
+//!   `compact` → `Constant` mode (routes to `fold_wrap_cubic` / `bspline_local_support`).
+//! Any run whose control drifts off 1.00x is noise-dominated and must be discarded.
+//!
+//! Usage: `perf_perpixel_leaf <compact|offs> [order]`
 use fsci_ndimage::{
-    BoundaryMode, NDIMAGE_BSPLINE_COMPACT_DISABLE, NdArray, affine_transform, map_coordinates,
-    rotate,
+    BoundaryMode, NDIMAGE_BSPLINE_COMPACT_DISABLE, NDIMAGE_SPLINE_OFFSET_DISABLE, NdArray,
+    affine_transform, map_coordinates, rotate,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -26,24 +37,24 @@ fn mean_cv(v: &[f64]) -> (f64, f64) {
     (m, if m > 0.0 { var.sqrt() / m * 100.0 } else { 0.0 })
 }
 
-/// A general (non-diagonal) affine: rotation-like matrix so the diagonal separable gate misses.
+/// A general (non-diagonal) affine, so the diagonal separable gate misses.
 const GENERAL_AFFINE: [[f64; 3]; 2] = [[0.9, 0.3, -20.0], [-0.3, 0.9, 15.0]];
+
+/// Kept under the parallel gate: `NPTS * (order+1)^2 < 2^18` for every order <= 5 (6000*36=216000).
+const NPTS: usize = 6000;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let mode_sel = args.get(1).map_or("both", |s| s.as_str());
+    let lever = args.get(1).map_or("offs", |s| s.as_str());
     let only_order: Option<usize> = args.get(2).and_then(|s| s.parse().ok());
-    // Tunable so a loaded box can buy stability with longer samples / more interleaves.
-    // Under `taskset -c <one core>` `available_parallelism()` is 1, so the transforms take the
-    // SERIAL path — the honest way to measure a per-pixel arithmetic lever (no scheduler noise).
     let env_usize = |k: &str, d: usize| {
         std::env::var(k)
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(d)
     };
-    let reps = env_usize("FSCI_AB_REPS", 4);
-    let iters = env_usize("FSCI_AB_ITERS", 5);
+    let reps = env_usize("FSCI_AB_REPS", 3);
+    let iters = env_usize("FSCI_AB_ITERS", 7);
 
     let mut s = 1u64;
     let mut r = || {
@@ -52,72 +63,74 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64
     };
-    let side = 512usize;
-    let data: Vec<f64> = (0..side * side).map(|_| r()).collect();
-    let img = NdArray::new(data, vec![side, side]).unwrap();
+    let big_side = 512usize;
+    let big = NdArray::new(
+        (0..big_side * big_side).map(|_| r()).collect(),
+        vec![big_side, big_side],
+    )
+    .unwrap();
 
-    // map_coordinates over a coupled (non-separable) swirl of sample points.
-    let npts = side * side;
+    // Small input keeps the spline prefilter from diluting the per-point leaf work.
+    let small_side = 64usize;
+    let small = NdArray::new(
+        (0..small_side * small_side).map(|_| r()).collect(),
+        vec![small_side, small_side],
+    )
+    .unwrap();
+    // Coupled (non-separable) coordinates.
     let coords: Vec<Vec<f64>> = {
-        let mut rr = Vec::with_capacity(npts);
-        let mut cc = Vec::with_capacity(npts);
-        for i in 0..npts {
-            let (y, x) = ((i / side) as f64, (i % side) as f64);
+        let (mut rr, mut cc) = (Vec::with_capacity(NPTS), Vec::with_capacity(NPTS));
+        for i in 0..NPTS {
+            let (y, x) = ((i / small_side) as f64, (i % small_side) as f64);
             rr.push(0.9 * y + 0.05 * x + 3.7);
             cc.push(0.9 * x - 0.05 * y + 2.3);
         }
         vec![rr, cc]
     };
 
-    // Isolation mode: hammer a single path so `perf record` attributes cleanly.
-    if mode_sel == "full" || mode_sel == "compact" {
-        let order = only_order.unwrap_or(3);
-        NDIMAGE_BSPLINE_COMPACT_DISABLE.store(mode_sel == "full", Ordering::Relaxed);
-        for _ in 0..30 {
-            black_box(
-                rotate(&img, 33.0, false, order, BoundaryMode::Reflect, 0.0)
-                    .unwrap()
-                    .data
-                    .len(),
-            );
+    let offs_lever = lever == "offs";
+    println!(
+        "# same-binary A/B lever={lever}: {}",
+        if offs_lever {
+            "ORIG index-space leaf vs flat-offset leaf (per-pixel path)"
+        } else {
+            "ORIG full tap window vs compact support window"
         }
-        return;
-    }
+    );
+    println!("# CONTROL rows must read ~1.00x; otherwise the run is noise-dominated.");
+    let set_orig = |orig: bool| {
+        if offs_lever {
+            NDIMAGE_SPLINE_OFFSET_DISABLE.store(orig, Ordering::Relaxed);
+        } else {
+            NDIMAGE_BSPLINE_COMPACT_DISABLE.store(orig, Ordering::Relaxed);
+        }
+    };
 
-    println!("# same-binary A/B: ORIG full tap window vs compact support window (per-pixel path)");
-    // Read-once knob: `true` = ORIG (evaluate 2*order+1 taps, discard the zeros).
-    let set_orig = |orig: bool| NDIMAGE_BSPLINE_COMPACT_DISABLE.store(orig, Ordering::Relaxed);
-
-    for &order in &[1usize, 2, 3, 4, 5] {
+    for &order in &[0usize, 1, 2, 3, 4, 5] {
         if only_order.is_some_and(|o| o != order) {
             continue;
         }
-        // Reflect/Mirror take the cardinal kernel the lever touches. Constant is a HARNESS
-        // NULL CONTROL: it routes to fold_wrap_cubic (order 3) or bspline_local_support (else),
-        // never the compact loop, so it MUST read ~1.00x. Any run whose control drifts off 1.00x
-        // is noise-dominated and gets discarded.
-        for &mode in &[
-            BoundaryMode::Reflect,
-            BoundaryMode::Mirror,
-            BoundaryMode::Constant,
-        ] {
-            // Three non-separable kernels; each returns a flat Vec<f64> for bit comparison.
+        // The compact lever does not exist at order 0 (no cardinal loop); it is the offs control.
+        if !offs_lever && order == 0 {
+            continue;
+        }
+        for &mode in &[BoundaryMode::Reflect, BoundaryMode::Constant] {
             let kernels: [(&str, Box<dyn Fn() -> Vec<f64>>); 3] = [
                 (
-                    "rotate",
-                    Box::new(|| rotate(&img, 33.0, false, order, mode, 0.0).unwrap().data),
+                    "rotate_par",
+                    Box::new(|| rotate(&big, 33.0, false, order, mode, 0.0).unwrap().data),
                 ),
                 (
-                    "affine_gen",
+                    "affine_gen_par",
                     Box::new(|| {
-                        affine_transform(&img, &GENERAL_AFFINE, order, mode, 0.0)
+                        affine_transform(&big, &GENERAL_AFFINE, order, mode, 0.0)
                             .unwrap()
                             .data
                     }),
                 ),
                 (
-                    "map_coords",
-                    Box::new(|| map_coordinates(&img, &coords, order, mode, 0.0).unwrap()),
+                    "map_coords_serial",
+                    Box::new(|| map_coordinates(&small, &coords, order, mode, 0.0).unwrap()),
                 ),
             ];
 
@@ -153,13 +166,20 @@ fn main() {
                     ov.push(bench(true));
                     cv.push(bench(false));
                 }
+                set_orig(false);
                 let (om, ocv) = mean_cv(&ov);
                 let (cm, ccv) = mean_cv(&cv);
                 let ob = ov.iter().copied().fold(f64::MAX, f64::min);
                 let cb = cv.iter().copied().fold(f64::MAX, f64::min);
+                let is_control = if offs_lever {
+                    order == 0
+                } else {
+                    mode == BoundaryMode::Constant
+                };
+                let tag = if is_control { "CONTROL" } else { "       " };
                 println!(
-                    "order={order} {mode:?} {name}: full {ob:.2}ms (mean {om:.2} cv {ocv:.1}%) \
-                     compact {cb:.2}ms (mean {cm:.2} cv {ccv:.1}%) best {:.2}x mean {:.2}x \
+                    "{tag} order={order} {mode:?} {name}: orig {ob:.2}ms (mean {om:.2} cv {ocv:.1}%) \
+                     cand {cb:.2}ms (mean {cm:.2} cv {ccv:.1}%) best {:.2}x mean {:.2}x \
                      maxdiff={md:.1e} bitmism={bits}",
                     ob / cb,
                     om / cm

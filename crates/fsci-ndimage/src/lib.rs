@@ -1707,6 +1707,10 @@ fn sample_interpolated(
         if bases.len() < n {
             bases.resize_with(n, Vec::new);
         }
+        // Read the A/B knob ONCE and thread it through: it decides BOTH whether the taps get
+        // pre-multiplied by stride AND which leaf consumes them. Reading it twice lets a
+        // concurrent toggle tear the pair (the latent panic fixed in 0a7086e76).
+        let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
         for axis in 0..n {
             if !compute_axis_support(
                 coords[axis],
@@ -1719,6 +1723,32 @@ fn sample_interpolated(
             ) {
                 return cval;
             }
+            if offsets {
+                // Fold this axis's stride into its `order+1` taps ONCE per pixel, so the
+                // `(order+1)^ndim` leaves below each become a single `data[base]` load instead
+                // of re-deriving `Σ idx[d]·stride[d]` via `coeffs.get`. Same lever the separable
+                // paths already use (c396459ef); the supports here are per-pixel because the
+                // coords couple axes, but the LEAF ADDRESS is orthogonal to separability.
+                let stride = coeffs.strides[axis];
+                for tap in &mut bases[axis] {
+                    tap.0 *= stride;
+                }
+            }
+        }
+
+        if offsets {
+            // BYTE-IDENTICAL to the index-space recursion: same weights, same accumulation
+            // order (axis 0 outermost), only the leaf address is precomputed. Axes beyond `n`
+            // hold `idx[d] = 0` there and contribute 0 to `base` here.
+            if n <= MAX_STACK_NDIM {
+                let mut slices: [&[(usize, f64)]; MAX_STACK_NDIM] = [&[]; MAX_STACK_NDIM];
+                for (axis, slot) in slices[..n].iter_mut().enumerate() {
+                    *slot = bases[axis].as_slice();
+                }
+                return sample_spline_offsets(&coeffs.data, &slices[..n], 0);
+            }
+            let slices: Vec<&[(usize, f64)]> = bases[..n].iter().map(Vec::as_slice).collect();
+            return sample_spline_offsets(&coeffs.data, &slices, 0);
         }
 
         idx.clear();
@@ -8787,10 +8817,14 @@ pub fn shift(
 pub static NDIMAGE_ZOOM_SEPARABLE_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// Same-binary A/B toggle for the separable paths' tensor-product combine: when `true`, taps stay
-/// in INDEX space and every leaf recomputes `Σ idx[d]·stride[d]` via `coeffs.get` — the ORIG
-/// comparator. When `false` (default) taps are pre-multiplied into FLAT OFFSETS and the leaf is a
-/// single load. Byte-identical either way. Benchmark knob; each transform reads it ONCE per call.
+/// Same-binary A/B toggle for the tensor-product combine on BOTH the separable paths
+/// (zoom/shift/diagonal-affine, supports precomputed per axis-index) and the per-pixel path
+/// (`sample_interpolated`: rotate / general affine / map_coordinates / geometric_transform, whose
+/// coupled coords force a per-pixel support rebuild). When `true`, taps stay in INDEX space and
+/// every leaf recomputes `Σ idx[d]·stride[d]` via `coeffs.get` — the ORIG comparator. When `false`
+/// (default) taps are pre-multiplied into FLAT OFFSETS and the leaf is a single load.
+/// Byte-identical either way. Benchmark knob; each call site reads it ONCE and threads it through
+/// (reading it twice tears the premultiply/leaf pair).
 #[doc(hidden)]
 pub static NDIMAGE_SPLINE_OFFSET_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -19069,6 +19103,106 @@ mod tests {
                 for (a, b) in a_o.data.iter().zip(a_c.data.iter()) {
                     assert_eq!(a.to_bits(), b.to_bits(), "affine order={order} {mode:?}");
                 }
+            }
+        }
+
+        // PER-PIXEL path (`sample_interpolated`): rotate / general affine / map_coordinates have
+        // COUPLED coords, so supports are rebuilt per pixel — but the leaf address is orthogonal
+        // to separability, and now also uses the flat-offset combine. Orders 0..=5 (order 0
+        // returns before the leaf and is a null case; order 1 has 2 taps/axis).
+        let general = [[0.85, 0.25, 1.3], [-0.2, 1.05, -0.6]];
+        for order in 0..=5usize {
+            for &mode in &modes {
+                let variants = |orig: bool| {
+                    NDIMAGE_SPLINE_OFFSET_DISABLE.store(orig, Ordering::Relaxed);
+                    (
+                        affine_transform(&arr, &general, order, mode, -2.5).unwrap(),
+                        rotate(&arr, 27.0, false, order, mode, -2.5).unwrap(),
+                    )
+                };
+                let (g_o, r_o) = variants(true);
+                let (g_c, r_c) = variants(false);
+                NDIMAGE_SPLINE_OFFSET_DISABLE.store(false, Ordering::Relaxed);
+                for (a, b) in g_o.data.iter().zip(g_c.data.iter()) {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "general affine order={order} {mode:?}"
+                    );
+                }
+                for (a, b) in r_o.data.iter().zip(r_c.data.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "rotate order={order} {mode:?}");
+                }
+            }
+        }
+
+        // `map_coordinates` over ndim 1/2/3 exercises ALL THREE arms of `sample_spline_offsets`
+        // (`[b0]`, the flattened 2-D `[b0,b1]`, and the `[b0, rest @ ..]` recursion).
+        let mc_shapes: &[Vec<usize>] = &[vec![17], vec![9, 11], vec![7, 6, 8]];
+        for shape in mc_shapes {
+            let total: usize = shape.iter().product();
+            let arr = NdArray::new(
+                (0..total).map(|k| (k as f64 * 0.37).sin() - 0.8).collect(),
+                shape.clone(),
+            )
+            .unwrap();
+            // Coupled coords, plus exact-integer and ±1 ULP samples.
+            let npts = 64usize;
+            let coords: Vec<Vec<f64>> = (0..shape.len())
+                .map(|d| {
+                    (0..npts)
+                        .map(|p| {
+                            let base = (p % shape[d]) as f64;
+                            match p % 4 {
+                                0 => base,
+                                1 => f64::from_bits(base.to_bits() + 1),
+                                2 => base + 0.41 + 0.13 * d as f64,
+                                _ => base - 0.27,
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            for order in 0..=5usize {
+                for &mode in &modes {
+                    let variants = |orig: bool| {
+                        NDIMAGE_SPLINE_OFFSET_DISABLE.store(orig, Ordering::Relaxed);
+                        map_coordinates(&arr, &coords, order, mode, -2.5).unwrap()
+                    };
+                    let m_o = variants(true);
+                    let m_c = variants(false);
+                    NDIMAGE_SPLINE_OFFSET_DISABLE.store(false, Ordering::Relaxed);
+                    for (a, b) in m_o.iter().zip(m_c.iter()) {
+                        assert_eq!(
+                            a.to_bits(),
+                            b.to_bits(),
+                            "map_coordinates {shape:?} order={order} {mode:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Parallel chunked fan-out: the leaf runs inside the per-pixel closure on every worker.
+        let big = NdArray::new(
+            (0..256 * 256).map(|k| (k as f64 * 0.017).cos()).collect(),
+            vec![256, 256],
+        )
+        .unwrap();
+        assert!(
+            ndimage_filter_thread_count(256 * 256, 4usize.pow(2)) > 1,
+            "big rotate case must exercise the parallel chunked path"
+        );
+        for order in [1usize, 3, 5] {
+            let variants = |orig: bool| {
+                NDIMAGE_SPLINE_OFFSET_DISABLE.store(orig, Ordering::Relaxed);
+                rotate(&big, 33.0, false, order, BoundaryMode::Reflect, 0.5).unwrap()
+            };
+            let r_o = variants(true);
+            let r_c = variants(false);
+            NDIMAGE_SPLINE_OFFSET_DISABLE.store(false, Ordering::Relaxed);
+            for (a, b) in r_o.data.iter().zip(r_c.data.iter()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "parallel rotate order={order}");
             }
         }
     }

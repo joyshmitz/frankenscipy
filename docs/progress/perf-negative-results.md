@@ -4,6 +4,140 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-10 - frankenscipy-cc-perpixel-offset-leaf - KEEP (byte-identical): ndimage per-pixel flat-offset tensor leaf — serial 1.23-1.27x, parallel 1.16-1.34x
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`)
+- Lever: in `sample_interpolated`, fold `coeffs.strides[axis]` into that axis's
+  `order+1` B-spline taps ONCE per pixel, then evaluate the tensor product with
+  the existing `sample_spline_offsets` (leaf = one `data[base]` load) instead of
+  `sample_spline_recursive` (leaf = `coeffs.get(idx)` = `Σ idx[d]·stride[d]`,
+  recomputed at every one of the `(order+1)^ndim` leaves).
+- Ledger consulted first. This is EXACTLY the retry condition recorded by the
+  preceding commit `6c53716ff`; no prior rejection exists for it.
+- Profile: REUSED the ranking already captured by `6c53716ff` (no new `perf record`
+  this turn — see CONSTRAINT). `rotate` order=3 post-compact:
+  `compute_axis_support` 61.39%, `sample_spline_recursive` **27.51%**,
+  `sample_interpolated` 2.42%. Frame #2 taken.
+- Insight: `c396459ef` applied this leaf only to the SEPARABLE transforms. But
+  separability decides whether SUPPORTS can be hoisted out of the pixel loop; it
+  says nothing about the LEAF ADDRESS. rotate / general affine / map_coordinates /
+  geometric_transform rebuild supports per pixel (coupled coords) yet still pay the
+  stride dot at every leaf. Orthogonal lever, unlanded.
+- Decision: KEEP. Byte-identical, no gate, no extra branch beyond one relaxed
+  atomic load for the A/B knob.
+- Graveyard/artifact route tested: precomputed flat offsets / arena-style address
+  folding, hoisting invariant address arithmetic out of the innermost tensor loop.
+
+- Baseline/candidate command (ONE invocation, both arms inside the binary):
+  `RCH_REQUIRE_REMOTE=1 FSCI_AB_REPS=3 FSCI_AB_ITERS=7 rch exec -- cargo run --profile release-perf -p fsci-ndimage --bin perf_perpixel_leaf offs`
+- Same-binary A/B knob: `NDIMAGE_SPLINE_OFFSET_DISABLE` (read ONCE per call and
+  threaded through both the premultiply and the leaf choice).
+- `map_coords_serial` is sized UNDER the parallel gate (`npts·(order+1)^ndim < 2^18`;
+  6000 points on a 64² input) so it takes the SERIAL path BY CONSTRUCTION. This
+  replaces the `taskset -c 56` pin used by `6c53716ff`, which is unavailable on
+  remote rch workers. Small input keeps the spline prefilter from diluting the leaf.
+- Interleaved best-of-7, all rows `bitmism=0` / `maxdiff=0.0e0`:
+
+  | Workload | order | orig | cand | Ratio | Verdict |
+  | --- | ---: | ---: | ---: | ---: | --- |
+  | `map_coords_serial` Reflect | 3 | 2.57 ms | 2.03 ms | **1.27x** | keep |
+  | `map_coords_serial` Reflect | 5 | 5.90 ms | 4.66 ms | **1.27x** | keep |
+  | `map_coords_serial` Reflect | 1 | 0.79 ms | 0.63 ms | 1.25x | keep |
+  | `map_coords_serial` Reflect | 4 | 4.39 ms | 3.53 ms | 1.24x | keep |
+  | `map_coords_serial` Reflect | 2 | 1.82 ms | 1.48 ms | 1.23x | keep |
+  | `rotate_par` Reflect (512²) | 3 | 30.93 ms | 25.51 ms | 1.21x | keep |
+  | `affine_gen_par` Reflect (512²) | 3 | 28.59 ms | 21.31 ms | 1.34x | keep |
+  | `rotate_par` Constant (512²) | 3 | 23.41 ms | 17.58 ms | 1.33x | keep |
+  | `affine_gen_par` Constant (512²) | 3 | 23.93 ms | 17.02 ms | 1.41x | keep |
+  | NULL CONTROL `map_coords_serial` Reflect | 0 | 0.24 ms | 0.24 ms | 1.00x | control ok |
+  | NULL CONTROL `map_coords_serial` Constant | 0 | 0.19 ms | 0.19 ms | 1.00x | control ok |
+
+  cv 0.3-1.5% on the serial rows; 2.4-14% on the parallel rows (shared worker).
+- Same-worker internal keep/loss/neutral: `30/0/6` (the 6 neutrals are the
+  `order=0` null-control rows, which MUST be ~1.00x and are).
+- NULL CONTROL rationale: at `order=0` `sample_interpolated` returns before ever
+  reaching the tensor leaf, so the knob cannot act. Serial control = 1.00x exactly.
+  The parallel control drifts 0.95-1.02x at cv 8-19%, so the parallel rows are
+  reported as corroboration only and the serial rows carry the headline.
+- Mechanism cross-check: under `Constant`, order=3 uses the CHEAP
+  `fold_wrap_cubic` support build ⇒ the leaf is a bigger share of the pixel ⇒ the
+  lever reads LARGER (1.33-1.41x); orders 2/4/5 use the EXPENSIVE
+  `bspline_local_support` ⇒ leaf share small ⇒ 1.01-1.11x. Amdahl on the captured
+  27.51% frame caps the win at 1.38x; 1.23-1.27x measured, the residual being the
+  load+FMA the leaf still performs once its address arithmetic is gone.
+- Discarded row (noise, NOT published): `order=3 Constant map_coords_serial` read
+  1.72x at cv 17.5% on a 0.5-0.9 ms absolute. The trustworthy Constant serial rows
+  are 1.11-1.22x.
+- Compounding vs the pre-`6c53716ff` baseline is an ESTIMATE, not a measurement:
+  order3 ≈ 1.37 × 1.27 ≈ 1.74x, order5 ≈ 1.53 × 1.27 ≈ 1.94x. A product of two
+  separately-measured ratios. To claim it, run ONE A/B toggling both knobs together.
+
+- METHODOLOGY (franken_networkx `br-r37-c1-839yx` addendum, applied and satisfied):
+  `rch exec` selects workers non-deterministically and has no `--worker` flag, and
+  the ORIG/CAND ratio is not worker-invariant, so any ratio SPLIT ACROSS TWO rch
+  invocations must be discarded. This probe is structurally immune: both arms are
+  compiled into one binary, selected in-process by an atomic, and ALTERNATED
+  (`ov.push(bench(true)); cv.push(bench(false))`) inside a single invocation, so
+  worker identity and drift cancel. Audited every ratio measured since the
+  constraint began — all came from that one invocation. The forbidden
+  "stash ORIG / bench / pop / bench NEW" recipe was NOT used (and `git stash` is
+  banned here regardless).
+
+- Correctness / behavior parity:
+  - BYTE-IDENTICAL by construction: identical weights, identical accumulation order
+    (axis 0 outermost, axis n-1 innermost); only the leaf ADDRESS is precomputed.
+    Axes beyond `n` hold `idx[d] = 0` in the recursion and contribute 0 to `base`.
+  - PASS: `spline_offset_leaf_matches_index_leaf_bitexact` extended to the per-pixel
+    path — rotate + general affine, orders 0..=5 × 5 boundary modes; plus
+    `map_coordinates` over ndim 1/2/3, which exercises ALL THREE arms of
+    `sample_spline_offsets` (`[b0]`, the flattened 2-D `[b0,b1]`, and the
+    `[b0, rest @ ..]` recursion) with coords on exact integers and ±1 ULP; plus a
+    256² parallel-chunked rotate. `to_bits` equality throughout.
+  - PASS: `RCH_REQUIRE_REMOTE=1 rch exec -- cargo test -p fsci-ndimage` →
+    `263 passed; 0 failed`.
+  - PASS: `cargo fmt -p fsci-ndimage -- --check` → 0 diffs. `git diff --check` clean.
+  - PASS: `ubs` on both touched files → 0 critical.
+  - PASS: `cargo check -p fsci-special --all-targets` and `-p fsci-conformance
+    --all-targets`, both remote, 0 errors (bead `frankenscipy-2p2hv` remains closed).
+  - BLOCKED (environmental, NOT a regression): the scipy differential packet cannot
+    run under the rch-only constraint. `.rch.env` pins `FSCI_REQUIRE_SCIPY_ORACLE=1`
+    and the remote workers have no SciPy, so `diff_ndimage` aborts with
+    "FSCI_REQUIRE_SCIPY_ORACLE=1 but SciPy ndimage is unavailable". The local box has
+    scipy 1.17.1 but must not be built on (disk at 96%). Correctness is carried by
+    the ndimage suite (263/0, which includes the scipy-PINNED reference tests) plus
+    bit-identity to the ORIG arm: outputs are unchanged to the last bit, so the packet
+    that passed on this code path at `6c53716ff` (`diff_ndimage` 5/0,
+    `diff_ndimage_zoom` 1/0, `diff_ndimage_affine_transform_properties` 1/0) still
+    passes. RE-RUN locally when the disk constraint lifts.
+
+- CONSTRAINT this turn: `/data` at 96% (90G free), 11 concurrent local cargo builds
+  draining ~450GB/h. Every build/bench went through `rch exec` with
+  `RCH_REQUIRE_REMOTE=1`; no local compile, no new `CARGO_TARGET_DIR`, no new
+  worktree, no `perf record`, nothing deleted. The profile was REUSED from
+  `6c53716ff` rather than regenerated.
+
+- Negative evidence / stale scorecard (re-confirmed a THIRD time — stop re-queueing):
+  the ndimage "geometric-transform separable precompute" and the parallel `*_many`
+  wrappers for `itj0y0`, `iti0k0`, `expn`, `shichi`, `fresnel`, `sici`, `poch` are
+  ALREADY LANDED. All seven wrappers exist in `crates/fsci-special/src/convenience.rs`
+  on `par_map_indices` and are present in HEAD (verified by
+  `git show HEAD:… | grep -c "pub fn <f>_many"` = 1 for each). The separable precompute
+  shipped at `c396459ef` + `0a7086e76` for zoom / shift / diagonal-affine; rotate,
+  general affine and `map_coordinates` have COUPLED coordinates and can never be
+  axis-separable, so there is nothing further to land there. Bead
+  `frankenscipy-2p2hv` is closed and both required `cargo check`s pass.
+
+- Retry condition / next levers, ranked:
+  1. With the leaf reduced to a bare load, `compute_axis_support` again dominates.
+     Its per-tap `fold` closure calls `rem_euclid` (surfaced as `fmod`, ~1.2% before
+     this change and a larger share now) on EVERY tap, though only taps that actually
+     cross a boundary need folding. Split the compact run into an interior fast path
+     (no fold) plus the boundary remainder.
+  2. Then SIMD the compacted 2/4/6-tap window (`order+1` taps map cleanly onto
+     2/4-lane f64 vectors).
+  3. Re-profile before either — both need a fresh `perf record`, hence the disk
+     constraint must lift first.
+
 ## 2026-07-10 - frankenscipy-cc-bspline-compact - KEEP (byte-identical): ndimage `compute_axis_support` compact cardinal-B-spline tap window — order3 1.37x, order5 1.53x self; plus REJECT of the FP-derived tap bound
 
 - Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`)
