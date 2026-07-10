@@ -8131,3 +8131,9 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - One remote binary, 20x32 alternating samples: candidate-specific self 60.10% (25,643 samples, zero lost).
 - ORIG 40.660139 ms (CV 3.659%); CAND 40.563001 ms (CV 6.976%); apparent 1.002395x mean / 1.006716x paired.
 - INVALID: candidate CV exceeds 5%. Retry with per-factor interleaving inside each paired sample.
+
+## 2026-07-10 - cod_fsc - INVALID MR4xNR4 per-factor paired run
+
+- 20x64 individual alternating pairs; candidate self 53.88% (25,795 samples, zero lost), exact factor bits.
+- ORIG 35.715026 ms (CV 11.242%); CAND 34.316969 ms (CV 12.163%); apparent 1.040740x mean / 1.043623x paired.
+- INVALID on raw CV. Retry without trimming and gate per-sample ratio CV, which cancels common worker drift.

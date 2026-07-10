@@ -18954,3 +18954,13 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   p50 39.881862, p95/p99 46.565430. Apparent mean ratio 1.002395x; paired-ratio mean 1.006716x.
 - Decision: INVALID again, because candidate CV exceeds 5%; neither keep nor reject. Retry by timing/interleaving
   each factor pair inside the sample so scheduler drift cannot land entirely on one 32-factor arm block.
+
+## 2026-07-10 - cod_fsc (cod) - INVALID MR4xNR4 per-factor paired run (raw CV > 5%)
+
+- Strict remote one-binary run on `vmi1149989`; each of 20 samples alternated 64 individual ORIG/CAND factor pairs.
+  Candidate profile: 25,795 cycles samples / zero lost; candidate-specific SYRK self 53.88%, TRSM 26.26%,
+  copy+pack 5.35%, blocked generic 4.16%, tail 2.06%. Full factor bits remained identical.
+- ORIG 35.715026 ms (CV 11.242%); CAND 34.316969 ms (CV 12.163%); apparent mean ratio 1.040740x and paired
+  mean 1.043623x. Both p95 shifts moved together (43.352694 / 42.050990 ms), consistent with common worker load.
+- Decision: INVALID under the raw-arm CV gate, neither keep nor reject. Retry condition: retain every sample and gate
+  the CV of per-sample paired ratios, the drift-cancelled estimator required by the fine-grained paired substrate.
