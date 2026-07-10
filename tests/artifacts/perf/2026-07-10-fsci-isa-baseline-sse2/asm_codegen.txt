@@ -1,0 +1,14 @@
+# ISA codegen evidence: identical source (isa_demo.rs), three rustc target-feature settings
+# rustc 1.99.0-nightly, x86_64-unknown-linux-gnu
+# default target_feature: target_feature="fxsr" target_feature="sse" target_feature="sse2" target_feature="x87" 
+#   -> NO avx/avx2/fma: baseline x86-64 is SSE2, 128-bit XMM
+
+build        vmulpd+ymm     vaddpd+ymm     mulpd+addpd/xmm vfmadd  
+baseline     0              0              8              0       
++avx2        2              2              0              0       
++avx2,+fma   2              2              0              0       
+
+VERDICT: baseline lowers Simd<f64,8> to 8x 128-bit XMM ops; +avx2 lowers it to 4x 256-bit YMM ops
+         (2 vmulpd + 2 vaddpd per 8-lane chunk). +fma adds NO vfmadd => rustc keeps
+         fp-contract=off => the AVX2 widening is BIT-IDENTICAL (same ops, same rounding order).
+         fsci ships the baseline column on a fleet whose CPUs report cpu:+avx2 +fma.

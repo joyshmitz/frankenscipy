@@ -6,6 +6,34 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - ROOT CAUSE of the dense-linalg wall: fsci is compiled for SSE2 (128-bit) and runs on an AVX2 (256-bit) fleet. + median-gate null control.
+
+- **DOMINANCE, first-hand** (`perf record` of scipy `cho_factor` n=1000, 1 thread, `thinkstation1`, 864
+  samples; artifact `tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/`): **GEMM 44.84%** (top:
+  `dgemm_kernel_HASWELL` 38.02%), **TRSM 18.76%**, **direct dsyrk 0.14%**. Independently reproduces cod's v2.
+  OpenBLAS runs the trailing update as GEMM; there is no separate `dsyrk`.
+- **ROOT CAUSE.** `rustc --print cfg` default target = `sse2` only — **no avx/avx2/fma**. No
+  `.cargo/config.toml`, no `RUSTFLAGS`, no runtime ISA dispatch, zero `mul_add` in the dense kernels. The rch
+  fleet reports **`cpu:+avx2 +fma`** (probe header). So fsci runs 128-bit code on 256-bit hardware.
+- **PROVEN at the instruction level** (artifact `asm_codegen.txt`, identical `Simd<f64,8>` source, 3 rustc
+  settings): baseline = 8× 128-bit XMM mul/add; `+avx2` = 4× 256-bit YMM; `+avx2,+fma` = same 4 YMM ops with
+  **NO `vfmadd`** (rustc keeps `fp-contract=off`). ⇒ AVX2 halves the instruction count and is **BIT-IDENTICAL**.
+  This is precisely cod's recurring "fits the 16-**XMM** budget / generic x86-64 codegen" symptom.
+- **EFFICIENCY:** fsci PARALLEL 10.4 GFLOP/s (~65% of ONE SSE2 core) vs SciPy 39.0 GFLOP/s ON ONE CORE (~61%
+  of AVX2+FMA). The kernel is fine; it is running at half the register width.
+- **RECOMMENDATION (cod's to implement; I touched no kernel):** the highest-leverage lowest-risk lever is
+  BUILDING FOR THE FLEET ISA — `-C target-feature=+avx2,+fma` (or `target-cpu=x86-64-v3`) on the numeric
+  crates, bit-identical, no algorithm change — verified with an A/A null (median gate), per-arm GFLOP/s, and
+  thread parity. THEN a register-blocked AVX2 micro-kernel ("native width, never pad", as `f64x4`+`f64x2` beat
+  padded `f64x8` in ndimage). Portable `std::simd` only, never C BLAS.
+- **MEDIAN NULL-GATE (frankenmermaid, supersedes cv<5%).** `cv<5%` is unreachable here. `perf_perpixel_leaf`
+  now decides a row iff the candidate MEDIAN ratio lies outside the null's observed `[min,max]`. Re-decided the
+  6-tap `f64x4+f64x2` win on worker `vmi1227854` (sha256 `ad52ef2e…`), cv 5-13%: order2 cand-median **1.276x**
+  (null 0.996x [0.862,1.148]), order3 **1.231x**, order4 **1.301x**, order5 **1.411x** — all DECIDED; every
+  inert control's cand-median sits inside its own null range. The win stands under the stricter rule.
+- Constraint: Python `perf` + `rustc --emit=asm` only (no cargo build, ~0 disk); one remote run via
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec`. No local build, no maturin, nothing stashed/deleted.
+
 ## 2026-07-10 - BlackThrush (cc) - RETRACTION: the "~8x at n=1000" cholesky gap is CORRECT. My "it's really 3.33x" was a THREAD-PARITY error. New mandatory rule.
 
 - **I was wrong in `c36cadef6`.** I told the fleet the wall was "~2.1-3.3x, not 8x" and that a lever sized

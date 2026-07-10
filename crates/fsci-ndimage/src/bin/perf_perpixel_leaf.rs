@@ -30,13 +30,17 @@
 //!                       inert for `simd` (empty recursion ⇒ the scalar kernel is used).
 //! Any run whose control drifts off 1.00x is noise-dominated and must be discarded.
 //!
-//! A/A NULL CONTROL (franken_whisper). Inert-path controls prove a knob cannot act, but they do NOT
-//! measure the harness's own noise floor. So every row ALSO times a SECOND instance of the ORIG arm,
-//! interleaved with the other two in the same measured routine: `null = min(orig)/min(orig2)`. That
-//! is an A/A comparison of identical code, so it MUST read 1.000x. Its deviation and cv ARE the
-//! floor. A "win" smaller than the floor is indistinguishable from noise, and a REJECT of a lever
-//! whose effect is below the floor is meaningless. Rows whose null deviates >3% from 1.000 or whose
-//! null cv exceeds 5% are tagged NOISE and must not be used to decide a lever.
+//! A/A NULL CONTROL (franken_whisper), decided by MEDIAN (frankenmermaid calibration). Inert-path
+//! controls prove a knob cannot act; they do NOT measure the harness's noise floor. So every row also
+//! times a SECOND instance of the ORIG arm, interleaved with the other two in one measured routine.
+//! Per iteration we form the A/A ratio `orig_i / orig2_i` (identical code, so it must centre on 1.000)
+//! and the A/B ratio `orig_i / cand_i`.
+//!
+//! GATE ON THE MEDIAN, NOT ON cv. A `cv < 5%` gate is UNREACHABLE on this hardware (mermaid swept
+//! min_sample x min_of and never attained it). A row is DECIDABLE only when the candidate's MEDIAN
+//! ratio lies clearly OUTSIDE the null's observed range `[min(null_i), max(null_i)]`. Otherwise the
+//! effect is inside the floor and the row decides nothing — neither a WIN nor a REJECT. cv is still
+//! reported, as information. The floor is PER-FUNCTION (frankenlibc), so it is measured per row.
 //!
 //! SUBSTRATE (rule v2): both arms live in THIS binary, are selected by an in-process atomic, and are
 //! ALTERNATED per iteration inside one measured routine — NOT merely registered as two Criterion
@@ -144,6 +148,25 @@ fn sha256_hex(data: &[u8]) -> String {
     h.iter().map(|w| format!("{w:08x}")).collect()
 }
 
+/// Runtime ISA of the machine producing these numbers. A ratio measured on a binary compiled for
+/// baseline x86-64 (SSE2, 128-bit) is not comparable to one compiled with AVX2 (256-bit), and the
+/// fleet is heterogeneous — so record what the CPU offers and what the binary was built for.
+fn isa() -> String {
+    let has = |f: &str, on: bool| if on { format!("+{f}") } else { format!("-{f}") };
+    let cpu = format!(
+        "cpu:{} {} {}",
+        has("avx2", is_x86_feature_detected!("avx2")),
+        has("fma", is_x86_feature_detected!("fma")),
+        has("avx512f", is_x86_feature_detected!("avx512f"))
+    );
+    let built = format!(
+        "built:{} {}",
+        has("avx2", cfg!(target_feature = "avx2")),
+        has("fma", cfg!(target_feature = "fma"))
+    );
+    format!("{cpu} | {built}")
+}
+
 /// `binary_sha256`, worker identity and exe path of the process producing these numbers.
 ///
 /// Known-answer self-test first: a certification tool that is not itself verified is worse than
@@ -242,6 +265,7 @@ fn main() {
     let (sha, worker, exe) = certify();
     println!("# binary_sha256={sha}");
     println!("# worker={worker} exe={exe} reps={reps} iters={iters}");
+    println!("# isa {}", isa());
     println!(
         "# self_time(function under test): cardinal_bspline is inlined into \
          compute_axis_support = 61.39% self (captured rotate order=3 profile)"
@@ -326,21 +350,39 @@ fn main() {
                 // Interleave ORIG / candidate / ORIG-again so slow drift hits all arms equally.
                 // The third arm is the A/A null control: identical code to the first.
                 let (mut ov, mut cv, mut nv) = (Vec::new(), Vec::new(), Vec::new());
+                let (mut null_r, mut cand_r) = (Vec::new(), Vec::new());
                 for _ in 0..iters {
-                    ov.push(bench(true));
-                    cv.push(bench(false));
-                    nv.push(bench(true));
+                    let (o, c, n) = (bench(true), bench(false), bench(true));
+                    // PAIRED per-iteration ratios: drift cancels inside the pair.
+                    null_r.push(o / n);
+                    cand_r.push(o / c);
+                    ov.push(o);
+                    cv.push(c);
+                    nv.push(n);
                 }
+                let median = |v: &mut Vec<f64>| {
+                    v.sort_by(f64::total_cmp);
+                    let n = v.len();
+                    if n % 2 == 1 {
+                        v[n / 2]
+                    } else {
+                        0.5 * (v[n / 2 - 1] + v[n / 2])
+                    }
+                };
+                let (mut nr, mut cr) = (null_r.clone(), cand_r.clone());
+                let null_med = median(&mut nr);
+                let cand_med = median(&mut cr);
+                let null_lo = nr.iter().copied().fold(f64::MAX, f64::min);
+                let null_hi = nr.iter().copied().fold(f64::MIN, f64::max);
+                // DECIDABLE iff the candidate median lies clearly outside the null's observed range.
+                let decidable = cand_med > null_hi || cand_med < null_lo;
                 set_orig(false);
                 let (om, ocv) = mean_cv(&ov);
                 let (cm, ccv) = mean_cv(&cv);
                 let (_nm, ncv) = mean_cv(&nv);
                 let ob = ov.iter().copied().fold(f64::MAX, f64::min);
                 let cb = cv.iter().copied().fold(f64::MAX, f64::min);
-                let nb = nv.iter().copied().fold(f64::MAX, f64::min);
-                // A/A: identical code both sides, so this MUST be 1.000x. Its drift is the floor.
-                let null_ratio = ob / nb;
-                let noisy = (null_ratio - 1.0).abs() > 0.03 || ncv > 5.0;
+                let _nb = nv.iter().copied().fold(f64::MAX, f64::min);
                 let is_control = if offs_lever {
                     order == 0
                 } else if simd_lever {
@@ -349,15 +391,16 @@ fn main() {
                 } else {
                     order == 0 || mode == BoundaryMode::Constant
                 };
-                let tag = match (noisy, is_control) {
-                    (true, _) => "NOISE  ",
-                    (false, true) => "CONTROL",
-                    (false, false) => "       ",
+                let tag = match (decidable, is_control) {
+                    (_, true) => "CONTROL ",
+                    (true, false) => "DECIDED ",
+                    (false, false) => "IN-FLOOR",
                 };
                 println!(
-                    "{tag} order={order} {mode:?} {name}: orig {ob:.2}ms (cv {ocv:.1}%) \
-                     cand {cb:.2}ms (cv {ccv:.1}%) best {:.2}x mean {:.2}x \
-                     NULL(A/A) {null_ratio:.3}x (cv {ncv:.1}%) maxdiff={md:.1e} bitmism={bits}",
+                    "{tag} order={order} {mode:?} {name}: orig {ob:.2}ms cand {cb:.2}ms \
+                     | CAND median {cand_med:.3}x | NULL median {null_med:.3}x range \
+                     [{null_lo:.3}, {null_hi:.3}] | cv o/c/n {ocv:.1}/{ccv:.1}/{ncv:.1}% \
+                     best {:.2}x mean {:.2}x maxdiff={md:.1e} bitmism={bits}",
                     ob / cb,
                     om / cm
                 );

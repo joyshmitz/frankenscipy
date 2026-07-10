@@ -4,6 +4,99 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+**NULL-CONTROL IS GATED BY MEDIAN, NOT cv (frankenmermaid calibration, supersedes the `cv < 5%` rule).**
+A `cv < 5%` gate is UNREACHABLE on this hardware. Run paired(base,base) as the A/A null and paired(base,cand)
+INTERLEAVED in one measured routine; form per-iteration ratios. A row is DECIDABLE only when the candidate's
+MEDIAN ratio lies clearly OUTSIDE the null's observed range `[min,max]`; otherwise the effect is inside the
+floor and decides nothing. Report null median, null range, and candidate median together. The floor is
+PER-FUNCTION (frankenlibc) — measure it per row. Keep reporting cv as information; do not gate on it.
+(frankenlibc's audit: 92 REJECT rows, 0% with a sha256, 51% decided INSIDE the null floor.)
+
+## 2026-07-10 - frankenscipy-cc-cholesky-ISA-ROOT-CAUSE - the dense-linalg wall is an ISA-BASELINE gap: fsci ships SSE2 (128-bit) on an AVX2 (256-bit) fleet
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`). Analysis + probe + banked artifacts. **NO kernel code
+  touched — cod owns `crates/fsci-linalg/` structurally and is live there (uncommitted probes in tree).**
+  This entry hands cod a root cause, not a competing patch.
+
+### Dominance, established FIRST-HAND (not by re-citing cod)
+
+`perf record -F 999 -g` of `scipy.linalg.cho_factor` n=1000, **single thread**, host `thinkstation1`, 864
+samples (perf.data sha256 `f532774af881804e…`; artifact
+`tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/scipy_dpotrf_profile.txt`):
+
+| family | self-time | top symbol |
+| --- | ---: | --- |
+| GEMM (kernel + itcopy/otcopy pack) | **44.84%** | `dgemm_kernel_HASWELL` 38.02% |
+| TRSM | **18.76%** | `dtrsm_RN_solve_opt` 16.36% |
+| numpy copy (`_aligned_strided_to_contig`) | 7.94% | — |
+| direct `dsyrk` | **0.14%** | (no distinct syrk kernel exists) |
+
+Reproduces cod's v2 (43.15 / 20.00 / 0.14) independently. **`dgemm` dominates `dpotrf`.** OpenBLAS executes
+the trailing symmetric update as GEMM; there is no separate `dsyrk` to optimise.
+
+### ROOT CAUSE (the finding): fsci is built for the wrong ISA
+
+- `rustc --print cfg` on the pinned nightly, default target: `target_feature = "fxsr","sse","sse2","x87"`.
+  **No `avx`, no `avx2`, no `fma`.** There is NO `.cargo/config.toml`, NO `RUSTFLAGS`, NO
+  `is_x86_feature_detected!` runtime dispatch in `fsci-linalg`/`fsci-ndimage`, and zero `mul_add`.
+- The rch fleet's CPUs report **`cpu:+avx2 +fma -avx512f`** (probe header, worker `vmi1152480`). So fsci runs
+  SSE2 code on AVX2 hardware.
+- PROVEN at the instruction level (artifact `asm_codegen.txt`, identical source `isa_demo.rs`, three rustc
+  settings — a `dot8` over `Simd<f64, 8>`):
+
+  | build | vmulpd+vaddpd (256-bit YMM) | mulpd+addpd (128-bit XMM) | vfmadd |
+  | --- | ---: | ---: | ---: |
+  | baseline (**what fsci ships**) | 0 | **8** | 0 |
+  | `+avx2` | **4** | 0 | 0 |
+  | `+avx2,+fma` | 4 | 0 | **0** |
+
+  AVX2 HALVES the instruction count for the same arithmetic. `+fma` emits NO `vfmadd` — rustc keeps
+  `fp-contract=off` — so the widening is **BIT-IDENTICAL** (same operations, same rounding order). This is
+  exactly why cod's ledger kept saying the tile "fits the 16-**XMM** budget" and "generic x86-64 codegen":
+  the compiler was never given the wider registers.
+- The efficiency gap corroborates: fsci PARALLEL = **10.4 GFLOP/s** (≈65% of ONE SSE2 core's ~16 GF/s peak —
+  a decent kernel on the wrong ISA); SciPy = **39.0 GFLOP/s on ONE core** (≈61% of AVX2+FMA's ~64 GF/s peak).
+  fsci's kernel is not badly written; it is running at half the register width.
+
+### Recommendation (cod's to implement — I did not touch the kernel)
+
+The highest-leverage, LOWEST-risk lever on the whole wall is not a new micro-kernel: it is **building for the
+fleet's actual ISA**, which is bit-identical and touches no algorithm. Options, in order of blast radius:
+1. Per-crate `RUSTFLAGS`/`build.rustflags` `-C target-feature=+avx2,+fma` (or `target-cpu=x86-64-v3`) for the
+   numeric crates. Bit-identical (no `vfmadd` emitted); widens every `Simd<f64,8>` to YMM. VERIFY with an A/A
+   null + median gate, per-arm GFLOP/s, and thread parity.
+2. If the fleet is heterogeneous, `is_x86_feature_detected!` runtime dispatch on the hot dense kernels.
+3. Only THEN does a register-blocked AVX2 micro-kernel (the "native width, never pad" principle that won in
+   ndimage: `f64x4`+`f64x2` beat a padded `f64x8` by 26-30 points) pay — on top of the widened baseline.
+Any of these must carry: candidate `binary_sha256`, candidate-specific self-time, `worker`, cv, the **null
+median + range**, and **thread counts for both arms**. Portable `std::simd` only; never C BLAS/LAPACK/MKL.
+
+### Median-gate re-decision of the shipped ndimage lever (harness upgrade this turn)
+
+`perf_perpixel_leaf` now gates on the median rule (candidate median outside the null's `[min,max]`), not cv,
+and emits `# isa cpu:… | built:…` per run. Re-decided the 6-tap `f64x4+f64x2` win (`8c10f0a45`) on worker
+`vmi1227854` (`binary_sha256 = ad52ef2e6887aa51…`), even though every cv here is 5-13% — which the old gate
+would have thrown away:
+
+  | order | orig | cand | CAND median | NULL median | null range | verdict |
+  | ---: | ---: | ---: | ---: | ---: | --- | --- |
+  | 2 | 1.10 ms | 0.78 ms | **1.276x** | 0.996x | [0.862, 1.148] | DECIDED |
+  | 3 | 1.47 ms | 1.19 ms | **1.231x** | 1.026x | [0.863, 1.197] | DECIDED |
+  | 4 | 2.48 ms | 1.70 ms | **1.301x** | 0.979x | [0.802, 1.016] | DECIDED |
+  | 5 | 3.18 ms | 2.28 ms | **1.411x** | 0.971x | [0.878, 1.157] | DECIDED |
+
+  Every inert CONTROL row's candidate median (0.987-1.038x) sits INSIDE its own null range ⇒ no false
+  positives. The win stands under the stricter rule. `self_time` = `cardinal_bspline` 61.39% self; all rows
+  `bitmism=0`, `maxdiff=0.0e0`.
+
+### Constraint / method
+
+Python profiling + `rustc --emit=asm` only — no cargo build/bench, no linking, ~0 disk. The one remote run
+went through `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec`. No local cargo build, no maturin, no new
+target tree/worktree, nothing stashed, nothing deleted. Standing items (separable precompute LIVE at three
+call sites; `rotate` non-separable via `ny = cy + cos·dy − sin·dx`; seven `*_many` wrappers in HEAD on
+`par_map_indices`) verified a sixth time — closed.
+
 **THREAD-PARITY RULE (mandatory, adopted 2026-07-10 after it invalidated one of my own claims).** Any
 fsci-vs-SciPy ratio MUST record the THREAD COUNT OF BOTH ARMS. SciPy's LAPACK is multi-threaded by
 default; a benchmark harness that pins it (or that inherits `OMP_NUM_THREADS=1`) silently compares a

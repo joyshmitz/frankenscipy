@@ -1,0 +1,18 @@
+# scipy dpotrf n=1000, 1 thread, perf -F 999 -g, 864 samples, host thinkstation1
+# perf.data sha256=f532774af881804e7c3fb6d9e8ec7c980672f7c3e3e0de58c68c2f233ed925d6
+# scipy 1.17.1 / scipy-openblas 0.3.31 DYNAMIC_ARCH / numpy 2.4.3
+
+    38.02%  python3  libscipy_openblas-6cdc3b4a.so                      [.] dgemm_kernel_HASWELL
+    16.36%  python3  libscipy_openblas-6cdc3b4a.so                      [.] dtrsm_RN_solve_opt
+     7.94%  python3  _multiarray_umath.cpython-313-x86_64-linux-gnu.so  [.] _aligned_strided_to_contig_size8
+     3.59%  python3  python3.13                                         [.] _PyEval_EvalFrameDefault
+     2.51%  python3  libscipy_openblas64_-ff84a88b.so                   [.] dgemm_kernel_HASWELL
+     2.32%  python3  libscipy_openblas-6cdc3b4a.so                      [.] dgemm_itcopy_HASWELL
+     1.99%  python3  libscipy_openblas-6cdc3b4a.so                      [.] dgemm_otcopy_HASWELL
+     1.43%  python3  libscipy_openblas-6cdc3b4a.so                      [.] dtrsm_kernel_RN_HASWELL
+     0.97%  python3  libscipy_openblas-6cdc3b4a.so                      [.] dtrsm_oltncopy_HASWELL
+     0.85%  python3  _generator.cpython-313-x86_64-linux-gnu.so         [.] random_standard_normal
+
+ROLLUP: GEMM family (kernel+pack) 44.84% | TRSM family 18.76% | direct dsyrk 0.14%
+        => OpenBLAS dpotrf executes the trailing symmetric update with dgemm_kernel_HASWELL
+           (AVX2+FMA, 256-bit YMM). There is no distinct dsyrk kernel.
