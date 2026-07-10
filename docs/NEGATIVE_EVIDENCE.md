@@ -18626,3 +18626,65 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   runtime branch, so its slice/no-alias codegen was not the literal `ce839d2dd` loop even though factor bits matched.
   No performance conclusion is allowed from this run. Retry condition: branch before any split, preserve the original
   global-index loop byte-for-byte in the false arm, then rebuild and rerun the same-binary CV-under-5 gate.
+
+## 2026-07-10 - cod_fsc (cod) - WIN dense-Cholesky MR2 shared-RHS panel TRSM (n=1000 1.132x, -11.65%, FP-bit-identical)
+
+- Lane: `frankenscipy-8l8r1` dense BLAS / `linalg.cholesky`. Both negative ledgers were searched before coding. This
+  does not retry public-`matmul`/naive blocking or packing, NB retunes, panel-order SYRK, TRSM row fan-out, or the
+  MR=6/eight-dot/4x16 SYRK families. Safe Rust only; no C BLAS/LAPACK/MKL/XLA linkage.
+- Fresh current-HEAD routing profile: release-perf `ce839d2dd`, n=1000 official `make_symmetric_eigh_matrix` fixture,
+  100 direct blocked factors, 15,433 cycles samples, zero lost, mean 23.256834 ms, digest
+  `0x045bd67d02b3e075`. Every self-time frame at or above 0.1%:
+
+  | Rank | Frame | Self |
+  | ---: | --- | ---: |
+  | 1 | `cholesky_syrk_flat_rows` | 40.00% |
+  | 2 | `cholesky_lower_blocked` | 39.07% |
+  | 3 | libc `__memset_avx2_unaligned_erms` | 5.86% |
+  | 4 | libc `__memmove_avx_unaligned_erms` | 1.80% |
+  | 5 | `cholesky_syrk_row_tail` | 1.12% |
+  | 6 | unresolved kernel | 1.07% |
+  | 7 | unresolved kernel | 0.23% |
+  | 8 | unresolved kernel | 0.22% |
+  | 9 | unresolved kernel | 0.19% |
+  | 10 | unresolved kernel | 0.15% |
+  | 11 | libc `pthread_create` | 0.14% |
+  | 12 | unresolved kernel | 0.14% |
+  | 13 | unresolved kernel | 0.13% |
+  | 14 | unresolved kernel | 0.13% |
+  | 15 | unresolved kernel | 0.12% |
+  | 16 | unresolved kernel | 0.12% |
+  | 17 | unresolved kernel | 0.12% |
+
+- Routing: the top frame maps to the ledger-closed SYRK-shape family, so it was skipped. `perf annotate` put 88.17%
+  of the blocked-body samples in panel TRSM, about 34.45% global. The banked counters (IPC 3.62, about 17.5 GB/s
+  estimated miss traffic) reject DRAM bandwidth as the primary wall. SciPy/OpenBLAS `dpotrf(n=1000)` independently
+  ranks GEMM-family 43.15%, TRSM-family 20.00%, and direct SYRK 0.14%, confirming TRSM as the next open primitive.
+- Lever: solve two independent trailing rows together for each diagonal-panel column and share each RHS vector load.
+  `simd_dot2_shared_rhs` retains two exact copies of the old eight-lane accumulation chains, lane-0-through-7 reduction,
+  scalar tail, subtraction, division, `j` order, and per-row dependency order. `split_at_mut(kb*n)` proves the diagonal
+  panel immutable and the two trailing rows disjoint.
+- Actual register budget, not a source-type guess: generic x86-64 release codegen lowers each `Simd<f64, 8>` to four
+  XMM registers. The inspected MR2 hot loop uses all 16 XMM registers (eight accumulators, four shared RHS, four
+  transient LHS) with no vector stack loads/stores. MR2 is therefore the widest spill-free grouping on this codegen;
+  MR4 is not attempted.
+- Honest comparator repair: the immediately preceding attempt was rejected and committed because its false arm
+  inherited a split-slice alias refactor. The scored binary uses const-generic monomorphs: `<false>` contains the
+  literal original global-index loop and no split; `<true>` contains only the paired path. Both run in the same binary,
+  process, worker, fixture, and alternating sample schedule.
+- Decisive release-perf A/B, official n=1000 fixture, 20 alternating samples and 10 factors/sample:
+  - ORIG: mean 21.576840 ms, CV 3.793%, p50 21.536466, p95/p99 22.670521 ms.
+  - CAND: mean 19.064166 ms, CV 3.754%, p50 18.825760, p95/p99 20.345864 ms.
+  - Mean ratio 1.131801x; paired-ratio mean 1.132979x; candidate delta -11.645236%.
+- FP-bit-identical proof: full flat-factor `to_bits()` equality at n=130 (paired tail), 131 (odd-row remainder), 270
+  (multiple panels), and n=1000; full n=1000 digest `0x51c725173f438a8c`. All 507 non-ignored fsci-linalg tests passed
+  in the exact release-perf binary (41 ignored); the focused Cholesky surface passed 16/0.
+- Gates: RCH workspace `cargo check --workspace --all-targets` passed; RCH linalg-only clippy with `-D warnings`
+  passed; scoped rustfmt and `git diff --check` passed; UBS found 0 critical issues and confirmed no unsafe blocks.
+  Workspace clippy remains blocked by three unrelated `fsci-opt` lints (`curvefit.rs:545`, `lib.rs:4276,4280`), and
+  workspace fmt reports peer-owned probe/special formatting debt. The requested conformance run reached two unrelated
+  cluster-linkage failures (`linkage_complete_5pt` and its quota wrapper) and was stopped after the gate was definitively
+  red; no linalg/Cholesky failure occurred.
+- Decision: KEEP and ratchet the n=1000 direct-factor mean to 19.064166 ms on this same-binary harness. Next pass must
+  reprofile this landed binary and take the highest open frame; neither this win nor a rejected vein establishes a
+  parity ceiling.

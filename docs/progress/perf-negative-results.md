@@ -7735,3 +7735,24 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - REJECT as invalid evidence: the false arm inherited a pre-branch `split_at_mut`, so alias/codegen conditions differed
   from literal `ce839d2dd` even though arithmetic and bits matched. No code is kept on this result. Retry only after
   moving the branch before the split and retaining the original global-index loop verbatim as the comparator.
+
+## 2026-07-10 - frankenscipy-8l8r1/cod_fsc - WIN MR2 shared-RHS panel TRSM (n=1000 1.132x, bit-identical)
+
+- Ledger first: did not retry naive/public-`matmul` blocking/packing, NB tuning, panel-order SYRK, row fan-out, or
+  MR=6/eight-dot/4x16 SYRK. Fresh `ce839d2dd` n=1000 release-perf profile (15,433 samples, zero lost) ranked
+  `cholesky_syrk_flat_rows` 40.00%, `cholesky_lower_blocked` 39.07%, memset 5.86%, memmove 1.80%, SYRK tail 1.12%,
+  unresolved kernel frames 1.07/0.23/0.22/0.19/0.15/0.14/0.13/0.13/0.12/0.12/0.12%, and `pthread_create` 0.14%.
+  SYRK shapes are closed; annotation put 88.17% of the blocked-body samples in panel TRSM (about 34.45% global).
+  SciPy `dpotrf` was GEMM-family 43.15%, TRSM-family 20.00%, direct SYRK 0.14%.
+- Lever: process two independent trailing rows together while sharing each diagonal-panel RHS vector load. Each result
+  retains the exact prior `simd_dot` lane chains, reduction, tail, subtraction, division, and dependency order.
+  Inspected generic x86-64 codegen uses all 16 XMM registers with no hot-loop vector spills, making MR2 the actual
+  spill-free register-budget fit.
+- Corrected same-binary release-perf A/B on the official n=1000 fixture, const-generic literal ORIG versus candidate,
+  20 alternating samples x 10 factors: ORIG 21.576840 ms (CV 3.793%, p50 21.536466, p95/p99 22.670521) versus CAND
+  19.064166 ms (CV 3.754%, p50 18.825760, p95/p99 20.345864), 1.131801x mean / 1.132979x paired, -11.645236%.
+- Exact factor bits passed at n=130/131/270/1000; n=1000 digest `0x51c725173f438a8c`. Exact release-perf linalg suite
+  passed 507/0 (41 ignored), focused Cholesky 16/0. Workspace check, linalg `clippy -D warnings`, scoped rustfmt,
+  `git diff --check`, and UBS (0 critical, no unsafe) passed. Workspace clippy/fmt and conformance remain red only in
+  unrelated peer-owned `fsci-opt` lint, formatting, and cluster-linkage surfaces recorded in the canonical ledger.
+- Decision: KEEP. Ratchet this harness to 19.064166 ms; reprofile the landed binary before choosing the next primitive.

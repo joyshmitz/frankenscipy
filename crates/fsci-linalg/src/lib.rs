@@ -5028,6 +5028,14 @@ fn cholesky_lower_simd(a: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
 
 #[allow(clippy::needless_range_loop)]
 fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
+    cholesky_lower_blocked_with_panel_trsm::<true>(a_in, n)
+}
+
+#[allow(clippy::needless_range_loop)]
+fn cholesky_lower_blocked_with_panel_trsm<const PAIR_PANEL_TRSM_ROWS: bool>(
+    a_in: &[Vec<f64>],
+    n: usize,
+) -> Option<Vec<f64>> {
     const NB: usize = 128;
     let mut lower = vec![0.0f64; n * n];
     for (i, row) in a_in.iter().enumerate() {
@@ -5060,16 +5068,21 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
                 lower[irow + j] = val;
             }
         }
-        for i in kb..n {
-            let irow = i * n;
-            for j in k..kb {
-                let jrow = j * n;
-                let dot = simd_dot(&lower[irow + k..irow + j], &lower[jrow + k..jrow + j]);
-                let val = (lower[irow + j] - dot) / lower[jrow + j];
-                if !val.is_finite() {
-                    return None;
+        if PAIR_PANEL_TRSM_ROWS {
+            let (panel, trailing) = lower.split_at_mut(kb * n);
+            cholesky_panel_trsm_rows2(panel, trailing, n, k, kb)?;
+        } else {
+            for i in kb..n {
+                let irow = i * n;
+                for j in k..kb {
+                    let jrow = j * n;
+                    let dot = simd_dot(&lower[irow + k..irow + j], &lower[jrow + k..jrow + j]);
+                    let val = (lower[irow + j] - dot) / lower[jrow + j];
+                    if !val.is_finite() {
+                        return None;
+                    }
+                    lower[irow + j] = val;
                 }
-                lower[irow + j] = val;
             }
         }
         if kb < n {
@@ -18317,6 +18330,39 @@ fn simd_dot_and_normsq(row: &[f64], x: &[f64]) -> (f64, f64) {
     (d, s)
 }
 
+/// Two 8-wide dot products sharing the same right-hand vector load. Each dot
+/// keeps the exact lane accumulation, lane reduction, and scalar-tail order of
+/// [`simd_dot`]. The emitted generic x86-64 code represents each `f64x8` as four
+/// XMM registers; MR2 fits the 16-XMM budget without hot-loop spills in inspected
+/// codegen, whereas a wider row group would spill.
+#[inline]
+fn simd_dot2_shared_rhs(lhs0: &[f64], lhs1: &[f64], rhs: &[f64]) -> [f64; 2] {
+    debug_assert_eq!(lhs0.len(), rhs.len());
+    debug_assert_eq!(lhs1.len(), rhs.len());
+
+    let mut acc0 = Simd::<f64, 8>::splat(0.0);
+    let mut acc1 = Simd::<f64, 8>::splat(0.0);
+    let mut p = 0;
+    while p + 8 <= rhs.len() {
+        let right = Simd::<f64, 8>::from_slice(&rhs[p..p + 8]);
+        acc0 += Simd::<f64, 8>::from_slice(&lhs0[p..p + 8]) * right;
+        acc1 += Simd::<f64, 8>::from_slice(&lhs1[p..p + 8]) * right;
+        p += 8;
+    }
+
+    let mut sums = [
+        acc0.to_array().iter().sum::<f64>(),
+        acc1.to_array().iter().sum::<f64>(),
+    ];
+    while p < rhs.len() {
+        let right = rhs[p];
+        sums[0] += lhs0[p] * right;
+        sums[1] += lhs1[p] * right;
+        p += 1;
+    }
+    sums
+}
+
 /// Four 8-wide dot products sharing the same left-hand vector load. The per-dot
 /// lane accumulation and final reduction match `simd_dot`, but a SYRK row no
 /// longer reloads its fixed left panel once per target column.
@@ -18512,6 +18558,61 @@ fn wide_pinv_left_inverse_max_error_rows(
         }
     }
     Some(max_error)
+}
+
+/// Solve the below-diagonal panel `A21 = A21 * L11^-T` two rows at a time.
+/// Rows are independent, while each row keeps increasing `j` order. Pairing
+/// exposes two independent exact-order dot chains and reuses the diagonal-panel
+/// RHS load without changing any per-output floating-point operation.
+fn cholesky_panel_trsm_rows2(
+    panel: &[f64],
+    trailing: &mut [f64],
+    n: usize,
+    k: usize,
+    kb: usize,
+) -> Option<()> {
+    let m2 = trailing.len() / n;
+    let mut base = 0;
+    while base + 2 <= m2 {
+        let row0 = base * n;
+        let row1 = row0 + n;
+        for j in k..kb {
+            let jrow = j * n;
+            let dots = simd_dot2_shared_rhs(
+                &trailing[row0 + k..row0 + j],
+                &trailing[row1 + k..row1 + j],
+                &panel[jrow + k..jrow + j],
+            );
+
+            let divisor = panel[jrow + j];
+            let value0 = (trailing[row0 + j] - dots[0]) / divisor;
+            if !value0.is_finite() {
+                return None;
+            }
+            trailing[row0 + j] = value0;
+
+            let value1 = (trailing[row1 + j] - dots[1]) / divisor;
+            if !value1.is_finite() {
+                return None;
+            }
+            trailing[row1 + j] = value1;
+        }
+        base += 2;
+    }
+
+    for local_i in base..m2 {
+        let irow = local_i * n;
+        for j in k..kb {
+            let jrow = j * n;
+            let dot = simd_dot(&trailing[irow + k..irow + j], &panel[jrow + k..jrow + j]);
+            let value = (trailing[irow + j] - dot) / panel[jrow + j];
+            if !value.is_finite() {
+                return None;
+            }
+            trailing[irow + j] = value;
+        }
+    }
+    Some(())
 }
 
 /// BLIS-style panel-pack of the panel into 8-column micro-panels:
@@ -19972,6 +20073,146 @@ mod tests {
                 "blocked Cholesky reconstruction too large n={n}: {max_recon:e}"
             );
         }
+    }
+
+    #[test]
+    fn cholesky_panel_trsm_rows2_is_bit_identical() {
+        for &n in &[130usize, 131, 270] {
+            let mut a = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..=i {
+                    let value = if i == j {
+                        (n as f64) * 3.0 + (i as f64) * 0.01
+                    } else {
+                        1.0 / ((i - j + 1) as f64)
+                    };
+                    a[i][j] = value;
+                    a[j][i] = value;
+                }
+            }
+
+            let original = cholesky_lower_blocked_with_panel_trsm::<false>(&a, n)
+                .expect("scalar panel TRSM factor");
+            let candidate = cholesky_lower_blocked_with_panel_trsm::<true>(&a, n)
+                .expect("paired panel TRSM factor");
+            for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "paired panel TRSM changed factor bits at flat index {index}, n={n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "release-perf n=1000 scalar-vs-paired panel TRSM A/B"]
+    #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+    fn cholesky_n1000_panel_trsm_ab_probe() {
+        let n = 1000usize;
+        let mut a = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in 0..=i {
+                let value = if i == j {
+                    (n as f64) * 3.0 + (i as f64) * 0.01
+                } else {
+                    1.0 / ((i - j + 1) as f64)
+                };
+                a[i][j] = value;
+                a[j][i] = value;
+            }
+        }
+
+        let original = cholesky_lower_blocked_with_panel_trsm::<false>(&a, n)
+            .expect("scalar panel TRSM factor");
+        let candidate = cholesky_lower_blocked_with_panel_trsm::<true>(&a, n)
+            .expect("paired panel TRSM factor");
+        for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "paired panel TRSM changed n=1000 factor bits at flat index {index}"
+            );
+        }
+
+        let mut digest = 0xcbf2_9ce4_8422_2325u64;
+        for &value in &candidate {
+            for byte in value.to_bits().to_le_bytes() {
+                digest ^= u64::from(byte);
+                digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+
+        for &pair_rows in &[false, true, false, true] {
+            let factor = if pair_rows {
+                cholesky_lower_blocked_with_panel_trsm::<true>(&a, n)
+            } else {
+                cholesky_lower_blocked_with_panel_trsm::<false>(&a, n)
+            };
+            std::hint::black_box(factor.expect("warm factor"));
+        }
+
+        let samples = 20usize;
+        let factors_per_sample = 10usize;
+        let measure = |pair_rows: bool| -> f64 {
+            let start = std::time::Instant::now();
+            for _ in 0..factors_per_sample {
+                let factor = if pair_rows {
+                    cholesky_lower_blocked_with_panel_trsm::<true>(std::hint::black_box(&a), n)
+                } else {
+                    cholesky_lower_blocked_with_panel_trsm::<false>(std::hint::black_box(&a), n)
+                };
+                std::hint::black_box(factor.expect("measured factor"));
+            }
+            start.elapsed().as_secs_f64() * 1000.0 / factors_per_sample as f64
+        };
+
+        let mut original_ms = Vec::with_capacity(samples);
+        let mut candidate_ms = Vec::with_capacity(samples);
+        for sample in 0..samples {
+            if sample % 2 == 0 {
+                original_ms.push(measure(false));
+                candidate_ms.push(measure(true));
+            } else {
+                candidate_ms.push(measure(true));
+                original_ms.push(measure(false));
+            }
+        }
+
+        let summarize = |values: &[f64]| -> (f64, f64, f64, f64, f64) {
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            let variance = values
+                .iter()
+                .map(|value| (value - mean) * (value - mean))
+                .sum::<f64>()
+                / values.len() as f64;
+            let cv_pct = variance.sqrt() / mean * 100.0;
+            let mut sorted = values.to_vec();
+            sorted.sort_by(f64::total_cmp);
+            let percentile = |pct: usize| sorted[(sorted.len() - 1) * pct / 100];
+            (mean, cv_pct, percentile(50), percentile(95), percentile(99))
+        };
+        let orig = summarize(&original_ms);
+        let cand = summarize(&candidate_ms);
+        let paired_ratio = original_ms
+            .iter()
+            .zip(&candidate_ms)
+            .map(|(before, after)| before / after)
+            .sum::<f64>()
+            / samples as f64;
+
+        eprintln!(
+            "FSCI_CHOL_TRSM_AB ORIG mean_ms={:.6} cv_pct={:.3} p50_ms={:.6} p95_ms={:.6} p99_ms={:.6}",
+            orig.0, orig.1, orig.2, orig.3, orig.4
+        );
+        eprintln!(
+            "FSCI_CHOL_TRSM_AB CAND mean_ms={:.6} cv_pct={:.3} p50_ms={:.6} p95_ms={:.6} p99_ms={:.6}",
+            cand.0, cand.1, cand.2, cand.3, cand.4
+        );
+        eprintln!(
+            "FSCI_CHOL_TRSM_AB speedup_mean={:.6} paired_ratio_mean={paired_ratio:.6} digest={digest:#018x} samples={samples} factors_per_sample={factors_per_sample}",
+            orig.0 / cand.0
+        );
     }
 
     #[test]
