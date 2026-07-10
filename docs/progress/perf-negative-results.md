@@ -8243,3 +8243,38 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 
 - Gates: remote release-perf exact-bit test 1/0; remote scoped clippy `-D warnings`; rustfmt/diff-check green;
   UBS benchmark scan 0 critical (monolithic lib scan attempted but stopped before summary).
+
+## 2026-07-10 - cod_fsc - PROVENANCE AUDIT v2: INVALID / REOPEN four dense-Cholesky rejects
+
+- Supersedes the earlier same-day audit that treated current production-helper self-time as proof for removed
+  candidates. Result: **0/4** original reject rows record a candidate binary SHA-256; **0/4** have candidate-specific
+  nonzero self-time; **0/4** meet the current provenance rule. A pre-candidate binary with no candidate frame means
+  self-time is unverified, not a valid 0.00% execution measurement.
+
+| Reject | Candidate SHA-256 in original row | Candidate self-time | Worker | `cv_pct` | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Naive B=48 blocking/packing (`c7c913d5cb`) | Missing / unrecoverable | Unverified; no candidate profile | Missing | Missing | **INVALID / REOPENED** |
+| Panel-order SYRK (`244dbb82d3`) | Missing / unrecoverable | Unverified; saved profile predates patch by 4m35s | `hz2` recovered | Missing | **INVALID / REOPENED** |
+| 4x16 packed SYRK (`58ae6859b3`) | Missing / unrecoverable | Unverified; saved profile predates patch by 94s | `vmi1152480` recovered | Missing in row; recovered CAND **50.855%** | **INVALID / REOPENED** |
+| Invalid MR2 comparator (`78298b22d9`) | Missing in row; recovered exact ELF `3a44e772e6892451d4586ff14703f3e5d502ec7737a75edad00109f04bc82621` | Unverified; no profile matches Build ID `5f60747c...` | `vmi1152480` recovered | ORIG **3.020%**, CAND **3.668%** | **INVALID comparator**; corrected MR2 remains shipped |
+
+- Naive source survives only in an agent session. Its separate-rebuild best-of-three probe had no worker/CV/SHA/profile:
+  n=1000 unblocked/B48/B48+pack 41.536/45.601/43.207 ms; n=2000 325.702/315.187/301.331 ms. The unproven
+  packed n=2000 signal was -7.48%, while n=1000 was +4.02%; the old "~0-gain" label is not trustworthy.
+- Panel profile `/tmp/frankenscipy-chol-baseline.perf` SHA
+  `7d969e4a2b35cf13fe90f73858ecb5b7c8be71dd6715d37770b23203e8818e40`, Build ID `66463f89...`, contains
+  baseline generic SYRK 2.13%, not the candidate. Its baseline/candidate were separate RCH invocations. The n=512
+  gate-512 sub-arm was dead because the largest trailing slice was 384 rows.
+- 4x16 profile `/tmp/frankenscipy-chol-current.perf` SHA
+  `ab531f187ed0e8582ee9193da24bd6e607004150d822c40ea9922600c13947df`, Build ID `b02e98c0...`, contains
+  baseline MR4xNR8 self 1.57%, not 4x16. Its A/B used two RCH invocations; surviving candidate mean/stddev
+  73.999113/37.632169 ms gives `cv_pct=50.855`.
+- Invalid MR2's exact ELF survives, but no matching perf exists and the comparator was structurally contaminated.
+  Corrected WIN `a6d7ba8978d9960ef956b8519775c0ef6d8e81d1` remains shipped (recovered corrected binary SHA
+  `4dda03b24ee4df02c03d58f366c2e98d75e5b7f3cdad133e290a9c98ae23cad9`).
+- SciPy profile SHA `b1c40ea6a01a962d4af178a574e04499800d208938398f76fccd70411b56f099`, host `thinkstation1`, 1,524 samples /
+  zero lost; OpenBLAS Build ID `bf30c713...`, image SHA
+  `8fb864c29cac4b25f6e2c139491ea96f2724dde42d51394f84e9c4a622e34790`. `dpotrf` is **dgemm 43.15% > dtrsm
+  20.00% >> direct dsyrk 0.14%**.
+- These invalidations reopen evidence, not ownership. cc owns the SYRK tile; cod owns structural packing/panel
+  residency/cache-oblivious blocking. Safe Rust only; no external BLAS/LAPACK/MKL/XLA.

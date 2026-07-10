@@ -19060,3 +19060,51 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   `git diff --check` passed. UBS completed on the benchmark with 0 critical issues (warnings are broad pre-existing
   benchmark panic/allocation inventory); the monolithic lib scan was attempted twice but the scanner stopped before
   a summary, while remote clippy and the exact release test remained green.
+
+## 2026-07-10 - cod_fsc (cod) - PROVENANCE AUDIT v2: INVALID / REOPEN four dense-Cholesky rejects
+
+- This candidate-specific audit supersedes the earlier same-day `BlackThrush (cc)` summary that called panel-order
+  and 4x16 valid from current production-helper self-time. A hot production helper does not prove that a removed
+  historical candidate executed. The original reject needs an exact candidate binary and a matching profile.
+- Result: **0/4** original reject rows record a candidate binary SHA-256; **0/4** have candidate-specific nonzero
+  self-time; **0/4** satisfy the current reject provenance rule. Absence from a pre-candidate binary is recorded as
+  **unverified**, not as a legitimate 0.00% execution measurement.
+
+| Historical reject | Candidate binary SHA-256 in original row | Candidate-specific self-time | Worker identity | `cv_pct` | Authoritative verdict |
+| --- | --- | --- | --- | --- | --- |
+| Naive B=48 blocking/packing (`c7c913d5cb`) | Not recorded; exact candidate ELF is unrecoverable | Unverified: no candidate `perf` artifact exists | Not recorded | Not recorded | **INVALID / REOPENED** |
+| Packed-SYRK panel order (`244dbb82d3`) | Not recorded; candidate ELF is unrecoverable | Unverified: saved profile is pre-candidate baseline | `hz2` recovered | Not recorded | **INVALID / REOPENED** |
+| 4x16 packed SYRK (`58ae6859b3`) | Not recorded; candidate ELF is unrecoverable | Unverified: saved profile is pre-candidate MR4xNR8 baseline | `vmi1152480` recovered | Not in row; candidate-only artifact recovers **50.855%** | **INVALID / REOPENED** |
+| Invalid MR2 comparator (`78298b22d9`) | Not in row; exact ELF recovered post hoc as `3a44e772e6892451d4586ff14703f3e5d502ec7737a75edad00109f04bc82621` | Unverified: no profile matches candidate Build ID `5f60747c38dae6f182269cf256f5a910bd3900ee` | `vmi1152480` recovered, absent from row | ORIG **3.020%**, CAND **3.668%** | **INVALID comparator**; MR2 lever remains shipped |
+
+- Naive B=48/packing: exact rejected source survives only in the historical agent session; the commit contains the
+  reverted SIMD keep and summary. The ephemeral, separate-rebuild best-of-three probe had no worker, CV, binary hash,
+  or profile. It reported unblocked/B48/B48+pack at n=1000 as 41.536/45.601/43.207 ms and at n=2000 as
+  325.702/315.187/301.331 ms. The unproven packed n=2000 result was 7.48% faster, not "~0-gain," while n=1000 was
+  4.02% slower. That conflicting signal is why the evidence is reopened rather than preserved as a reject.
+- Panel order: `/tmp/frankenscipy-chol-baseline.perf` SHA-256
+  `7d969e4a2b35cf13fe90f73858ecb5b7c8be71dd6715d37770b23203e8818e40`, Build ID
+  `66463f89fdb869a6f90bb5d393c2924c3dfc7895`, ended 2026-07-09 21:45:47 EDT, 4m35s before the exact candidate
+  patch. Its generic `cholesky_syrk_rows` 2.13% self is baseline, not candidate proof. Baseline and candidate used
+  separate RCH invocations, violating substrate v2. The gate-512 n=512 sub-arm was independently dead: its first and
+  largest trailing slice has 384 rows and only shrinks.
+- 4x16: `/tmp/frankenscipy-chol-current.perf` SHA-256
+  `ab531f187ed0e8582ee9193da24bd6e607004150d822c40ea9922600c13947df`, Build ID
+  `b02e98c0402e943915f33d76798ae77d2b12eb9f`, ended 2026-07-09 22:35:12 EDT, 94 seconds before the exact 4x16
+  patch. Its generic `cholesky_syrk_flat_rows` 1.57% self is MR4xNR8 baseline. The A/B used two RCH invocations;
+  the surviving candidate Criterion artifact has mean 73.999113 ms and stddev 37.632169 ms (`cv_pct=50.855`).
+- Invalid MR2: the one-binary, paired, black-boxed timing exists, but its false arm was structurally contaminated and
+  no saved profile contains candidate Build ID `5f60747c...`. The corrected const-generic comparator then landed as
+  WIN `a6d7ba8978d9960ef956b8519775c0ef6d8e81d1`; its recovered binary SHA-256 is
+  `4dda03b24ee4df02c03d58f366c2e98d75e5b7f3cdad133e290a9c98ae23cad9`. Reopen only the invalid comparator
+  evidence, not the shipped MR2 primitive.
+- SciPy dominance is independently provenance-complete: saved profile
+  `/data/tmp/scipy-dpotrf-n1000-cod_fsc-20260710004300.perf` SHA-256
+  `b1c40ea6a01a962d4af178a574e04499800d208938398f76fccd70411b56f099`, host `thinkstation1`, 1,524 samples /
+  zero lost. Its OpenBLAS image has Build ID `bf30c713562fd027e062cbdc890164bdc1c019f9` and SHA-256
+  `8fb864c29cac4b25f6e2c139491ea96f2724dde42d51394f84e9c4a622e34790`. Self-time aggregation is **dgemm
+  43.15%** (37.25 kernel + 3.06/2.84 packing), **dtrsm 20.00%** (18.91 solve + 0.80/0.29 copy/kernel), and direct
+  **dsyrk 0.14%**. Therefore SciPy `dpotrf` is dgemm-dominant, then dtrsm; standalone dsyrk is negligible.
+- Reopened means the old evidence no longer forbids a fresh, provenance-complete experiment. It is not a win and does
+  not authorize cross-owner duplication: cc retains the SYRK-tile lane; cod retains structural packing, panel
+  residency, and cache-oblivious blocking. Safe Rust only; no C BLAS/LAPACK/MKL/XLA linkage.
