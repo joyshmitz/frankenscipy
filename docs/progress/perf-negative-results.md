@@ -9083,3 +9083,23 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   filter. FOLLOW-UP available: van Herk cache-vectorization across the inner dim (analog of
   bspline_reflect_axis_inplace) would make the strided axes cache-friendly AND parallelize axis-0 —
   potentially the 2-3x that spline_filter1d's vectorization got. Safe Rust; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN ndimage van Herk stride>1 cache-vectorization (inner-strip sweep) 1.16-1.49x, byte-identical
+
+- **WIN; shipped.** Follow-up to the van Herk parallel-across-slabs win (98652064a). For stride>1 (a
+  non-last axis) the per-column path gathered each line with a stride-`inner` jump (cache-hostile).
+  Rewrote the stride>1 case to sweep a TILE=64 group of inner columns together: every ext/g/h "row"
+  is a CONTIGUOUS inner-strip, so boundary-resolution (contiguous memcpy or cval-fill), block
+  prefix/suffix, and combine all run over contiguous memory (and auto-vectorize). stride==1 keeps the
+  per-column memcpy path. Analog of bspline_reflect_axis_inplace (spline_filter1d).
+- Same-binary A/B (MINMAX_HGW_FORCE_SCALAR knob, percolumn/vectorized/percolumn interleaved,
+  black-boxed, N-D maximum_filter, both arms parallel): **256^3 size=21 DECIDED 1.491x**
+  (328.87->221.42ms, 2 of 3 axes stride>1), NULL(A/A) 0.997x [0.960,1.010]; **3000x3000x1 size=15
+  DECIDED 1.158x** (210.70->182.98ms, only axis-0 stride>1, diluted by the unchanged last-axis pass),
+  worker ovh-a. Cache/SIMD win STACKS on the parallelism -> vectorized-parallel vs orig serial-per-
+  column ~2x.
+- **Byte-identical: bitmism=0** both probes; test `minmax_hgw_vectorized_matches_scalar_bitexact`
+  (sizes 2/3/5/8, 4 modes, adversarial NaN/±0.0/±inf, shapes with inner below & above the 64-tile,
+  to_bits equality) passes; fsci-ndimage suite 268/0. Per-column arithmetic order is unchanged
+  (g[t][k]=op(g[t-1][k],ext[t][k]) per column k identical to the scalar g[t]=op(g[t-1],ext[t])).
+  Safe Rust; no external BLAS/LAPACK/MKL/XLA.

@@ -3510,6 +3510,15 @@ fn nanprop_min(a: f64, b: f64) -> f64 {
 pub static MINMAX_HGW_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Same-binary A/B toggle for the strided (stride>1) van Herk path. When `true`, each column is
+/// processed independently with a cache-hostile strided gather (the ORIG behaviour). When `false`
+/// (default), the boundary-resolved line, block prefix/suffix, and combine sweep CONTIGUOUSLY over a
+/// tile of inner columns at once (cache-friendly + auto-vectorizable). Byte-identical (the per-column
+/// arithmetic order is unchanged). Benchmark knob.
+#[doc(hidden)]
+pub static MINMAX_HGW_FORCE_SCALAR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn minmax_along_axis_hgw<F: Fn(f64, f64) -> f64 + Copy + Sync>(
     arr: &NdArray,
     axis: usize,
@@ -3536,7 +3545,77 @@ fn minmax_along_axis_hgw<F: Fn(f64, f64) -> f64 + Copy + Sync>(
     // independent — the same boundary-resolved `ext`, the same block prefix/suffix `g`/`h`, and the
     // same combine — so this is BYTE-IDENTICAL to the serial walk regardless of how the outer slabs
     // are partitioned across threads.
+    // For stride>1 (a non-last axis) the per-column path gathers each line with a stride-`inner`
+    // jump — cache-hostile. Sweep a TILE of inner columns together instead: every ext/g/h "row" is
+    // then a contiguous inner-strip, so the reads/writes are contiguous (and the block ops
+    // auto-vectorize). Byte-identical: for a fixed column the boundary resolution, prefix/suffix and
+    // combine are the exact same ops in the same order. stride==1 keeps the per-column memcpy path.
+    let use_vec = stride > 1
+        && !MINMAX_HGW_FORCE_SCALAR.load(std::sync::atomic::Ordering::Relaxed);
+    let interior_start = lo as usize; // t where coord == 0 (lo >= 0 always)
+    let interior_end = interior_start + mid; // t where coord == mid (exclusive)
     let process = |in_chunk: &[f64], out_chunk: &mut [f64]| {
+        if use_vec {
+            const TILE: usize = 64;
+            let tile = TILE.min(inner);
+            let mut ext = vec![0.0f64; ext_len * tile];
+            let mut g = vec![0.0f64; ext_len * tile];
+            let mut h = vec![0.0f64; ext_len * tile];
+            let n_slabs = in_chunk.len() / slab;
+            for o in 0..n_slabs {
+                let sb = o * slab;
+                let mut jt = 0usize;
+                while jt < inner {
+                    let w = tile.min(inner - jt);
+                    // ext row t = boundary-resolved inner-strip at axis-coord (t - lo): a contiguous
+                    // slab strip for interior/reflected coords, or `cval` when out of domain.
+                    for t in 0..ext_len {
+                        let dst = &mut ext[t * tile..t * tile + w];
+                        let src_i = if t >= interior_start && t < interior_end {
+                            Some(t - interior_start)
+                        } else {
+                            boundary_index_1d(t as i64 - lo, n, mode).map(|m| m as usize)
+                        };
+                        match src_i {
+                            Some(i) => {
+                                let s = sb + i * inner + jt;
+                                dst.copy_from_slice(&in_chunk[s..s + w]);
+                            }
+                            None => dst.fill(cval),
+                        }
+                    }
+                    // Block prefix g / suffix h over contiguous inner-strips.
+                    let mut bstart = 0usize;
+                    while bstart < ext_len {
+                        let bend = (bstart + size).min(ext_len);
+                        g[bstart * tile..bstart * tile + w]
+                            .copy_from_slice(&ext[bstart * tile..bstart * tile + w]);
+                        for t in bstart + 1..bend {
+                            for k in 0..w {
+                                g[t * tile + k] = op(g[(t - 1) * tile + k], ext[t * tile + k]);
+                            }
+                        }
+                        h[(bend - 1) * tile..(bend - 1) * tile + w]
+                            .copy_from_slice(&ext[(bend - 1) * tile..(bend - 1) * tile + w]);
+                        for t in (bstart..bend - 1).rev() {
+                            for k in 0..w {
+                                h[t * tile + k] = op(h[(t + 1) * tile + k], ext[t * tile + k]);
+                            }
+                        }
+                        bstart = bend;
+                    }
+                    // Combine into the output inner-strips.
+                    for i in 0..mid {
+                        let d = sb + i * inner + jt;
+                        for k in 0..w {
+                            out_chunk[d + k] = op(h[i * tile + k], g[(i + size - 1) * tile + k]);
+                        }
+                    }
+                    jt += w;
+                }
+            }
+            return;
+        }
         let mut ext = vec![0.0f64; ext_len];
         let mut g = vec![0.0f64; ext_len];
         let mut h = vec![0.0f64; ext_len];
@@ -12284,6 +12363,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn minmax_hgw_vectorized_matches_scalar_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The contiguous inner-strip (vectorized) stride>1 path must be BYTE-IDENTICAL to the
+        // per-column strided-gather path, across window sizes, modes, adversarial data, and shapes
+        // exercising non-last axes (stride>1) with inner both below and above the 64-column tile.
+        MINMAX_FILTER_HGW.store(true, Ordering::Relaxed); // van Herk path
+        MINMAX_HGW_FORCE_SERIAL.store(true, Ordering::Relaxed); // isolate the kernel (no threads)
+        let shapes: &[Vec<usize>] = &[
+            vec![9, 11],       // inner=11 (< tile)
+            vec![13, 100],     // inner=100 (> tile)
+            vec![7, 8, 9],     // axis-0 inner=72, axis-1 inner=9
+            vec![6, 5, 200],   // axis-0 inner=1000, axis-1 inner=200 (both > tile)
+        ];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let mut data: Vec<f64> = (0..total)
+                .map(|i| (i as f64 * 0.41).sin() * 5.0 + (i % 7) as f64)
+                .collect();
+            if total > 25 {
+                data[3] = f64::NAN;
+                data[7] = -0.0;
+                data[8] = 0.0;
+                data[20] = f64::NEG_INFINITY;
+                data[21] = f64::INFINITY;
+            }
+            let input = NdArray::new(data, shape.clone()).unwrap();
+            for &size in &[2usize, 3, 5, 8] {
+                for mode in [
+                    BoundaryMode::Reflect,
+                    BoundaryMode::Nearest,
+                    BoundaryMode::Constant,
+                    BoundaryMode::Wrap,
+                ] {
+                    MINMAX_HGW_FORCE_SCALAR.store(true, Ordering::Relaxed);
+                    let sc_max = maximum_filter(&input, size, mode, 2.5);
+                    let sc_min = minimum_filter(&input, size, mode, 2.5);
+                    MINMAX_HGW_FORCE_SCALAR.store(false, Ordering::Relaxed);
+                    let vec_max = maximum_filter(&input, size, mode, 2.5);
+                    let vec_min = minimum_filter(&input, size, mode, 2.5);
+                    for (a, b) in [(sc_max, vec_max), (sc_min, vec_min)] {
+                        match (a, b) {
+                            (Ok(a), Ok(b)) => {
+                                assert_eq!(a.shape, b.shape);
+                                for (x, y) in a.data.iter().zip(&b.data) {
+                                    assert_eq!(
+                                        x.to_bits(),
+                                        y.to_bits(),
+                                        "shape={shape:?} size={size} mode={mode:?}"
+                                    );
+                                }
+                            }
+                            (Err(_), Err(_)) => {}
+                            _ => panic!("scalar/vectorized disagree on Ok/Err"),
+                        }
+                    }
+                }
+            }
+        }
+        MINMAX_HGW_FORCE_SCALAR.store(false, Ordering::Relaxed);
+        MINMAX_HGW_FORCE_SERIAL.store(false, Ordering::Relaxed);
     }
 
     /// HGW must be bit-for-bit identical to the legacy monotonic-deque path across
