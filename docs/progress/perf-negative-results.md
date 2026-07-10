@@ -8240,3 +8240,6 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   CAND 40.535228 ms (raw CV 9.643%); paired mean 1.066441x with paired CV 1.535%, candidate -6.24%. Criterion
   paired routine [73.127, 76.100, 79.053] ms. Inputs/results black-boxed; artifact retrieval non-empty.
 - KEEP. Safe Rust only; no external BLAS/LAPACK/MKL/XLA.
+
+- Gates: remote release-perf exact-bit test 1/0; remote scoped clippy `-D warnings`; rustfmt/diff-check green;
+  UBS benchmark scan 0 critical (monolithic lib scan attempted but stopped before summary).

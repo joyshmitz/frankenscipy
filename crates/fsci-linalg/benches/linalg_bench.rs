@@ -13,6 +13,8 @@ use fsci_linalg::{
     orthogonal_procrustes, pascal, pinv, randomized_eigh, solve, solve_banded, solve_triangular,
     svd,
 };
+#[cfg(feature = "chol-wall-bench")]
+use fsci_linalg::{cholesky_wall_mr4_nr4_candidate, cholesky_wall_mr4_nr8_orig};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 use std::sync::atomic::Ordering;
@@ -1132,6 +1134,224 @@ fn bench_dft_gauntlet_scipy(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(feature = "chol-wall-bench")]
+fn bench_cholesky_wall_mr4_nr4_ab(c: &mut Criterion) {
+    const PROFILE_CHILD: &str = "FSCI_CHOL_MR4_NR4_PROFILE_CHILD";
+    let n = 1000usize;
+    let a = make_symmetric_eigh_matrix(n);
+
+    if std::env::var_os(PROFILE_CHILD).is_some() {
+        for _ in 0..4 {
+            black_box(
+                cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("warm candidate factor"),
+            );
+        }
+        let start = std::time::Instant::now();
+        let mut digest = 0xcbf2_9ce4_8422_2325u64;
+        for _ in 0..160 {
+            let factor =
+                cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("profiled candidate factor");
+            for &value in factor.iter().step_by(4096) {
+                digest ^= value.to_bits();
+                digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            black_box(factor);
+        }
+        eprintln!(
+            "FSCI_CHOL_MR4_NR4_PROFILE factors=160 mean_ms={:.6} digest={digest:#018x}",
+            start.elapsed().as_secs_f64() * 1000.0 / 160.0
+        );
+        std::process::exit(0);
+    }
+
+    let exe = std::env::current_exe().expect("current release-perf benchmark binary");
+    let perf_path = format!(
+        "/dev/shm/fsc-chol-mr4-nr4-{}-{}.perf",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    );
+    let profile_status = Command::new("perf")
+        .args([
+            "record", "-e", "cycles:u", "-F", "997", "-o", &perf_path, "--",
+        ])
+        .arg(&exe)
+        .args(["cholesky_wall_mr4_nr4_ab", "--noplot"])
+        .env(PROFILE_CHILD, "1")
+        .status()
+        .expect("spawn candidate perf child");
+    assert!(
+        profile_status.success(),
+        "candidate perf child failed: {profile_status}"
+    );
+    let report = Command::new("perf")
+        .args([
+            "report",
+            "--stdio",
+            "--no-children",
+            "--percent-limit",
+            "0.1",
+            "--sort",
+            "symbol",
+            "-i",
+            &perf_path,
+        ])
+        .output()
+        .expect("run candidate perf report");
+    assert!(
+        report.status.success(),
+        "candidate perf report failed: {}",
+        String::from_utf8_lossy(&report.stderr)
+    );
+    let report = String::from_utf8(report.stdout).expect("utf8 candidate perf report");
+    eprintln!("FSCI_CHOL_MR4_NR4_REPORT_BEGIN\n{report}FSCI_CHOL_MR4_NR4_REPORT_END");
+    assert!(
+        report.contains("cholesky_syrk_flat_rows_mr4_nr4"),
+        "candidate-specific SYRK symbol must have non-zero profiled self-time"
+    );
+
+    let original = cholesky_wall_mr4_nr8_orig(black_box(&a)).expect("original factor");
+    let candidate = cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("candidate factor");
+    for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
+        assert_eq!(
+            actual.to_bits(),
+            expected.to_bits(),
+            "MR4xNR4 changed n=1000 factor bits at flat index {index}"
+        );
+    }
+    let mut digest = 0xcbf2_9ce4_8422_2325u64;
+    for &value in &candidate {
+        for byte in value.to_bits().to_le_bytes() {
+            digest ^= u64::from(byte);
+            digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    black_box(original);
+    black_box(candidate);
+
+    for candidate_first in [false, true, false, true] {
+        if candidate_first {
+            black_box(
+                cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("warm candidate factor"),
+            );
+            black_box(cholesky_wall_mr4_nr8_orig(black_box(&a)).expect("warm original factor"));
+        } else {
+            black_box(cholesky_wall_mr4_nr8_orig(black_box(&a)).expect("warm original factor"));
+            black_box(
+                cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("warm candidate factor"),
+            );
+        }
+    }
+
+    let samples = 20usize;
+    let factors_per_sample = 64usize;
+    let measure_original = || -> Duration {
+        let start = std::time::Instant::now();
+        black_box(cholesky_wall_mr4_nr8_orig(black_box(&a)).expect("measured original factor"));
+        start.elapsed()
+    };
+    let measure_candidate = || -> Duration {
+        let start = std::time::Instant::now();
+        black_box(
+            cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("measured candidate factor"),
+        );
+        start.elapsed()
+    };
+
+    let mut original_ms = Vec::with_capacity(samples);
+    let mut candidate_ms = Vec::with_capacity(samples);
+    for sample in 0..samples {
+        let mut original_elapsed = Duration::ZERO;
+        let mut candidate_elapsed = Duration::ZERO;
+        for factor in 0..factors_per_sample {
+            if (sample + factor) % 2 == 0 {
+                original_elapsed += measure_original();
+                candidate_elapsed += measure_candidate();
+            } else {
+                candidate_elapsed += measure_candidate();
+                original_elapsed += measure_original();
+            }
+        }
+        original_ms.push(original_elapsed.as_secs_f64() * 1000.0 / factors_per_sample as f64);
+        candidate_ms.push(candidate_elapsed.as_secs_f64() * 1000.0 / factors_per_sample as f64);
+    }
+    let summarize = |values: &[f64]| -> (f64, f64, f64, f64, f64) {
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values
+            .iter()
+            .map(|value| (value - mean) * (value - mean))
+            .sum::<f64>()
+            / values.len() as f64;
+        let cv_pct = variance.sqrt() / mean * 100.0;
+        let mut sorted = values.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        let percentile = |pct: usize| sorted[(sorted.len() - 1) * pct / 100];
+        (mean, cv_pct, percentile(50), percentile(95), percentile(99))
+    };
+    let orig = summarize(&original_ms);
+    let cand = summarize(&candidate_ms);
+    let paired_ratios = original_ms
+        .iter()
+        .zip(&candidate_ms)
+        .map(|(before, after)| before / after)
+        .collect::<Vec<_>>();
+    let paired = summarize(&paired_ratios);
+    eprintln!(
+        "FSCI_CHOL_MR4_NR4_AB ORIG mean_ms={:.6} cv_pct={:.3} p50_ms={:.6} p95_ms={:.6} p99_ms={:.6}",
+        orig.0, orig.1, orig.2, orig.3, orig.4
+    );
+    eprintln!(
+        "FSCI_CHOL_MR4_NR4_AB CAND mean_ms={:.6} cv_pct={:.3} p50_ms={:.6} p95_ms={:.6} p99_ms={:.6}",
+        cand.0, cand.1, cand.2, cand.3, cand.4
+    );
+    eprintln!(
+        "FSCI_CHOL_MR4_NR4_AB speedup_mean={:.6} paired_ratio_mean={:.6} paired_cv_pct={:.3} digest={digest:#018x} samples={samples} factors_per_sample={factors_per_sample}",
+        orig.0 / cand.0,
+        paired.0,
+        paired.1
+    );
+    assert!(
+        paired.1 < 5.0,
+        "paired-ratio CV gate failed: {:.3}%",
+        paired.1
+    );
+
+    let mut group = c.benchmark_group("cholesky_wall_mr4_nr4_ab");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    let candidate_first = std::cell::Cell::new(false);
+    group.bench_function("1000x1000_paired_alternating", |bencher| {
+        bencher.iter(|| {
+            let first = candidate_first.get();
+            candidate_first.set(!first);
+            if first {
+                black_box(
+                    cholesky_wall_mr4_nr4_candidate(black_box(&a))
+                        .expect("criterion candidate factor"),
+                );
+                black_box(
+                    cholesky_wall_mr4_nr8_orig(black_box(&a)).expect("criterion original factor"),
+                );
+            } else {
+                black_box(
+                    cholesky_wall_mr4_nr8_orig(black_box(&a)).expect("criterion original factor"),
+                );
+                black_box(
+                    cholesky_wall_mr4_nr4_candidate(black_box(&a))
+                        .expect("criterion candidate factor"),
+                );
+            }
+        });
+    });
+    group.finish();
+}
+
+#[cfg(not(feature = "chol-wall-bench"))]
+fn bench_cholesky_wall_mr4_nr4_ab(_c: &mut Criterion) {}
+
 fn bench_cho_factor_gauntlet_scipy(c: &mut Criterion) {
     let mut group = c.benchmark_group("cho_factor_gauntlet_scipy");
     group.sample_size(10);
@@ -1413,4 +1633,6 @@ criterion_group!(
     bench_baseline_pinv
 );
 
-criterion_main!(benches, baseline_benches);
+criterion_group!(cholesky_wall_benches, bench_cholesky_wall_mr4_nr4_ab);
+
+criterion_main!(cholesky_wall_benches, benches, baseline_benches);

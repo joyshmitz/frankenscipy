@@ -19054,3 +19054,9 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   returned Criterion JSON includes 964-byte estimates plus 322/206/73-byte benchmark/sample/tukey artifacts.
 - Decision: KEEP. This does not re-close panel-order or 4x16; it is a distinct register-budget tile. Safe Rust only;
   no C BLAS/LAPACK/MKL/XLA linkage.
+
+- Post-keep gates: strict-remote release-perf exact-bit unit test passed 1/0; strict-remote `cargo clippy` for the
+  fsci-linalg library plus `linalg_bench` with `chol-wall-bench` passed with `-D warnings`; scoped rustfmt and
+  `git diff --check` passed. UBS completed on the benchmark with 0 critical issues (warnings are broad pre-existing
+  benchmark panic/allocation inventory); the monolithic lib scan was attempted twice but the scanner stopped before
+  a summary, while remote clippy and the exact release test remained green.

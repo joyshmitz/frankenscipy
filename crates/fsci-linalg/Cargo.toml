@@ -6,6 +6,9 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+chol-wall-bench = []
+
 [dependencies]
 fsci-fft = { workspace = true }
 fsci-runtime = { workspace = true }

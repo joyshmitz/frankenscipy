@@ -5036,6 +5036,17 @@ fn cholesky_lower_blocked_with_panel_trsm<const PAIR_PANEL_TRSM_ROWS: bool>(
     a_in: &[Vec<f64>],
     n: usize,
 ) -> Option<Vec<f64>> {
+    cholesky_lower_blocked_with_kernels::<PAIR_PANEL_TRSM_ROWS, true>(a_in, n)
+}
+
+#[allow(clippy::needless_range_loop)]
+fn cholesky_lower_blocked_with_kernels<
+    const PAIR_PANEL_TRSM_ROWS: bool,
+    const HALF_PANEL_SYRK: bool,
+>(
+    a_in: &[Vec<f64>],
+    n: usize,
+) -> Option<Vec<f64>> {
     const NB: usize = 128;
     let mut lower = vec![0.0f64; n * n];
     for (i, row) in a_in.iter().enumerate() {
@@ -5094,14 +5105,26 @@ fn cholesky_lower_blocked_with_panel_trsm<const PAIR_PANEL_TRSM_ROWS: bool>(
             let nthreads = matmul_thread_count(m2, nb, m2);
             let trailing = &mut lower[kb * n..];
             if nthreads <= 1 {
-                cholesky_syrk_flat_rows(trailing, 0, n, l21_ref, l21t_ref, nb, kb);
+                if HALF_PANEL_SYRK {
+                    cholesky_syrk_flat_rows_mr4_nr4(trailing, 0, n, l21_ref, l21t_ref, nb, kb);
+                } else {
+                    cholesky_syrk_flat_rows_mr4_nr8_orig(trailing, 0, n, l21_ref, l21t_ref, nb, kb);
+                }
             } else {
                 let chunk = m2.div_ceil(nthreads);
                 std::thread::scope(|scope| {
                     for (t, rows) in trailing.chunks_mut(chunk * n).enumerate() {
                         let row_offset = t * chunk;
                         scope.spawn(move || {
-                            cholesky_syrk_flat_rows(rows, row_offset, n, l21_ref, l21t_ref, nb, kb)
+                            if HALF_PANEL_SYRK {
+                                cholesky_syrk_flat_rows_mr4_nr4(
+                                    rows, row_offset, n, l21_ref, l21t_ref, nb, kb,
+                                );
+                            } else {
+                                cholesky_syrk_flat_rows_mr4_nr8_orig(
+                                    rows, row_offset, n, l21_ref, l21t_ref, nb, kb,
+                                );
+                            }
                         });
                     }
                 });
@@ -5111,6 +5134,28 @@ fn cholesky_lower_blocked_with_panel_trsm<const PAIR_PANEL_TRSM_ROWS: bool>(
     }
 
     Some(lower)
+}
+
+/// Literal pre-MR4×NR4 factor path for the one-binary Cholesky wall benchmark.
+#[cfg(feature = "chol-wall-bench")]
+#[doc(hidden)]
+pub fn cholesky_wall_mr4_nr8_orig(a: &[Vec<f64>]) -> Option<Vec<f64>> {
+    let n = a.len();
+    if a.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    cholesky_lower_blocked_with_kernels::<true, false>(a, n)
+}
+
+/// Production MR4×NR4 factor path for the one-binary Cholesky wall benchmark.
+#[cfg(feature = "chol-wall-bench")]
+#[doc(hidden)]
+pub fn cholesky_wall_mr4_nr4_candidate(a: &[Vec<f64>]) -> Option<Vec<f64>> {
+    let n = a.len();
+    if a.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    cholesky_lower_blocked_with_kernels::<true, true>(a, n)
 }
 
 /// `cholesky` blocked-factor gate — the parallel-SYRK blocked Cholesky beats the
@@ -18671,6 +18716,13 @@ fn syrk_sub8(row: &mut [f64], col: usize, c: Simd<f64, 8>) {
     (cur - c).copy_to_slice(&mut row[col..col + 8]);
 }
 
+/// `row[col..col+4] -= c` (4-wide).
+#[inline]
+fn syrk_sub4(row: &mut [f64], col: usize, c: Simd<f64, 4>) {
+    let cur = Simd::<f64, 4>::from_slice(&row[col..col + 4]);
+    (cur - c).copy_to_slice(&mut row[col..col + 4]);
+}
+
 /// Per-row triangular update `row[kb+j] -= Σ_p l21[ii][p]·l21[j][p]` for `j = 0..=ii`,
 /// starting from column `j_start` (the register-tiled path handles `0..j_start`).
 #[inline]
@@ -18764,7 +18816,7 @@ fn cholesky_syrk_rows(
 }
 
 #[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
-fn cholesky_syrk_flat_rows(
+fn cholesky_syrk_flat_rows_mr4_nr8_orig(
     rows: &mut [f64],
     row_offset: usize,
     n: usize,
@@ -18802,6 +18854,84 @@ fn cholesky_syrk_flat_rows(
             syrk_sub8(&mut rows[r0 + n..r0 + 2 * n], col, c1);
             syrk_sub8(&mut rows[r0 + 2 * n..r0 + 3 * n], col, c2);
             syrk_sub8(&mut rows[r0 + 3 * n..r0 + 4 * n], col, c3);
+            j += 8;
+        }
+        for mrow in 0..4 {
+            let r0 = (base + mrow) * n;
+            cholesky_syrk_row_tail(&mut rows[r0..r0 + n], ii + mrow, j, l21, nb, kb);
+        }
+        base += 4;
+    }
+    for local_i in base..m {
+        let r0 = local_i * n;
+        cholesky_syrk_row_tail(&mut rows[r0..r0 + n], row_offset + local_i, 0, l21, nb, kb);
+    }
+}
+
+/// Spill-free packed-broadcast SYRK for the generic x86-64 register budget.
+///
+/// `Simd<f64, 8>` lowers to four XMM pieces on the portable release target, so
+/// the original MR4×NR8 tile needs all 16 XMM registers for accumulators before
+/// loading its RHS or broadcast operands. Splitting each packed eight-column
+/// panel into two NR4 halves needs eight accumulator pieces plus operands. Each
+/// output still receives the same `p = 0..nb` multiply/add chain, and the MR4
+/// row grouping plus exact-dot tail boundary are unchanged.
+#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+fn cholesky_syrk_flat_rows_mr4_nr4(
+    rows: &mut [f64],
+    row_offset: usize,
+    n: usize,
+    l21: &[f64],
+    l21t: &[f64],
+    nb: usize,
+    kb: usize,
+) {
+    let m = rows.len() / n;
+    let mut base = 0;
+    while base + 4 <= m {
+        let ii = row_offset + base;
+        let a0 = &l21[ii * nb..ii * nb + nb];
+        let a1 = &l21[(ii + 1) * nb..(ii + 1) * nb + nb];
+        let a2 = &l21[(ii + 2) * nb..(ii + 2) * nb + nb];
+        let a3 = &l21[(ii + 3) * nb..(ii + 3) * nb + nb];
+        let mut j = 0;
+        while j + 8 <= ii {
+            let pbase = (j / 8) * nb * 8;
+            let panel = &l21t[pbase..pbase + nb * 8];
+
+            let mut c00 = Simd::<f64, 4>::splat(0.0);
+            let mut c10 = Simd::<f64, 4>::splat(0.0);
+            let mut c20 = Simd::<f64, 4>::splat(0.0);
+            let mut c30 = Simd::<f64, 4>::splat(0.0);
+            for p in 0..nb {
+                let b = Simd::<f64, 4>::from_slice(&panel[p * 8..p * 8 + 4]);
+                c00 += Simd::splat(a0[p]) * b;
+                c10 += Simd::splat(a1[p]) * b;
+                c20 += Simd::splat(a2[p]) * b;
+                c30 += Simd::splat(a3[p]) * b;
+            }
+            let col = kb + j;
+            let r0 = base * n;
+            syrk_sub4(&mut rows[r0..r0 + n], col, c00);
+            syrk_sub4(&mut rows[r0 + n..r0 + 2 * n], col, c10);
+            syrk_sub4(&mut rows[r0 + 2 * n..r0 + 3 * n], col, c20);
+            syrk_sub4(&mut rows[r0 + 3 * n..r0 + 4 * n], col, c30);
+
+            let mut c01 = Simd::<f64, 4>::splat(0.0);
+            let mut c11 = Simd::<f64, 4>::splat(0.0);
+            let mut c21 = Simd::<f64, 4>::splat(0.0);
+            let mut c31 = Simd::<f64, 4>::splat(0.0);
+            for p in 0..nb {
+                let b = Simd::<f64, 4>::from_slice(&panel[p * 8 + 4..p * 8 + 8]);
+                c01 += Simd::splat(a0[p]) * b;
+                c11 += Simd::splat(a1[p]) * b;
+                c21 += Simd::splat(a2[p]) * b;
+                c31 += Simd::splat(a3[p]) * b;
+            }
+            syrk_sub4(&mut rows[r0..r0 + n], col + 4, c01);
+            syrk_sub4(&mut rows[r0 + n..r0 + 2 * n], col + 4, c11);
+            syrk_sub4(&mut rows[r0 + 2 * n..r0 + 3 * n], col + 4, c21);
+            syrk_sub4(&mut rows[r0 + 3 * n..r0 + 4 * n], col + 4, c31);
             j += 8;
         }
         for mrow in 0..4 {
@@ -20100,6 +20230,36 @@ mod tests {
                     actual.to_bits(),
                     expected.to_bits(),
                     "paired panel TRSM changed factor bits at flat index {index}, n={n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cholesky_syrk_mr4_nr4_is_bit_identical() {
+        for &n in &[130usize, 131, 270, 271] {
+            let mut a = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..=i {
+                    let value = if i == j {
+                        (n as f64) * 3.0 + (i as f64) * 0.01
+                    } else {
+                        1.0 / ((i - j + 1) as f64)
+                    };
+                    a[i][j] = value;
+                    a[j][i] = value;
+                }
+            }
+
+            let original =
+                cholesky_lower_blocked_with_kernels::<true, false>(&a, n).expect("MR4xNR8 factor");
+            let candidate =
+                cholesky_lower_blocked_with_kernels::<true, true>(&a, n).expect("MR4xNR4 factor");
+            for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "MR4xNR4 changed factor bits at flat index {index}, n={n}"
                 );
             }
         }
