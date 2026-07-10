@@ -6,6 +6,40 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - REJECT (bit-identity): hand register-blocking the dense dot (FMA + 4-acc) — measured 1.098x but NOT bit-identical; the remaining ~4x is structural, not inner-dot
+
+- Deeper follow-on to the per-kernel ISA trio. Question: does hand-tuned register-blocking beat the
+  ISA-flag `simd_dot` bit-identically? Measured, single-binary code A/B (all arms `+avx2,+fma`), median
+  self-time gate + A/A null. Artifact `tests/artifacts/perf/2026-07-10-fsci-isa-baseline-sse2/regblock_reject.txt`.
+- RESULT — three hand-tuned variants vs the shipped 1-accumulator `simd_dot` (self-time / perf cycles):
+
+  | variant | speedup (L1/L2) | memory-bound (L3) | bit-identical? |
+  | --- | ---: | ---: | --- |
+  | 4 accumulators, no FMA | 1.06-1.10x | 0.98x | NO (1 ULP, reassociated) |
+  | FMA, 1 accumulator | **0.76-0.90x** | 1.03x | (this data yes) but SLOWER |
+  | FMA + 4 acc (BLAS microkernel) | 1.10-1.14x | 1.00x | NO (**299/500** inputs differ) |
+
+- MEDIAN GATE (BLAS microkernel, n=512, K=15): NULL(A/A) median 1.0035x [0.9726, 1.0382]; **CAND median
+  1.0984x, DECIDED**. So it IS a measured win — but it DIFFERS in 299/500 random inputs (FMA single-rounding
+  + 4-acc reassociation). **REJECT under the FP-bit-identical contract.** The two directives conflict here
+  ("pursue measured wins" vs "bit-identical outputs"); bit-identity is the standing hard constraint.
+- KEY MECHANISM (subtle, worth keeping): FMA ALONE is SLOWER (0.76-0.90x) because `a = x.mul_add(y, a)` puts
+  the multiply ON the serial dependency chain, whereas `a += x*y` lets the independent mul run ahead of the
+  add. FMA only pays WITH multiple accumulators to hide its latency. And the `Simd<f64,8>` single accumulator
+  already gives 8-lane ILP, so the inner dot is near-optimal for its ISA — only ~1.10x headroom total.
+- **WHERE THE REMAINING ~4x ACTUALLY IS (surfaced to cod):** NOT the inner dot. It is (a) CACHE-BLOCKING /
+  wider register TILES of the matmul loop nest — reuse each loaded element across more outputs; this IS
+  bit-identical (it reorders which OUTPUTS are computed, not the k-reduction within each), and is cod's
+  dense-BLAS structural work (`simd_dot4` is already a 4-wide tile; `770c4d490` fits it to the register
+  budget); and (b) FMA — which fsci forgoes for bit-identity. fsci's "bit-identical to naive sum" contract
+  forecloses the FMA + multi-accumulator that BLAS/LAPACK use with a documented ~1 ULP tolerance. Closing the
+  last ~4x bit-identically means WIDER bit-identical output tiles + cache-blocking, not inner-dot micro-tuning.
+- SCOPE: no kernel code touched; all variants are in my microbench sandbox. This is measured negative
+  evidence + a directional finding for cod, not a landed change.
+- Constraint: single-file `rustc` + perf + Python only; no cargo build, no maturin, ~0 disk, nothing stashed
+  or deleted. `cargo bench` still can't do an ISA A/B (E0133, `9d6f44b9e`) — but this was a same-ISA code A/B,
+  correctly single-binary.
+
 ## 2026-07-10 - BlackThrush (cc) - PER-KERNEL ISA #3/dgemm: `simd_dot` +avx2 = 1.349x (self-time + wall-clock agree), bit-identical. TRIO COMPLETE.
 
 - Kernel #3, completing the dtrsm/dgemm/dsyrk trio. **dgemm = `simd_dot`** (the `matmul_flat` rank-update /

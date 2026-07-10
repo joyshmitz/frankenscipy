@@ -1,0 +1,33 @@
+# REGISTER-BLOCKING the dense dot kernel BEYOND the ISA flag: does it beat the ISA-flag version
+# bit-identically? host thinkstation1, all arms compiled +avx2,+fma (same ISA), single-binary code A/B.
+
+Three hand-tuned variants of the shipped simd_dot, each vs the shipped 1-accumulator baseline:
+
+  variant                        self-time speedup (perf cycles)         bit-identical?
+  4 accumulators (no FMA)        n=256 1.061x / n=2048 1.096x / L3 0.983x  NO (1 ULP, reassociated)
+  FMA, 1 accumulator             n=256 0.900x / n=2048 0.759x / L3 1.027x  yes(this data) -- but SLOWER
+  FMA + 4 acc (BLAS microkernel) n=256 1.103x / n=512 1.140x / L3 1.002x    NO (299/500 inputs differ)
+
+MEDIAN SELF-TIME GATE (BLAS microkernel, n=512 best case, K=15 interleaved base/blas/base):
+  NULL(A/A base) median 1.0035x  range [0.9726, 1.0382]
+  CAND(base/blas) median 1.0984x  DECIDED
+  bit-identity: base vs BLAS microkernel DIFFER in 299/500 random inputs
+
+=> VERDICT: REJECT under the bit-identity contract. The register-blocked microkernel IS a measured
+   ~1.10x win on L1/L2-resident dots, but it is NOT bit-identical (FMA single-rounding + 4-acc
+   reassociation change the last bit in 60% of inputs), and ~1.00x when memory-bound. FP-bit-identical
+   or revert => not landable.
+
+=> WHY SMALL, and where the real gap is: the Simd<f64,8> single accumulator ALREADY provides 8-lane ILP
+   and the independent mul overlaps the serial add, so the inner dot is near-optimal for its ISA -- only
+   ~1.10x headroom from accumulators/FMA. SUBTLE: FMA ALONE is SLOWER (0.76-0.90x) because a=x.mul_add(y,a)
+   puts the multiply ON the dependency chain, whereas a+=x*y lets the mul run ahead; FMA only pays WITH
+   multiple accumulators to hide its latency.
+
+=> THE REMAINING ~4x vs scipy dgemm_kernel_HASWELL is NOT in the inner dot. It is in (a) CACHE-BLOCKING /
+   wider register TILES of the matmul loop nest (reuse each loaded element across more outputs -- a
+   bit-identical structural lever, and cod's dense-BLAS territory: simd_dot4 already does a 4-wide tile,
+   770c4d490 fits it to the register budget), and (b) FMA -- which fsci forgoes for bit-identity. fsci's
+   'bit-identical to naive sum' contract forecloses the FMA + multi-accumulator that BLAS/LAPACK use with
+   a documented ~1 ULP tolerance. Closing the last ~4x bit-identically means wider bit-identical output
+   tiles + cache-blocking, not inner-dot micro-tuning.
