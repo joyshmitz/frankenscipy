@@ -9200,3 +9200,21 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   fsci-ndimage suite 272/0. Gate spline_axis_threads(outer, axis_len*stride) (>=2 blocks & >=2^20 work).
   Byte-identical: same line elements, same kernel, same target slots; block partition is the only change.
   Safe Rust; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN interpolate RBF Phi-matrix build parallel-across-rows (1.13-1.15x, byte-identical)
+
+- **WIN; shipped (modest).** `RbfInterpolator::new` built the dense Φ[i,j]=φ(||points[i]-points[j]||)
+  matrix with a SERIAL double loop (a distance + a transcendental per entry for Gaussian/multiquadric).
+  Each row writes its OWN contiguous row, so fan the rows across cores (chunks_mut over `n`-element
+  rows) — the parallel-matrix-constructor lever. Byte-identical (each entry is the same pure fn of
+  (points[i], points[j]); the deterministic dense solve then yields identical weights → identical eval).
+- Same-binary A/B (RBF_BUILD_FORCE_SERIAL knob, serial/parallel/serial interleaved, black-boxed, whole
+  new() so the shared solve isolates the build): **n=1000 DECIDED 1.132x** (41.11->36.24ms, thin margin
+  vs null_hi 1.115), **n=2000 DECIDED 1.147x** (183.18->156.96ms, null_hi 1.093), worker unknown.
+  MODEST + CAPPED: the O(n^2) build is only ~15% of new() (the O(n^3) parallel LU solve dominates ~85%,
+  as the code comment warned), and the build fraction shrinks as O(1/n), so the win DIMINISHES for
+  larger n (n=4096: ~1.04x). Best for moderate n~500-2000.
+- **Byte-identical: bitmism=0** probe; test `rbf_build_parallel_matches_serial_bitexact` (Gaussian/
+  Multiquadric/InverseMultiquadric, n=300 above the gate, eval to_bits equality) passes; fsci-interpolate
+  suite 187/0. Gate build_work=n²·(dim+2) >= 2^18. NOTE: a pre-existing peer harness (perf_rbf_build.rs)
+  had measured the build/solve regime; left untouched. Safe Rust; no external BLAS/LAPACK/MKL/XLA.

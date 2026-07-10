@@ -5000,6 +5000,12 @@ pub enum RbfKernel {
     Gaussian,
 }
 
+/// Same-binary A/B toggle for the RBF `Φ` matrix build. When `true`, the matrix is filled serially
+/// (the ORIG behaviour). When `false` (default), the independent rows fan across cores. Byte-identical.
+#[doc(hidden)]
+pub static RBF_BUILD_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// N-dimensional scattered data interpolation using radial basis functions.
 ///
 /// Matches `scipy.interpolate.RBFInterpolator(y, d, kernel=kernel)`.
@@ -5081,12 +5087,47 @@ impl RbfInterpolator {
         // Build the RBF matrix Φ[i,j] = φ(||points[i] - points[j]||) in FLAT row-major
         // storage so the dense solve runs over contiguous rows (cache-resident +
         // SIMD-able inner update) instead of a Vec<Vec> with one heap alloc per row.
+        // Row `i` = φ(||points[i] - points[j]||) over all j — an independent, compute-bound sweep
+        // (a distance + a transcendental per entry) that writes its OWN contiguous row, so the rows
+        // fan across cores. BYTE-IDENTICAL to the serial double loop (each entry is the same pure
+        // function of (points[i], points[j]); only the owning core changes). SciPy builds it
+        // single-threaded. Gated on the total kernel-eval work so small systems stay serial.
         let mut phi = vec![0.0f64; n * n];
-        for i in 0..n {
-            for j in 0..n {
+        let build_row = |i: usize, row: &mut [f64]| {
+            for (j, slot) in row.iter_mut().enumerate() {
                 let r2 = euclidean_dist_sq(&points[i], &points[j]);
-                phi[i * n + j] = rbf_eval_sq(kernel, r2, epsilon);
+                *slot = rbf_eval_sq(kernel, r2, epsilon);
             }
+        };
+        let build_work = (n as u64) * (n as u64) * (dim as u64 + 2);
+        let nthreads = if RBF_BUILD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+            || build_work < (1 << 18)
+            || n < 2
+        {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n)
+        };
+        if nthreads <= 1 {
+            for i in 0..n {
+                build_row(i, &mut phi[i * n..i * n + n]);
+            }
+        } else {
+            let per = n.div_ceil(nthreads);
+            let build_row = &build_row;
+            std::thread::scope(|scope| {
+                for (ci, chunk) in phi.chunks_mut(per * n).enumerate() {
+                    let i0 = ci * per;
+                    scope.spawn(move || {
+                        for (local, row) in chunk.chunks_mut(n).enumerate() {
+                            build_row(i0 + local, row);
+                        }
+                    });
+                }
+            });
         }
 
         // Solve Φ w = values for weights. Route through fsci-linalg's multithreaded
@@ -10957,6 +10998,43 @@ mod tests {
                 assert_eq!(r.to_bits(), f.to_bits(), "n={n}: flat solve != Vec<Vec> solve");
             }
         }
+    }
+
+    #[test]
+    fn rbf_build_parallel_matches_serial_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The parallel Φ-matrix build must be BYTE-IDENTICAL to the serial build: same Φ → same
+        // (deterministic) dense solve → same weights → same evaluations. Sized above the parallel
+        // build gate. Checked across kernels with a transcendental/sqrt per entry.
+        let n = 300usize;
+        let mut s = 12345u64;
+        let mut rng = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let points: Vec<Vec<f64>> = (0..n).map(|_| vec![rng() * 10.0, rng() * 10.0]).collect();
+        let values: Vec<f64> = (0..n).map(|_| rng() * 4.0 - 2.0).collect();
+        let queries: Vec<Vec<f64>> = (0..40).map(|_| vec![rng() * 10.0, rng() * 10.0]).collect();
+        for kernel in [
+            RbfKernel::Gaussian,
+            RbfKernel::Multiquadric,
+            RbfKernel::InverseMultiquadric,
+        ] {
+            RBF_BUILD_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let ser = RbfInterpolator::new(&points, &values, kernel, 1.0).unwrap();
+            RBF_BUILD_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let par = RbfInterpolator::new(&points, &values, kernel, 1.0).unwrap();
+            for q in &queries {
+                assert_eq!(
+                    ser.eval(q).to_bits(),
+                    par.eval(q).to_bits(),
+                    "kernel={kernel:?}"
+                );
+            }
+        }
+        RBF_BUILD_FORCE_SERIAL.store(false, Ordering::Relaxed);
     }
 
     #[test]
