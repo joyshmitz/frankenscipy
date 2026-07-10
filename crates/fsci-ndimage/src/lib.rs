@@ -1628,6 +1628,13 @@ fn compute_axis_support(
             let hn = (order / 2) as isize;
             (hn, hn + 1)
         };
+        // NOTE (measured, 2026-07-10): an "interior fast path" that skips `fold` when the whole tap
+        // run lies in `0..=len-1` was implemented, proven byte-identical, and REJECTED at 1.01-1.05x
+        // (1.01x at the default order 3). `perf annotate` of `compute_axis_support` — 61.39% self,
+        // so the code is demonstrably live — shows ZERO `idiv` instructions: `fold`'s `rem_euclid`
+        // costs essentially nothing here, and the `fmod` visible in the profile is the f64 `fmod`
+        // from `map_interpolation_coordinate`, NOT this integer fold. Do not retry unless
+        // `cardinal_bspline` gets much cheaper (SIMD), which would raise `fold`'s share.
         for k in (floor - span.0)..=(floor + span.1) {
             let weight = cardinal_bspline(order, cc - k as f64);
             if weight != 0.0 {

@@ -9,7 +9,11 @@
 //!               taps can be nonzero. Shipped 6c53716ff (order3 1.37x, order5 1.53x).
 //!   `offs`    — `NDIMAGE_SPLINE_OFFSET_DISABLE`: each of the `(order+1)^ndim` tensor leaves
 //!               recomputed `Σ idx[d]·stride[d]` via `coeffs.get`. Premultiply taps by stride once
-//!               per pixel ⇒ the leaf is a single `data[base]` load.
+//!               per pixel ⇒ the leaf is a single `data[base]` load. Shipped 6347c4045.
+//!
+//! REJECTED lever (2026-07-10, do not re-add): a `fold` interior fast path skipping `rem_euclid`
+//! for tap runs inside `0..=len-1`. Byte-identical but only 1.01-1.05x — `perf annotate` shows
+//! ZERO `idiv` in `compute_axis_support` (61.39% self), so there was no division to remove.
 //!
 //! NOISE: remote rch workers cannot be `taskset`-pinned, so the `map_coords_serial` workload is
 //! sized UNDER the parallel gate (`npts · (order+1)^ndim < 2^18`) and therefore runs on the
@@ -17,8 +21,14 @@
 //!
 //! Each lever carries its own NULL CONTROL, a row where the knob provably cannot act:
 //!   `offs`    → `order=0` (`sample_interpolated` returns before the leaf).
-//!   `compact` → `Constant` mode (routes to `fold_wrap_cubic` / `bspline_local_support`).
+//!   `compact` → `Constant` mode (routes to `fold_wrap_cubic` / `bspline_local_support`, never the
+//!               cardinal loop). `order=0` is inert for `compact` too.
 //! Any run whose control drifts off 1.00x is noise-dominated and must be discarded.
+//!
+//! Both arms live in THIS binary and are selected by an in-process atomic, then alternated, so a
+//! single `rch exec` invocation measures both on the same worker (rch picks workers
+//! non-deterministically and the ORIG/CAND ratio is not worker-invariant — an A/B split across two
+//! invocations would be invalid).
 //!
 //! Usage: `perf_perpixel_leaf <compact|offs> [order]`
 use fsci_ndimage::{
@@ -110,10 +120,8 @@ fn main() {
         if only_order.is_some_and(|o| o != order) {
             continue;
         }
-        // The compact lever does not exist at order 0 (no cardinal loop); it is the offs control.
-        if !offs_lever && order == 0 {
-            continue;
-        }
+        // Order 0 has no cardinal loop, so it is inert for `compact` too — keep it as an extra
+        // control row rather than skipping, since a knob that moves it is a bug.
         for &mode in &[BoundaryMode::Reflect, BoundaryMode::Constant] {
             let kernels: [(&str, Box<dyn Fn() -> Vec<f64>>); 3] = [
                 (
@@ -174,7 +182,7 @@ fn main() {
                 let is_control = if offs_lever {
                     order == 0
                 } else {
-                    mode == BoundaryMode::Constant
+                    order == 0 || mode == BoundaryMode::Constant
                 };
                 let tag = if is_control { "CONTROL" } else { "       " };
                 println!(

@@ -4,6 +4,106 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+**LEDGER-INTEGRITY RULE (adopted 2026-07-10, from frankenmermaid `5feb977`).** Every REJECT row must
+record the SELF-TIME of the function under test on the benchmark that produced the ratio. A reject
+measured on an input that never reaches the code is INVALID and must be reopened. A profile SYMBOL is
+not a call SITE: confirm with `perf annotate` which code emits a frame before acting on it.
+
+## 2026-07-10 - frankenscipy-cc-fold-interior - REJECT (reverted, byte-identical but 1.01-1.05x): ndimage `compute_axis_support` fold interior fast path; the premise was FALSE — zero `idiv` emitted
+
+- Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`)
+- SELF-TIME OF CODE UNDER TEST (mandatory field): `compute_axis_support` = **61.39% self** on the
+  captured `rotate` order=3 / 512² / Reflect profile. The function under test is demonstrably HOT and
+  the benchmark reaches it; the `interior` branch is taken for ~99% of pixels (only those within
+  `order/2 + 1` of an edge fold). This is NOT a dead-code measurement.
+- Lever: for `0 <= k <= len-1` every fold mode reachable from the cardinal Nearest/Reflect/Mirror
+  branch is the IDENTITY — `Nearest`'s `clamp(0, len-1)` is a no-op, `Mirror`'s
+  `k.rem_euclid(2(len-1))` returns `k` (since `len-1 < 2(len-1)` for `len >= 2`) and its `m >= len`
+  reflection never fires, likewise `Reflect`'s `k.rem_euclid(2·len)`; Wrap/Constant never reach the
+  branch. So hoist the bounds test out of the tap loop and skip `fold` entirely for interior runs.
+- Ledger consulted first: this was retry-condition #1 recorded by `6347c4045`. Not previously tried.
+- Graveyard/artifact route tested: branch hoisting out of an inner loop, interior/boundary loop
+  splitting (peel the halo), avoiding a runtime-modulus integer division on the hot path.
+
+- Baseline/candidate command (ONE invocation, both arms inside the binary, alternating):
+  `RCH_REQUIRE_REMOTE=1 FSCI_AB_REPS=3 FSCI_AB_ITERS=7 rch exec -- cargo run --profile release-perf -p fsci-ndimage --bin perf_perpixel_leaf fold`
+- Same-binary A/B knob: `NDIMAGE_FOLD_INTERIOR_DISABLE` (read once per call).
+- Interleaved best-of-7, all 36 rows `bitmism=0` / `maxdiff=0.0e0`. Serial rows (`map_coords_serial`,
+  sized under the parallel gate so it runs serially by construction), cv 0.7-2.4%:
+
+  | Workload | order | orig | cand | Ratio | Verdict |
+  | --- | ---: | ---: | ---: | ---: | --- |
+  | `map_coords_serial` Reflect | 1 | 0.51 ms | 0.49 ms | 1.05x | below gate |
+  | `map_coords_serial` Reflect | 2 | 1.20 ms | 1.18 ms | 1.02x | below gate |
+  | `map_coords_serial` Reflect | 3 | 1.60 ms | 1.58 ms | **1.01x** | below gate |
+  | `map_coords_serial` Reflect | 4 | 2.88 ms | 2.80 ms | 1.03x | below gate |
+  | `map_coords_serial` Reflect | 5 | 3.73 ms | 3.69 ms | 1.01x | below gate |
+  | NULL CONTROL `map_coords_serial` Reflect | 0 | 0.19 ms | 0.19 ms | 1.00x | control ok |
+  | NULL CONTROL `map_coords_serial` Constant | 3 | 0.41 ms | 0.41 ms | 0.99x | control ok |
+  | NULL CONTROL `map_coords_serial` Constant | 5 | 3.10 ms | 3.10 ms | 1.00x | control ok |
+
+  Parallel rows (`rotate_par`, `affine_gen_par`) ranged 0.99-1.19x at cv 8-33% with controls drifting
+  0.89-1.11x — noise-dominated, DISCARDED, not used for the verdict.
+- Same-worker internal keep/loss/neutral: `0/0/36` (nothing clears the gate; controls neutral as
+  required). At order 3 — scipy's DEFAULT — the 1.01x is inside the ±1% control drift.
+
+- ROOT CAUSE OF THE NULL RESULT (instruction-level, on the ALREADY-CAPTURED profile; no new
+  `perf record`, per the disk constraint): `perf annotate -s fsci_ndimage::compute_axis_support`
+  renders 1879 instruction lines and contains **ZERO `idiv`/`div`** instructions — summed idiv
+  self-time **0.000%**. Mnemonic histogram of the sampled lines: `mov` 214, `movapd` 169, `movsd` 72,
+  `cmp` 72, `addsd` 59, `mulsd` 44, `lea` 43, `jmp` 41, `subsd` 29, `subpd` 28, `call` 28. That is the
+  INLINED `cardinal_bspline` recursion — pure scalar FP. There was no division to remove. The residual
+  1-5% is only the hoisted per-tap `match fold_mode` branch, and it decays with order exactly as that
+  mechanism predicts (largest at order 1, where the kernel is cheapest).
+
+- **CORRECTION — a mis-attributed frame in two of my earlier entries.** `6c53716ff` and `6347c4045`
+  each record the next lever as "`fold`'s `rem_euclid` (visible as `fmod` ~1.2%)". WRONG. The `fmod`
+  frame is `compiler_builtins::math::libm_math::fmod::fmod`, the **f64** modulus called from
+  `map_interpolation_coordinate`'s coordinate wrap — an entirely different call site from the integer
+  `fold`. I inferred the call site from the symbol NAME instead of annotating. Both "next lever" lines
+  are now tagged `[SUPERSEDED 2026-07-10]` in place. Only their SIMD sub-lever survives. This is the
+  same class of error as the frankenmermaid `bench_layout_wide` finding: the ledger recorded a claim
+  about code that the evidence did not actually support.
+
+- Correctness / behavior parity (proven before the revert, so the reject is about SPEED only):
+  - BYTE-IDENTICAL: identical `(index, weight)` pairs in identical push order; `fold(k) == k` for all
+    in-range `k` under every reachable mode.
+  - PASS: new `bspline_fold_interior_fast_path_matches_folded_bitexact` (`to_bits`) over TINY shapes
+    where EVERY pixel's tap run crosses an edge (`[7]`, `[6,7]`, `[6,6,7]`) plus interior-heavy shapes
+    (`[23]`, `[17,19]`), orders 0..=5 × 5 modes, shifts at frac / negative / integer / integer+1ULP;
+    plus diag-affine, general affine, rotate and `map_coordinates` with coords pinned ON the first and
+    last valid index and just outside; plus a 256² parallel-chunked rotate. fsci-ndimage 264/0 WITH the
+    lever in.
+  - After revert: fsci-ndimage **263/0**, `cargo fmt -p fsci-ndimage --check` 0 diffs, `ubs` 0 critical,
+    `git diff --check` clean. Code is byte-for-byte back to `6347c4045` apart from a do-not-retry
+    comment at the call site and in the probe header.
+
+- CONSTRAINT this turn: `/data` at 96%. Every build/test/bench ran through `rch exec` with
+  `RCH_REQUIRE_REMOTE=1`; no local compile, no maturin, no new target tree or worktree, no `perf
+  record`, nothing deleted, nothing stashed. The instruction-level attribution reused the `perf.data`
+  captured by `6c53716ff`. The scipy differential packet remains BLOCKED remotely (`.rch.env` pins
+  `FSCI_REQUIRE_SCIPY_ORACLE=1`, workers have no SciPy) — irrelevant here since the code is reverted to
+  a committed, previously-conformance-verified state.
+
+- Negative evidence: do NOT retry the fold interior fast path. It is byte-identical and free but worth
+  1.01x at the default order, and the division it was meant to remove does not exist in the emitted
+  code. Retry condition: ONLY after `cardinal_bspline` is made much cheaper (SIMD over the compacted
+  2/4/6-tap window), which would raise `fold`'s relative share — and re-check the idiv self-time first;
+  if it is still 0.000%, the answer is unchanged.
+- Remaining ndimage lever (unattempted): SIMD `cardinal_bspline` itself. The profile is unambiguous
+  that this is where the time is — >60% self, entirely scalar FP (`movapd`/`mulsd`/`addsd`/`subpd`),
+  and the compact window has already reduced the tap count to a clean 2/4/6. Needs a fresh
+  `perf record`, so it waits on the disk constraint.
+
+- Stale scorecard, re-verified mechanically a THIRD time (stop re-queueing): all seven special
+  `*_many` wrappers (`itj0y0`, `iti0k0`, `expn`, `shichi`, `fresnel`, `sici`, `poch`) exist in HEAD in
+  `crates/fsci-special/src/convenience.rs` on `par_map_indices`
+  (`git show HEAD:… | grep -c "pub fn <f>_many"` = 1 each, and each is followed by `par_map_indices`).
+  The ndimage geometric-transform separable precompute is live at three call sites in HEAD
+  (`build_axis_offset_supports` for zoom / shift / diagonal-affine); `rotate` computes
+  `ny = cy + cos·dy − sin·dx`, so `ny` depends on BOTH output indices — the map is provably
+  non-separable, as are general affine and `map_coordinates`. Nothing remains to land on either item.
+
 ## 2026-07-10 - frankenscipy-cc-perpixel-offset-leaf - KEEP (byte-identical): ndimage per-pixel flat-offset tensor leaf — serial 1.23-1.27x, parallel 1.16-1.34x
 
 - Agent: cc / BlackThrush (`AGENT_NAME=cc_fsc`)
@@ -128,11 +228,14 @@ condition so dead ends are not repeated casually.
   `frankenscipy-2p2hv` is closed and both required `cargo check`s pass.
 
 - Retry condition / next levers, ranked:
-  1. With the leaf reduced to a bare load, `compute_axis_support` again dominates.
-     Its per-tap `fold` closure calls `rem_euclid` (surfaced as `fmod`, ~1.2% before
-     this change and a larger share now) on EVERY tap, though only taps that actually
-     cross a boundary need folding. Split the compact run into an interior fast path
-     (no fold) plus the boundary remainder.
+  1. [SUPERSEDED 2026-07-10 — MIS-ATTRIBUTED FRAME; lever built, measured 1.01-1.05x,
+     REVERTED. The `fmod` is the f64 modulus in `map_interpolation_coordinate`, NOT the
+     integer `fold`; `perf annotate` shows ZERO `idiv` in `compute_axis_support`. See the
+     2026-07-10 REJECT entry.] With the leaf reduced to a bare load, `compute_axis_support`
+     again dominates. Its per-tap `fold` closure calls `rem_euclid` (surfaced as `fmod`,
+     ~1.2% before this change and a larger share now) on EVERY tap, though only taps that
+     actually cross a boundary need folding. Split the compact run into an interior fast
+     path (no fold) plus the boundary remainder.
   2. Then SIMD the compacted 2/4/6-tap window (`order+1` taps map cleanly onto
      2/4-lane f64 vectors).
   3. Re-profile before either — both need a fresh `perf record`, hence the disk
@@ -272,7 +375,9 @@ condition so dead ends are not repeated casually.
      `coeffs.strides[axis]` and route to the existing `sample_spline_offsets` (the
      separable paths already do exactly this, `c396459ef`). Expect ~1.10-1.15x on top.
      Held back here to keep ONE lever per commit.
-  2. `fold`'s `rem_euclid` (visible as `fmod` ~1.2%) runs on every tap, but only taps
+  2. [SUPERSEDED 2026-07-10 — see the REJECT entry: no `idiv` is emitted; `fmod` is the
+     f64 modulus from `map_interpolation_coordinate`.] `fold`'s `rem_euclid` (visible as
+     `fmod` ~1.2%) runs on every tap, but only taps
      that cross a boundary need folding — split the compact run into an interior fast
      path (no fold) and the boundary remainder.
   3. Only then consider SIMD across the `order+1` taps: with the window compacted, the

@@ -6,6 +6,68 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - BlackThrush (cc) - REJECT (reverted): ndimage `compute_axis_support` fold interior fast path — 1.01-1.05x; the premise was FALSE (zero `idiv` emitted) + CORRECTION of a mis-attributed frame in two earlier entries
+
+- SELF-TIME OF THE CODE UNDER TEST (per the frankenmermaid `5feb977` ledger-integrity rule, which
+  every new REJECT must now carry): `compute_axis_support` = **61.39% self** in the captured
+  `rotate` order=3 profile, i.e. the benchmark demonstrably EXECUTES the function under test. This
+  reject is NOT a dead-code measurement. The `interior` branch is taken for ~99% of pixels of a 512²
+  transform (only pixels within `order/2 + 1` of an edge fold), so the candidate arm ran.
+- LEVER TRIED: for `0 <= k <= len-1` every fold mode reachable from the cardinal branch is the
+  identity (`Nearest`'s clamp is a no-op; `Mirror`/`Reflect`'s `rem_euclid` returns `k` and the
+  `m >= len` reflection never fires). So a tap run lying wholly inside the coefficient array can skip
+  the `fold` closure entirely. Implemented, proven BYTE-IDENTICAL (new to_bits test over tiny shapes
+  where EVERY pixel folds, plus interior-heavy shapes, orders 0..=5 × 5 modes × ndim 1/2/3,
+  zoom/shift/diag-affine/general-affine/rotate/map_coordinates, plus a 256² parallel rotate;
+  fsci-ndimage 264/0 with the lever in).
+- MEASURED (same-binary A/B `NDIMAGE_FOLD_INTERIOR_DISABLE`, ONE `rch exec` invocation, both arms
+  alternating in-process; serial rows via `map_coords_serial` sized under the parallel gate, cv
+  0.7-2.4%; all 36 rows `bitmism=0`):
+
+  | order | map_coords_serial (Reflect) | CONTROL (Constant serial) |
+  | ---: | ---: | ---: |
+  | 0 (CONTROL) | 1.00x | 1.00x |
+  | 1 | 1.05x | 0.99x |
+  | 2 | 1.02x | 1.00x |
+  | 3 | **1.01x** | 0.99x |
+  | 4 | 1.03x | 1.00x |
+  | 5 | 1.01x | 1.00x |
+
+  Controls pinned at 0.99-1.00x, so the harness is valid and the ~1-5% is real but tiny. At order 3
+  — scipy's DEFAULT — the effect (1.01x) is indistinguishable from the ±1% control drift.
+- WHY IT FAILED (the premise was false, and the profile says so at INSTRUCTION level):
+  `perf annotate -s fsci_ndimage::compute_axis_support` over the captured profile renders 1879
+  instruction lines and contains **ZERO `idiv`/`div` instructions** — total idiv self-time
+  **0.000%**. The symbol is pure scalar FP (`movapd` 169, `movsd` 72, `addsd` 59, `mulsd` 44,
+  `subsd`/`subpd` 57 …), i.e. the INLINED `cardinal_bspline` recursion. `fold`'s `rem_euclid` costs
+  essentially nothing; the residual 1-5% is merely hoisting the per-tap `match fold_mode` branch out
+  of the loop, and it decays with order exactly as expected (biggest at order 1, where the kernel is
+  cheapest and the branch is the largest share).
+- **CORRECTION to two earlier entries of mine (they contain a MIS-ATTRIBUTED frame).** The
+  `6c53716ff` and `6347c4045` entries both say the next lever is "`fold`'s `rem_euclid` (visible as
+  `fmod` ~1.2%)". That is WRONG: the `fmod` in the profile is `compiler_builtins::math::libm_math::
+  fmod::fmod`, the **f64** modulus called from `map_interpolation_coordinate`'s coordinate wrap — a
+  DIFFERENT function from the integer `fold`. I attributed a symbol to the wrong call site without
+  checking, and it sent me after a division that does not exist. Those "next lever" lines are hereby
+  marked SUPERSEDED. Lesson, same family as the frankenmermaid finding: a profile SYMBOL is not a
+  call SITE — before acting on a frame, confirm which code actually emits it (`perf annotate`, not
+  inference from the name).
+- DECISION: REVERTED (code back to HEAD; only this ledger + a do-not-retry comment at the call site
+  and in the probe header remain). Byte-identical and free, but 1.01x at the default order does not
+  clear the keep-gate and does not justify a duplicated loop body. Suite back to **263/0**, fmt 0
+  diffs, ubs 0 critical.
+- RETRY CONDITION: only if `cardinal_bspline` becomes MUCH cheaper (e.g. the SIMD'd 2/4/6-tap window),
+  which would raise `fold`'s relative share. Re-measure the idiv self-time first — if it is still
+  0.000%, there is nothing to remove and the answer is unchanged.
+- AUDIT of my own prior REJECT rows under the new rule (are any measured on dead code?): the only
+  other reject in this arc is `6c53716ff`'s "FP-derived tap bound", which was rejected on a
+  BIT-IDENTITY failure (46 mismatches / 1870 adversarial `cc`), not on a timing A/B, so the
+  dead-code hazard does not apply to it. Both KEEPs in this arc (`compact`, `offs`) moved the exact
+  frames they targeted (61.68% and 27.51% self), which is itself proof the benchmarks reached them.
+- REMAINING ndimage lever (unchanged, still unattempted): SIMD the compacted `order+1` = 2/4/6-tap
+  window inside `cardinal_bspline`, which the profile shows IS the cost (>60% self, all scalar FP).
+  Needs a fresh `perf record`, hence the disk constraint must lift.
+
 ## 2026-07-10 - BlackThrush (cc) - KEEP: ndimage per-pixel flat-offset tensor leaf (serial 1.23-1.27x, parallel 1.16-1.34x, BYTE-IDENTICAL) — the retry condition logged by 6c53716ff
 
 - LEDGER FIRST: this is the lever `6c53716ff` recorded as retry-condition #1 ("`sample_spline_recursive`
@@ -104,6 +166,10 @@ ledger above so the project has one source of truth.
   now) runs on EVERY tap although only taps that actually cross a boundary need folding — split the
   compact run into an interior fast path (no fold) plus the boundary remainder. Then SIMD the 2/4/6-tap
   window. Re-profile before either (needs the disk constraint lifted).
+  **[SUPERSEDED 2026-07-10 — MIS-ATTRIBUTED FRAME. That `fmod` is the f64 modulus in
+  `map_interpolation_coordinate`, NOT the integer `fold`. `perf annotate` shows ZERO `idiv` in
+  `compute_axis_support`; the interior fast path was built, measured at 1.01-1.05x, and REVERTED.
+  Only the SIMD sub-lever survives. See the 2026-07-10 REJECT entry.]**
 
 ## 2026-07-10 - BlackThrush (cc) - KEEP: ndimage `compute_axis_support` compact cardinal-B-spline tap window (order3 1.33-1.40x, order5 1.51-1.56x self, BYTE-IDENTICAL) + REJECT of the FP-derived bound
 
