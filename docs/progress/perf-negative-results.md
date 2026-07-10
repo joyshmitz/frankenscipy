@@ -9180,3 +9180,23 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   (savgol/resample hoisted, 2-D axis filters parallel), interpolate (hoists done) are all worked;
   remaining ndimage callback-loop stragglers (labeled_comprehension) are bucketing-capped like this.
   Safe Rust; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN ndimage non-reflect spline prefilter parallel (1.60x, byte-identical)
+
+- **WIN; shipped.** `prefilter_spline_coefficients` (the internal N-D spline prefilter behind
+  zoom/rotate/map_coordinates/affine_transform for order>=2) parallelized only the REFLECT kernel; the
+  Constant/Wrap/Mirror modes and the general banded fallback (`cubic_constant_wrap_coefficients` /
+  `bspline_mirror_coefficients` / `spline_coefficients_for_line`) fell to a SERIAL per-line walk (ALWAYS,
+  even for large inputs). The lines are independent (each reads its own strided line, writes disjoint
+  slots), so fan the outer blocks across cores (chunks_mut over `axis_len*stride` blocks) — the same
+  pattern the reflect path already uses. The general kernel is fallible, so each block returns a Result
+  and the FIRST (lowest-outer-block) error wins, matching the serial walk's lowest-line_flat error.
+- Same-binary A/B (NDIMAGE_SPLINE_PREFILTER_FORCE_SERIAL knob, serial/parallel/serial interleaved,
+  black-boxed, driven via zoom order=5 mode=Mirror, 200x200x200): **DECIDED 1.600x** (425.24->262.42ms),
+  NULL(A/A) 0.998x [0.915,1.040], worker hz2. The prefilter was ~40% of the whole zoom (interpolation
+  is parallel in both arms), so parallelizing it lifts the aggregate 1.6x.
+- **Byte-identical: bitmism=0** probe; test `spline_prefilter_nonreflect_parallel_matches_serial_bitexact`
+  (Constant/Wrap/Mirror x orders 2-5 via zoom, 1100x1000 crossing the gate, to_bits equality) passes;
+  fsci-ndimage suite 272/0. Gate spline_axis_threads(outer, axis_len*stride) (>=2 blocks & >=2^20 work).
+  Byte-identical: same line elements, same kernel, same target slots; block partition is the only change.
+  Safe Rust; no external BLAS/LAPACK/MKL/XLA.

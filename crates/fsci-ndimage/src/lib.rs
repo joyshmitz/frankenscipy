@@ -1231,6 +1231,13 @@ fn spline_axis_threads(blocks: usize, block_work: usize) -> usize {
         .min(blocks)
 }
 
+/// Same-binary A/B toggle for the non-reflect spline prefilter fallback (Constant/Wrap/Mirror and the
+/// general banded kernel). When `true`, those axis passes run the serial per-line walk (the ORIG
+/// behaviour). When `false` (default), the independent outer slabs fan across cores. Byte-identical.
+#[doc(hidden)]
+pub static NDIMAGE_SPLINE_PREFILTER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn prefilter_spline_coefficients(
     input: &NdArray,
     order: usize,
@@ -1350,6 +1357,72 @@ fn prefilter_spline_coefficients(
                 continue;
             }
         }
+        // Non-reflect / general kernels (Constant/Wrap/Mirror + the banded fallback): the lines are
+        // independent (each reads its own strided line, writes disjoint slots), so fan the outer
+        // blocks across cores — byte-identical to the serial per-line walk (same line elements, same
+        // kernel, same target slots; the block partition is the only change). The general kernel is
+        // fallible, so each block returns a Result and the FIRST (lowest-outer-block) error wins,
+        // matching the serial walk's lowest-`line_flat` error.
+        let block = axis_len * stride;
+        let par_threads =
+            if NDIMAGE_SPLINE_PREFILTER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+                1
+            } else {
+                spline_axis_threads(outer, block)
+            };
+        if par_threads > 1 {
+            let per = outer.div_ceil(par_threads);
+            let results: Vec<Result<(), NdimageError>> = std::thread::scope(|scope| {
+                let handles: Vec<_> = current
+                    .data
+                    .chunks_mut(per * block)
+                    .map(|chunk| {
+                        let chunk_outer = chunk.len() / block;
+                        scope.spawn(move || -> Result<(), NdimageError> {
+                            let mut line = Vec::with_capacity(axis_len);
+                            for o in 0..chunk_outer {
+                                let outer_base = o * block;
+                                for inner in 0..stride {
+                                    let base = outer_base + inner;
+                                    line.clear();
+                                    for i in 0..axis_len {
+                                        line.push(chunk[base + i * stride]);
+                                    }
+                                    let coeffs = match (order, mode) {
+                                        (3, BoundaryMode::Constant | BoundaryMode::Wrap) => {
+                                            cubic_constant_wrap_coefficients(&line)
+                                        }
+                                        (_, BoundaryMode::Nearest) if bspline_reflect => {
+                                            bspline_reflect_coefficients(&line, order)
+                                        }
+                                        (_, BoundaryMode::Reflect) if exact_reflect => {
+                                            bspline_reflect_coefficients(&line, order)
+                                        }
+                                        (_, BoundaryMode::Mirror) if exact_mirror => {
+                                            bspline_mirror_coefficients(&line, order)
+                                        }
+                                        _ => spline_coefficients_for_line(&line, order)?,
+                                    };
+                                    for (i, coeff) in coeffs.into_iter().enumerate() {
+                                        chunk[base + i * stride] = coeff;
+                                    }
+                                }
+                            }
+                            Ok(())
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("spline prefilter worker panicked"))
+                    .collect()
+            });
+            for r in results {
+                r?;
+            }
+            continue;
+        }
+
         let line_count = outer * stride;
         let mut line = Vec::with_capacity(axis_len);
         for line_flat in 0..line_count {
@@ -16820,6 +16893,36 @@ mod tests {
         let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let result = zoom(&input, &[2.0, 2.0], 0, BoundaryMode::Nearest, 0.0).unwrap();
         assert_eq!(result.shape, vec![4, 4]);
+    }
+
+    #[test]
+    fn spline_prefilter_nonreflect_parallel_matches_serial_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The parallel non-reflect prefilter (Constant/Wrap/Mirror + general banded) must be
+        // BYTE-IDENTICAL to the serial per-line walk. Exercised through `zoom` (order>=2 prefilters);
+        // the input is large enough that an interior axis pass crosses the parallel gate.
+        let (rows, cols) = (1100usize, 1000usize);
+        let data: Vec<f64> = (0..rows * cols)
+            .map(|k| ((k as f64 * 0.019).sin() * 6.0 - 0.7) + (k % 13) as f64 * 0.25)
+            .collect();
+        let input = NdArray::new(data, vec![rows, cols]).unwrap();
+        for order in 2..=5usize {
+            for mode in [
+                BoundaryMode::Constant,
+                BoundaryMode::Wrap,
+                BoundaryMode::Mirror,
+            ] {
+                NDIMAGE_SPLINE_PREFILTER_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                let ser = zoom(&input, &[1.0, 1.0], order, mode, 0.0).unwrap();
+                NDIMAGE_SPLINE_PREFILTER_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                let par = zoom(&input, &[1.0, 1.0], order, mode, 0.0).unwrap();
+                assert_eq!(ser.shape, par.shape);
+                for (i, (a, b)) in ser.data.iter().zip(&par.data).enumerate() {
+                    assert_eq!(a.to_bits(), b.to_bits(), "order={order} mode={mode:?} idx={i}");
+                }
+            }
+        }
+        NDIMAGE_SPLINE_PREFILTER_FORCE_SERIAL.store(false, Ordering::Relaxed);
     }
 
     #[test]
