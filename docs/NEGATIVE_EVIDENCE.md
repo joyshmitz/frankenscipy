@@ -6,6 +6,63 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage separable transforms — flat-offset tensor-product leaf (zoom 1.27-1.84x, shift 1.12-1.29x, diag-affine 1.18-1.30x self, BYTE-IDENTICAL)
+
+- LANE AUDIT FIRST (marching orders assigned two items; BOTH were already landed — do not redo):
+  (1) "logged-but-unlanded ndimage geometric-transform separable precompute" is LANDED: zoom
+  `d77e60b17`, shift `15c802380`, diagonal-affine `0b3a7916a` (all 2026-07-09). The FINDING that
+  reads "not yet landed" is at NEGATIVE_EVIDENCE.md:492 and is STALE — this file is newest-first,
+  so the three KEEP entries that supersede it sit ABOVE it (lines ~366-460). (2) "scalar-only
+  special ufuncs: add `_many` for itj0y0/iti0k0/expn/shichi/fresnel/sici/poch" is LANDED
+  2026-07-01 (ledger:15238, up to 29.5x scipy); all seven verified present at
+  `crates/fsci-special/src/convenience.rs:3508-3595`. NOTE: the FINDING's own "expected ~cores×"
+  was already met — zoom went from the FINDING's "EXACT PARITY 55.06ms vs scipy 54.93ms" to 4.9x
+  FASTER before this commit. A stale FINDING near the BOTTOM of a newest-first ledger reads as
+  open work; check for superseding KEEPs ABOVE it.
+- DUG ONE LAYER DOWN instead (same lane). `perf record` on the SEPARABLE path in isolation
+  (new `perf_zoom_sep sep 3` mode — the old probe ran BOTH arms, so `compute_axis_support` showed
+  60% purely from the A/B baseline) gave a clean ranked table for zoom order=3:
+  `sample_spline_recursive` **67.66%**, `zoom::{closure#3}` 9.19%, `unravel_with_shape` 6.10%,
+  allocator (cfree/calloc/malloc/memmove/memset) ~7.6%.
+- ROOT CAUSE: `sample_spline_recursive`'s leaf calls `coeffs.get(idx)` = `data[Σ idx[d]·stride[d]]`,
+  recomputing that stride dot at EVERY one of the `(order+1)^ndim` leaves (16 leaves for 2-D
+  order-3, 36 for order-5), and the per-pixel closure memcpy'd each axis support into a
+  thread-local `Vec` before combining.
+- FIX: taps are pre-multiplied by `coeffs.strides[axis]` ONCE in the precompute
+  (`build_axis_offset_supports`, which also de-duplicates the three copy-pasted separable blocks),
+  so the leaf is a single `data[base]` load (`sample_spline_offsets`, with a flattened 2-D arm that
+  keeps the inner accumulator in a register). The per-pixel support copies are gone — the combine
+  borrows the precomputed slices directly (`sample_separable_pixel`, stack-gathered for ndim<=8).
+- BYTE-IDENTICAL: same weights, same accumulation order (axis 0 outermost), only the leaf ADDRESS
+  is precomputed; axes beyond `bases.len()` contributed `idx[d]=0` before and contribute 0 to
+  `base` now. New test `spline_offset_leaf_matches_index_leaf_bitexact` (to_bits) over
+  zoom+shift+diag-affine × order 2..=5 × {Reflect,Mirror,Nearest,Constant,Wrap} × ndim 1/2/3.
+  fsci-ndimage **261/0**. clippy clean (0 warnings in ndimage lib), fmt clean, UBS exit 0 / 0 critical.
+- SAME-BINARY A/B `NDIMAGE_SPLINE_OFFSET_DISABLE` (ORIG keeps taps in index space + `coeffs.get`
+  leaf), 5x interleaved best-of, all **bitmism=0**. zoom 512²→2× (output 1024²):
+  order2 Reflect 8.84→6.68ms **1.32x** / Mirror **1.27x**; order3 Reflect 11.44→7.12ms **1.61x** /
+  Mirror **1.34x**; order4 Reflect **1.69x** / Mirror **1.49x**; order5 Reflect 18.65→10.15ms
+  **1.84x** / Mirror **1.64x** (cv 1.0-6.5%). shift 512²: order2 **1.12x**, order3 **1.16x**,
+  order5 **1.29x**. diag-affine 512²: order2 **1.18x**, order3 **1.18x**, order5 **1.30x**.
+  Gain grows with order — more leaves ⇒ more stride-dots eliminated (the predicted signature).
+  CONSERVATIVE: the ORIG arm also drops the per-pixel copies, so it flatters ORIG; the full lever
+  (copies + leaf) is larger than these ratios.
+- vs SciPy 1.17.1 (OMP_NUM_THREADS=1, fresh same-machine baseline, 512²→2× Reflect):
+  order2 6.68 vs 37.56ms **5.6x**; order3 7.18 vs 57.35ms **8.0x** (was ~5.2x before this commit);
+  order4 8.97 vs 86.74ms **9.7x**; order5 10.03 vs 126.05ms **12.6x**.
+- PROFILE MOVED (proof the lever hit the ranked target): `sample_spline_recursive` 67.66% →
+  `sample_spline_offsets` **25.10%**. New #1 is `unravel_with_shape` **11.57%** + allocator
+  (cfree 6.39% + calloc 4.37%) = **~22.3%** — that fn heap-allocates TWO `Vec`s per output pixel
+  (`compute_strides` + `idx`) and is called per-pixel by EVERY geometric transform. NEXT LEVER
+  (ranked, uncontested): per-chunk row-major odometer in `fill_pixels_parallel` (the same
+  unravel→odometer lever already proven 1.8-11.4x in this crate, `0605d16b7`).
+- MEASUREMENT GOTCHA (caught a wrong claim before it shipped): cross-session absolute timings on
+  this box are NOT comparable — the `perf_shift_sep` ORIG-serial baseline reproduced (126 vs 136ms)
+  but shift `order=1`, which does NOT use the separable path at all and CANNOT be touched by this
+  lever, read 8.93x vs the ledger's recorded 1.99x purely from machine load. Only same-binary
+  interleaved A/B with cv reported is trustworthy. Probes now print mean+cv and bitmism, and take
+  an `offs` mode that isolates this lever from the separable precompute.
+
 ## 2026-07-09 - BlackThrush (cc) - KEEP: ndimage `iterate_structure` (binary_dilation_with_structure_once) unravel→odometer + direct-flat write (2.6-2.83x self, BYTE-IDENTICAL)
 
 - Extends the unravel→odometer lever to the last ndimage sibling. `binary_dilation_with_structure_once`

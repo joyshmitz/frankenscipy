@@ -1225,7 +1225,13 @@ fn prefilter_spline_coefficients(
                     for chunk in current.data.chunks_mut(per * block) {
                         let chunk_outer = chunk.len() / block;
                         scope.spawn(move || {
-                            bspline_reflect_axis_inplace(chunk, chunk_outer, axis_len, stride, order);
+                            bspline_reflect_axis_inplace(
+                                chunk,
+                                chunk_outer,
+                                axis_len,
+                                stride,
+                                order,
+                            );
                         });
                     }
                 });
@@ -1306,6 +1312,171 @@ fn sample_spline_recursive(
     acc
 }
 
+/// Largest `ndim` whose per-axis support slices are gathered on the stack.
+/// Beyond this the gather falls back to a per-pixel `Vec` (never hit in practice:
+/// scipy's own geometric transforms cap out far below 8 dimensions).
+const MAX_STACK_NDIM: usize = 8;
+
+/// Tensor-product B-spline combine over per-axis `(flat offset, weight)` supports.
+///
+/// BYTE-IDENTICAL to `sample_spline_recursive`: same weights, same accumulation order
+/// (axis 0 outermost → axis n-1 innermost). The only change is the leaf ADDRESS, which is
+/// precomputed. `sample_spline_recursive`'s leaf calls `coeffs.get(idx)` = `data[Σ idx[d]·stride[d]]`,
+/// recomputing that stride dot at every one of the `(order+1)^ndim` leaves; here each tap already
+/// carries `idx[d]·stride[d]`, so the leaf is a single `data[base]` load. Axes beyond `bases.len()`
+/// keep `idx[d] = 0` in the recursive version and contribute 0 to `base` here — identical.
+fn sample_spline_offsets(data: &[f64], bases: &[&[(usize, f64)]], base: usize) -> f64 {
+    match bases {
+        [] => data[base],
+        [b0] => {
+            let mut acc = 0.0;
+            for &(o0, w0) in *b0 {
+                acc += w0 * data[base + o0];
+            }
+            acc
+        }
+        // The 2-D arm is the hot one (zoom/shift/affine on images): flattening the recursion
+        // lets LLVM keep the inner accumulator in a register across the (order+1) taps.
+        [b0, b1] => {
+            let mut acc = 0.0;
+            for &(o0, w0) in *b0 {
+                let row = base + o0;
+                let mut inner = 0.0;
+                for &(o1, w1) in *b1 {
+                    inner += w1 * data[row + o1];
+                }
+                acc += w0 * inner;
+            }
+            acc
+        }
+        [b0, rest @ ..] => {
+            let mut acc = 0.0;
+            for &(o0, w0) in *b0 {
+                acc += w0 * sample_spline_offsets(data, rest, base + o0);
+            }
+            acc
+        }
+    }
+}
+
+/// Per-axis B-spline supports for a SEPARABLE transform, as `(flat offset, weight)` taps.
+///
+/// A separable transform (zoom, shift, diagonal affine) maps each output axis-index to an input
+/// coordinate that depends ONLY on that axis, so the support along axis `a` takes just
+/// `out_shape[a]` distinct values. `coord_of(axis, o)` supplies that coordinate. Taps are stored
+/// pre-multiplied by `coeffs.strides[axis]` so the per-pixel combine indexes `coeffs.data`
+/// directly (see `sample_spline_offsets`). `None` marks an output position that maps out of
+/// range along that axis (⇒ the pixel is `cval`).
+fn build_axis_offset_supports(
+    coeffs: &NdArray,
+    in_shape: &[usize],
+    out_shape: &[usize],
+    coord_offsets: &[f64],
+    order: usize,
+    mode: BoundaryMode,
+    coord_of: impl Fn(usize, usize) -> f64,
+) -> Vec<Vec<Option<Vec<(usize, f64)>>>> {
+    // ORIG comparator keeps taps in index space (see `NDIMAGE_SPLINE_OFFSET_DISABLE`).
+    let premultiply = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    (0..out_shape.len())
+        .map(|axis| {
+            let stride = coeffs.strides[axis];
+            (0..out_shape[axis])
+                .map(|o| {
+                    let mut s = Vec::new();
+                    if compute_axis_support(
+                        coord_of(axis, o),
+                        coeffs.shape[axis],
+                        in_shape[axis],
+                        coord_offsets[axis],
+                        order,
+                        mode,
+                        &mut s,
+                    ) {
+                        if premultiply {
+                            for tap in &mut s {
+                                tap.0 *= stride;
+                            }
+                        }
+                        Some(s)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// ORIG comparator for `sample_spline_offsets`: taps are INDICES and every leaf recomputes the
+/// stride dot via `coeffs.get`. Identical arithmetic to `sample_spline_recursive`, but taking
+/// borrowed slices so both A/B arms can share one support table.
+fn sample_spline_indices(
+    coeffs: &NdArray,
+    bases: &[&[(usize, f64)]],
+    dim: usize,
+    idx: &mut [usize],
+) -> f64 {
+    if dim == bases.len() {
+        return coeffs.get(idx);
+    }
+    let mut acc = 0.0;
+    for &(coord_idx, weight) in bases[dim] {
+        idx[dim] = coord_idx;
+        acc += weight * sample_spline_indices(coeffs, bases, dim + 1, idx);
+    }
+    acc
+}
+
+/// Gather one output pixel's per-axis supports and run the tensor-product combine.
+/// Returns `cval` when any axis maps out of range. `offsets` selects the fast flat-offset leaf
+/// (default) or the ORIG index-space leaf; hoist the flag read out of the pixel loop.
+#[inline]
+fn sample_separable_pixel(
+    coeffs: &NdArray,
+    axis_supports: &[Vec<Option<Vec<(usize, f64)>>>],
+    oidx: &[usize],
+    cval: f64,
+    offsets: bool,
+) -> f64 {
+    let ndim = oidx.len();
+    if ndim <= MAX_STACK_NDIM {
+        let mut bases: [&[(usize, f64)]; MAX_STACK_NDIM] = [&[]; MAX_STACK_NDIM];
+        for (axis, slot) in bases[..ndim].iter_mut().enumerate() {
+            match &axis_supports[axis][oidx[axis]] {
+                None => return cval,
+                Some(s) => *slot = s.as_slice(),
+            }
+        }
+        sample_separable_combine(coeffs, &bases[..ndim], offsets)
+    } else {
+        let mut bases: Vec<&[(usize, f64)]> = Vec::with_capacity(ndim);
+        for axis in 0..ndim {
+            match &axis_supports[axis][oidx[axis]] {
+                None => return cval,
+                Some(s) => bases.push(s.as_slice()),
+            }
+        }
+        sample_separable_combine(coeffs, &bases, offsets)
+    }
+}
+
+#[inline]
+fn sample_separable_combine(coeffs: &NdArray, bases: &[&[(usize, f64)]], offsets: bool) -> f64 {
+    if offsets {
+        return sample_spline_offsets(&coeffs.data, bases, 0);
+    }
+    // ORIG: rebuild the per-pixel index buffer, recompute the stride dot at every leaf.
+    thread_local! {
+        static ORIG_IDX: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    ORIG_IDX.with_borrow_mut(|idx| {
+        idx.clear();
+        idx.resize(coeffs.ndim(), 0);
+        sample_spline_indices(coeffs, bases, 0, idx.as_mut_slice())
+    })
+}
+
 /// Per-axis B-spline support (index/weight taps) for one interpolation coordinate.
 /// Extracted verbatim from `sample_interpolated`'s per-axis loop so the general
 /// per-pixel path and the separable zoom path share EXACTLY the same weights.
@@ -1325,9 +1496,7 @@ fn compute_axis_support(
     };
     let spline_coord = if coord_offset > 0.0 {
         match mode {
-            BoundaryMode::Nearest => {
-                (coord + coord_offset).clamp(0.0, (coeff_len - 1) as f64)
-            }
+            BoundaryMode::Nearest => (coord + coord_offset).clamp(0.0, (coeff_len - 1) as f64),
             BoundaryMode::Wrap => {
                 let mut wrapped = coord + coord_offset;
                 let period = input_shape_axis as f64;
@@ -1530,6 +1699,7 @@ fn sample_interpolated(
                 return cval;
             }
         }
+
         idx.clear();
         idx.resize(coeffs.ndim(), 0);
         sample_spline_recursive(coeffs, &bases[..n], 0, idx.as_mut_slice())
@@ -6514,8 +6684,7 @@ fn measurement_label_mean(
     match index {
         Some(index) => {
             if let Some(label_count) = measurement_one_based_contiguous_index_len(index) {
-                let (s, c) =
-                    measurement_one_based_scatter(&input.data, &labels.data, label_count);
+                let (s, c) = measurement_one_based_scatter(&input.data, &labels.data, label_count);
                 sums = s;
                 counts = c;
             } else if let Some(label_to_pos) = measurement_dense_label_positions(index) {
@@ -8158,29 +8327,30 @@ fn edt_2d_felzenszwalb_with_indices(
             let cols_per = cols.div_ceil(nthreads);
             {
                 let f_ref = &f;
-                let do_cols =
-                    |col_start: usize, fcm_slab: &mut [f64], featcm_slab: &mut [usize]| {
-                        let ncols_local = fcm_slab.len() / rows;
-                        let mut line = vec![0.0f64; rows];
-                        let mut d = vec![0.0f64; rows];
-                        let mut v = vec![0usize; rows];
-                        let mut z = vec![0.0f64; rows + 1];
-                        let mut w = vec![0usize; rows];
-                        for lc in 0..ncols_local {
-                            let col = col_start + lc;
-                            for t in 0..rows {
-                                line[t] = f_ref[col + t * cols];
-                            }
-                            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, Some(&mut w));
-                            let off = lc * rows;
-                            for t in 0..rows {
-                                fcm_slab[off + t] = d[t];
-                                if d[t].is_finite() {
-                                    featcm_slab[off + t] = w[t];
-                                }
+                let do_cols = |col_start: usize,
+                               fcm_slab: &mut [f64],
+                               featcm_slab: &mut [usize]| {
+                    let ncols_local = fcm_slab.len() / rows;
+                    let mut line = vec![0.0f64; rows];
+                    let mut d = vec![0.0f64; rows];
+                    let mut v = vec![0usize; rows];
+                    let mut z = vec![0.0f64; rows + 1];
+                    let mut w = vec![0usize; rows];
+                    for lc in 0..ncols_local {
+                        let col = col_start + lc;
+                        for t in 0..rows {
+                            line[t] = f_ref[col + t * cols];
+                        }
+                        edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, Some(&mut w));
+                        let off = lc * rows;
+                        for t in 0..rows {
+                            fcm_slab[off + t] = d[t];
+                            if d[t].is_finite() {
+                                featcm_slab[off + t] = w[t];
                             }
                         }
-                    };
+                    }
+                };
                 let do_cols = &do_cols;
                 std::thread::scope(|scope| {
                     for ((fc, ftc), tt) in fcm
@@ -8473,54 +8643,20 @@ pub fn shift(
     if !NDIMAGE_ZOOM_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
         if order >= 2 {
             let coeffs = &spline.coeffs;
-            let coord_offsets = &spline.coord_offsets;
-            let axis_supports: Vec<Vec<Option<Vec<(usize, f64)>>>> = (0..ndim)
-                .map(|axis| {
-                    (0..out_shape[axis])
-                        .map(|o| {
-                            let coord = o as f64 - shift_values[axis];
-                            let mut s = Vec::new();
-                            if compute_axis_support(
-                                coord,
-                                coeffs.shape[axis],
-                                in_shape[axis],
-                                coord_offsets[axis],
-                                order,
-                                mode,
-                                &mut s,
-                            ) {
-                                Some(s)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                })
-                .collect();
+            let axis_supports = build_axis_offset_supports(
+                coeffs,
+                &in_shape,
+                &out_shape,
+                &spline.coord_offsets,
+                order,
+                mode,
+                |axis, o| o as f64 - shift_values[axis],
+            );
             let axis_supports = &axis_supports;
+            let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
             fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
-                thread_local! {
-                    static ZB: std::cell::RefCell<(Vec<Vec<(usize, f64)>>, Vec<usize>)> =
-                        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
-                }
                 let oidx = unravel_with_shape(flat, &out_shape);
-                ZB.with_borrow_mut(|(bases, idx)| -> f64 {
-                    if bases.len() < ndim {
-                        bases.resize_with(ndim, Vec::new);
-                    }
-                    for axis in 0..ndim {
-                        match &axis_supports[axis][oidx[axis]] {
-                            None => return cval,
-                            Some(s) => {
-                                bases[axis].clear();
-                                bases[axis].extend_from_slice(s);
-                            }
-                        }
-                    }
-                    idx.clear();
-                    idx.resize(coeffs.ndim(), 0);
-                    sample_spline_recursive(coeffs, &bases[..ndim], 0, idx.as_mut_slice())
-                })
+                sample_separable_pixel(coeffs, axis_supports, &oidx, cval, offsets)
             });
         } else {
             fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
@@ -8570,6 +8706,13 @@ pub fn shift(
 /// output pixel (via `sample_interpolated`); when `false` (default) it precomputes the support
 /// once per output axis-index (separable) — byte-identical, but skips the per-pixel recompute.
 pub static NDIMAGE_ZOOM_SEPARABLE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Same-binary A/B toggle for the separable paths' tensor-product combine: when `true`, taps stay
+/// in INDEX space and every leaf recomputes `Σ idx[d]·stride[d]` via `coeffs.get` (plus the old
+/// per-pixel support copies) — the ORIG comparator. When `false` (default) taps are pre-multiplied
+/// into FLAT OFFSETS and the leaf is a single load. Byte-identical either way.
+pub static NDIMAGE_SPLINE_OFFSET_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Zoom (rescale) an array by the given factors.
@@ -8629,63 +8772,31 @@ pub fn zoom(
     // that axis. Precompute the O(Σ out_shape[a]) supports ONCE (via the same
     // `compute_axis_support` the per-pixel path uses) instead of recomputing them for all
     // out_shape.product() pixels; each pixel is then a gather + `sample_spline_recursive`.
-    // Byte-identical (same weights, same combine order). Gated `order >= 2`: order-1 Reflect is
-    // already the ultra-fast cardinal linear path where the precompute doesn't pay (0.77x),
+    // Byte-identical (same weights, same combine order). Gated `order >= 2`: order-1 Reflect
+    // is already the ultra-fast cardinal linear path where the precompute doesn't pay (0.77x),
     // while orders 2-5 win 2.0-3.7x (more support taps ⇒ more per-pixel recompute avoided).
     if order >= 2 && !NDIMAGE_ZOOM_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
         let coeffs = &spline.coeffs;
-        let coord_offsets = &spline.coord_offsets;
-        let axis_supports: Vec<Vec<Option<Vec<(usize, f64)>>>> = (0..ndim)
-            .map(|axis| {
-                (0..out_shape[axis])
-                    .map(|o| {
-                        let coord = if out_shape[axis] <= 1 || in_shape[axis] <= 1 {
-                            0.0
-                        } else {
-                            o as f64 * (in_shape[axis] - 1) as f64 / (out_shape[axis] - 1) as f64
-                        };
-                        let mut s = Vec::new();
-                        if compute_axis_support(
-                            coord,
-                            coeffs.shape[axis],
-                            in_shape[axis],
-                            coord_offsets[axis],
-                            order,
-                            mode,
-                            &mut s,
-                        ) {
-                            Some(s)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
+        let axis_supports = build_axis_offset_supports(
+            coeffs,
+            &in_shape,
+            &out_shape,
+            &spline.coord_offsets,
+            order,
+            mode,
+            |axis, o| {
+                if out_shape[axis] <= 1 || in_shape[axis] <= 1 {
+                    0.0
+                } else {
+                    o as f64 * (in_shape[axis] - 1) as f64 / (out_shape[axis] - 1) as f64
+                }
+            },
+        );
         let axis_supports = &axis_supports;
+        let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
         fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
-            thread_local! {
-                static ZB: std::cell::RefCell<(Vec<Vec<(usize, f64)>>, Vec<usize>)> =
-                    const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
-            }
             let oidx = unravel_with_shape(flat, &out_shape);
-            ZB.with_borrow_mut(|(bases, idx)| -> f64 {
-                if bases.len() < ndim {
-                    bases.resize_with(ndim, Vec::new);
-                }
-                for axis in 0..ndim {
-                    match &axis_supports[axis][oidx[axis]] {
-                        None => return cval,
-                        Some(s) => {
-                            bases[axis].clear();
-                            bases[axis].extend_from_slice(s);
-                        }
-                    }
-                }
-                idx.clear();
-                idx.resize(coeffs.ndim(), 0);
-                sample_spline_recursive(coeffs, &bases[..ndim], 0, idx.as_mut_slice())
-            })
+            sample_separable_pixel(coeffs, axis_supports, &oidx, cval, offsets)
         });
         return Ok(output);
     }
@@ -9984,58 +10095,21 @@ pub fn affine_transform(
     {
         let out_shape = output.shape.clone();
         let in_shape = input.shape.clone();
-        let ndim = out_shape.len();
         let coeffs = &spline.coeffs;
-        let coord_offsets = &spline.coord_offsets;
-        let axis_supports: Vec<Vec<Option<Vec<(usize, f64)>>>> = (0..ndim)
-            .map(|axis| {
-                let coef = matrix[axis][axis];
-                let off = matrix[axis][2];
-                (0..out_shape[axis])
-                    .map(|o| {
-                        let coord = coef * o as f64 + off;
-                        let mut s = Vec::new();
-                        if compute_axis_support(
-                            coord,
-                            coeffs.shape[axis],
-                            in_shape[axis],
-                            coord_offsets[axis],
-                            order,
-                            mode,
-                            &mut s,
-                        ) {
-                            Some(s)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
+        let axis_supports = build_axis_offset_supports(
+            coeffs,
+            &in_shape,
+            &out_shape,
+            &spline.coord_offsets,
+            order,
+            mode,
+            |axis, o| matrix[axis][axis] * o as f64 + matrix[axis][2],
+        );
         let axis_supports = &axis_supports;
+        let offsets = !NDIMAGE_SPLINE_OFFSET_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
         fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
-            thread_local! {
-                static ZB: std::cell::RefCell<(Vec<Vec<(usize, f64)>>, Vec<usize>)> =
-                    const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
-            }
             let oidx = unravel_with_shape(flat, &out_shape);
-            ZB.with_borrow_mut(|(bases, idx)| -> f64 {
-                if bases.len() < ndim {
-                    bases.resize_with(ndim, Vec::new);
-                }
-                for axis in 0..ndim {
-                    match &axis_supports[axis][oidx[axis]] {
-                        None => return cval,
-                        Some(s) => {
-                            bases[axis].clear();
-                            bases[axis].extend_from_slice(s);
-                        }
-                    }
-                }
-                idx.clear();
-                idx.resize(coeffs.ndim(), 0);
-                sample_spline_recursive(coeffs, &bases[..ndim], 0, idx.as_mut_slice())
-            })
+            sample_separable_pixel(coeffs, axis_supports, &oidx, cval, offsets)
         });
         return Ok(output);
     }
@@ -10726,8 +10800,7 @@ pub fn fourier_gaussian(input: &[Complex64], shape: &[usize], sigma: &[f64]) -> 
     // (`total·ndim` exps); precomputing the `ndim` 1-D factor tables costs only `Σ shape[d]` exps
     // (~`total/ndim`× fewer). BYTE-IDENTICAL: each `g_d[i]` is the identical expression and the
     // per-element product runs in the SAME reverse-axis order, so `filter_val` matches bit-for-bit.
-    let full_mode =
-        NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let full_mode = NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
     let factors: Vec<Vec<f64>> = if full_mode {
         Vec::new()
     } else {
@@ -10801,8 +10874,7 @@ pub fn fourier_uniform(input: &[Complex64], shape: &[usize], size: &[f64]) -> Ve
     // freq≈0). Precompute the `ndim` 1-D tables (`Σ shape[d]` sines) instead of a `sin` at every
     // `total·ndim`. BYTE-IDENTICAL: the freq≈0 factor is exactly `1.0`, so `filter_val *= 1.0`
     // reproduces the old `continue` (no-op), and the retained sines run in the same reverse order.
-    let full_mode =
-        NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let full_mode = NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
     let factors: Vec<Vec<f64>> = if full_mode {
         Vec::new()
     } else {
@@ -10885,8 +10957,7 @@ pub fn fourier_shift(input: &[Complex64], shape: &[usize], shift: &[f64]) -> Vec
     // `2π·freq_d(i)·shift_d` (a `freq` branch+divide + two mults) depends ONLY on the axis index, so
     // precompute the `ndim` 1-D tables once and reduce the inner loop to a subtraction. BYTE-IDENTICAL:
     // each `pc[d][i]` is the identical expression and the sum runs in the SAME reverse-axis order.
-    let full_mode =
-        NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let full_mode = NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
     let pc: Vec<Vec<f64>> = if full_mode {
         Vec::new()
     } else {
@@ -10960,8 +11031,7 @@ pub fn fourier_ellipsoid(input: &[Complex64], shape: &[usize], size: &[f64]) -> 
     // stays per element — but each per-axis squared term `(freq_d(i)·size_d)²` (a `freq` branch+divide
     // + two mults) depends ONLY on the axis index, so precompute the `ndim` 1-D tables and reduce the
     // inner loop to an add. BYTE-IDENTICAL: same expression, same reverse-axis accumulation order.
-    let full_mode =
-        NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
+    let full_mode = NDIMAGE_FOURIER_SEPARABLE_DISABLE.load(std::sync::atomic::Ordering::Relaxed);
     let sq: Vec<Vec<f64>> = if full_mode {
         Vec::new()
     } else {
@@ -11315,12 +11385,12 @@ pub fn spline_filter1d(
             // solving a full interpolation system via `make_interp_spline` (O(n) banded build
             // per line — ~17x slower for a single long line). Nearest mode and axes too short
             // for the order's stencil keep the general path.
-            let coeffs = if mode == BoundaryMode::Reflect && (2..=5).contains(&order) && axis_len > order
-            {
-                bspline_reflect_coefficients(&line, order)
-            } else {
-                spline_coefficients_for_line(&line, order)?
-            };
+            let coeffs =
+                if mode == BoundaryMode::Reflect && (2..=5).contains(&order) && axis_len > order {
+                    bspline_reflect_coefficients(&line, order)
+                } else {
+                    spline_coefficients_for_line(&line, order)?
+                };
 
             for (i, &c) in coeffs.iter().enumerate() {
                 let flat = outer_idx * axis_len * stride + i * stride + inner_idx;
@@ -11794,7 +11864,10 @@ mod tests {
             }
             checked += 1;
         }
-        assert!(checked > 19_000, "expected near-full coverage, got {checked}");
+        assert!(
+            checked > 19_000,
+            "expected near-full coverage, got {checked}"
+        );
     }
 
     /// Order-1 reflect/mirror no longer eagerly pads the array (it folds the support taps on the
@@ -11807,16 +11880,48 @@ mod tests {
         let mat = [[0.7, 0.2, -1.5], [-0.1, 0.9, 2.0]]; // 2x3: linear part + offset column (row, col)
         // scipy.ndimage.affine_transform(img, [[0.7,0.2],[-0.1,0.9]], offset=[-1.5,2.0], order=1)
         let reflect_golden = [
-            5.5, 5.3999999999999995, 5.3000000000000007, 5.0, 4.4000000000000004,
-            2.9000000000000004, 3.7999999999999998, 4.7000000000000002, 5.0, 4.5,
-            2.7999999999999998, 4.1999999999999993, 6.0999999999999996, 7.5, 8.0999999999999996,
-            5.6999999999999975, 7.5999999999999979, 9.4999999999999982, 11.0, 11.699999999999999,
+            5.5,
+            5.3999999999999995,
+            5.3000000000000007,
+            5.0,
+            4.4000000000000004,
+            2.9000000000000004,
+            3.7999999999999998,
+            4.7000000000000002,
+            5.0,
+            4.5,
+            2.7999999999999998,
+            4.1999999999999993,
+            6.0999999999999996,
+            7.5,
+            8.0999999999999996,
+            5.6999999999999975,
+            7.5999999999999979,
+            9.4999999999999982,
+            11.0,
+            11.699999999999999,
         ];
         let mirror_golden = [
-            10.5, 10.4, 10.300000000000002, 8.8000000000000007, 6.9000000000000004,
-            6.9000000000000004, 6.7999999999999998, 6.7000000000000002, 5.4000000000000004, 3.5,
-            3.3000000000000003, 4.1999999999999993, 6.0999999999999996, 7.0, 7.0999999999999996,
-            5.6999999999999975, 7.5999999999999979, 9.4999999999999982, 10.6, 10.699999999999999,
+            10.5,
+            10.4,
+            10.300000000000002,
+            8.8000000000000007,
+            6.9000000000000004,
+            6.9000000000000004,
+            6.7999999999999998,
+            6.7000000000000002,
+            5.4000000000000004,
+            3.5,
+            3.3000000000000003,
+            4.1999999999999993,
+            6.0999999999999996,
+            7.0,
+            7.0999999999999996,
+            5.6999999999999975,
+            7.5999999999999979,
+            9.4999999999999982,
+            10.6,
+            10.699999999999999,
         ];
         for (mode, golden) in [
             (BoundaryMode::Reflect, &reflect_golden),
@@ -15098,8 +15203,16 @@ mod tests {
         for (&v, &lv) in vals.iter().zip(&labels) {
             let p = (lv as usize) - 1;
             cnt[p] += 1;
-            rmin[p] = if rmin[p].is_nan() || v.is_nan() { f64::NAN } else { rmin[p].min(v) };
-            rmax[p] = if rmax[p].is_nan() || v.is_nan() { f64::NAN } else { rmax[p].max(v) };
+            rmin[p] = if rmin[p].is_nan() || v.is_nan() {
+                f64::NAN
+            } else {
+                rmin[p].min(v)
+            };
+            rmax[p] = if rmax[p].is_nan() || v.is_nan() {
+                f64::NAN
+            } else {
+                rmax[p].max(v)
+            };
         }
         for i in 0..k {
             let want_min = if cnt[i] == 0 { 0.0 } else { rmin[i] };
@@ -15157,8 +15270,14 @@ mod tests {
         let data = NdArray::new(vec![3.0, 7.0, 2.0, 9.0], vec![4]).unwrap();
         let labels = NdArray::new(vec![1.0, 1.0, 3.0, 3.0], vec![4]).unwrap();
         let index = [1, 2, 3]; // label 2 is empty
-        assert_eq!(minimum(&data, Some(&labels), Some(&index)).unwrap(), vec![3.0, 0.0, 2.0]);
-        assert_eq!(maximum(&data, Some(&labels), Some(&index)).unwrap(), vec![7.0, 0.0, 9.0]);
+        assert_eq!(
+            minimum(&data, Some(&labels), Some(&index)).unwrap(),
+            vec![3.0, 0.0, 2.0]
+        );
+        assert_eq!(
+            maximum(&data, Some(&labels), Some(&index)).unwrap(),
+            vec![7.0, 0.0, 9.0]
+        );
     }
 
     #[test]
@@ -18698,8 +18817,16 @@ mod tests {
                     fourier_uniform(&input, shape, params)
                 };
                 for (a, b) in full.iter().zip(sep.iter()) {
-                    assert_eq!(a.0.to_bits(), b.0.to_bits(), "re {shape:?} gaussian={gaussian}");
-                    assert_eq!(a.1.to_bits(), b.1.to_bits(), "im {shape:?} gaussian={gaussian}");
+                    assert_eq!(
+                        a.0.to_bits(),
+                        b.0.to_bits(),
+                        "re {shape:?} gaussian={gaussian}"
+                    );
+                    assert_eq!(
+                        a.1.to_bits(),
+                        b.1.to_bits(),
+                        "im {shape:?} gaussian={gaussian}"
+                    );
                 }
             }
         }
@@ -18776,6 +18903,88 @@ mod tests {
     }
 
     #[test]
+    fn spline_offset_leaf_matches_index_leaf_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The flat-offset tensor combine must be BYTE-IDENTICAL to the ORIG index-space leaf
+        // (which recomputes Σ idx[d]·stride[d] per leaf) for every separable transform, across
+        // orders 2..=5, all boundary modes, and ndim 1/2/3. Both arms are byte-identical by
+        // construction, so a concurrent test observing either toggle state still sees the
+        // same values — no lock needed.
+        let modes = [
+            BoundaryMode::Reflect,
+            BoundaryMode::Mirror,
+            BoundaryMode::Nearest,
+            BoundaryMode::Constant,
+            BoundaryMode::Wrap,
+        ];
+        // Mirror requires every axis length > spline order, so keep min(shape) > 5.
+        let shapes: &[Vec<usize>] = &[vec![17], vec![9, 11], vec![7, 6, 8]];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let data: Vec<f64> = (0..total)
+                .map(|k| (k as f64 * 0.41).cos() * 3.0 + 1.7)
+                .collect();
+            let arr = NdArray::new(data, shape.clone()).unwrap();
+            let zooms: Vec<f64> = shape.iter().map(|_| 1.7).collect();
+            let shifts: Vec<f64> = shape
+                .iter()
+                .enumerate()
+                .map(|(d, _)| 0.3 + d as f64)
+                .collect();
+            for order in 2..=5usize {
+                for &mode in &modes {
+                    let variants = |orig: bool| {
+                        NDIMAGE_SPLINE_OFFSET_DISABLE.store(orig, Ordering::Relaxed);
+                        let z = zoom(&arr, &zooms, order, mode, -2.5).unwrap();
+                        let s = shift(&arr, &shifts, order, mode, -2.5).unwrap();
+                        (z, s)
+                    };
+                    let (z_o, s_o) = variants(true);
+                    let (z_c, s_c) = variants(false);
+                    NDIMAGE_SPLINE_OFFSET_DISABLE.store(false, Ordering::Relaxed);
+                    for (a, b) in z_o.data.iter().zip(z_c.data.iter()) {
+                        assert_eq!(
+                            a.to_bits(),
+                            b.to_bits(),
+                            "zoom {shape:?} order={order} {mode:?}"
+                        );
+                    }
+                    for (a, b) in s_o.data.iter().zip(s_c.data.iter()) {
+                        assert_eq!(
+                            a.to_bits(),
+                            b.to_bits(),
+                            "shift {shape:?} order={order} {mode:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // Diagonal affine (the separable affine branch) is 2-D only.
+        let arr = NdArray::new(
+            (0..12 * 10)
+                .map(|k| (k as f64 * 0.23).sin() + 2.0)
+                .collect(),
+            vec![12, 10],
+        )
+        .unwrap();
+        let diag = [[0.7, 0.0, 1.3], [0.0, 1.4, -0.6]];
+        for order in 2..=5usize {
+            for &mode in &modes {
+                let variants = |orig: bool| {
+                    NDIMAGE_SPLINE_OFFSET_DISABLE.store(orig, Ordering::Relaxed);
+                    affine_transform(&arr, &diag, order, mode, -2.5).unwrap()
+                };
+                let a_o = variants(true);
+                let a_c = variants(false);
+                NDIMAGE_SPLINE_OFFSET_DISABLE.store(false, Ordering::Relaxed);
+                for (a, b) in a_o.data.iter().zip(a_c.data.iter()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "affine order={order} {mode:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn binary_dilation_odometer_matches_full_bitexact() {
         use std::sync::atomic::Ordering;
         // binary_dilation's odometer + direct-flat write must be BYTE-IDENTICAL to the
@@ -18784,7 +18993,9 @@ mod tests {
         for shape in shapes {
             let total: usize = shape.iter().product();
             // Sparse-ish binary foreground.
-            let data: Vec<f64> = (0..total).map(|k| ((k * 7 + 3) % 5 == 0) as u8 as f64).collect();
+            let data: Vec<f64> = (0..total)
+                .map(|k| ((k * 7 + 3) % 5 == 0) as u8 as f64)
+                .collect();
             let arr = NdArray::new(data, shape.clone()).unwrap();
             for iters in [1usize, 2] {
                 NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(true, Ordering::Relaxed);
@@ -18792,7 +19003,11 @@ mod tests {
                 NDIMAGE_UNRAVEL_ODOMETER_DISABLE.store(false, Ordering::Relaxed);
                 let odo = binary_dilation(&arr, 3, iters).unwrap();
                 for (a, b) in full.data.iter().zip(odo.data.iter()) {
-                    assert_eq!(a.to_bits(), b.to_bits(), "binary_dilation {shape:?} iters={iters}");
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "binary_dilation {shape:?} iters={iters}"
+                    );
                 }
             }
         }
