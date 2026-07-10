@@ -8653,3 +8653,22 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   Apparent mean 1.011638x / paired 1.019996x, but paired `cv_pct=11.564%`.
 - **INVALID**, neither win nor reject. Retry on a stable strict-remote reservation or with more work per paired sample
   until paired CV <5%; the current apparent signal cannot move the ratchet.
+
+## 2026-07-10 - cod_fsc - REJECT fused panel-TRSM dual-pack write-through (0.9943x paired)
+
+- Valid unchanged-source retry on strict-remote worker `vmi1264463`. Binary SHA-256
+  `0163f948a0c606ad94d710fe604fc1ebb9e6f3cd86b79c356ee0723ed7eff82a` (58,297,088 bytes); perf SHA-256
+  `cc53c62347e1fddee83a5549c0685e06fe29f4cdeda0828bcd85a73fa65e8e0f` (2,103,384 bytes), 14,523 samples /
+  zero lost. Candidate fused producer self-time **29.42%** primary / **30.16%** summed duplicate symbol rows.
+- All candidate frames >=0.1%: tile 41.99+1.29%, fused producer 29.42+0.74%, driver 5.81+0.12%, tail 1.65%, then
+  1.64/0.93/0.69/0.67/0.62/0.57/0.53/0.51/0.40/0.39/0.39/0.37/0.36/0.36/0.33/0.32/0.31/0.31/0.30/
+  0.28/0.24/0.16/0.15/0.15/0.13/0.12/0.12/0.11/0.11/0.11/0.11/0.11/0.11/0.10%.
+- Exact bits passed n=130/131/270/271/1000; digest `0x1cc5a3cf60fda65c`. One binary, 20x64 individually
+  alternating pairs, black-boxed inputs/results: ORIG 40.894626 ms (raw CV 14.596%, p50 39.562444, p95/p99
+  44.768917); CAND 41.248357 ms (raw CV 16.898%, p50 39.451776, p95/p99 46.138934). Mean ratio 0.991424x;
+  paired mean **0.994290x**, paired **`cv_pct=3.184%`**. Criterion pair [72.041, 74.621, 78.392] ms.
+- Artifact retrieval non-empty: project/worker-target 2,395/572 bytes; estimates/benchmark/sample/tukey JSON
+  969/358/206/73 bytes.
+- **REJECT; code removed.** Write-through store pressure in the latency-sensitive TRSM producer outweighs the removed
+  warm reread. Retry only with a representation that eliminates a destination buffer/store, or if copy+pack later
+  profiles above 5% self. Safe Rust only; no external BLAS/LAPACK/MKL/XLA.

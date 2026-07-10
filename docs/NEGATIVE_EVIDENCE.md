@@ -19338,3 +19338,37 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   failed closed at the CV assertion; RCH itself remained strict-remote. Retry condition: a new one-binary interleaved
   run on a stable remote reservation, or more paired work per sample, until paired CV is below 5%. No performance
   conclusion is allowed from the apparent 1-2% signal.
+
+## 2026-07-10 - cod_fsc (cod) - REJECT fused panel-TRSM dual-pack write-through (0.9943x paired)
+
+- This is the valid retry of the immediately preceding high-CV attempt, with identical source and sampler on a stable
+  strict-remote reservation. Ledger boundaries and SciPy routing are unchanged: dgemm 43.15% > dtrsm 20.00% >> direct
+  dsyrk 0.14%; the cc-owned MR4xNR4 tile was not changed.
+- One lever: write every exact MR2 panel-TRSM result directly to the output factor, row-major `L21`, and packed `L21T`,
+  eliminating the later 2.95%-self reread/dual-pack helper. Dot operations, subtraction, division, `j` order, NB,
+  thread partition, SYRK arithmetic, and output layout remained unchanged.
+- Provenance: worker **`vmi1264463`**; scored binary SHA-256
+  **`0163f948a0c606ad94d710fe604fc1ebb9e6f3cd86b79c356ee0723ed7eff82a`** (58,297,088 bytes); candidate perf
+  SHA-256 **`cc53c62347e1fddee83a5549c0685e06fe29f4cdeda0828bcd85a73fa65e8e0f`** (2,103,384 bytes), 14,523 cycles
+  samples / zero lost. Candidate-specific `cholesky_panel_trsm_rows2_and_pack` is **29.42% self-time** in the primary
+  row (**30.16%** summed with its second 0.74% symbol row), so the rejected code is definitively live.
+- Every candidate profile frame >=0.1%: MR4xNR4 SYRK 41.99% + 1.29%, fused producer 29.42% + 0.74%, candidate
+  driver 5.81% + 0.12%, exact tail 1.65%, unresolved 1.64/0.93/0.69/0.67/0.62%, `pthread_create` 0.57%, unresolved
+  0.53%, scope 0.51%, unresolved 0.40/0.39/0.39/0.37/0.36/0.36%, TLS 0.33%, `cfree` 0.32%, unresolved/ctype
+  0.31/0.31%, unresolved 0.30/0.28%, pagesize 0.24%, unresolved 0.16/0.15/0.15/0.13%, thread-new 0.12%, unresolved
+  0.12%, spawn hooks 0.11%, original-path thread shim 0.11%, unresolved/Arc drop/mutex lock/unlock 0.11% each, and
+  unresolved 0.10%.
+- FP-bit identity passed at n=130/131/270/271 and the full scored n=1000 factor; digest
+  `0x1cc5a3cf60fda65c`. One binary / one invocation, 20 samples x 64 individually timed alternating factor pairs,
+  black-boxed input and whole output:
+  - ORIG mean 40.894626 ms, raw CV 14.596%, p50 39.562444, p95/p99 44.768917.
+  - CAND mean 41.248357 ms, raw CV 16.898%, p50 39.451776, p95/p99 46.138934.
+  - Mean ratio **0.991424x**; paired-ratio mean **0.994290x** with paired **`cv_pct=3.184%`**. The paired Criterion
+    routine measured [72.041, 74.621, 78.392] ms.
+- Artifact retrieval was non-empty: project artifacts 2,395 bytes, worker-target artifacts 572 bytes; returned
+  Criterion estimates/benchmark/sample/tukey JSON were 969/358/206/73 bytes.
+- Decision: **REJECT and remove code**. Moving the two pack stores into the dependency-sensitive TRSM producer costs
+  more than the later warm reread it removes; the valid paired result is a 0.57% loss. Retry only if a structurally
+  different representation eliminates one destination buffer/store entirely, or a future profile puts the separate
+  copy+pack pass above 5% self. The source and benchmark feature are fully removed; safe Rust only, no external
+  BLAS/LAPACK/MKL/XLA.
