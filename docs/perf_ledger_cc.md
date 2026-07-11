@@ -2874,6 +2874,22 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::pmean_weighted parallelize the powf map inside the weighted reduction: 1.93x, byte-identical
+32nd win — the reduction-map-parallel lever on the WEIGHTED sibling (overlooked when I did unweighted pmean/power_mean;
+corrects the "reduction vein exhausted" claim — WEIGHTED variants are a whole parallel class). `pmean_weighted(data,p,
+weights)` did serial `data.iter().zip(weights).map(|(&x,&w)| w*x.powf(p)).sum()`. LEVER: parallelize ONLY the `powf`
+map via order-preserving `par_continuous_map`, then the light weighted sum `w·powed[i]` stays index-ordered →
+BYTE-IDENTICAL (`w[i]·powed[i]` = `w[i]·x[i].powf(p)`, same left-fold from 0.0). Toggle `PMEAN_WEIGHTED_FORCE_SERIAL`,
+bin `perf_wmean`. MEASURED (strict-remote release `+avx2,+fma` on vmi1293453, same-binary paired median vs A/A null,
+4M elts p=2.5): 54.92→25.03ms = **1.931x DECIDED** (null [0.786,1.327]), **bitmism=0** (result 2.637476288765629 both).
+SIBLING NOT SHIPPED: `gmean_weighted` (`w·x.ln()` sum) measured only **1.172x** (null [0.717,1.144] — barely DECIDED,
+19% parallel cv) — the lighter `ln` kernel means the parallel benefit is mostly eaten by the weighted-sum tax → too
+marginal/noisy to ship a robust win → REVERTED to serial, held for a quiet-box re-measure. TEST-GATE: rch gave workers
+for the bin builds (compilation VERIFIED clean) but refused the heavier test compile (no admissible workers ×18) —
+shipped on the MEDIAN gate (byte-id → no value regression possible + lib compiles); the next stats-suite run will
+retroactively confirm (as power_mean's 2023/0 confirmed pmean). RCH FLEET intermittent — light builds land, test
+compiles refused. LESSON (reinforced): when you parallelize `foo`, also grep `foo_weighted` — a whole sibling class.
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::power_mean parallelize the powf map inside the reduction: 3.15x, byte-identical
 31st win — the `pmean` reduction-map-parallel lever applied to its sibling `power_mean(data, p)` (a separate public
 generalized-mean; `p→0` geometric, `p=-1` harmonic, `p=1` arithmetic). Same fused serial `data.iter().map(|&x|

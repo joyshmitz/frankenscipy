@@ -25906,9 +25906,30 @@ pub fn pmean_weighted(data: &[f64], p: f64, weights: &[f64]) -> f64 {
     if p < 0.0 && data.contains(&0.0) {
         return 0.0;
     }
-    let weighted_power_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.powf(p)).sum();
+    // `powf` dominates this weighted reduction — parallelize ONLY the `powf` map (order-preserving
+    // `par_continuous_map`), then the light weighted sum `w·x^p` stays in index order. BYTE-IDENTICAL
+    // to the fused `map(w·x^p).sum()`: `w[i]·powed[i]` = `w[i]·x[i].powf(p)`, left-fold from 0.0 over
+    // the same sequence. `PMEAN_WEIGHTED_FORCE_SERIAL` restores the fused serial map-sum.
+    let weighted_power_sum: f64 =
+        if PMEAN_WEIGHTED_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+            data.iter().zip(weights).map(|(&x, &w)| w * x.powf(p)).sum()
+        } else {
+            par_continuous_map(data, |x| x.powf(p))
+                .iter()
+                .zip(weights)
+                .map(|(&pw, &w)| w * pw)
+                .sum()
+        };
     (weighted_power_sum / total_w).powf(1.0 / p)
 }
+
+/// When `true`, [`pmean_weighted`] computes its weighted `powf` sum with the fused serial
+/// `map(w·x^p).sum()` (the ORIG behaviour). When `false` (default), the compute-bound `powf` map fans
+/// across cores via the order-preserving `par_continuous_map` and the light weighted sum stays in
+/// index order. Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static PMEAN_WEIGHTED_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Circular mean for angular data.
 ///

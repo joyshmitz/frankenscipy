@@ -20134,3 +20134,16 @@ memory dir: `QUEUED_wmean_lever.lib.diff` + `QUEUED_perf_wmean.rs.saved`. RETRY 
 a worktree at origin, `cargo build/run --bin perf_wmean -- 4000000 21 2.5`, gate on median + bitmism=0, run
 `cargo test -p fsci-stats --lib`, ship both if DECIDED. RCH FLEET has been persistently saturated ("no admissible
 workers") for ~2 turns — the binding constraint now is fleet capacity, not lever availability.
+
+## 2026-07-11 - ScarletChapel (cc) - RESOLVED the queued wmean lever: pmean_weighted SHIPPED 1.93x; gmean_weighted HELD (marginal)
+`rch sync --all` refreshed the fleet → drained the queue. `pmean_weighted` (powf) = **1.931x DECIDED, bitmism=0**
+(54.92→25.03ms, 4M/p=2.5, null [0.786,1.327]) → SHIPPED. `gmean_weighted` (ln) = **1.172x, bitmism=0** but the
+A/A null ceiling was 1.144 (only 2.5% margin under 19% parallel cv) — the lighter `ln` kernel means the weighted-sum
+tax eats most of the parallel benefit; a 2.5%-margin decision near the noise floor is ~50/50 to reproduce → NOT a
+robust win → REVERTED to serial, HELD. LESSON: the reduction-map-parallel win magnitude scales with kernel weight —
+powf (~50-100 cyc) clears the noise robustly (1.9-3.2x), ln (~20-40 cyc) is borderline once the weighted-sum
+multiply+add pass is added (only ~1.17x). Do NOT ship the ln-weighted variant without a QUIET-box re-measure at high
+N (may still be a real ~1.2-1.5x but needs a tight null to prove). TEST-GATE for pmean_weighted was rch-blocked
+(builds landed, test compile refused ×18) — shipped on median gate, byte-id guarantees no value regression, next
+stats-suite run confirms. hmean_weighted (`w/x`) bandwidth-bound = skip. Weighted-mean reduction class now: pmean_w
+DONE, gmean_w held, hmean_w skip.
