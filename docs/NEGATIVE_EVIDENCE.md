@@ -20334,3 +20334,13 @@ The queued boxcox_llf lever shipped once rch recovered — `git stash pop` resto
 powf/ln + Σln) parallelized via par_map_inline + par_continuous_map (byte-id). Test-gate rch-blocked (heavy stats
 compile ×8; bin served→verified) → median gate (byte-id → no regression). BOXCOX/YEOJOHNSON LLF: boxcox_llf DONE;
 yeojohnson_llf follow-on (its transform is parallel, `Σ signum·ln` still serial). On MAIN, push-after-commit.
+
+## 2026-07-11 - ScarletChapel (cc) - REJECT (byte-id, IN-FLOOR): yeojohnson_llf log_term parallelization
+Parallelized the serial `Σ sign(x)·ln(|x|+1)` log_term in yeojohnson_llf/yeojohnson_normmax (shared
+`yeojohnson_log_term` helper, byte-id via par_continuous_map). MEASURED bitmism=0 but IN-FLOOR: 8M 1.171x (null_hi
+1.267 → NOT decided), 24M 1.218x (null_hi 1.214 → 0.3% margin = noise-floor non-decision). ROOT CAUSE: unlike
+boxcox_llf (BOTH transform+Σln serial → 2.33x), yeojohnson_llf's TRANSFORM is ALREADY PARALLEL (via `yeojohnson`), so
+log_term is a small fraction and parallelizing it alone caps at ~1.2x — within the noise floor. Do NOT re-chase.
+Stashed as reject (stash "yeojohnson_llf-REJECT..."). LESSON: when only ONE of a fn's heavy passes is serial and the
+others are already parallel, parallelizing that one pass rarely clears the median gate — need ≥2 serial heavy passes
+(boxcox_llf) or a dominant single one.
