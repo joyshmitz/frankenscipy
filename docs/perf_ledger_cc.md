@@ -3189,3 +3189,25 @@ but unshipped: `freqs`/`freqs_zpk` (analog response stragglers of the already-pa
 complete, blocked only on rch capacity (fleet too contended 2026-07-11 to obtain a median). Structural byte-id
 primitives are walled (FFT SoA-SIMD behind forbid(unsafe); cache-blocking rejected; tolerance rewrites owner-gated).
 HOLD until a retry condition is met.
+
+### 2026-07-11 (cc) — signal::gauspuls parallel 3-output fill: 8.9x, byte-identical
+Fresh win from the "one sibling left serial in an otherwise-parallel family" vein. `gauspuls(t, fc, bw, bwr)`
+(the i/q/envelope form of `scipy.signal.gauspuls`, signal lib.rs:13183) looped its per-sample kernel SERIALLY
+while its direct sibling `gausspulse` (2362, the real-part-only form) was already parallel via `par_index_fill`.
+The kernel is the HEAVIEST of the campaign — 3 fused transcendentals per element: `e = exp(-a·t²)`, then
+`e·cos(2π·fc·t)` and `e·sin(2π·fc·t)`. Because it writes THREE output arrays (i/q/envelope) there is no
+single-output helper to reuse, so I added a dedicated work-gated 3-output fill: factor the kernel into ONE
+shared closure (both arms run identical arithmetic → byte-identical by construction), preallocate the 3 vecs,
+and in the parallel arm fan disjoint contiguous chunks of all three across cores via `thread::scope` +
+triple-`chunks_mut` zip (`out[i]` is a pure function of `t[i]`, so bit-identical to the serial push loop; only
+the owning core changes). Gate `>=4096 samples/thread` (same as the sibling), toggle `GAUSPULS_FORCE_SERIAL`,
+bin `perf_gauspuls`. MEASURED (release `+avx2,+fma`, same-binary paired median vs A/A null, 4M samples/fc=1000,
+21 iters, twice): serial 185.40→parallel 19.88ms = **8.861x DECIDED** (null [0.927,1.060]) and 177.78→19.46ms =
+**8.939x DECIDED** (null [0.911,1.056]); **bitmism=0** across all three output vectors both runs. fsci-signal
+--lib 674/0 (incl. all 5 gauspuls tests + `gauspuls_zero_center_frequency_matches_scipy`). HIGHEST reduction/
+map-parallel ratio of the campaign — 3 heavy transcendentals fused per element gives the largest compute:memory
+ratio, so the parallel fill dominates the light writes. Peer scipy.signal.gauspuls is single-threaded numpy.
+LEVER (reusable): a MULTI-OUTPUT serial waveform generator (i/q/envelope, real/imag) parallelizes byte-id with a
+dedicated N-buffer chunked fill even when no single-output helper fits — factor the kernel into one shared closure
+so serial and parallel arms are provably identical. AUDIT: grep waveform/window/wavelet generators for the lone
+serial member whose sibling is already `par_index_fill` (gausspulse→gauspuls; nuttall/bohman/morlet2 remain).
