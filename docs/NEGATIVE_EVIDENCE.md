@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - cod - REJECT (bit-identical): sparse square-grid `spsolve` row-forward threading regresses median 136.59%
+
+- PROFILE-FIRST: after excluding closed linalg/Mathieu/CSR-add/SpMM families, the live open row was
+  `sparse_spsolve_laplacian/spsolve/4900`. Strict-remote baseline on `vmi1227854` stored a
+  **1.117393 ms median** (95% CI `[1.056821, 1.172892]` ms). One-shot stage timing ranked row-forward
+  **222.674 us**, spectral-forward 219.609 us, inverse-row 177.737 us, and inverse-column 191.998 us.
+- ONE LEVER: only the hottest row-forward DST stage was split into at most four contiguous mode chunks for
+  side >= 64. Each output cell retained the identical ascending-row reduction; the other three cubic stages
+  and the side-40 guard path were unchanged.
+- **MEDIAN GATE, same-binary RCH `hz2`:** serial **1.026938 ms** (CI `[1.022461, 1.042192]` ms) versus
+  threaded **2.429663 ms** (CI `[2.297781, 2.663645]` ms): **2.36593x time, +136.593%, 0.42267x speed**.
+  Thread creation costs more than the complete 222.674-us target stage; REJECT.
+- BIT IDENTITY: remote focused proof passed 2/2, including every row-transform value via `f64::to_bits()`
+  and the existing square-grid solve/residual route. The candidate, proof hook, timer, and A/B benchmark were
+  removed; sparse production and benchmark sources are restored with no owned diff.
+- REMOTE boundary: every Cargo command used `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- ...`.
+  When the baseline worker later had no slot, the decision used a same-binary serial/candidate A/B on one
+  admitted remote worker; no cross-worker comparison and no local Cargo fallback entered the verdict.
+- Retry only with a no-spawn primitive, such as a transposed sine layout, or a proven persistent worker pool.
+  Do not retry scoped OS-thread fan-out at side 70. Bead: `frankenscipy-erz49`.
+
 ## 2026-07-10 - cod - KEEP (bit-identical): sparse `block_diag` skips redundant canonical validation - 2.04-3.32x median self-time
 
 - DIFFERENT module: selected `fsci-sparse`; no ndimage, interpolate, or signal file was touched. The

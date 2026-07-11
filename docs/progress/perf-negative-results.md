@@ -4,6 +4,62 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-10 - frankenscipy-erz49 - REJECT: square-grid `spsolve` row-forward OS-thread fan-out (bit-identical, median +136.59%)
+
+- Agent: cod. Domain: `fsci-sparse`. Current Criterion artifacts and the negative ledger were ranked before
+  editing. Hotter COO, SpMM, CSR-add, kron, SPILU, and `block_diag` rows were closed or rejected families;
+  linalg had no admissible one-turn exact lever and special's clean parallel/hoist veins were exhausted.
+  The first open row was `sparse_spsolve_laplacian/spsolve/4900`.
+- Fresh fail-closed RCH baseline on effective worker `vmi1227854`, saved as
+  `spsolve_dst_serial_before`: median **1.117392596 ms**, 95% median CI
+  `[1.056821373, 1.172892452]` ms. The side-40/1600 guard remained below the parallel gate.
+- Temporary one-shot instrumentation, built and run remotely on that worker, attributed the four serial
+  O(side^3) stages at side 70:
+
+| stage | one-shot wall | share of four-stage wall |
+| --- | ---: | ---: |
+| row-forward DST | **222.674 us** | **27.4%** |
+| spectral-forward DST/divide | 219.609 us | 27.0% |
+| inverse-row DST | 177.737 us | 21.9% |
+| inverse-column DST | 191.998 us | 23.6% |
+
+### One lever and isomorphism contract
+
+- Only row-forward, the measured hottest stage, was changed. For `side >= 64`, at most four scoped OS
+  threads owned contiguous mode/output-row chunks; smaller systems stayed serial. Spectral-forward,
+  inverse-row, inverse-column, residual verification, route selection, and fallbacks were untouched.
+- Ordering preserved: yes. Every output cell retained the same `row = 0..side` multiply-add order and was
+  written once to the same flat index. Tie-breaking and RNG: N/A. Floating point: identical by construction.
+- Remote proof on `hz2`: 2/2 focused tests passed. The forced 1-thread and 4-thread row transforms compared
+  every `f64::to_bits()` at side 70, and the existing square-grid route/residual test also passed.
+
+### Median decision gate
+
+Because `vmi1227854` became fully occupied after the saved baseline, RCH's worker preference could not be
+treated as a hard pin. Instead of comparing across workers, a temporary same-binary Criterion A/B ran both
+arms back-to-back on effective worker `hz2`, 20 samples and 5 seconds measurement per arm:
+
+| arm | stored median | 95% median CI | relative time | verdict |
+| --- | ---: | ---: | ---: | --- |
+| serial control | **1.026938002 ms** | `[1.022460789, 1.042191516]` ms | 1.00000x | control |
+| parallel row-forward | **2.429663241 ms** | `[2.297781263, 2.663645314]` ms | **2.36593x** | REJECT |
+
+The candidate regressed median self-time by **136.592982%** and delivered only **0.422667x** the serial
+throughput. The target stage itself is only 222.674 us, so fresh OS-thread creation per solve overwhelms all
+available work. This is a decisive median-gated rejection, not noise or a cross-worker inference.
+
+### Restoration and remote boundary
+
+- The profiling timer, execution-policy helper, exact-bit test, public benchmark toggle, and A/B group were
+  all removed manually. `crates/fsci-sparse/src/linalg.rs` and `benches/sparse_bench.rs` have no owned diff;
+  pre-existing peer formatting remains untouched. Direct rustfmt check and `git diff --check` passed.
+- All Cargo benchmark/test commands used the fail-closed prefix
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec --`. RCH executed on `vmi1227854` or `hz2`; no
+  local fallback and no local Cargo command was used.
+- Retry condition: do not retry scoped OS-thread row-forward fan-out at side 70. A future fresh profile may
+  test one no-spawn primitive (for example, a transposed copy of the already-computed sine bits) or a
+  persistent pool whose dispatch cost is independently proven below the stage budget.
+
 ## 2026-07-10 - frankenscipy-5pnb3 - KEEP: skip redundant canonical validation in sparse `block_diag` (bit-identical, median -51.04% to -69.91%)
 
 - Agent: cod. Domain: `fsci-sparse`; no peer-owned ndimage, interpolate, or signal file was touched. A
