@@ -13766,24 +13766,101 @@ fn symiir2_separable(input: &[f64], rows: usize, cols: usize, r: f64, omega: f64
 /// Apply the 1-D mirror-symmetric spline coefficient filter separably across
 /// the rows then the columns of a row-major `rows×cols` image (SciPy's
 /// `symiirorder_nd` order: axis=-1 then axis=0).
+/// Same-binary A/B toggle for the 2-D separable spline coefficient filter (`cspline2d`/`qspline2d`).
+/// When `true`, the row/column IIR passes run serially (the ORIG behaviour). When `false` (default),
+/// the independent lines fan across cores (the column pass via a blocked transpose). Byte-identical.
+#[doc(hidden)]
+pub static CSPLINE2D_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Apply `spline1d_coeff` to each CONTIGUOUS `line_len`-element line of `data` (`nlines` of them),
+/// fanning the independent lines across cores. Byte-identical to the serial per-line walk.
+fn spline_lines_iir(
+    data: &mut [f64],
+    nlines: usize,
+    line_len: usize,
+    zi: f64,
+    gain: f64,
+    force_serial: bool,
+) {
+    let work = (nlines as u64).saturating_mul(line_len as u64);
+    let threads = if force_serial || work < (1 << 16) || nlines < 2 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nlines)
+    };
+    let apply = |block: &mut [f64]| {
+        let mut line = vec![0.0_f64; line_len];
+        for chunk in block.chunks_mut(line_len) {
+            line.copy_from_slice(chunk);
+            let coeffs = spline1d_coeff(&line, zi, gain);
+            chunk.copy_from_slice(&coeffs);
+        }
+    };
+    if threads <= 1 {
+        apply(data);
+        return;
+    }
+    let per = nlines.div_ceil(threads);
+    let apply = &apply;
+    std::thread::scope(|scope| {
+        for block in data.chunks_mut(per * line_len) {
+            scope.spawn(move || apply(block));
+        }
+    });
+}
+
+/// Blocked (cache-tiled) transpose of a row-major `rows x cols` matrix into a fresh row-major
+/// `cols x rows` matrix. Pure data movement (a permutation of values), so BYTE-IDENTICAL.
+fn transpose_rowmajor_blocked(data: &[f64], rows: usize, cols: usize) -> Vec<f64> {
+    let mut out = vec![0.0_f64; rows * cols];
+    const T: usize = 32;
+    let mut i0 = 0;
+    while i0 < rows {
+        let i1 = (i0 + T).min(rows);
+        let mut j0 = 0;
+        while j0 < cols {
+            let j1 = (j0 + T).min(cols);
+            for r in i0..i1 {
+                let src = &data[r * cols + j0..r * cols + j1];
+                for (c, &v) in (j0..j1).zip(src) {
+                    out[c * rows + r] = v;
+                }
+            }
+            j0 = j1;
+        }
+        i0 = i1;
+    }
+    out
+}
+
 fn spline2d_separable(input: &[f64], rows: usize, cols: usize, zi: f64, gain: f64) -> Vec<f64> {
     let mut data = input.to_vec();
-    // Along each row (length `cols`).
-    let mut row = vec![0.0_f64; cols];
-    for r in 0..rows {
-        row.copy_from_slice(&data[r * cols..(r + 1) * cols]);
-        let coeffs = spline1d_coeff(&row, zi, gain);
-        data[r * cols..(r + 1) * cols].copy_from_slice(&coeffs);
-    }
-    // Along each column (length `rows`).
-    let mut col = vec![0.0_f64; rows];
-    for c in 0..cols {
-        for r in 0..rows {
-            col[r] = data[r * cols + c];
-        }
-        let coeffs = spline1d_coeff(&col, zi, gain);
-        for r in 0..rows {
-            data[r * cols + c] = coeffs[r];
+    let force_serial = CSPLINE2D_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+
+    // Row pass: each length-`cols` row is a contiguous, independent IIR — fan across cores.
+    spline_lines_iir(&mut data, rows, cols, zi, gain, force_serial);
+
+    // Column pass: transpose so each column becomes a contiguous row, IIR them, transpose back —
+    // BYTE-IDENTICAL to the serial strided column walk (the IIR sees the same column values in the
+    // same order; the transpose only moves data). The 1-D degenerate cases keep the direct walk.
+    if rows > 1 && cols > 1 {
+        let mut t = transpose_rowmajor_blocked(&data, rows, cols); // cols x rows
+        spline_lines_iir(&mut t, cols, rows, zi, gain, force_serial);
+        data = transpose_rowmajor_blocked(&t, cols, rows); // back to rows x cols
+    } else {
+        let mut col = vec![0.0_f64; rows];
+        for c in 0..cols {
+            for r in 0..rows {
+                col[r] = data[r * cols + c];
+            }
+            let coeffs = spline1d_coeff(&col, zi, gain);
+            for r in 0..rows {
+                data[r * cols + c] = coeffs[r];
+            }
         }
     }
     data
@@ -33016,6 +33093,49 @@ mod tests {
             "bohman center should be 1.0"
         );
         assert!((result[1] - result[3]).abs() < 1e-10, "bohman symmetric");
+    }
+
+    #[test]
+    fn cspline2d_parallel_matches_serial_bitexact() {
+        use std::sync::atomic::Ordering;
+        // The parallel (row + transposed-column) IIR must be BYTE-IDENTICAL to the serial passes,
+        // across rectangular shapes (incl. above the parallel gate) and the 1-row/1-col degenerate
+        // cases. Both cspline2d (cubic) and qspline2d (quadratic) route through spline2d_separable.
+        let shapes: &[(usize, usize)] = &[(1, 20), (20, 1), (5, 7), (400, 300), (300, 400), (33, 33)];
+        for &(rows, cols) in shapes {
+            let data: Vec<f64> = (0..rows * cols)
+                .map(|k| ((k as f64 * 0.041).sin() * 5.0 - 0.4) + (k % 9) as f64 * 0.3)
+                .collect();
+            for use_q in [false, true] {
+                CSPLINE2D_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                let ser = if use_q {
+                    qspline2d(&data, (rows, cols), 0.0)
+                } else {
+                    cspline2d(&data, (rows, cols), 0.0)
+                };
+                CSPLINE2D_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                let par = if use_q {
+                    qspline2d(&data, (rows, cols), 0.0)
+                } else {
+                    cspline2d(&data, (rows, cols), 0.0)
+                };
+                match (ser, par) {
+                    (Ok(a), Ok(b)) => {
+                        assert_eq!(a.len(), b.len());
+                        for (x, y) in a.iter().zip(&b) {
+                            assert_eq!(
+                                x.to_bits(),
+                                y.to_bits(),
+                                "shape=({rows},{cols}) q={use_q}"
+                            );
+                        }
+                    }
+                    (Err(_), Err(_)) => {}
+                    _ => panic!("serial/parallel disagree on Ok/Err"),
+                }
+            }
+        }
+        CSPLINE2D_FORCE_SERIAL.store(false, Ordering::Relaxed);
     }
 
     #[test]

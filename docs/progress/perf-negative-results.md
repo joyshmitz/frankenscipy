@@ -9218,3 +9218,19 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   Multiquadric/InverseMultiquadric, n=300 above the gate, eval to_bits equality) passes; fsci-interpolate
   suite 187/0. Gate build_work=n²·(dim+2) >= 2^18. NOTE: a pre-existing peer harness (perf_rbf_build.rs)
   had measured the build/solve regime; left untouched. Safe Rust; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-10 - cc_fsc - WIN signal cspline2d/qspline2d 2-D separable spline IIR parallel + blocked transpose (2.10x, byte-identical)
+
+- **WIN; shipped.** `spline2d_separable` (the shared kernel behind `cspline2d`/`qspline2d`/`spline_filter`
+  — 2-D image spline smoothing) ran SERIAL row-IIR then column-IIR passes, each line an independent
+  compute-heavy symmetric IIR (`spline1d_coeff`, forward+backward). Parallelized both: the row pass fans
+  the CONTIGUOUS rows across cores (`spline_lines_iir`); the column pass uses a BLOCKED/tiled transpose
+  (structural primitive) so each column becomes a contiguous row, IIRs them in parallel, and transposes
+  back. Byte-identical: the IIR sees the same line values in the same order; the transpose only moves data.
+- Same-binary A/B (CSPLINE2D_FORCE_SERIAL knob, serial/parallel/serial interleaved, black-boxed,
+  2000x2000): **DECIDED 2.095x** (46.84->21.14ms), NULL(A/A) 0.992x [0.968,1.040], worker ovh-a.
+- **Byte-identical: bitmism=0** probe; test `cspline2d_parallel_matches_serial_bitexact` (cspline2d +
+  qspline2d, rectangular shapes incl. above the gate + 1-row/1-col degenerate, to_bits equality) passes,
+  AND the existing cspline2d_qspline2d_match_scipy still passes (rewrite preserved output). Gate
+  nlines*line_len >= 2^16, serial for <2 lines. transpose_rowmajor_blocked (T=32) keeps the transpose
+  cache-friendly so it doesn't eat the parallel IIR win. Safe Rust; no external BLAS/LAPACK/MKL/XLA.
