@@ -2774,3 +2774,19 @@ parallel time is fixed thread overhead (hence order=3072 to clear the floor). bi
 19 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats + 3 signal). SIGNAL RESPONSE FAMILY FULLY
 EXHAUSTED: freqz/group_delay already parallel; group_delay_from_ba (5.69x) + phase_response (5.79x) +
 magnitude_response (3.51x)/magnitude_response_db (inherits) landed. No more per-ω response stragglers.
+
+### 2026-07-11 (ScarletChapel, cc) — signal::dfreqresp parallel across frequencies: 6.47x, byte-identical
+Fresh straggler beyond the freqz-kernel family: `dfreqresp(num, den, dt, w)` (discrete-time complex frequency
+response H(e^{jω})=num/den at an explicit ω-grid) did a SERIAL `w.iter().map(...).collect()` while its ANALOG
+sibling `bode` (10569) already routes the identical shape through `freqz_par_collect`. Each ω is independent:
+cos/sin + two Horner `eval_poly_complex` sweeps (O(len(num)+len(den)) complex MACs) + a complex divide — pure
+per-ω function of the index. LEVER: fan across disjoint contiguous ω-chunks via `freqz_par_collect` (index-
+aligned, pure kernel) → byte-identical to the serial map; gate `freqz_response_thread_count(w.len(),
+2·(len(num)+len(den)))` (mirrors bode's work estimate), toggle `DFREQRESP_FORCE_SERIAL`. `dbode` (10599) calls
+`dfreqresp` so it inherits the speedup for free. MEASURED (strict-remote release `+avx2,+fma`, paired median vs
+A/A null, order=3072 / n_freqs=16384): 101.91->14.19ms = **6.474x** (null [0.948,1.068], serial cv 2.5%),
+**bitmism=0**. HIGHER than the magnitude/phase siblings (6.47x vs 3.51/5.79x) — the kernel is pure Horner +
+complex divide with NO atan2/sqrt tail, so the per-ω compute is cleaner and thread overhead is a smaller
+fraction. bin `perf_dfreqresp`. 20 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats + 4 signal).
+AUDIT NOTE: found by grepping the analog-vs-digital response sibling pair (bode parallel, dfreqresp/dbode serial)
+— the same public-straddler heuristic across a DIFFERENT kernel (eval_poly_complex, not eval_poly_on_unit_circle).

@@ -10681,18 +10681,36 @@ pub fn dfreqresp(
             "num and den must be non-empty".to_string(),
         ));
     }
-    let h: Vec<(f64, f64)> = w
-        .iter()
-        .map(|&omega| {
-            let (zre, zim) = (omega.cos(), omega.sin());
-            let (br, bi) = eval_poly_complex(num, zre, zim);
-            let (ar, ai) = eval_poly_complex(den, zre, zim);
-            let denom = ar * ar + ai * ai;
-            ((br * ar + bi * ai) / denom, (bi * ar - br * ai) / denom)
-        })
-        .collect();
+    // Each frequency's complex response is independent — cos/sin + two Horner `eval_poly_complex`
+    // sweeps (O(len(num)+len(den)) complex MACs) + a complex divide, reading only the immutable
+    // `num`/`den`. Fan across disjoint contiguous chunks through the shared `freqz_par_collect`
+    // helper (the same path the analog sibling `bode` uses): chunks are index-aligned and the kernel
+    // is pure, so the result is byte-identical to the serial `w.iter().map(...).collect()`. `dbode`
+    // calls this fn and inherits the speedup.
+    let force_serial = DFREQRESP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let work = (num.len() + den.len()).saturating_mul(2).max(8);
+    let nthreads = if force_serial {
+        1
+    } else {
+        freqz_response_thread_count(w.len(), work)
+    };
+    let h: Vec<(f64, f64)> = freqz_par_collect(w.len(), nthreads, |i| {
+        let omega = w[i];
+        let (zre, zim) = (omega.cos(), omega.sin());
+        let (br, bi) = eval_poly_complex(num, zre, zim);
+        let (ar, ai) = eval_poly_complex(den, zre, zim);
+        let denom = ar * ar + ai * ai;
+        ((br * ar + bi * ai) / denom, (bi * ar - br * ai) / denom)
+    });
     Ok((w.to_vec(), h))
 }
+
+/// When `true`, [`dfreqresp`] runs its per-frequency sweep serially (the ORIG behaviour).
+/// When `false` (default), independent frequencies fan across cores via `freqz_par_collect`.
+/// Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static DFREQRESP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Compute group delay of a digital filter.
 ///
