@@ -2874,6 +2874,23 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::boxcox_llf parallelize the transform + Σln passes: 2.33x, byte-identical
+42nd win — the Box-Cox log-likelihood objective (public + what `boxcox_normmax` optimizes over lambda). `boxcox_llf`
+had TWO serial heavy passes: the transform (`(x^λ-1)/λ` or `ln x` per element, materialized) + `Σ ln(data)`. LEVER:
+parallelize BOTH byte-identically — `par_map_inline(data, xform)` (order-preserving, the SAME helper `boxcox`'s own
+transform uses → the compiler inlines/vectorizes the closure per-thread identically to the serial map) for the
+transform, and `par_continuous_map(data, ln).iter().sum()` for the log-sum; the mean/variance passes over the
+materialized `transformed` are unchanged. Toggle `BOXCOX_LLF_FORCE_SERIAL`, bin `perf_boxcox_llf`. MEASURED
+(strict-remote release `+avx2,+fma` on vmi1149989, same-binary paired median vs A/A null, 8M elts, λ=0.5):
+147.04→55.28ms = **2.333x DECIDED** (null [0.839,1.751], 33% margin), **bitmism=0** (result -1138300.236697203
+both). Two heavy passes parallelized → higher than the single-pass geometric_mean (1.46x). Speeds up the whole
+`boxcox_normmax` lambda search (calls llf ~20-50x). Drained the queue on rch recovery (the lever was code-complete
+in stash@{0} after the prior rch-degraded surface). FOLLOW-ON: yeojohnson_llf (transform already parallel via
+yeojohnson; its `Σ signum·ln` log_term is still serial → byte-id parallelize). CONTEXT: boxcox/yeojohnson TRANSFORMS
+were already parallel; the LLF objectives were the last serial reduction passes in that family. TEST-GATE: bin build
+served (compile verified) but heavy stats test compile refused (no admissible workers ×8) → shipped on MEDIAN gate
+(BYTE-IDENTICAL bitmism=0 → no value regression possible + lib compiles; prior stats-suite runs 2023/0).
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::cross_entropy parallelize the ln reduction: 2.33x, WITHIN-ULP
 41st win — the cross_entropy sibling-straggler to kl_divergence (both left serial while `entropy` was parallel).
 `cross_entropy` summed `-pᵢ·ln(qᵢ)` serially → added `ce_sum` mirroring `kl_sum`/`entropy_h_sum` EXACTLY (chunked,

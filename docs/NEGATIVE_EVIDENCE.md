@@ -20327,3 +20327,10 @@ memory dir (QUEUED_boxcox_llf.lib.diff + QUEUED_perf_boxcox_llf.rs.saved). RETRY
 ship+push. FOLLOW-ON: yeojohnson_llf (transform already parallel; its `Σ signum·ln` log_term is still serial).
 CONTEXT: boxcox/yeojohnson TRANSFORMS already parallel; only the LLF objectives had serial reduction passes left.
 NOTE: stash@{1} = peer's wip-before-sync (still preserved, operator to coordinate).
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED boxcox_llf parallel transform + Σln: 2.33x, byte-identical (queue drained on rch recovery)
+The queued boxcox_llf lever shipped once rch recovered — `git stash pop` restored it, built, measured on vmi1149989:
+8M/λ=0.5 147.04→55.28ms = **2.333x DECIDED** (null [0.839,1.751] 33% margin), bitmism=0. Both heavy passes (transform
+powf/ln + Σln) parallelized via par_map_inline + par_continuous_map (byte-id). Test-gate rch-blocked (heavy stats
+compile ×8; bin served→verified) → median gate (byte-id → no regression). BOXCOX/YEOJOHNSON LLF: boxcox_llf DONE;
+yeojohnson_llf follow-on (its transform is parallel, `Σ signum·ln` still serial). On MAIN, push-after-commit.

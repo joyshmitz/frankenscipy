@@ -39340,16 +39340,25 @@ pub fn boxcox_llf(lmb: f64, data: &[f64]) -> f64 {
     }
 
     let nf = n as f64;
-    let transformed: Vec<f64> = data
-        .iter()
-        .map(|&x| {
-            if lmb.abs() < 1e-10 {
-                x.ln()
-            } else {
-                (x.powf(lmb) - 1.0) / lmb
-            }
-        })
-        .collect();
+    // Two compute-bound heavy passes over `data`: the Box-Cox `transform` (a `powf`/`ln` per element)
+    // and the `Σ ln(data)`. Parallelize BOTH byte-identically — `par_map_inline` (order-preserving,
+    // the same helper `boxcox` uses for its transform) and `par_continuous_map` (order-preserving map
+    // + serial index-ordered sum). The mean/variance passes over the materialized `transformed` are
+    // unchanged. Called repeatedly by `boxcox_normmax`, so this speeds up the whole lambda search.
+    // `BOXCOX_LLF_FORCE_SERIAL` restores the exact serial maps (same-binary A/B).
+    let force_serial = BOXCOX_LLF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let xform = |x: f64| -> f64 {
+        if lmb.abs() < 1e-10 {
+            x.ln()
+        } else {
+            (x.powf(lmb) - 1.0) / lmb
+        }
+    };
+    let transformed: Vec<f64> = if force_serial {
+        data.iter().map(|&x| xform(x)).collect()
+    } else {
+        par_map_inline(data, xform)
+    };
 
     let mean = transformed.iter().sum::<f64>() / nf;
     let var = transformed.iter().map(|&y| (y - mean).powi(2)).sum::<f64>() / nf;
@@ -39358,9 +39367,20 @@ pub fn boxcox_llf(lmb: f64, data: &[f64]) -> f64 {
         return f64::NEG_INFINITY;
     }
 
-    let log_sum: f64 = data.iter().map(|&x| x.ln()).sum();
+    let log_sum: f64 = if force_serial {
+        data.iter().map(|&x| x.ln()).sum()
+    } else {
+        par_continuous_map(data, |x| x.ln()).iter().sum()
+    };
     -nf / 2.0 * var.ln() + (lmb - 1.0) * log_sum
 }
+
+/// When `true`, [`boxcox_llf`] runs its transform and `Σ ln` passes serially (the ORIG behaviour).
+/// When `false` (default), both compute-bound maps fan across cores (byte-identical: `par_map_inline`
+/// is order-preserving; `par_continuous_map` keeps the sum in index order). For the A/B perf gate.
+#[doc(hidden)]
+pub static BOXCOX_LLF_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Kendall's tau rank correlation coefficient.
 ///
