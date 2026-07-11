@@ -20007,3 +20007,19 @@ bound, not compute). AUDIT LESSON: the freqs-class straggler audit generalizes b
 sibling TRIO was left serial after the other two shipped; grep sibling GROUPS, not just pairs. rch was intermittently
 degraded during this land (test build refused twice with "no worker"; retried until a slot freed — never fell to
 local).
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED ndimage::power_array parallel powf map (compute-bound vein reopened): 3.61x, byte-identical
+A NEW vein after the serial-straggler-with-parallel-sibling vein exhausted: the COMPUTE-BOUND elementwise
+transcendental map. `power_array(input, exponent)` mapped `powf` (a ~50-100 cycle transcendental) serially over
+the array. Unlike the bandwidth-bound `add_arrays`/`multiply_arrays` (x+y / x*y — correctly flagged as likely-wash
+by the Explore near-miss pass), a `powf` map is COMPUTE-bound → a work-gated parallel fill wins. LEVER: route
+through the existing `fill_pixels_parallel(&mut output, 16, |flat,_| input.data[flat].powf(exponent))` (byte-id,
+pure per-index, gated so small arrays stay serial), toggle `NDIMAGE_POWER_ARRAY_FORCE_SERIAL`, bin
+`perf_power_array`. MEASURED strict-remote release `+avx2,+fma` (vmi1293453), same-binary paired median vs A/A
+null, 4M elements exponent=2.4: 38.51→9.84ms = **3.607x DECIDED** (null [0.734,1.414] wide under contention, cand
+far outside), **bitmism=0** (all 4M elements). Peer numpy `np.power` (single-threaded C). DISCRIMINATOR for the
+elementwise-map vein: heavy transcendental (powf/exp/log → compute-bound → parallel wins) vs light arithmetic
+(add/mul/sub/neg/abs → bandwidth-bound → wash — do NOT parallelize those). REMAINING elementwise candidates to
+measure (lighter, borderline): `exp_array`, `log_array` (~20-40 cyc each); `sqrt_array` is ~1 instruction →
+bandwidth-bound, skip. This is the new frontier: audit each crate's elementwise unary ops for a HEAVY per-element
+kernel that is still serial.

@@ -2839,6 +2839,24 @@ line drifted. FOLLOW-ON (queued, identical vein): `freqs_zpk(zpk, w)` (10415) is
 (kernel = k·Π(jω−z)/Π(jω−p) → (mag,phase)) — same one-fn routing through `freqz_parallel_fill`, separate
 `FREQS_ZPK_FORCE_SERIAL` gate + bin.
 
+### 2026-07-11 (ScarletChapel, cc) — ndimage::power_array parallel powf map: 3.61x, byte-identical
+26th win — a NEW vein: compute-bound elementwise transcendental map (distinct from the serial-straggler-with-
+parallel-sibling vein, now exhausted). `power_array(input, exponent)` did a serial
+`input.data.iter().map(|&v| v.powf(exponent)).collect()`. `powf` is a heavy per-element transcendental
+(~50-100 cycles), so this map is COMPUTE-bound — unlike the bandwidth-bound `add_arrays`/`multiply_arrays`
+(x+y / x*y), which an Explore near-miss pass correctly flagged as likely-wash. LEVER: route the map through the
+existing work-gated `fill_pixels_parallel(&mut output, kernel_work=16, |flat,_| input.data[flat].powf(exponent))`
+helper — byte-identical (each output = `input.data[flat].powf(exponent)` in flat order, pure per-index), gated so
+small arrays stay serial. Toggle `NDIMAGE_POWER_ARRAY_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`
+on vmi1293453, same-binary paired median vs A/A null, bin `perf_power_array`, 4M elements, exponent=2.4):
+38.51→9.84ms = **3.607x DECIDED** (null median 0.997x range [0.734,1.414] — wide under box contention but the
+3.61x candidate is far outside), **bitmism=0** (all 4M elements bit-identical). Peer: numpy `np.power`,
+single-threaded C. KEY: this REOPENS the compute-bound-map vein for ndimage elementwise ops — the DISCRIMINATOR is
+per-element kernel weight: heavy transcendental (powf ✓ compute-bound → parallel wins) vs light arithmetic
+(add/mul/sub ✗ bandwidth-bound → wash). FOLLOW-ON candidates (measure separately — lighter kernels, may be
+borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
+bandwidth-bound, skip.
+
 ### 2026-07-11 (ScarletChapel, cc) — SmoothBivariateSpline::eval_many hoist+parallel: 1.78x, byte-identical
 25th win — a fresh vein OUTSIDE the exhausted signal-response family, found by re-running the freqs-class
 "serial straggler with a parallel sibling" audit across the accessible crates (Explore fan-out). The pointwise

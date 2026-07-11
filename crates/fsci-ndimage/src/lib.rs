@@ -11242,13 +11242,37 @@ pub fn sqrt_array(input: &NdArray) -> NdArray {
 
 /// Apply element-wise power.
 pub fn power_array(input: &NdArray, exponent: f64) -> NdArray {
-    let data: Vec<f64> = input.data.iter().map(|&v| v.powf(exponent)).collect();
-    NdArray {
-        data,
+    // `powf` is a heavy per-element transcendental (~50-100 cycles), so this map is COMPUTE-bound
+    // (unlike the bandwidth-bound `add_arrays`/`multiply_arrays`): a work-gated parallel fill wins
+    // at large `n`. BYTE-IDENTICAL to the serial `data.iter().map(|&v| v.powf(exponent)).collect()`
+    // — each output element is `input.data[flat].powf(exponent)` written in flat order, a pure
+    // function of its index. `NDIMAGE_POWER_ARRAY_FORCE_SERIAL` restores the serial map (same-binary
+    // A/B). The gate (`kernel_work = 16`, powf's rough mul-equivalent cost) keeps small arrays serial.
+    if NDIMAGE_POWER_ARRAY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let data: Vec<f64> = input.data.iter().map(|&v| v.powf(exponent)).collect();
+        return NdArray {
+            data,
+            shape: input.shape.clone(),
+            strides: input.strides.clone(),
+        };
+    }
+    let mut output = NdArray {
+        data: vec![0.0; input.data.len()],
         shape: input.shape.clone(),
         strides: input.strides.clone(),
-    }
+    };
+    fill_pixels_parallel(&mut output, 16, |flat, _scratch| {
+        input.data[flat].powf(exponent)
+    });
+    output
 }
+
+/// When `true`, [`power_array`] runs its element-wise `powf` map serially (the ORIG behaviour).
+/// When `false` (default), the compute-bound map fans across cores via `fill_pixels_parallel`.
+/// Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static NDIMAGE_POWER_ARRAY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Multiply two arrays element-wise.
 pub fn multiply_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
