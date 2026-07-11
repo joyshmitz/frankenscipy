@@ -20075,3 +20075,21 @@ BYTE-IDENTICAL. Toggle `POWER_MEAN_FORCE_SERIAL`, bin `perf_power_mean`. Strict-
 41.50→12.52ms = **3.154x DECIDED** (null [0.748,1.282]), bitmism=0 (result 2.637360238656237 both). Higher than
 pmean's 1.94x only because a quieter worker (parallel arm 12.52 vs 21.81ms) — same lever/fixture. reduction-map-
 parallel stats means: pmean + power_mean DONE; gmean (ln-sum) remaining follow-on; hmean (1/x)=bandwidth-bound skip.
+
+## 2026-07-11 - ScarletChapel (cc) - NO-SHIP / ALREADY-DONE: gmean is fully optimized; reduction-map-parallel vein EXHAUSTED
+Went to take the `gmean` follow-on (the ledger/memory had listed it as a plain `map(ln).sum()` like pmean) — but
+reading ORIGIN SOURCE, `gmean` (25230) delegates to `gmean_log_sum` (25242) which is ALREADY fully optimized by a
+prior agent: (1) a 4-way-UNROLLED strided `chunk_sum` (4 accumulators `(a0+a1)+(a2+a3)` — already a reordered fast
+sum, not a naive left-fold), (2) a small-input short-circuit (`n < 1<<16` → serial, avoiding the
+`available_parallelism()` = `sched_getaffinity` syscall that dominates when `gmean_axis_2d` calls it per short line),
+(3) CHUNKED PARALLEL summation via `thread::scope` (workers capped at ≥64k elts each) for large n. **Do NOT re-chase
+gmean** — it is done. LEDGER-DRIFT LESSON (again): the "gmean follow-on" was an assumption generalized from pmean;
+origin source shows it was long-since optimized. AUDIT RESULT: swept accessible crates (stats/special/integrate/
+signal) for other large-N heavy-kernel (`powf`/`exp`/`erf`/`gamma`) serial `.sum()`/`.fold()`/`for`-accumulations —
+ALL remaining sites are SMALL-N or embedded: distribution log-pmf inner loops (`lpk += r.ln()` over k-ranges),
+convergent series (`sum += log_term.exp()` — few terms), Stirling corrections, softmax/logsumexp over a handful of
+logits, or `#[test]` code. **REDUCTION-MAP-PARALLEL VEIN NOW EXHAUSTED**: the only two genuine large-N heavy-kernel
+public reductions were `pmean` (1.94x) + `power_mean` (3.15x), both SHIPPED byte-identical this session. NEXT: the
+vein's last theoretical frontier is quadrature weight-sums in special/integrate — but those are typically fixed
+small node counts (Gauss-Kronrod XGK/WGK are compile-time const) → not large-N. Genuinely at frontier+hold across
+all worked veins; remaining is owner-gated tolerance-parity, forbid(unsafe) FFT SoA-SIMD, or retry #2 (new peer code).
