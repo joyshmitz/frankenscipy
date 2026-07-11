@@ -20117,3 +20117,20 @@ with `threads=cores.min((n/(1<<16)).max(1)).min(16)`; report `ulp_dist=|ser.to_b
 BOTH the final pmean result AND the raw power-sum, plus serial-vs-chunked median speedup. SHIP only if ulp_dist is
 tiny (≤ a few ULP) AND DECIDED; else SURFACE (keep byte-identical). DECISION LIKELY = surface (drift ~1e-9 rel for
 4M sum), so the byte-identical versions are probably the right permanent implementation regardless.
+
+## 2026-07-11 - ScarletChapel (cc) - QUEUED-READY (rch degraded): pmean_weighted + gmean_weighted byte-id map-parallel
+FRESH byte-identical lever found + CODE-COMPLETE but UNMEASURED (rch still degraded ×28 attempts, strict-remote
+forbids local → cannot build/verify/measure). The WEIGHTED mean siblings were overlooked when I did unweighted
+pmean/power_mean: `pmean_weighted` (25909) does serial `data.iter().zip(weights).map(|(&x,&w)| w*x.powf(p)).sum()`
+and `gmean_weighted` (25768) does serial `...map(|(&x,&w)| w*x.ln()).sum()` — both heavy-kernel (powf/ln) SERIAL
+weighted reductions (the unweighted gmean is parallel, but its WEIGHTED variant was not). LEVER (same reduction-map-
+parallel pattern, BYTE-IDENTICAL): parallelize ONLY the transcendental map via order-preserving `par_continuous_map`,
+then the light weighted sum `w·f(x)` stays index-ordered → `par_continuous_map(data,|x| x.powf(p)).iter().zip(weights)
+.map(|(&pw,&w)| w*pw).sum()` == fused `map(w·x^p).sum()` (`w[i]·powed[i]` = `w[i]·x[i].powf(p)`, same left-fold).
+Toggles `PMEAN_WEIGHTED_FORCE_SERIAL` / `GMEAN_WEIGHTED_FORCE_SERIAL`, bin `perf_wmean`. Expected ~1.9-3x (powf) /
+~1.5-2x (ln), like unweighted pmean/power_mean. hmean_weighted (`w/x`) = bandwidth-bound, skip. **NOT committed to
+main** (unverified-compile + unmeasured; rch-degraded=surface, no unmeasured ship). Exact diff + bin saved to
+memory dir: `QUEUED_wmean_lever.lib.diff` + `QUEUED_perf_wmean.rs.saved`. RETRY when rch recovers: apply the diff in
+a worktree at origin, `cargo build/run --bin perf_wmean -- 4000000 21 2.5`, gate on median + bitmism=0, run
+`cargo test -p fsci-stats --lib`, ship both if DECIDED. RCH FLEET has been persistently saturated ("no admissible
+workers") for ~2 turns — the binding constraint now is fleet capacity, not lever availability.
