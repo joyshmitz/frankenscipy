@@ -20256,3 +20256,16 @@ PASS** → drift within per-op ULP tolerance, proven. CONTRADICTS the stale [[pe
 — that reject was SIMD-ln single-thread (~1.15x, "N logs irreducible"); PARALLELIZATION across cores is orthogonal and
 wins 2.58x (2 div + ln = heaviest reduction kernel yet). KEY LESSON: a reduction "rejected for SIMD" is NOT rejected
 for parallelization — re-measure across-cores. FOLLOW-ON: cross_entropy (identical sibling-straggler pattern, serial).
+
+## 2026-07-11 - ScarletChapel (cc) - QUEUED-READY (rch degraded): cross_entropy parallel ln reduction (within-ULP)
+CODE-COMPLETE but UNMEASURED — rch persistently saturated (26+ "no admissible workers" incl. after `rch sync --all`,
+even light bin builds refused), strict-remote forbids local. `cross_entropy` (Σ -pᵢ·ln(qᵢ), serial) is the identical
+sibling-straggler to kl_divergence (just shipped 2.58x, c5b3351f7). Added `ce_sum` mirroring `kl_sum`/`entropy_h_sum`
+EXACTLY (chunked 4-way-unrolled), toggle `CROSS_ENTROPY_FORCE_SERIAL`, bin `perf_cross_entropy`. The qi==0&pi>0 term
+yields +INF (ln(0)=-INF, ·(-pi)=+INF) → preserves scalar INFINITY. WITHIN-ULP (same reorder as shipped entropy).
+Expected ~2-2.5x (slightly below kl: ce has 1 ln + 2 div, kl has 1 ln + extra div in the ln arg). **NOT shipped**:
+within-ULP change → TEST GATE MANDATORY (could trip a tight-tol test) + no measurement possible → per rch-degraded=
+surface, no unmeasured/untested ship. Exact diff+bin saved: memory dir QUEUED_cross_entropy.lib.diff +
+QUEUED_perf_cross_entropy.rs.saved. RETRY when rch recovers: apply diff at origin, build+run perf_cross_entropy
+8000000 21, confirm ULP rel≲1e-13 + DECIDED, run `cargo test -p fsci-stats --lib` (MUST be 2023/0 incl. cross_entropy
+scipy-ref tests), ship. rch FLEET saturated end of this turn (sync --all did not recover it this time).
