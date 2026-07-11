@@ -4,6 +4,31 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-11 - frankenscipy-8l8r1.157 - SURFACE: differential-evolution scratch reuse unscored after strict-remote capacity refusal
+
+- Agent: cod / ScarletChapel. Domain: `fsci-opt`; cc-owned `ndimage` and `interpolate` were excluded. A strict-remote
+  full `optimize_bench` sweep ranked `differential_evolution/rosen_5d` as the highest-cost fresh solver row after
+  excluding the heavily mined `linear_sum_assignment`, CG, Powell, and L-BFGS-B families. Its stored Criterion median
+  on `vmi1167313` was **1.451291659 ms**. The DE loop is unchanged since March and performs about 7,500 candidate
+  iterations for this fixture, allocating `mutant` and `trial` on every iteration (about 15,000 alloc/free pairs).
+- A fresh focused baseline completed remotely on `vmi1149989`, 20 samples and 3 seconds measurement: stored median
+  **747.592910 us**, 95% median CI **[733.337644, 775.371662] us**. The seeded baseline result was banked as
+  `x=[3feffd541a99f908,3ff0063d28ffc97b,3ff00c7b8733cbae,3ff0199eaa5b07ea,3ff02ad908490820]`,
+  `fun=3f4f87af07bb6109`, `nfev=7575`, `nit=100`.
+- One candidate lever was prepared: allocate the two scratch vectors once, overwrite every coordinate in the same
+  order, preserve the crossover short-circuit and RNG draw sequence, and copy an accepted trial into the existing
+  population row. Arithmetic, clamps, objective calls, selection ties, and output ordering were unchanged by
+  construction; the seeded bits above were installed as the proof contract.
+- The pinned candidate command failed closed before compilation or execution:
+  `no admissible workers: insufficient_slots=7,hard_preflight=2,active_project_exclusion=1`; RCH then reported
+  `remote required; refusing local fallback (no worker assigned)`. Per the remote-only rule, there was no retry and no
+  local Cargo command. The unmeasured source, test, and temporary golden-print instrumentation were removed manually;
+  `fsci-opt` source and benchmark files retain only pre-existing peer formatting changes.
+- Decision: **SURFACE / UNMEASURED**, neither WIN nor REJECT. Candidate median, candidate binary provenance, and
+  candidate bit result are N/A because no candidate ran. Retry only when a strict remote slot is immediately
+  admissible, preferably pinned to `vmi1149989`; reapply the single scratch-reuse lever, require the seeded bits above,
+  and gate against the **747.592910 us** median (or use a same-binary A/B if worker pinning is not honored).
+
 ## 2026-07-10 - frankenscipy-erz49 - REJECT: square-grid `spsolve` row-forward OS-thread fan-out (bit-identical, median +136.59%)
 
 - Agent: cod. Domain: `fsci-sparse`. Current Criterion artifacts and the negative ledger were ranked before

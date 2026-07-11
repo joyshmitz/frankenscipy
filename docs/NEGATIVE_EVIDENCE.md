@@ -19815,3 +19815,25 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   (1) a narrowly audited unsafe runtime dispatcher with a safe SSE2 fallback, or (2) a build-level exception to the
   one-binary rule. A fixed `target-cpu=native` artifact is not a portable library solution and is nondeterministic on
   RCH's worker-selected fleet. Safe Rust only; no C BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-11 - ScarletChapel (cod) - SURFACE differential-evolution scratch reuse after strict-remote no-slot refusal
+
+- Module selection was profile-first and excluded cc-owned `ndimage`/`interpolate`. A strict-remote full
+  `fsci-opt` Criterion sweep measured stored median **1.451291659 ms** for
+  `differential_evolution/rosen_5d`, the highest-cost fresh solver row after closed/rejected LSAP, CG, Powell, and
+  L-BFGS-B families were removed from consideration. The unchanged DE candidate loop performs about 7,500
+  iterations and two small vector allocations per iteration on this fixture.
+- Fresh focused baseline on remote worker `vmi1149989` (20 samples, 3 seconds measurement) stored median
+  **747.592910 us**, 95% median CI **[733.337644, 775.371662] us**. Its exact seeded proof was
+  `x=[3feffd541a99f908,3ff0063d28ffc97b,3ff00c7b8733cbae,3ff0199eaa5b07ea,3ff02ad908490820]`,
+  `fun=3f4f87af07bb6109`, `nfev=7575`, `nit=100`.
+- One lever was prepared: hoist `mutant` and `trial` allocation out of the loop, overwrite all coordinates in the
+  original order, preserve crossover short-circuit/RNG draws, and copy accepted coordinates into the existing row.
+  Arithmetic, objective order, clamps, ties, and result bits were intended to remain identical.
+- The pinned candidate request failed before compilation: RCH reported
+  `no admissible workers: insufficient_slots=7,hard_preflight=2,active_project_exclusion=1` and then
+  `remote required; refusing local fallback (no worker assigned)`. No local Cargo command or fallback ran. The
+  unmeasured source/test/instrumentation hunks were removed manually without disturbing peer formatting.
+- Verdict: **UNMEASURED / SURFACED**, not a win or reject. Retry only with an immediately admissible strict-remote
+  slot, preferably the baseline worker `vmi1149989`; require the exact seeded bits and gate candidate median against
+  **747.592910 us**, or use a same-binary A/B if worker affinity is unavailable.
