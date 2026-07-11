@@ -6911,13 +6911,59 @@ pub fn matching(u: &[bool], v: &[bool]) -> f64 {
 /// Returns condensed distance vector.
 pub fn pdist_func<F>(data: &[Vec<f64>], metric: F) -> Vec<f64>
 where
-    F: Fn(&[f64], &[f64]) -> f64,
+    F: Fn(&[f64], &[f64]) -> f64 + Sync,
 {
     let n = data.len();
-    let mut dists = Vec::with_capacity(n * (n - 1) / 2);
-    for i in 0..n {
-        for j in i + 1..n {
-            dists.push(metric(&data[i], &data[j]));
+    // Row `i` contributes the condensed block [(i,i+1)..(i,n-1)]; the blocks are INDEPENDENT and the
+    // condensed vector is exactly block_0 ++ block_1 ++ … So split contiguous i-ranges across cores
+    // and concatenate the per-chunk blocks in i-order: BYTE-IDENTICAL to the serial double loop
+    // (identical per-pair `metric` calls, identical order). scipy's callable-metric pdist is serial.
+    let total = n * (n.saturating_sub(1)) / 2;
+    let nthreads = if SPATIAL_CDIST_FUNC_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 3
+        || (total as u64) < (1 << 14)
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+
+    if nthreads <= 1 {
+        let mut dists = Vec::with_capacity(total);
+        for i in 0..n {
+            for j in i + 1..n {
+                dists.push(metric(&data[i], &data[j]));
+            }
+        }
+        return dists;
+    }
+
+    let block_of = |i: usize| -> Vec<f64> {
+        (i + 1..n).map(|j| metric(&data[i], &data[j])).collect()
+    };
+    let block_of = &block_of;
+    let chunk = n.div_ceil(nthreads);
+    let parts: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {
+        (0..n)
+            .step_by(chunk)
+            .map(|i0| {
+                scope.spawn(move || {
+                    let i1 = (i0 + chunk).min(n);
+                    (i0..i1).map(block_of).collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("pdist_func chunk panicked"))
+            .collect()
+    });
+    let mut dists = Vec::with_capacity(total);
+    for part in parts {
+        for block in part {
+            dists.extend(block);
         }
     }
     dists

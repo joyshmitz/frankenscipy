@@ -2665,3 +2665,17 @@ Work-gated (`m·n ≥ 2^14`); toggled by `SPATIAL_CDIST_FUNC_FORCE_SERIAL`. MEAS
 `diff_spatial_pdist_cdist_func` (cdist_func(euclidean)≡cdist_metric) unaffected (byte-identical). bin
 `perf_cdist_func`. FOLLOW-ON: `pdist_func` (condensed, same pattern, trickier disjoint-range output indexing).
 12 cc wins this session (10 ndimage + 2 spatial).
+
+### 2026-07-11 (ScarletChapel, cc) — spatial::pdist_func parallel across rows: 3.65x, byte-identical
+Follow-on to cdist_func. `pdist_func(data, metric)` (custom-metric CONDENSED pairwise; scipy's is serial)
+computed the condensed vector via a serial double loop. Row `i` contributes the contiguous condensed block
+[(i,i+1)..(i,n-1)]; blocks are independent and the condensed vector is exactly block_0 ++ block_1 ++ …, so
+split contiguous i-ranges across cores and concatenate per-chunk blocks in i-order. BYTE-IDENTICAL (identical
+per-pair `metric` calls + identical order); `+ Sync` on the metric (no non-test callers). Reuses
+`SPATIAL_CDIST_FUNC_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`, paired median vs A/A null,
+n=1400, d=64, euclidean): 22.78->6.05ms = **3.649x** (null [0.862,1.254]), **bitmism=0**. Slightly below
+cdist_func (4.47x) due to the load imbalance of contiguous i-chunks (early rows carry more pairs) — a
+balanced-by-cumulative-pairs split would recover it but breaks the simple order-preserving concat. bin
+`perf_pdist_func`. 13 cc wins this session (10 ndimage + 3 spatial: slerp 2.12x, cdist_func 4.47x, pdist_func
+3.65x). LEVER (reusable): serial closure-based map/double-loop over independent rows/pairs/points = byte-id
+parallel win; add `+ Sync`, chunk contiguously to preserve output order.
