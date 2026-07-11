@@ -2720,3 +2720,23 @@ n=3000, median statistic): 119.18->22.19ms = **4.612x** (null [0.869,1.316]), **
 CLEAN but the LEDGER was behind origin/main (opt entries landed via worktree), so committed via WORKTREE too.
 bin `perf_jackknife`. 16 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats). KEY: jackknife is
 byte-id-parallelizable (deterministic); bootstrap/permutation are NOT (RNG-order-dependent).
+
+### 2026-07-11 (ScarletChapel, cc) — signal::group_delay_from_ba parallel across frequencies: 5.69x, byte-identical
+Public-straggler lever. `group_delay_from_ba(b, a, n_freqs)` (the convenience group-delay sweep) computed each
+frequency's delay in a SERIAL `for k in 0..n_freqs` loop, while its scipy-named sibling `group_delay` was ALREADY
+parallel (both route the per-ω kernel through the shared `freqz_par_collect` helper). Each frequency's delay is a
+PURE function of its index `ω_k=π·k/n`: `group_delay_at_frequency` reads only the immutable `b`/`a` and does two
+`eval_weighted_poly_on_unit_circle` sweeps — a `cos`+`sin` PER COEFFICIENT (Σ k·c[k]·e^{-jkω}, the derivative
+polynomial that plain Horner can't produce) — so per-ω work is O(len(b)+len(a)) transcendentals: compute-bound.
+LEVER: fan the sweep across disjoint contiguous ω-chunks via `freqz_par_collect` (index-aligned, kernel pure) →
+byte-identical to the serial loop; gated by `freqz_response_thread_count(n_freqs, len(b)+len(a))` (serial below
+n_freqs<4096 or work<2^16). ORTHOGONAL to the prior Horner-routing of this fn (that cut the per-ω magnitude evals
+to 1 cos+sin; the DERIVATIVE evals stay per-coefficient — which is exactly why the sweep is compute-bound and
+parallelizes cleanly). Toggled by `GROUP_DELAY_FROM_BA_FORCE_SERIAL`. MEASURED (strict-remote release
+`+avx2,+fma`, paired median vs A/A null, order=1024 / n_freqs=16384): 264.50->41.54ms = **5.687x** (null
+[0.885,1.172], serial cv 4.0%), **bitmism=0**. (A smaller order=256/nf=8192 probe was IN-FLOOR on a contended
+worker — the raw ~2x was swamped by 43% parallel-arm cv; larger work amortised the scheduling jitter.) bin
+`perf_group_delay_from_ba`. 17 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats + 1 signal). Sibling
+stragglers `magnitude_response`/`phase_response` share the pattern but their per-ω kernel is Horner (1 cos+sin,
+memory-bound) — lighter payoff, left for a follow-on. LEVER (reusable): grep public vs scipy-named sibling pairs
+where the sibling routes a per-item kernel through a parallel helper but the convenience fn still loops serially.

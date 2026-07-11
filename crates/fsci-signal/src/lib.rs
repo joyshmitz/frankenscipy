@@ -6004,17 +6004,40 @@ fn validate_discrete_tf(b: &[f64], a: &[f64]) -> Result<(), SignalError> {
 /// Returns the group delay τ(ω) = -d(phase)/dω.
 /// This is a convenience wrapper that returns (frequencies, delays).
 pub fn group_delay_from_ba(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f64>) {
+    // Each frequency's delay is a pure function of its index — `group_delay_at_frequency`
+    // reads only the immutable `b`/`a` and does two `eval_weighted_poly_on_unit_circle`
+    // sweeps (a `cos`+`sin` PER coefficient), so the per-frequency work is O(len(b)+len(a))
+    // transcendentals. Fan the sweep across disjoint contiguous chunks through the shared
+    // `freqz_par_collect` helper (the same path the scipy-named `group_delay` uses): the
+    // chunks are index-aligned and the kernel is pure, so the result is byte-identical to
+    // the serial `for k in 0..n_freqs` loop. Its sibling `group_delay` was already parallel;
+    // this convenience helper was the leftover serial straggler.
+    let force_serial = GROUP_DELAY_FROM_BA_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let nthreads = if force_serial {
+        1
+    } else {
+        freqz_response_thread_count(n_freqs, b.len() + a.len())
+    };
+    let pairs: Vec<(f64, f64)> = freqz_par_collect(n_freqs, nthreads, |k| {
+        let w = std::f64::consts::PI * k as f64 / n_freqs as f64;
+        (w, group_delay_at_frequency(b, a, w))
+    });
     let mut freqs = Vec::with_capacity(n_freqs);
     let mut delays = Vec::with_capacity(n_freqs);
-
-    for k in 0..n_freqs {
-        let w = std::f64::consts::PI * k as f64 / n_freqs as f64;
+    for (w, gd) in pairs {
         freqs.push(w);
-        delays.push(group_delay_at_frequency(b, a, w));
+        delays.push(gd);
     }
 
     (freqs, delays)
 }
+
+/// When `true`, [`group_delay_from_ba`] runs its per-frequency sweep serially (the ORIG
+/// behaviour). When `false` (default), independent frequencies fan across cores via
+/// `freqz_par_collect`. Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static GROUP_DELAY_FROM_BA_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Compute the **linear** magnitude response of a digital filter.
 ///
