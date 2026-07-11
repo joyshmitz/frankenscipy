@@ -2821,3 +2821,23 @@ closure captures `&self`+`w`, both Sync) → byte-identical to the serial loop; 
 3 spatial + 2 opt + 1 stats + 6 signal). SIGNAL FREQUENCY-RESPONSE SURFACE NOW FULLY EXHAUSTED: free fns
 (freqz/freqz_zpk/sosfreqz/freqs/freqs_zpk/group_delay/bode + group_delay_from_ba/phase_response/
 magnitude_response/dfreqresp) AND methods (Lti/Dlti::freqresp) all parallel. No per-ω response stragglers remain.
+
+---
+
+## SESSION CONSOLIDATION — 2026-07-11 (ScarletChapel, cc): 22 byte-identical wins, then FRONTIER+HOLD
+Roll-up of the byte-identical (bitmism=0, median-gated) parallelization campaign. All wins strict-remote release
+`+avx2,+fma`, paired median vs A/A null, same-binary `*_FORCE_SERIAL` toggle.
+- **ndimage ×10** (1.5–29x): global label-stat clone-drops (`measurement_label_groups(None)` 128 MB clone) +
+  privatized parallel histograms (labeled_comprehension, label gathers, otsu, histogram, min/max, sum, variance/std,
+  extrema, labcomp-global; median-global was IN-FLOOR cleanup).
+- **signal ×6** (public-straddler vein): group_delay_from_ba 5.69x, phase_response 5.79x, magnitude_response 3.51x,
+  dfreqresp 6.47x, Lti::freqresp 5.99x, Dlti::freqresp 5.31x. Frequency-response surface now fully parallel.
+- **spatial ×3** (callback-map + Sync): geometric_slerp 2.12x, cdist_func 4.47x, pdist_func 3.65x.
+- **opt ×2**: approx_derivative, approx_fprime (callback-map + Sync, first-error preserved).
+- **stats ×1**: jackknife 4.61x (deterministic replicates; bootstrap/permutation excluded — RNG-order-dependent).
+FRONTIER (full detail + retry conditions in docs/NEGATIVE_EVIDENCE.md → "FRONTIER SUMMARY — cc byte-identical
+parallelization lane"): the accessible byte-id parallelization/hoist/structural surface is SATURATED. Known-ready
+but unshipped: `freqs`/`freqs_zpk` (analog response stragglers of the already-parallel `bode`) — byte-id code
+complete, blocked only on rch capacity (fleet too contended 2026-07-11 to obtain a median). Structural byte-id
+primitives are walled (FFT SoA-SIMD behind forbid(unsafe); cache-blocking rejected; tolerance rewrites owner-gated).
+HOLD until a retry condition is met.

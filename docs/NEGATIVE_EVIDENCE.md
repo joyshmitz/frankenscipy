@@ -19887,3 +19887,76 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   `ubs` wrapper unexpectedly launched local Cargo health checks in its temporary shadow workspace; that accidental
   wrapper behavior was disclosed and is excluded from the proof bundle. Retry only when a fresh profile independently
   elevates the untouched `select_three` allocation; do not reopen the two-vector scratch lever.
+
+---
+
+## FRONTIER SUMMARY — cc byte-identical parallelization lane (ScarletChapel, cc, 2026-07-11)
+
+Consolidated frontier for the changed-behavior-forbidden (bit-identical) performance lane worked by the `cc`
+agents (ndimage/interpolate/signal/spatial/stats/opt/integrate/fft/special — NOT linalg/sparse, cod's lane).
+Every win below was gated on the paired MEDIAN vs an A/A null control on one strict-remote worker
+(`RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo run --release`, `+avx2,+fma`) with a
+same-binary `*_FORCE_SERIAL` toggle and `bitmism=0` (bit-for-bit output equality) asserted.
+
+### Modules mined — 22 byte-identical wins shipped this campaign (2026-07-11)
+- **ndimage (10):** labeled_comprehension, measurement_label_value_positions/groups, otsu_threshold, histogram
+  global fast-path, minimum/maximum global, sum global, variance/std global, extrema fused single-pass,
+  labeled_comprehension global reducer (+ median-global monotone clone-drop, IN-FLOOR cleanup). Vein: privatized
+  parallel histogram (per-pixel divide/bincount) + drop the 128 MB `measurement_label_groups(None)` clone on every
+  global label-stat. 1.5–29x.
+- **signal (6):** group_delay_from_ba 5.69x, phase_response 5.79x, magnitude_response 3.51x (+ magnitude_response_db
+  inherits), dfreqresp 6.47x (+ dbode inherits), Lti::freqresp 5.99x, Dlti::freqresp 5.31x. Vein: PUBLIC-STRADDLER —
+  a public/convenience sweep loops a per-ω kernel serially while its scipy-named sibling already routes the SAME
+  kernel through the parallel `freqz_par_collect`/`freqz_parallel_fill` helper. Applies to free fns, ANALOG-vs-DIGITAL
+  pairs (bode parallel → dfreqresp serial), and `&self` struct methods (Sync `Vec<f64>` structs).
+- **spatial (3):** geometric_slerp 2.12x, cdist_func 4.47x, pdist_func 3.65x. Vein: CALLBACK-MAP — public fn maps a
+  user closure over independent rows/pairs/points; add `+ Sync` to the closure bound, chunk contiguously to preserve
+  output order.
+- **opt (2):** approx_derivative (per-Jacobian-column), approx_fprime (per-gradient-component, lowest-index error
+  merge to match serial first-error). Same CALLBACK-MAP vein + `+ Sync`.
+- **stats (1):** jackknife 4.61x (per leave-one-out replicate). DETERMINISTIC → byte-id parallelizable; bootstrap
+  and permutation are NOT (RNG stream is iteration-order-dependent).
+
+### Veins EXHAUSTED across the accessible cc surface — do NOT re-chase
+- **CALLBACK-MAP** (public fn mapping a closure over independent items) — harvested (spatial cdist/pdist_func/slerp,
+  opt approx_derivative/fprime, stats jackknife).
+- **PRIVATIZED-BINCOUNT** (per-pixel divide / histogram) — harvested (ndimage histogram/otsu; stats
+  binned_statistic 1-D + 2-D were ALREADY parallel via `parallel_bin_histogram`).
+- **CLONE-BEFORE-CHEAP-REDUCE** — harvested (ndimage global reductions; the remaining collect-then-sum sites are
+  legit two-pass mean+variance reuse).
+- **PUBLIC-STRADDLER** (all variants: free-fn, analog/digital, struct-method) — signal frequency-response surface is
+  now FULLY parallel: freqz/freqz_zpk/sosfreqz/group_delay/bode + the 6 landed stragglers + Lti/Dlti methods.
+- **REDUNDANT-RECOMPUTE HOIST** — verified DONE workspace-wide: special spheroidal/mathieu `_many` hoist cv/Fourier
+  coeffs; stats dist `_many` hoist norm constants; GaussianKdeNd pre-whitens once; spatial pdist/cdist cosine/
+  correlation/seuclidean hoist per-row invariants; integrate memoizes Gauss-Legendre nodes; opt computes f0 once.
+- **STRUCTURAL byte-id primitive frontier is EMPTY** (verified by reading source): FFT bit-reversal is already
+  optimal (Gold-Rader incremental, transforms.rs:553); cache-blocking is REJECTED-negative; radix-4 fusion + ND
+  parallel-axis are done; SoA-SIMD is blocked by `forbid(unsafe)`; every other FFT rewrite (Stockham, packed-real
+  rfft, radix regroup, twiddle symmetry) is TOLERANCE-changing. special structural = asymptotic/CF = tolerance.
+  opt structural = dense linear algebra = cod's linalg lane.
+
+### KNOWN-READY but UNSHIPPED (blocked only on rch capacity, not on a missing lever)
+- **`freqs` and `freqs_zpk`** (analog b/a and zpk frequency response, signal lib.rs ~10491 / ~10361) — SERIAL
+  per-ω stragglers of the already-parallel analog `bode` (identical `eval_analog_poly` kernel). A prior ledger note
+  claiming "freqs parallel" had conflated it with the DIGITAL `freqz_zpk`; reading origin source shows both analog
+  fns are still serial. The `freqs` parallelization is code-complete and byte-identical by construction (route the
+  per-ω loop through `freqz_parallel_fill`; `w[i]` copied through unchanged = `w.to_vec()`; gate
+  `freqz_response_thread_count(w.len(), 2*(b.len()+a.len()))`; toggle a new `FREQS_FORCE_SERIAL`). NOT shipped
+  2026-07-11 because the rch fleet was severely contended (RCH-selected worker `speed 50, 0 slots`; a cold
+  `fsci-signal` build did not complete inside 260s or 480s bounded windows → no median obtainable). Per the standing
+  rule (rch degraded/no-slot → surface, never local), no unmeasured ship was made.
+
+### RETRY CONDITIONS (when to reopen this lane)
+1. **rch fleet recovers** (a worker with free slots completes a `fsci-signal` build in ~2 min) → ship the queued
+   `freqs` then `freqs_zpk` in a worktree at origin/main, median-gated at order=3072/n_freqs=16384; expect ~5–6x.
+2. **New peer code lands** (git log advances past b6b94503e) → re-grep the changed modules for serial per-item
+   sweeps and public-vs-sibling straddler pairs; that is the only way fresh byte-id parallelization appears.
+3. **A contended shared file frees** (signal cspline2d region, interpolate/lib.rs, cluster) → its region opens for
+   a clean paired A/B.
+4. **Owner sign-off on tolerance-parity** → unlocks FFT radix rewrites (Stockham/packed-rfft) and special
+   asymptotic reformulations, which are ~1e-13-accurate but not bit-identical.
+5. **`forbid(unsafe)` relaxed for fsci-fft** → the SoA-SIMD 1-D kernel (pow2 ≥ 4096 ~1.13–1.36x + rfft 1.6x + DCT
+   passes) becomes attackable on a quiet box.
+
+HOLD: the accessible byte-identical parallelization + hoist + structural surface is saturated; no further
+lever-hunting until one of the retry conditions above is met.
