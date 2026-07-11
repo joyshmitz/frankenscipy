@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use crate::formats::{
-    BsrMatrix, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, DokMatrix, LilMatrix, Shape2D,
-    SparseError, SparseFormat, SparseResult,
+    BsrMatrix, CanonicalMeta, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, DokMatrix, LilMatrix,
+    Shape2D, SparseError, SparseFormat, SparseResult,
 };
 use crate::ops::{FormatConvertible, add_csr};
 
@@ -440,7 +440,12 @@ fn block_diag_canonical_csr(matrices: &[&CsrMatrix], shape: Shape2D) -> SparseRe
         (data, indices)
     };
 
-    CsrMatrix::from_components(shape, data, indices, indptr, true)
+    let mut result = CsrMatrix::from_components_unchecked(shape, data, indices, indptr);
+    result.canonical = CanonicalMeta {
+        sorted_indices: true,
+        deduplicated: true,
+    };
+    Ok(result)
 }
 
 /// Construct a sparse matrix from a block layout of sparse matrices.

@@ -4,6 +4,58 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-10 - frankenscipy-5pnb3 - KEEP: skip redundant canonical validation in sparse `block_diag` (bit-identical, median -51.04% to -69.91%)
+
+- Agent: cod. Domain: `fsci-sparse`; no peer-owned ndimage, interpolate, or signal file was touched. A
+  current Criterion ranking put the two open `sparse_block_diag` rows at **3.1933 ms** and **4.9915 ms**
+  median. Hotter COO conversion/dedup rows were already mined or rejected, kron was closed, and SpMM's
+  count-pass removal had already lost. The prior `block_diag` entry identified its remaining serial
+  O(nnz) `validate_compressed` scan as a 2-3 ms floor.
+- ONE LEVER: replace the final validating `CsrMatrix::from_components(..., true)` inside
+  `block_diag_canonical_csr` with the crate-private unchecked component constructor, then set both canonical
+  metadata bits. The public fast-path guard admits only sorted, deduplicated input blocks. Each block owns
+  disjoint output rows, column offsets preserve sorted order, and each output row contains exactly one input
+  row, so the constructed CSR is sorted and deduplicated by construction.
+
+### Median self-time decision gate
+
+Same worker `vmi1293453`, saved Criterion baseline `blockdiag_validate_before`, release bench profile:
+
+| row | before median | candidate median | Criterion median change | 95% confidence interval | speedup | verdict |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `sparse_block_diag/nblocks2000_bs40_nnz320000/320000` | 3.193265 ms | 1.563451 ms | **-51.0391%** | [-59.9384%, -43.0313%] | **2.0424x** | KEEP |
+| `sparse_block_diag/nblocks500_bs120_nnz360000/360000` | 4.991548 ms | 1.501748 ms | **-69.9142%** | [-72.9356%, -58.1272%] | **3.3238x** | KEEP |
+
+The decision is gated on the stored Criterion median estimates, not console means or cross-worker data.
+Both median-change intervals exclude zero (`p = 0.00` in the Criterion console comparison).
+
+### Isomorphism and quality proof
+
+- Ordering preserved: yes. The same `data`, shifted `indices`, and `indptr` vectors leave the builder in the
+  same order; only the post-build validation/detection scan is removed.
+- Tie-breaking and RNG: N/A. Floating-point: identical; the lever performs no floating-point operation.
+- `block_diag_canonical_parallel_is_byte_identical_to_reference` plus the five other focused `block_diag`
+  tests: **6 passed, 0 failed** remotely on `vmi1293453`. The proof compares `indptr`, `indices`, every
+  `f64::to_bits()`, canonical metadata, overflow handling, and SciPy reference values.
+- Remote `cargo check -p fsci-sparse --all-targets`: PASS on `vmi1293453`. Direct
+  `rustfmt --edition 2024 --check` and `git diff --check`: PASS.
+- Remote workspace check was blocked by a `num-traits` build-script SIGILL on `ovh-b`. Remote workspace
+  clippy stopped in peer-owned `fsci-opt`; crate-scoped clippy reached existing `needless_range_loop`
+  findings in `linalg.rs`/`ops.rs`, all outside this hunk. A full sparse-lib test request found no admissible
+  8-slot worker and RCH refused local fallback. None of these failures implicates `construct.rs`.
+- A targeted UBS invocation unexpectedly executed its internal Cargo subchecks in a local shadow workspace.
+  Those results were discarded; every authoritative build, test, check, and benchmark cited above used RCH.
+
+### Remote execution and retry boundary
+
+The decisive baseline and comparison used
+`RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- cargo bench ...` on the same effective worker,
+`vmi1293453`; RCH logs verified the worker for both arms. There was no local fallback. The earlier degraded
+`ovh-a` retries and the no-slot full-suite request were surfaced rather than replaced by local Cargo.
+
+Retry condition: none for this trusted canonical construction path; it ships. Future `block_diag` work must
+start from a new profile and a different primitive while retaining the exact CSR bit proof.
+
 ## 2026-07-10 - frankenscipy-8l8r1.156 - KEEP: cache SPILU diagonal structural positions once (bit-identical, primary median -8.08%)
 
 - Agent: cod / ScarletChapel. Domain: `fsci-sparse`; interpolate remained peer-owned. The profile-first

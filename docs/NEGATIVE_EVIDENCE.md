@@ -6,6 +6,30 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-10 - cod - KEEP (bit-identical): sparse `block_diag` skips redundant canonical validation - 2.04-3.32x median self-time
+
+- DIFFERENT module: selected `fsci-sparse`; no ndimage, interpolate, or signal file was touched. The
+  profile-first ranking placed the two still-open `sparse_block_diag` rows at **3.1933 ms** and
+  **4.9915 ms** median. Hotter COO conversion/dedup rows were already mined, and the existing ledger
+  identified the serial `validate_compressed` scan as this canonical builder's remaining 2-3 ms floor.
+- ONE LEVER: `block_diag_canonical_csr` now uses the crate-private unchecked component constructor and
+  stamps `CanonicalMeta { sorted_indices: true, deduplicated: true }`. Entry to this helper already proves
+  every input canonical, and its offset/disjoint-slice construction proves the output canonical. No data,
+  index, indptr, allocation size, traversal order, or floating-point operation changed.
+- **MEDIAN GATE, same worker `vmi1293453`, Criterion:** 2000 x 40 blocks **3.1933 -> 1.5635 ms**
+  (**-51.0391%**, 95% CI `[-59.9384%, -43.0313%]`, **2.0424x**); 500 x 120 blocks
+  **4.9915 -> 1.5017 ms** (**-69.9142%**, 95% CI `[-72.9356%, -58.1272%]`, **3.3238x**).
+  Both intervals exclude zero; KEEP.
+- BIT IDENTITY: all six focused `block_diag` tests passed remotely, including exact `indptr`/`indices`,
+  every value via `to_bits()`, canonical metadata, overflow, and SciPy reference cases. Remote
+  `cargo check -p fsci-sparse --all-targets`, direct rustfmt check, and `git diff --check` passed.
+- REMOTE boundary: all authoritative Cargo commands used fail-closed RCH. Workspace check hit a remote
+  `num-traits` SIGILL; workspace clippy stopped in peer-owned `fsci-opt`; crate clippy reached pre-existing
+  `needless_range_loop` findings outside `construct.rs`; a full sparse-suite request found no admissible
+  8-slot worker and refused local fallback. A targeted UBS invocation unexpectedly ran its internal Cargo
+  subchecks in a local shadow workspace; those results were discarded and did not inform this verdict.
+- Bead: `frankenscipy-5pnb3`.
+
 ## 2026-07-10 - ScarletChapel (cod) - KEEP (bit-identical): sparse SPILU cached diagonal positions - 8.08% median self-time reduction on 1024/bw32
 
 - DIFFERENT module: selected `fsci-sparse`, not peer-owned interpolate. A remote-only full sparse Criterion
