@@ -10674,14 +10674,39 @@ fn eval_poly_complex(p: &[f64], zre: f64, zim: f64) -> (f64, f64) {
 
 /// Magnitude (dB) and unwrapped phase (degrees) from a complex response.
 fn bode_from_complex(h: &[(f64, f64)], w: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let mag: Vec<f64> = h.iter().map(|&(re, im)| 20.0 * re.hypot(im).log10()).collect();
-    let raw: Vec<f64> = h.iter().map(|&(re, im)| im.atan2(re)).collect();
+    // `hypot`+`log10` (magnitude, dB) and `atan2` (phase) are heavy per-element transcendentals. When
+    // `bode`/`dbode` are called with many frequencies on a low-order filter, the complex response `h`
+    // is cheap (already computed in parallel) and this post-processing dominates. Fan the two
+    // independent maps across cores via the order-preserving `freqz_par_collect` — BYTE-IDENTICAL to
+    // the serial `h.iter().map(...).collect()`. The `unwrap_phase` scan stays serial (it is cumulative,
+    // so not independent per element). `BODE_POST_FORCE_SERIAL` restores the serial maps (A/B gate).
+    let n = h.len();
+    let nthreads = if BODE_POST_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        1
+    } else {
+        freqz_response_thread_count(n, 8)
+    };
+    let mag: Vec<f64> = freqz_par_collect(n, nthreads, |i| {
+        let (re, im) = h[i];
+        20.0 * re.hypot(im).log10()
+    });
+    let raw: Vec<f64> = freqz_par_collect(n, nthreads, |i| {
+        let (re, im) = h[i];
+        im.atan2(re)
+    });
     let phase: Vec<f64> = unwrap_phase(&raw)
         .iter()
         .map(|&p| p * 180.0 / std::f64::consts::PI)
         .collect();
     (w.to_vec(), mag, phase)
 }
+
+/// When `true`, [`bode`]/`dbode`'s magnitude/phase post-processing (`hypot`+`log10`, `atan2`) runs
+/// serially (the ORIG behaviour). When `false` (default), the two independent maps fan across cores
+/// via the order-preserving `freqz_par_collect`. Byte-identical either way. For the A/B perf gate.
+#[doc(hidden)]
+pub static BODE_POST_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Bode magnitude and phase of a continuous-time transfer function, matching
 /// `scipy.signal.bode((num, den), w)` for the explicit-frequency case.

@@ -20219,3 +20219,17 @@ output passes cap it). Test-gate rch-blocked (heavy stats compile ×10, bin serv
 MATERIALIZE-THEN-REDUCE surface done: gstd + gzscore family. Remaining ln-materialize sites (boxcox/yeojohnson at
 5041/5050/5418) are EMBEDDED in opt/Newton loops (not clean standalone) → skip. Stats reduction-map surface now
 deeply harvested across means/circular/materialize-then-reduce.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED signal::bode/dbode post-processing parallel: 1.77x, byte-identical (PIPELINE-TAIL vein)
+Pivoted OUT of stats (harvested) to signal. `bode_from_complex` (shared by bode+dbode) did TWO serial heavy maps
+after the parallel `freqz_par_collect` computes `h`: mag (hypot+log10) + raw (atan2). For LOW-order + MANY freqs the
+post-processing DOMINATES → fanned both maps through `freqz_par_collect` (byte-id, order-preserving; unwrap_phase
+stays serial=cumulative). Gate freqz_response_thread_count(n,8), toggle BODE_POST_FORCE_SERIAL, bin perf_bode_post.
+500k freqs 1.48x (fragile cv34%) → 2M freqs 91.56→43.62ms **1.768x DECIDED** (null [0.812,1.202] 47% margin),
+bitmism=0, **fsci-signal --lib 674/0**. Gated at n≥8192 so typical few-point Bode stays serial (no regression).
+NEW VEIN "PIPELINE-TAIL": after parallelizing the EXPENSIVE stage of a pipeline, the serial POST-PROCESSING tail
+becomes the bottleneck for regimes where the expensive stage is cheap — parallelize the tail too. GENERALIZES: audit
+other multi-stage fns where stage-1 is already parallel but a heavy stage-2 map/reduce is serial (freq-response
+mag/phase, FFT→post-process, filter→envelope). CHECKED & EXHAUSTED THIS TURN: ndimage elementwise (power/exp/log done;
+abs/sqrt/scale light), opt callback-map (fixed_point_many already parallel; DE/PSO embedded), signal
+instantaneous_frequency (FFT-dominated, atan2 map ~10% → skip).

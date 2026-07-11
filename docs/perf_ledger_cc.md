@@ -2874,6 +2874,23 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — signal::bode/dbode parallelize the mag/phase post-processing: 1.77x, byte-identical
+38th win — pivot OUT of stats to signal's `bode_from_complex` post-processing (shared by `bode` + `dbode`). After
+the parallel `freqz_par_collect` computes the complex response `h`, this helper did TWO serial heavy maps:
+`mag = h.iter().map(|&(re,im)| 20·re.hypot(im).log10())` (hypot+log10) + `raw = h.iter().map(|&(re,im)| im.atan2(re))`
+(atan2). With a LOW-ORDER filter + MANY frequencies (dense Bode plot), `h` is cheap and this post-processing DOMINATES.
+LEVER: fan the two independent maps across cores via the order-preserving `freqz_par_collect` (the same helper `h`
+uses) → BYTE-IDENTICAL (index order preserved); `unwrap_phase` stays serial (cumulative scan, not independent).
+Gate `freqz_response_thread_count(n, 8)`, toggle `BODE_POST_FORCE_SERIAL`, bin `perf_bode_post`. MEASURED (strict-remote
+release `+avx2,+fma` on vmi1149989, same-binary paired median vs A/A null, low-order H(jω)=1/(1+0.5jω)): 500k freqs
+1.483x (fragile, contended cv 34%) → RE-MEASURED at 2M freqs: 91.56→43.62ms = **1.768x DECIDED** (null [0.812,1.202]
+— 47% margin, serial cv 6.7%), **bitmism=0** (mag+phase). REGIME NOTE: gated at n_freqs≥8192, so typical few-point
+Bode plots stay serial (no change/regression); the win is for DENSE frequency sweeps on low-order filters. LESSON:
+after parallelizing the EXPENSIVE stage of a pipeline (h via freqz_par_collect), the POST-PROCESSING tail becomes the
+new serial bottleneck for regimes where the expensive stage is cheap — parallelize the tail too. TEST-GATE: fsci-signal
+--lib **674 passed / 0 failed** (rch served the signal test compile). Signal post-processing tail now parallel
+(bode/dbode).
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::gzscore/gzscore_ddof/gzscore_weighted parallelize the materialized ln map: 1.54x, byte-identical
 37th win — the materialize-then-reduce sub-pattern (from gstd) applied to the geometric z-scores.
 `gzscore_ddof(data)` = `zscore_ddof(ln(data))`; `gzscore_weighted` = `zscore_weighted(ln(data))` — both materialize
