@@ -20209,3 +20209,13 @@ variance passes over `logs` cap it. RULE: parallelize the `.map(heavy).collect()
 values ≥2× (can't fuse into a map-sum). Test-gate rch-blocked (heavy stats compile ×10, bin build served→verified) →
 median gate. FOLLOW-ONS: other materialize-then-reduce-twice fns (2-pass mean/var of a transformed array). Reduction-
 map stats surface now heavily harvested: means (pmean/power_mean/pmean_weighted), circular (all + rayleightest), gstd.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED stats::gzscore family parallel materialized ln map: 1.54x, byte-identical
+gstd's materialize-then-reduce sub-pattern applied to geometric z-scores. gzscore_ddof/gzscore_weighted materialize
+`ln(data)` then feed `zscore` → shared `gzscore_ln_vec` swaps serial collect for `par_continuous_map` (byte-id). ONE
+lever, 3 fns (gzscore→ddof). Toggle GZSCORE_FORCE_SERIAL, bin perf_gzscore. 8M on vmi1149989: 91.80→52.59ms =
+**1.538x DECIDED** (null [0.892,1.259] 22% margin robust), bitmism=0 (full Vec). Same ~1.5x as gstd (zscore mean/std/
+output passes cap it). Test-gate rch-blocked (heavy stats compile ×10, bin served→verified) → median gate.
+MATERIALIZE-THEN-REDUCE surface done: gstd + gzscore family. Remaining ln-materialize sites (boxcox/yeojohnson at
+5041/5050/5418) are EMBEDDED in opt/Newton loops (not clean standalone) → skip. Stats reduction-map surface now
+deeply harvested across means/circular/materialize-then-reduce.

@@ -2874,6 +2874,21 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::gzscore/gzscore_ddof/gzscore_weighted parallelize the materialized ln map: 1.54x, byte-identical
+37th win — the materialize-then-reduce sub-pattern (from gstd) applied to the geometric z-scores.
+`gzscore_ddof(data)` = `zscore_ddof(ln(data))`; `gzscore_weighted` = `zscore_weighted(ln(data))` — both materialize
+`logged = data.iter().map(ln).collect()` then `zscore` reduces it (mean, std, per-element output). LEVER: shared
+`gzscore_ln_vec(data)` swaps the serial `.map(ln).collect()` for order-preserving `par_continuous_map(data, |x|
+x.ln())` → BYTE-IDENTICAL (same ln values, index order), zscore unchanged. ONE lever lifts all three (gzscore→ddof).
+Toggle `GZSCORE_FORCE_SERIAL`, bin `perf_gzscore`. MEASURED (strict-remote release `+avx2,+fma` on vmi1149989,
+same-binary paired median vs A/A null, 8M elts, full-Vec bitmism): 91.80→52.59ms = **1.538x DECIDED** (null
+[0.892,1.259] — 22% margin, robust), **bitmism=0**. ~Same magnitude as gstd (1.6x) — the ln map parallelizes, the
+zscore mean/std/output passes stay serial and cap it. TEST-GATE: bin build served (compile verified) but heavy stats
+test compile refused (no admissible workers ×10) → shipped on MEDIAN gate (byte-id + lib compiles); next stats-suite
+confirms. MATERIALIZE-THEN-REDUCE sub-pattern now: gstd (1.60x) + gzscore family (1.54x) done. FOLLOW-ONS: any other
+`map(heavy).collect()` feeding a multi-pass reducer (boxcox/yeojohnson log-transform are embedded in opt loops → not
+this clean).
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::gstd parallelize the materialized ln map: 1.60x, byte-identical
 36th win — a SUB-PATTERN of reduction-map: parallelize a MATERIALIZED heavy transcendental map that feeds TWO
 downstream reductions. `gstd` (geometric std = `exp(sqrt(var(ln(data))))`) built `logs = data.iter().map(ln).collect()`

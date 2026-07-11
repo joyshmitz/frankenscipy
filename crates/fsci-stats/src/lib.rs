@@ -33701,8 +33701,27 @@ pub fn gzscore(data: &[f64]) -> Vec<f64> {
 /// Compute the geometric z-score with an explicit degrees-of-freedom correction.
 ///
 /// Matches the core 1D behavior of `scipy.stats.gzscore(a, ddof=...)`.
+/// `ln(data)` as a vector, the shared materialized heavy map of the geometric z-scores
+/// (`gzscore`/`gzscore_ddof`/`gzscore_weighted`), whose downstream `zscore` reads the values across
+/// several passes (mean, std, per-element output). Parallelize ONLY the `ln` map via the
+/// order-preserving `par_continuous_map` → BYTE-IDENTICAL to `data.iter().map(ln).collect()` (same
+/// values, index order). `GZSCORE_FORCE_SERIAL` restores the serial map (same-binary A/B).
+fn gzscore_ln_vec(data: &[f64]) -> Vec<f64> {
+    if GZSCORE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| x.ln()).collect()
+    } else {
+        par_continuous_map(data, |x| x.ln())
+    }
+}
+
+/// See [`gzscore_ln_vec`]. When `true`, the geometric z-scores build `ln(data)` serially (ORIG); when
+/// `false` (default), the `ln` map fans across cores. Byte-identical either way. For the A/B perf gate.
+#[doc(hidden)]
+pub static GZSCORE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn gzscore_ddof(data: &[f64], ddof: usize) -> Vec<f64> {
-    let logged: Vec<f64> = data.iter().map(|&value| value.ln()).collect();
+    let logged = gzscore_ln_vec(data);
     zscore_ddof(&logged, ddof)
 }
 
@@ -33721,7 +33740,7 @@ pub fn gzscore_weighted(data: &[f64], weights: &[f64]) -> Vec<f64> {
     if data.windows(2).all(|w| w[0] == w[1]) {
         return vec![0.0; data.len()];
     }
-    let logged: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
+    let logged = gzscore_ln_vec(data);
     zscore_weighted(&logged, weights)
 }
 
