@@ -2874,6 +2874,24 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::gstd parallelize the materialized ln map: 1.60x, byte-identical
+36th win — a SUB-PATTERN of reduction-map: parallelize a MATERIALIZED heavy transcendental map that feeds TWO
+downstream reductions. `gstd` (geometric std = `exp(sqrt(var(ln(data))))`) built `logs = data.iter().map(ln).collect()`
+then computed mean_log + var_log over it. LEVER: swap the serial `.map(ln).collect()` for the order-preserving
+`par_continuous_map(data, |x| x.ln())` (par_continuous_map IS a parallel collect) → BYTE-IDENTICAL (identical ln
+values in index order), so the serial mean/variance passes are unchanged. Toggle `GSTD_FORCE_SERIAL`, bin `perf_gstd`.
+MEASURED (strict-remote release `+avx2,+fma` on vmi1227854, same-binary paired median vs A/A null): 4M 24.63→16.11ms
+= 1.455x DECIDED (marginal, null [0.698,1.374], 6% margin under cv 16%) → RE-MEASURED at 16M for robustness:
+153.25→90.33ms = **1.601x DECIDED** (null [0.776,1.167] — 37% margin, cv 13.9%), **bitmism=0** both (result
+1.98…both). MODEST because only the ONE ln map parallelizes while the TWO serial reduction passes (mean, then
+variance over `logs`) stay serial and cap the win — the win = parallelize the ln, the reductions are unchanged. This
+is the "materialize-then-reduce-twice" sub-pattern: distinct from the fused map-sum (pmean) because the values are
+NEEDED TWICE (mean, variance) so the Vec is materialized either way — the only change is the collect goes parallel.
+LESSON: parallelize the `.map(heavy).collect()` when a later reduction needs the values ≥2× (can't fuse). TEST-GATE: bin build
+served (compile verified) but heavy stats test compile refused (no admissible workers x10) -> shipped on MEDIAN gate
+(byte-id + lib compiles); next stats-suite run confirms. FOLLOW-ONS: any `map(heavy).collect()` feeding
+multiple reductions (2-pass mean/variance of a transformed array).
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::rayleightest reuse the parallel sin/cos reduction: 4.17x, byte-identical
 35th win — the circular-sin/cos vein extends to the directional TESTS. `rayleightest(samples)` (scipy.stats
 Rayleigh test of circular uniformity) did serial `sum_cos = map(cos).sum()` + `sum_sin = map(sin).sum()` — two heavy

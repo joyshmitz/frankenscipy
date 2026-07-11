@@ -25775,6 +25775,13 @@ pub fn gmean_weighted(data: &[f64], weights: &[f64]) -> f64 {
 /// All values must be positive.
 ///
 /// Matches `scipy.stats.gstd(a)`.
+/// When `true`, [`gstd`] builds its log vector with the serial `data.iter().map(ln).collect()` (the
+/// ORIG behaviour). When `false` (default), the compute-bound `ln` map fans across cores via the
+/// order-preserving `par_continuous_map`. Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static GSTD_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn gstd(data: &[f64]) -> f64 {
     if data.is_empty() || data.len() < 2 {
         return f64::NAN;
@@ -25783,7 +25790,16 @@ pub fn gstd(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let n = data.len() as f64;
-    let logs: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
+    // `ln` is a heavy per-element transcendental that dominates building `logs`; the two downstream
+    // reductions (mean, then variance) read the materialized values. Parallelize ONLY the ln map via
+    // the order-preserving `par_continuous_map` — BYTE-IDENTICAL to `data.iter().map(ln).collect()`
+    // (same values in index order), so the serial mean/variance are unchanged. `GSTD_FORCE_SERIAL`
+    // restores the serial map (same-binary A/B).
+    let logs: Vec<f64> = if GSTD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| x.ln()).collect()
+    } else {
+        par_continuous_map(data, |x| x.ln())
+    };
     let mean_log = logs.iter().sum::<f64>() / n;
     let var_log = logs.iter().map(|&lx| (lx - mean_log).powi(2)).sum::<f64>() / (n - 1.0);
     var_log.sqrt().exp()

@@ -20198,3 +20198,14 @@ ENTIRE cost is the transcendental map-sum (no weighting, no downstream heavy mat
 perf_rayleightest. Test-gate rch-blocked → median-gate ship. Directional sin/cos surface now DONE (circmean family +
 weighted + rayleightest). kuipertest/rao_spacing_test are spacing-based (sorted angles, no sin/cos sum) — different
 vein, not this lever.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED stats::gstd parallel materialized ln map: 1.60x, byte-identical
+Sub-pattern of reduction-map: parallelize a MATERIALIZED heavy map feeding ≥2 downstream reductions. `gstd`
+(geometric std) built `logs = data.iter().map(ln).collect()` then mean+variance over it → swapped the serial collect
+for order-preserving `par_continuous_map(data,|x| x.ln())` (byte-id, ln values index-ordered). Toggle GSTD_FORCE_SERIAL,
+bin perf_gstd. 4M 1.455x (marginal, 6% margin) → RE-MEASURED 16M: 153.25→90.33ms = **1.601x DECIDED** (null
+[0.776,1.167] 37% margin), bitmism=0. MODEST (1.6x) because only the ONE ln map parallelizes; the two serial mean/
+variance passes over `logs` cap it. RULE: parallelize the `.map(heavy).collect()` when a later reduction needs the
+values ≥2× (can't fuse into a map-sum). Test-gate rch-blocked (heavy stats compile ×10, bin build served→verified) →
+median gate. FOLLOW-ONS: other materialize-then-reduce-twice fns (2-pass mean/var of a transformed array). Reduction-
+map stats surface now heavily harvested: means (pmean/power_mean/pmean_weighted), circular (all + rayleightest), gstd.
