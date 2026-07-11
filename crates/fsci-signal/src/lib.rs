@@ -4840,12 +4840,28 @@ pub fn cheb1ap(
 /// Matches `scipy.signal.gauss_spline(x, n)`: a zero-mean Gaussian with variance
 /// `σ² = (n + 1) / 12`, evaluated at each knot in `x` —
 /// `g(x) = exp(−x² / (2σ²)) / √(2π σ²)`.
+/// When `true`, [`gauss_spline`] runs its `exp` map serially (the ORIG behaviour). When `false`
+/// (default), the compute-bound `exp` map fans across cores via the order-preserving `par_index_fill`
+/// (byte-identical). For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static GAUSS_SPLINE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn gauss_spline(x: &[f64], n: u32) -> Vec<f64> {
     let signsq = (n as f64 + 1.0) / 12.0;
     let coef = 1.0 / (2.0 * std::f64::consts::PI * signsq).sqrt();
-    x.iter()
-        .map(|&xi| coef * (-xi * xi / (2.0 * signsq)).exp())
-        .collect()
+    // Each element is an independent `exp` (transcendental, compute-bound), `coef`/`signsq` hoisted.
+    // Fan across cores via the order-preserving `par_index_fill` — BYTE-IDENTICAL to the serial map.
+    if GAUSS_SPLINE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        x.iter()
+            .map(|&xi| coef * (-xi * xi / (2.0 * signsq)).exp())
+            .collect()
+    } else {
+        par_index_fill(x.len(), |i| {
+            let xi = x[i];
+            coef * (-xi * xi / (2.0 * signsq)).exp()
+        })
+    }
 }
 
 /// Analog Chebyshev type II (inverse Chebyshev) lowpass prototype.

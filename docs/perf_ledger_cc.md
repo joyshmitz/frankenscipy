@@ -2874,6 +2874,16 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — signal::gauss_spline parallelize the exp map: 2.67x, byte-identical
+44th win — Explore follow-on. `gauss_spline(x, n)` (scipy.signal.gauss_spline) did serial `x.iter().map(|&xi| coef *
+(-xi*xi/(2·signsq)).exp()).collect()` — one `exp` per element (coef/signsq hoisted), the whole function body. LEVER:
+route through the order-preserving `par_index_fill` (the same helper the signal waveform gens/windows use) → BYTE-
+IDENTICAL to the serial map. Toggle `GAUSS_SPLINE_FORCE_SERIAL`, bin `perf_gauss_spline`. MEASURED (strict-remote
+release `+avx2,+fma` on vmi1167313, same-binary paired median vs A/A null, 8M elts, order=3): 51.25→17.52ms =
+**2.668x DECIDED** (null [0.749,1.233] — robust), **bitmism=0** (full output). Clean single-exp elementwise map,
+like ndimage exp_array. TEST-GATE: bin build served (compile verified); byte-id (bitmism=0) → median-gate ship.
+FOLLOW-ON: spectral_flatness (signal:4654, serial Σln reduction — the last Explore candidate).
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::GenNorm::logpdf_many parallelize the powf map: 3.08x, byte-identical
 43rd win — found by an Explore sweep for "dominant serial heavy compute": `GenNorm::logpdf_many` (23269, scipy
 `gennorm.logpdf` batch) was the LONE distribution `_many` method still serial — `xs.iter().map(|&x| lead -
