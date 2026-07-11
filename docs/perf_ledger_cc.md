@@ -3246,3 +3246,17 @@ scipy.signal.windows.nuttall/.bohman is single-threaded numpy. SIGNAL WINDOW GEN
 blackman/blackmanharris/barthann/flattop/tukey/kaiser/... + nuttall/bohman landed). WAVEFORM/WINDOW/WAVELET VEIN this
 session: gauspuls 8.9x + morlet/morlet2 7.9x + nuttall 11.0x + bohman 6.4x = 5 fns, 3 commits. Remaining serial gen
 straggler: `general_hamming` (799, 1×cos — light, likely marginal). Cross-crate: stats `vtest` (circular family).
+
+### 2026-07-11 (cc) — stats::vtest parallel circular reduction: 5.4x, byte-identical
+The LAST serial member of the directional sin/cos-sum family (circmean/circvar/circstd/rayleightest + weighted all
+already route their Σsin/Σcos through the parallel `par_continuous_map`; `vtest` was missed). `vtest(samples, mu)`
+(V-test of circular uniformity with a known mean direction, stats:26224) did serial `Σcos(x−mu)` + `Σsin(x−mu)` —
+two heavy transcendentals/element, everything else O(1) (the circular sweet spot). Parallelized ONLY the two maps via
+the order-preserving `par_continuous_map` (`|x| (x−mu).cos()` / `.sin()`, sums kept index-ordered) → BYTE-IDENTICAL to
+the serial `map(cos).sum()`/`map(sin).sum()` (same left-fold from 0.0); shares `CIRC_FORCE_SERIAL` with the family.
+bin `perf_vtest`. MEASURED (release `+avx2,+fma`, same-binary median vs A/A null, 4M/mu=1, 21 iters, ×2): serial
+113.42→19.46ms = **5.444x DECIDED** (null [0.932,1.044]) and 113.20→19.80ms = **5.463x DECIDED** (null [0.890,1.042]);
+**bitmism=0** (v AND pvalue bit-identical, v=0.9938637087169686 both) both runs. fsci-stats --lib **2023/0** (incl.
+vtest_returns_valid_results). ~5.4x = pure two-transcendental sums with no downstream heavy math (rayleightest-class);
+higher than circmean's 2.08x (which has atan2+rem_euclid tails). Peer: astropy.stats.vtest (scipy has no vtest) →
+byte-identical self-speedup. **DIRECTIONAL sin/cos-sum FAMILY NOW FULLY EXHAUSTED.** 49 cc wins total this campaign.

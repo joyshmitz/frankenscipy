@@ -26228,8 +26228,20 @@ pub fn vtest(samples: &[f64], mu: f64) -> (f64, f64) {
     }
     let nf = n as f64;
 
-    let sum_cos: f64 = samples.iter().map(|&x| (x - mu).cos()).sum();
-    let sum_sin: f64 = samples.iter().map(|&x| (x - mu).sin()).sum();
+    // Σcos(x−mu) and Σsin(x−mu): two heavy transcendentals/element (the circular sweet spot), everything
+    // else O(1). Parallelize ONLY the maps via the order-preserving `par_continuous_map`, keep the sums in
+    // index order → BYTE-IDENTICAL to the serial `map(cos).sum()`/`map(sin).sum()` (same left-fold from 0.0).
+    // Shares `CIRC_FORCE_SERIAL` with the circmean/rayleightest family (same-binary A/B). The last serial
+    // member of the directional sin/cos-sum family.
+    let (sum_cos, sum_sin) = if CIRC_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let sum_cos: f64 = samples.iter().map(|&x| (x - mu).cos()).sum();
+        let sum_sin: f64 = samples.iter().map(|&x| (x - mu).sin()).sum();
+        (sum_cos, sum_sin)
+    } else {
+        let sum_cos: f64 = par_continuous_map(samples, |x| (x - mu).cos()).iter().sum();
+        let sum_sin: f64 = par_continuous_map(samples, |x| (x - mu).sin()).iter().sum();
+        (sum_cos, sum_sin)
+    };
 
     let r_bar = ((sum_cos * sum_cos + sum_sin * sum_sin) / (nf * nf)).sqrt();
     let v = r_bar * (sum_cos / nf).signum() * (nf).sqrt();
