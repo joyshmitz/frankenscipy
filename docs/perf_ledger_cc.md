@@ -2535,3 +2535,19 @@ BYTE-IDENTICAL (each group's ascending-flat-order value list reproduced exactly)
 (all cases) + non-contiguous-index label stats; the contiguous-index common case uses the unaffected
 `measurement_one_based_scatter`. The label-stat parallelization vein is now SATURATED (map +
 `labeled_comprehension`, both shared gathers done); no clean sibling remains in it.
+
+### 2026-07-11 (ScarletChapel, cc) — otsu_threshold parallel min/max + histogram: 5.71x, byte-identical
+Broke OUT of the label-stat vein into a compute-bound global reduction. `otsu_threshold` (image
+binarization; peer = skimage `threshold_otsu`, single-threaded) ran 3 serial O(N) passes: a min fold, a max
+fold, and a 256-bin histogram with a per-pixel divide+floor (the divide is COMPUTE-bound). LEVER: parallelize
+all three — chunked NaN-propagating min/max reductions (associative + NaN-propagating → byte-identical) + a
+privatized per-thread 256-bin histogram merged by summing counts (order-independent integer counts →
+byte-identical). Same per-pixel bin assignment, so `best_thresh` is bit-identical. Gated by
+`ndimage_filter_thread_count`; toggled by `NDIMAGE_OTSU_FORCE_SERIAL`. MEASURED (strict-remote release
+`+avx2,+fma`, paired median vs A/A null, 16M px): 90.06->13.15ms = **5.710x** (null [0.834,1.165]),
+**bitmism=0**. cargo check compiles; the serial arm is the ORIG code verbatim + perf-bin bitmism=0 proves the
+parallel arm is bit-identical, and the existing `diff_ndimage_otsu_threshold` conformance test validates that
+serial path vs Python — so it transitively covers the parallel path. bin `perf_otsu`. LEVER (reusable, BIG):
+a GLOBAL histogram/threshold fn with a per-pixel divide is compute-bound → privatized-parallel bincount is a
+~5x byte-identical win (vs the memory-bound label gathers' ~1.5x — the per-pixel DIVIDE is what makes it 5x).
+NEXT: `histogram`'s global (labels=None) path is the identical pattern (+drops a full-data clone).

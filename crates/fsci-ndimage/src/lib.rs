@@ -10604,34 +10604,59 @@ pub fn threshold(input: &NdArray, thresh: f64) -> NdArray {
 /// Apply Otsu's thresholding to find optimal binary threshold.
 ///
 /// Returns the optimal threshold value.
+/// When `true`, force `otsu_threshold` onto its ORIG serial min/max + histogram passes. Byte-identical
+/// either way. Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static NDIMAGE_OTSU_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn otsu_threshold(input: &NdArray) -> f64 {
     if input.size() == 0 {
         return 0.0;
     }
 
-    // Build histogram
-    let min_val = input
-        .data
-        .iter()
-        .cloned()
-        .fold(f64::INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.min(b)
-            }
+    let data = input.data.as_slice();
+    let n = data.len();
+    // NaN-propagating min/max combine — matches the ORIG two folds exactly (result is NaN iff any
+    // element is NaN, else the true extremum). Both are associative + commutative, so the chunked
+    // parallel reductions below are BYTE-IDENTICAL to the sequential folds.
+    let nan_min = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) };
+    let nan_max = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) };
+
+    let nthreads = if NDIMAGE_OTSU_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        1
+    } else {
+        ndimage_filter_thread_count(n, 4)
+    };
+
+    // Pass 1: min + max over all pixels.
+    let (min_val, max_val) = if nthreads <= 1 {
+        (
+            data.iter().copied().fold(f64::INFINITY, nan_min),
+            data.iter().copied().fold(f64::NEG_INFINITY, nan_max),
+        )
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|c| {
+                    scope.spawn(move || {
+                        (
+                            c.iter().copied().fold(f64::INFINITY, nan_min),
+                            c.iter().copied().fold(f64::NEG_INFINITY, nan_max),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("otsu minmax chunk panicked"))
+                .collect()
         });
-    let max_val = input
-        .data
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
-        });
+        parts.into_iter().fold(
+            (f64::INFINITY, f64::NEG_INFINITY),
+            |(amn, amx), (bmn, bmx)| (nan_min(amn, bmn), nan_max(amx, bmx)),
+        )
+    };
 
     if (max_val - min_val).abs() < 1e-15 {
         return min_val;
@@ -10639,12 +10664,44 @@ pub fn otsu_threshold(input: &NdArray) -> f64 {
 
     let nbins = 256;
     let bin_width = (max_val - min_val) / nbins as f64;
-    let mut hist = vec![0usize; nbins];
 
-    for &v in &input.data {
-        let bin = ((v - min_val) / bin_width).floor() as usize;
-        hist[bin.min(nbins - 1)] += 1;
-    }
+    // Pass 2: 256-bin histogram (per-pixel divide + floor). Each pixel lands in the same bin
+    // regardless of thread, and integer counts sum order-independently, so the privatized
+    // per-thread histograms merged below are BYTE-IDENTICAL to the sequential bincount.
+    let hist: Vec<usize> = if nthreads <= 1 {
+        let mut h = vec![0usize; nbins];
+        for &v in data {
+            let bin = ((v - min_val) / bin_width).floor() as usize;
+            h[bin.min(nbins - 1)] += 1;
+        }
+        h
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let parts: Vec<Vec<usize>> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|c| {
+                    scope.spawn(move || {
+                        let mut h = vec![0usize; nbins];
+                        for &v in c {
+                            let bin = ((v - min_val) / bin_width).floor() as usize;
+                            h[bin.min(nbins - 1)] += 1;
+                        }
+                        h
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("otsu histogram chunk panicked"))
+                .collect()
+        });
+        let mut h = vec![0usize; nbins];
+        for p in parts {
+            for (i, c) in p.into_iter().enumerate() {
+                h[i] += c;
+            }
+        }
+        h
+    };
 
     let total = input.size() as f64;
     let mut sum_total = 0.0;
