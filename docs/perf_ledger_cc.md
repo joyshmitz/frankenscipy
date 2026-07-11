@@ -2839,6 +2839,23 @@ line drifted. FOLLOW-ON (queued, identical vein): `freqs_zpk(zpk, w)` (10415) is
 (kernel = k·Π(jω−z)/Π(jω−p) → (mag,phase)) — same one-fn routing through `freqz_parallel_fill`, separate
 `FREQS_ZPK_FORCE_SERIAL` gate + bin.
 
+### 2026-07-11 (ScarletChapel, cc) — ndimage::exp_array + log_array parallel transcendental maps: 2.00x / 3.05x, byte-identical
+27th+28th wins — the compute-bound elementwise-map vein (opened by power_array) applied to the sibling
+transcendental maps. `exp_array` did serial `data.iter().map(|&v| v.exp()).collect()`; `log_array` did
+`.map(|&v| if v>0 { v.ln() } else { NEG_INFINITY })`. Both `exp`/`ln` are heavy per-element transcendentals
+(~20-40 cycles) → COMPUTE-bound → routed through the same work-gated `fill_pixels_parallel(&mut out, 16, …)`
+(byte-id, pure per-index; log's `v>0.0` branch is per-element so still pure). Toggles
+`NDIMAGE_EXP_ARRAY_FORCE_SERIAL` / `NDIMAGE_LOG_ARRAY_FORCE_SERIAL`, bin `perf_explog_array`. MEASURED
+(strict-remote release `+avx2,+fma` on vmi1149989, same-binary paired median vs A/A null, 4M elements):
+`exp_array` 13.61→5.87ms = **2.002x DECIDED** (null [0.703,1.517] — marginal under heavy box contention,
+parallel cv 37% but cand outside band), **bitmism=0**; `log_array` 24.63→6.14ms = **3.048x DECIDED** (null
+[0.823,1.206] clean), **bitmism=0**. NOTE the speedup ORDERING confirms the discriminator: log (24.6ms serial,
+ln+branch, heaviest) 3.05x > exp (13.6ms, plain exp) 2.00x > (add/mul, bandwidth-bound, WASH — not shipped).
+The lighter the transcendental, the closer to the bandwidth floor and the lower the parallel multiple — but exp/ln
+are both still compute-bound enough to DECIDE. `sqrt_array` (~1 instruction) is left serial (bandwidth-bound).
+ndimage elementwise compute-bound-map vein now harvested (power/exp/log); the remaining unary ops (sqrt/neg/abs)
+and the binary ops (add/mul/sub) are bandwidth-bound rejects.
+
 ### 2026-07-11 (ScarletChapel, cc) — ndimage::power_array parallel powf map: 3.61x, byte-identical
 26th win — a NEW vein: compute-bound elementwise transcendental map (distinct from the serial-straggler-with-
 parallel-sibling vein, now exhausted). `power_array(input, exponent)` did a serial

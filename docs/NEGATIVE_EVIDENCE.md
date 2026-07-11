@@ -20023,3 +20023,16 @@ elementwise-map vein: heavy transcendental (powf/exp/log → compute-bound → p
 measure (lighter, borderline): `exp_array`, `log_array` (~20-40 cyc each); `sqrt_array` is ~1 instruction →
 bandwidth-bound, skip. This is the new frontier: audit each crate's elementwise unary ops for a HEAVY per-element
 kernel that is still serial.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED ndimage::exp_array + log_array (compute-bound map vein): 2.00x / 3.05x, byte-identical
+Measured the two borderline follow-ons flagged above — BOTH DECIDED, byte-identical. Routed the serial `exp`/`ln`
+maps through `fill_pixels_parallel(&mut out, 16, …)` (toggles `NDIMAGE_EXP_ARRAY_FORCE_SERIAL` /
+`NDIMAGE_LOG_ARRAY_FORCE_SERIAL`, bin `perf_explog_array`). Strict-remote release `+avx2,+fma` (vmi1149989), 4M
+elements: `exp_array` 13.61→5.87ms = **2.002x DECIDED** (null [0.703,1.517], marginal under contention, bitmism=0);
+`log_array` 24.63→6.14ms = **3.048x DECIDED** (null [0.823,1.206] clean, bitmism=0). CONFIRMS the discriminator
+QUANTITATIVELY — the parallel multiple tracks per-element kernel weight: powf (38.5ms serial) 3.61x ≈ log (24.6ms,
+ln+branch) 3.05x > exp (13.6ms, plain exp) 2.00x >> add/mul (bandwidth-bound) WASH. `sqrt_array` (~1 instr) left
+serial. ndimage elementwise compute-bound-map vein now HARVESTED (power/exp/log shipped; sqrt/neg/abs + binary
+add/mul/sub are bandwidth-bound rejects — do NOT re-chase). GENERALIZE: the vein is alive in OTHER crates' public
+elementwise transcendental maps (special has erf/gamma/bessel families, but those `_many` are already par_map_indices
+per the ledger; check any remaining serial heavy-kernel unary maps).

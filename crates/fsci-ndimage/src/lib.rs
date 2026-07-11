@@ -11346,27 +11346,68 @@ pub fn scale_array(input: &NdArray, scalar: f64) -> NdArray {
 
 /// Apply element-wise natural logarithm (ln).
 pub fn log_array(input: &NdArray) -> NdArray {
-    let data: Vec<f64> = input
-        .data
-        .iter()
-        .map(|&v| if v > 0.0 { v.ln() } else { f64::NEG_INFINITY })
-        .collect();
-    NdArray {
-        data,
+    // `ln` is a heavy per-element transcendental (~20-40 cycles) → this map is COMPUTE-bound; a
+    // work-gated parallel fill wins at large `n`. BYTE-IDENTICAL to the serial map (the `v > 0.0`
+    // branch + `v.ln()` is a pure function of each element, written in flat order).
+    if NDIMAGE_LOG_ARRAY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let data: Vec<f64> = input
+            .data
+            .iter()
+            .map(|&v| if v > 0.0 { v.ln() } else { f64::NEG_INFINITY })
+            .collect();
+        return NdArray {
+            data,
+            shape: input.shape.clone(),
+            strides: input.strides.clone(),
+        };
+    }
+    let mut output = NdArray {
+        data: vec![0.0; input.data.len()],
         shape: input.shape.clone(),
         strides: input.strides.clone(),
-    }
+    };
+    fill_pixels_parallel(&mut output, 16, |flat, _scratch| {
+        let v = input.data[flat];
+        if v > 0.0 { v.ln() } else { f64::NEG_INFINITY }
+    });
+    output
 }
+
+/// When `true`, [`log_array`] runs its element-wise `ln` map serially (the ORIG behaviour). When
+/// `false` (default), the compute-bound map fans across cores via `fill_pixels_parallel`.
+/// Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static NDIMAGE_LOG_ARRAY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Apply element-wise exponential.
 pub fn exp_array(input: &NdArray) -> NdArray {
-    let data: Vec<f64> = input.data.iter().map(|&v| v.exp()).collect();
-    NdArray {
-        data,
+    // `exp` is a heavy per-element transcendental (~20-40 cycles) → this map is COMPUTE-bound; a
+    // work-gated parallel fill wins at large `n`. BYTE-IDENTICAL to the serial map (`v.exp()` is a
+    // pure function of each element, written in flat order).
+    if NDIMAGE_EXP_ARRAY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let data: Vec<f64> = input.data.iter().map(|&v| v.exp()).collect();
+        return NdArray {
+            data,
+            shape: input.shape.clone(),
+            strides: input.strides.clone(),
+        };
+    }
+    let mut output = NdArray {
+        data: vec![0.0; input.data.len()],
         shape: input.shape.clone(),
         strides: input.strides.clone(),
-    }
+    };
+    fill_pixels_parallel(&mut output, 16, |flat, _scratch| input.data[flat].exp());
+    output
 }
+
+/// When `true`, [`exp_array`] runs its element-wise `exp` map serially (the ORIG behaviour). When
+/// `false` (default), the compute-bound map fans across cores via `fill_pixels_parallel`.
+/// Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static NDIMAGE_EXP_ARRAY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Compute the sum along a specific axis, reducing that dimension.
 pub fn sum_axis(input: &NdArray, axis: usize) -> Result<NdArray, NdimageError> {
