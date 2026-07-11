@@ -19986,3 +19986,24 @@ GENUINELY EXHAUSTED (source-verified): freqz/freqz_zpk/sosfreqz/freqs/freqs_zpk/
 group_delay_from_ba/phase_response/magnitude_response/dfreqresp + Lti/Dlti::freqresp all parallel. Retry
 condition #1 fully consumed — the queued freqs/freqs_zpk pair is DONE. Next lever needs a fresh vein (retry #2:
 new peer code) or an owner-gated frontier.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED interpolate::SmoothBivariateSpline::eval_many (fresh vein, hoist+parallel): 1.78x, byte-identical
+A FRESH straggler OUTSIDE the exhausted signal-response family, found by re-running the freqs-class audit (serial
+public per-item loop WITH a parallel sibling) across the accessible crates via an Explore fan-out. The pointwise
+`SmoothBivariateSpline::eval_many(x,y)` did a serial `x.iter().zip(y).map(|(&xv,&yv)| self.eval(xv,yv)).collect()`
+while BOTH the sibling `RectBivariateSpline::eval_many` (d380511db, 3.0-25.2x) AND this struct's own `eval_grid`
+(b9c6ee6b5, 5.1-8.4x) had already been given the shared-predictor hoist + a parallel driver — the pointwise
+variant was the last serial member of the trio. LEVER: hoist the ny query-independent x-direction BSplines out of
+the per-query rebuild, then fan the independent per-query evals through the existing `par_query_map` (`eval_one`
+reproduces `eval`'s exact finite-guard/clamp/build order → byte-identical). Toggle
+`SMOOTHBISPLINE_EVAL_MANY_FORCE_SCALAR`; build-failure/knob falls back to the serial `self.eval` map. MEASURED
+strict-remote release `+avx2,+fma`, bin `perf_smoothbispline_evalmany`, same-binary paired median vs A/A null:
+30x30/20k **1.776x DECIDED** (null [0.914,1.190]); 45x45/40k **1.785x DECIDED** (null [0.488,1.426]); 60x60/100k
+1.645x IN-FLOOR (null blew out [0.705,1.689] under BOX CONTENTION — the candidate median stayed ~1.65x, i.e. the
+A/A null jittered, not the candidate). **bitmism=0 all three; candidate median rock-stable ~1.78x across sizes.**
+lib suite 187/0. Modest (1.78x, vs the sibling's 3-25x) because at these smoothing factors the SmoothBiv fit has
+fewer coeffs than a full tensor grid, so the hoisted per-query x-spline rebuild is a smaller share (memory/dispatch
+bound, not compute). AUDIT LESSON: the freqs-class straggler audit generalizes beyond signal — one member of a
+sibling TRIO was left serial after the other two shipped; grep sibling GROUPS, not just pairs. rch was intermittently
+degraded during this land (test build refused twice with "no worker"; retried until a slot freed — never fell to
+local).

@@ -2839,6 +2839,29 @@ line drifted. FOLLOW-ON (queued, identical vein): `freqs_zpk(zpk, w)` (10415) is
 (kernel = k·Π(jω−z)/Π(jω−p) → (mag,phase)) — same one-fn routing through `freqz_parallel_fill`, separate
 `FREQS_ZPK_FORCE_SERIAL` gate + bin.
 
+### 2026-07-11 (ScarletChapel, cc) — SmoothBivariateSpline::eval_many hoist+parallel: 1.78x, byte-identical
+25th win — a fresh vein OUTSIDE the exhausted signal-response family, found by re-running the freqs-class
+"serial straggler with a parallel sibling" audit across the accessible crates (Explore fan-out). The pointwise
+`SmoothBivariateSpline::eval_many(x, y)` (scattered (x,y) pairs) did a SERIAL `x.iter().zip(y).map(|(&xv,&yv)|
+self.eval(xv,yv)).collect()` while BOTH the sibling `RectBivariateSpline::eval_many` (8859, commit d380511db
+3.0-25.2x) AND this struct's own `eval_grid` (9287, commit b9c6ee6b5 5.1-8.4x) had already been given the
+shared-predictor hoist + a parallel driver — the pointwise variant was the last straggler of the trio.
+LEVER (same recipe as the sibling): `self.eval`→`eval_impl` rebuilds the ny x-direction BSplines
+(`coeffs.chunks(nx_coeffs)`, cloning tx + a coeff row) on EVERY query though they depend only on the spline;
+build them ONCE, then a per-query `eval_one` (finite-guard + bbox clamp + shared x-spline evals + one
+query-dependent y-spline build/eval — mirrors `eval`'s exact order, so byte-identical) fans across cores via the
+existing `par_query_map(&pairs, work_per_query=coeffs.len(), …)`. Toggle `SMOOTHBISPLINE_EVAL_MANY_FORCE_SCALAR`;
+x-spline build failure or the knob falls back to the exact serial `self.eval` map. MEASURED (strict-remote release
+`+avx2,+fma`, same-binary paired median vs A/A null, bin `perf_smoothbispline_evalmany`): 30x30 samples/20k
+queries **1.776x DECIDED** (null [0.914,1.190]); 45x45/40k **1.785x DECIDED** (null [0.488,1.426]); 60x60/100k
+1.645x IN-FLOOR (null band blew out to [0.705,1.689] under box contention — candidate median STILL 1.65x, i.e.
+the null jittered, not the candidate). **bitmism=0 all three runs.** Candidate median rock-stable ~1.78x across
+sizes → shipped on the two DECIDED runs. MODEST (1.78x, not the sibling's 3-25x) because at these smoothing
+factors the SmoothBiv fit has fewer coeffs than a full RectBiv tensor grid, so the hoisted per-query x-spline
+rebuild is a smaller share; the bound is memory/dispatch, not compute. AUDIT LESSON: the freqs-class straggler
+audit (serial public per-item loop + a parallel sibling) generalizes BEYOND signal — one member of a sibling
+TRIO (RectBiv-evalmany / SmoothBiv-evalgrid / SmoothBiv-evalmany) was left serial after the other two shipped.
+
 ### 2026-07-11 (ScarletChapel, cc) — signal::freqs_zpk parallel across frequencies: 5.60x, byte-identical
 24th win — completes the analog-response straggler pair opened by `freqs` (23rd). `freqs_zpk(zpk, w)` (10415)
 looped `for &omega in w` SERIALLY while the sibling `bode`/`freqs` sweeps already route the identical

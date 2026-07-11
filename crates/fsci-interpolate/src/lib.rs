@@ -9157,6 +9157,15 @@ pub struct SmoothBivariateSpline {
 pub static SMOOTHBISPLINE_EVAL_GRID_FORCE_PERCELL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Same-binary A/B toggle for `SmoothBivariateSpline::eval_many` (scattered points). When `true`,
+/// every query goes through the per-query `eval` path (which rebuilds the ny x-direction splines for
+/// every (x,y) — the ORIG behaviour). When `false` (default), the x-splines are built once for the
+/// whole batch and the per-query evals fan across cores via `par_query_map`. Byte-identical either
+/// way. Benchmark knob.
+#[doc(hidden)]
+pub static SMOOTHBISPLINE_EVAL_MANY_FORCE_SCALAR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl SmoothBivariateSpline {
     pub fn new(
         x: &[f64],
@@ -9278,10 +9287,46 @@ impl SmoothBivariateSpline {
                 ),
             });
         }
-        Ok(x.iter()
-            .zip(y)
-            .map(|(&xv, &yv)| self.eval(xv, yv))
-            .collect())
+
+        // `eval` -> `eval_impl` rebuilds the `ny` x-direction BSplines (each cloning `tx` and a
+        // coefficient row) on EVERY scattered query, though they depend only on the spline, not the
+        // point. Build them ONCE and reuse across the batch (shared-predictor lever, the same recipe
+        // as the sibling `RectBivariateSpline::eval_many` and this struct's `eval_grid`); each query
+        // then only evaluates the shared x-splines, builds its query-dependent y-spline, and
+        // evaluates that. The independent per-query evals then fan across cores via `par_query_map`.
+        // BYTE-IDENTICAL to the serial `self.eval` map: `eval_one` reproduces `eval`'s exact guard
+        // (`!x.finite || !y.finite -> NaN`), clamps, deterministic builds, and evaluation order. The
+        // knob and any x-spline build failure fall back to the exact per-query path.
+        if x.is_empty()
+            || SMOOTHBISPLINE_EVAL_MANY_FORCE_SCALAR.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Ok(x.iter().zip(y).map(|(&xv, &yv)| self.eval(xv, yv)).collect());
+        }
+        let x_splines: Option<Vec<BSpline>> = self
+            .coeffs
+            .chunks(self.nx_coeffs)
+            .map(|row| BSpline::new(self.tx.clone(), row.to_vec(), self.kx).ok())
+            .collect();
+        let Some(x_splines) = x_splines else {
+            return Ok(x.iter().zip(y).map(|(&xv, &yv)| self.eval(xv, yv)).collect());
+        };
+        let eval_one = |xv: f64, yv: f64| -> f64 {
+            if !xv.is_finite() || !yv.is_finite() {
+                return f64::NAN;
+            }
+            let xi = xv.clamp(self.bbox[0], self.bbox[1]);
+            let yi = yv.clamp(self.bbox[2], self.bbox[3]);
+            let intermediate: Vec<f64> = x_splines.iter().map(|s| s.eval(xi)).collect();
+            let Ok(y_spline) = BSpline::new(self.ty.clone(), intermediate, self.ky) else {
+                return f64::NAN;
+            };
+            y_spline.eval(yi)
+        };
+        let pairs: Vec<(f64, f64)> = x.iter().zip(y).map(|(&xv, &yv)| (xv, yv)).collect();
+        let work_per_query = self.coeffs.len().max(1);
+        Ok(par_query_map(&pairs, work_per_query, |&(xv, yv)| {
+            eval_one(xv, yv)
+        }))
     }
 
     pub fn eval_grid(&self, x: &[f64], y: &[f64]) -> Vec<Vec<f64>> {
