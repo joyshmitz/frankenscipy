@@ -20067,3 +20067,11 @@ TEST-GATE: full `fsci-stats --lib` could not run (rch saturated ×14, strict-rem
 MEDIAN gate — byte-id (no value regression possible) + lib compiles (bin built). Re-run tests when rch recovers.
 NOTE re the operator's ULP directive: no lever this turn needed to move any bit — the reduction vein turned out to
 have a byte-identical formulation, so nothing to surface as "beyond ULP tolerance."
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED stats::power_mean map-parallel reduction (byte-id): 3.15x
+Sibling of the pmean lever — `power_mean(data, p)` (separate public generalized-mean) had the SAME fused serial
+`map(powf).sum()`. Parallelized ONLY the powf map (order-preserving `par_continuous_map`), sum stays index-ordered →
+BYTE-IDENTICAL. Toggle `POWER_MEAN_FORCE_SERIAL`, bin `perf_power_mean`. Strict-remote (vmi1227854), 4M/p=2.5:
+41.50→12.52ms = **3.154x DECIDED** (null [0.748,1.282]), bitmism=0 (result 2.637360238656237 both). Higher than
+pmean's 1.94x only because a quieter worker (parallel arm 12.52 vs 21.81ms) — same lever/fixture. reduction-map-
+parallel stats means: pmean + power_mean DONE; gmean (ln-sum) remaining follow-on; hmean (1/x)=bandwidth-bound skip.

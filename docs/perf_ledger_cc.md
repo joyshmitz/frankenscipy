@@ -2874,6 +2874,20 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::power_mean parallelize the powf map inside the reduction: 3.15x, byte-identical
+31st win — the `pmean` reduction-map-parallel lever applied to its sibling `power_mean(data, p)` (a separate public
+generalized-mean; `p→0` geometric, `p=-1` harmonic, `p=1` arithmetic). Same fused serial `data.iter().map(|&x|
+x.powf(p)).sum()` → parallelize ONLY the `powf` map via order-preserving `par_continuous_map`, keep the sum in index
+order → BYTE-IDENTICAL. Toggle `POWER_MEAN_FORCE_SERIAL`, bin `perf_power_mean`. MEASURED (strict-remote release
+`+avx2,+fma` on vmi1227854, same-binary paired median vs A/A null, 4M elts p=2.5): 41.50→12.52ms = **3.154x DECIDED**
+(null median 0.988x range [0.748,1.282]), **bitmism=0** (result 2.637360238656237 both arms). HIGHER than pmean's
+1.94x purely because this run landed a quieter/faster worker (parallel arm 12.52ms vs pmean's 21.81ms on the more
+contended vmi1149989) — SAME lever, SAME fixture; the win magnitude is worker-dependent, the byte-identity and the
+DECIDE are not. TEST-GATE: `fsci-stats --lib` **2023 passed / 0 failed** — and since this worktree also carries the
+pmean change (74a98a212), this GREEN suite RETROACTIVELY CONFIRMS the pmean win whose gate was rch-blocked last turn.
+REDUCTION-MAP-PARALLEL VEIN across stats means: pmean + power_mean landed; `gmean` (ln-sum,
+lighter) is the remaining follow-on; hmean (1/x) bandwidth-bound=skip.
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::pmean parallelize the powf map inside the reduction: 1.94x, byte-identical
 30th win — the "reduction vein" the operator opened by authorizing within-ULP changes, but landed BYTE-IDENTICAL
 (zero ULP risk). `pmean(data, p)` computed `let power_sum = data.iter().map(|&x| x.powf(p)).sum()` — a fused serial

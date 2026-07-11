@@ -45195,9 +45195,25 @@ pub fn power_mean(data: &[f64], p: f64) -> f64 {
     if p.abs() < 1e-10 {
         return geometric_mean(data);
     }
-    let sum_pow: f64 = data.iter().map(|&x| x.powf(p)).sum();
+    // `powf` dominates this reduction (~50-100 cyc vs ~1 cyc/add) — parallelize ONLY the map (via the
+    // order-preserving `par_continuous_map`) and keep the sum in index order. BYTE-IDENTICAL to the
+    // fused serial `map(powf).sum()` (same independent values, same left-fold from 0.0). Mirrors the
+    // `pmean` lever. `POWER_MEAN_FORCE_SERIAL` restores the fused serial map-sum (same-binary A/B).
+    let sum_pow: f64 = if POWER_MEAN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| x.powf(p)).sum()
+    } else {
+        par_continuous_map(data, |x| x.powf(p)).iter().sum()
+    };
     (sum_pow / data.len() as f64).powf(1.0 / p)
 }
+
+/// When `true`, [`power_mean`] computes its `powf` power-sum with the fused serial `map(powf).sum()`
+/// (the ORIG behaviour). When `false` (default), the compute-bound `powf` map fans across cores via
+/// the order-preserving `par_continuous_map` and the sum stays in index order. Byte-identical either
+/// way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static POWER_MEAN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Gini coefficient - measure of statistical dispersion (inequality).
 /// Returns value between 0 (perfect equality) and 1 (perfect inequality).
