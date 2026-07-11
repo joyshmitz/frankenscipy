@@ -2601,3 +2601,16 @@ because variance's TWO passes over the data make the clone a smaller fraction. b
 CLONE-REMOVAL FAMILY COMPLETE: min/max 7.21x, sum 7.21x, histogram 5.78x, variance/std 4.30x; `mean` was
 already clone-free (`measurement_label_mean` has a direct global path). `measurement_label_groups(None)`'s
 clone is no longer on any global-stat hot path.
+
+### 2026-07-11 (ScarletChapel, cc) — global extrema fused single pass: 6.66x, byte-identical
+The last global-label-stat allocation. `extrema` with `labels=None` allocated ALL `(value, position)` pairs
+via `measurement_label_value_positions(None)` (~256MB at 16M px) THEN ran two separate scans
+(`minimum_value_position` + `maximum_value_position`). LEVER: a single fused pass over `input.data` tracking
+min/max + their positions — BYTE-IDENTICAL (identical strict-`<`/`>` first-occurrence tie-break, identical NaN
+"last wins" update `value.is_nan()→update`, identical increasing-flat-index order; min/max are independent
+trackers so fusing the two scans is exact) — no pair allocation, and 2 scans → 1. Toggled by
+`NDIMAGE_EXTREMA_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`, paired median vs A/A null, 16M px):
+101.05->15.83ms = **6.662x** (null [0.706,1.145]), **bitmism=0** (all 4 outputs incl. positions). bin
+`perf_extrema_global`. ALLOCATION-REMOVAL FAMILY now FULLY CLOSED: the `measurement_label_groups(None)` clone
+(min/max/sum/variance/std/histogram) and the `measurement_label_value_positions(None)` pair-alloc (extrema) are
+off every global-stat hot path; `mean` was already direct. 9 ndimage wins this session (1.5-7.2x, all byte-id).

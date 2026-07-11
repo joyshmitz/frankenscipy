@@ -8043,11 +8043,47 @@ pub fn maximum_position(
 /// Matches `scipy.ndimage.extrema`; scalar SciPy results are returned as
 /// one-element vectors, while explicit `index` lists return one value/position
 /// per label.
+/// When `true`, force the global (no-labels) `extrema` onto the ORIG group path (allocate all
+/// (value, position) pairs + two scans). Byte-identical either way. Benchmark knob.
+#[doc(hidden)]
+pub static NDIMAGE_EXTREMA_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn extrema(
     input: &NdArray,
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<ExtremaResult, NdimageError> {
+    if labels.is_none() && !NDIMAGE_EXTREMA_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        // Global extrema (labels=None): a single fused pass over `input.data` tracking min/max +
+        // their positions, skipping the `measurement_label_value_positions` (value, position) pair
+        // allocation AND fusing the two separate scans. BYTE-IDENTICAL to `minimum_value_position` /
+        // `maximum_value_position` over the whole array: identical strict-`<`/`>` first-occurrence
+        // tie-break, identical NaN "last wins" update, identical increasing-flat-index order.
+        let data = input.data.as_slice();
+        if data.is_empty() {
+            let z = vec![0usize; input.ndim()];
+            return Ok((vec![0.0], vec![0.0], vec![z.clone()], vec![z]));
+        }
+        let (mut min_val, mut min_flat) = (data[0], 0usize);
+        let (mut max_val, mut max_flat) = (data[0], 0usize);
+        for (flat, &value) in data.iter().enumerate().skip(1) {
+            if value < min_val || value.is_nan() {
+                min_val = value;
+                min_flat = flat;
+            }
+            if value > max_val || value.is_nan() {
+                max_val = value;
+                max_flat = flat;
+            }
+        }
+        return Ok((
+            vec![min_val],
+            vec![max_val],
+            vec![input.unravel(min_flat)],
+            vec![input.unravel(max_flat)],
+        ));
+    }
     let groups = measurement_label_value_positions(input, labels, index)?;
     let mut minima = Vec::with_capacity(groups.len());
     let mut maxima = Vec::with_capacity(groups.len());
