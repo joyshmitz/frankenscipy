@@ -20036,3 +20036,18 @@ serial. ndimage elementwise compute-bound-map vein now HARVESTED (power/exp/log 
 add/mul/sub are bandwidth-bound rejects — do NOT re-chase). GENERALIZE: the vein is alive in OTHER crates' public
 elementwise transcendental maps (special has erf/gamma/bessel families, but those `_many` are already par_map_indices
 per the ledger; check any remaining serial heavy-kernel unary maps).
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED signal::filtfilt_axis_2d lfilter_zi hoist (shared-predictor vein): 1.66x, byte-identical
+A 2nd Explore fan-out for the RECOMPUTE-INSIDE-LOOP anti-pattern (distinct from the parallelization straggler hunt,
+now exhausted) found the sole non-marginal remaining site: `filtfilt_axis_2d` recomputes `lfilter_zi(b,a)` — an
+O(order³) dense solve (`fsci_linalg::solve`) query-independent in (b,a) — on EVERY line. Hoisted it out of the
+per-line loop (new `filtfilt_with_padtype_zi(...,zi_pre)` internal; `lfilter_zi`-error/knob fallback to the exact
+per-line path preserves error order). MEASURED strict-remote release `+avx2,+fma`, same-binary paired median vs A/A
+null (bin `perf_filtfilt_axis_hoist`): order=20/10000×260 **1.657x DECIDED** (null [0.752,1.343], cv 15.8%), bitmism=0
+(also order=14/6000×350 1.637x but IN-FLOOR under 42%-cv contention — same win, null blew out). WIN RATIO ≈ order²/len
+→ decides for HIGH-ORDER filters (sharp elliptic/Chebyshev) on many modest-length lines; marginal for low order/long
+lines. HOIST VEIN NOW SATURATED (2nd fan-out evidence): the shipped hoists (RectBiv/SmoothBiv eval_many & eval_grid,
+pchip, and now filtfilt_axis_2d) cover every high-value recompute-in-loop site; the remaining `*_axis_2d` window/zi
+rebuilds (sosfiltfilt/welch/csd/spectrogram/coherence) are all rebuild≪per-line → single-digit-% → left as near-misses.
+STATE: both the parallelization/compute-bound-map AND the shared-predictor-hoist veins are now genuinely exhausted for
+non-marginal byte-identical wins across the accessible crates; remaining is owner-gated tolerance-parity or retry #2.

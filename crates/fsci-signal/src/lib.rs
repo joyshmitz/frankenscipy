@@ -8734,6 +8734,21 @@ pub fn filtfilt_with_padtype(
     x: &[f64],
     padtype: Option<&str>,
 ) -> Result<Vec<f64>, SignalError> {
+    filtfilt_with_padtype_zi(b, a, x, padtype, None)
+}
+
+/// Like [`filtfilt_with_padtype`], but reuses a precomputed `lfilter_zi(b, a)` initial-condition
+/// vector when `zi_pre` is `Some` — the query-INDEPENDENT part of the forward/backward passes. Used
+/// by [`filtfilt_axis_2d`] to hoist the O(order³) `lfilter_zi` dense solve out of the per-line loop.
+/// With `zi_pre = None` it computes `lfilter_zi` at the same point as before, so the single-call
+/// path is byte-identical (same validation/error order, same arithmetic).
+fn filtfilt_with_padtype_zi(
+    b: &[f64],
+    a: &[f64],
+    x: &[f64],
+    padtype: Option<&str>,
+    zi_pre: Option<&[f64]>,
+) -> Result<Vec<f64>, SignalError> {
     if b.is_empty() || a.is_empty() {
         return Err(SignalError::InvalidArgument(
             "b and a must be non-empty".to_string(),
@@ -8801,8 +8816,16 @@ pub fn filtfilt_with_padtype(
         _ => unreachable!("padtype validated above"),
     }
 
-    // Forward pass with initial conditions
-    let zi = lfilter_zi(b, a)?;
+    // Forward pass with initial conditions. `lfilter_zi(b, a)` is query-INDEPENDENT; reuse a
+    // precomputed one when the caller (`filtfilt_axis_2d`) hoisted it out of a per-line loop.
+    let zi_owned;
+    let zi: &[f64] = match zi_pre {
+        Some(z) => z,
+        None => {
+            zi_owned = lfilter_zi(b, a)?;
+            &zi_owned
+        }
+    };
     let zi_f: Vec<f64> = zi.iter().map(|&v| v * padded[0]).collect();
     let mut forward = lfilter(b, a, &padded, Some(&zi_f))?;
 
@@ -9100,8 +9123,28 @@ pub fn filtfilt_axis_2d(
 ) -> Result<Vec<Vec<f64>>, SignalError> {
     // Forward + backward doubles the per-sample work vs a single lfilter pass.
     let nfilt = a.len().max(b.len()).saturating_mul(2).max(1);
-    apply_filter_axis_2d(x, axis, nfilt, |line| filtfilt(b, a, line))
+    // `filtfilt` recomputes the query-INDEPENDENT `lfilter_zi(b, a)` initial-condition solve (an
+    // O(order³) dense linear solve) on EVERY line. Hoist it out of the per-line loop and reuse the
+    // same vector for all lines — BYTE-IDENTICAL: the zi is deterministic in (b, a); each line still
+    // scales it by its own first sample. On any `lfilter_zi` failure (e.g. order-1 filter) or when
+    // the hoist is disabled, fall back to the exact per-line path so error behaviour is unchanged.
+    if FILTFILT_AXIS_HOIST_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return apply_filter_axis_2d(x, axis, nfilt, |line| filtfilt(b, a, line));
+    }
+    match lfilter_zi(b, a) {
+        Ok(zi) => apply_filter_axis_2d(x, axis, nfilt, |line| {
+            filtfilt_with_padtype_zi(b, a, line, None, Some(&zi))
+        }),
+        Err(_) => apply_filter_axis_2d(x, axis, nfilt, |line| filtfilt(b, a, line)),
+    }
 }
+
+/// When `true`, [`filtfilt_axis_2d`] recomputes `lfilter_zi` on every line (the ORIG behaviour).
+/// When `false` (default), it hoists the query-independent solve out of the per-line loop and reuses
+/// it across all lines. Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static FILTFILT_AXIS_HOIST_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Apply `sosfiltfilt` (zero-phase SOS forward+backward) across one axis of a 2-D
 /// input.

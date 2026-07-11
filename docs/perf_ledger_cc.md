@@ -2874,6 +2874,26 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — signal::filtfilt_axis_2d hoist lfilter_zi out of per-line loop: 1.66x, byte-identical
+29th win — the shared-predictor HOIST vein (compute-once-reuse), found by a 2nd Explore fan-out for the
+recompute-inside-loop anti-pattern (distinct from the parallelization straggler hunt). `filtfilt_axis_2d(b,a,x,axis)`
+calls `filtfilt(b,a,line)` per line; each `filtfilt` recomputes `lfilter_zi(b,a)` — an **O(order³) dense linear
+solve** (`fsci_linalg::solve` on an (order-1)² matrix + `Vec<Vec>` alloc) that is query-INDEPENDENT (depends only
+on b/a). Over L lines that's L redundant solves. LEVER: factor `filtfilt_with_padtype_zi(b,a,x,padtype,zi_pre)`
+(the old body, taking an optional precomputed zi; `filtfilt_with_padtype` = it with `None` → single-call path
+byte-identical, same validation/error order); in `filtfilt_axis_2d` solve `lfilter_zi` ONCE, thread it into the
+per-line closure. FALLBACK: on any `lfilter_zi` error (e.g. order-1 filter) or the `FILTFILT_AXIS_HOIST_DISABLE`
+knob, revert to the exact per-line `filtfilt` path → error behaviour unchanged. BYTE-IDENTICAL: zi is deterministic
+in (b,a); each line still scales it by its own first sample. MEASURED (strict-remote release `+avx2,+fma`,
+same-binary paired median vs A/A null, bin `perf_filtfilt_axis_hoist`): order=14/6000×350 1.637x IN-FLOOR (box
+contended, null blew to [0.709,2.258], cv 42% BOTH arms — the null jittered, cand consistent); order=20/10000×260
+(heavier+quieter) **1.657x DECIDED** (null [0.752,1.343], cv 15.8%), **bitmism=0** both. WIN RATIO ≈ order²/len, so
+DECIDES for HIGH-ORDER filters (sharp elliptic/Chebyshev) on many modest-length lines; marginal for low order/long
+lines. MEASURE LESSON (reconfirmed 3rd time): contention blows out the A/A NULL, not the candidate — scale work up
+(bigger order+more rows = longer call) to amortize scheduling jitter, don't accept the IN-FLOOR. The hoist vein is
+otherwise SATURATED (2nd Explore fan-out: this was the sole non-marginal remaining site; sosfiltfilt/welch/csd/
+spectrogram/coherence _axis_2d window-rebuilds are all rebuild≪per-line → left as documented near-misses).
+
 ### 2026-07-11 (ScarletChapel, cc) — SmoothBivariateSpline::eval_many hoist+parallel: 1.78x, byte-identical
 25th win — a fresh vein OUTSIDE the exhausted signal-response family, found by re-running the freqs-class
 "serial straggler with a parallel sibling" audit across the accessible crates (Explore fan-out). The pointwise
