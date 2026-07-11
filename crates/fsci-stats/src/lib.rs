@@ -39018,22 +39018,91 @@ pub fn cross_entropy(pk: &[f64], qk: &[f64], base: Option<f64>) -> f64 {
         return f64::NAN;
     }
 
-    let mut ce = 0.0;
-    for (&p, &q) in pk.iter().zip(qk) {
-        let pi = p / sum_p;
-        let qi = q / sum_q;
-        if pi > 0.0 {
-            if qi == 0.0 {
-                return f64::INFINITY;
+    // `qi.ln()` per element (a heavy `ln` + two divides) makes this reduction COMPUTE-bound. Mirror
+    // the parallel siblings `entropy`/`kl_divergence`: fan the term sum across cores (chunked,
+    // 4-way-unrolled), WITHIN per-op ULP tolerance (same reordering as the shipped `entropy_h_sum`).
+    // The `qi==0 && pi>0` case yields a `+INF` term (ln(0) = -INF, ·(-pi<0) = +INF), preserving the
+    // scalar's INFINITY result. `CROSS_ENTROPY_FORCE_SERIAL` restores the exact scalar loop (A/B).
+    let ce = if CROSS_ENTROPY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut ce = 0.0;
+        for (&p, &q) in pk.iter().zip(qk) {
+            let pi = p / sum_p;
+            let qi = q / sum_q;
+            if pi > 0.0 {
+                if qi == 0.0 {
+                    return f64::INFINITY;
+                }
+                ce -= pi * qi.ln();
             }
-            ce -= pi * qi.ln();
         }
-    }
+        ce
+    } else {
+        let s = ce_sum(pk, qk, sum_p, sum_q);
+        if s == f64::INFINITY {
+            return f64::INFINITY;
+        }
+        s
+    };
 
     match base {
         Some(b) => ce / b.ln(),
         None => ce,
     }
+}
+
+/// When `true`, [`cross_entropy`] sums its terms with the exact scalar loop (the ORIG behaviour). When
+/// `false` (default), the compute-bound `Σ -pᵢ·ln(qᵢ)` fans across cores (chunked, 4-way-unrolled),
+/// mirroring `entropy`/`kl_divergence`. WITHIN per-op ULP tolerance. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static CROSS_ENTROPY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `Σ -(pₖ/Σpₖ)·ln(qₖ/Σqₖ)` over aligned probability vectors, fanned across cores exactly as
+/// [`entropy_h_sum`]/[`kl_sum`] (chunked, 4-way-unrolled). Within per-op ULP tolerance (parallel reorder).
+fn ce_sum(pk: &[f64], qk: &[f64], sum_p: f64, sum_q: f64) -> f64 {
+    let chunk_sum = |pc: &[f64], qc: &[f64]| -> f64 {
+        let term = |p: f64, q: f64| -> f64 {
+            let pi = p / sum_p;
+            let qi = q / sum_q;
+            if pi > 0.0 { -pi * qi.ln() } else { 0.0 }
+        };
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= pc.len() {
+            a[0] += term(pc[i], qc[i]);
+            a[1] += term(pc[i + 1], qc[i + 1]);
+            a[2] += term(pc[i + 2], qc[i + 2]);
+            a[3] += term(pc[i + 3], qc[i + 3]);
+            i += 4;
+        }
+        let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+        while i < pc.len() {
+            s += term(pc[i], qc[i]);
+            i += 1;
+        }
+        s
+    };
+    let n = pk.len();
+    if n < (1 << 16) {
+        return chunk_sum(pk, qk);
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let threads = cores.min((n / (1 << 16)).max(1)).min(16);
+    if threads <= 1 {
+        return chunk_sum(pk, qk);
+    }
+    let chunk = n.div_ceil(threads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        let handles: Vec<_> = pk
+            .chunks(chunk)
+            .zip(qk.chunks(chunk))
+            .map(|(pc, qc)| scope.spawn(move || chunk_sum(pc, qc)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    parts.iter().sum()
 }
 
 /// Result of Box-Cox transformation.

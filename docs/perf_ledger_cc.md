@@ -2874,6 +2874,18 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::cross_entropy parallelize the ln reduction: 2.33x, WITHIN-ULP
+41st win — the cross_entropy sibling-straggler to kl_divergence (both left serial while `entropy` was parallel).
+`cross_entropy` summed `-pᵢ·ln(qᵢ)` serially → added `ce_sum` mirroring `kl_sum`/`entropy_h_sum` EXACTLY (chunked,
+4-way-unrolled), toggle `CROSS_ENTROPY_FORCE_SERIAL`, bin `perf_cross_entropy`. qi==0&pi>0 term → +INF (ln(0)=-INF,
+·(-pi<0)=+INF) preserving scalar INFINITY. MEASURED (strict-remote release `+avx2,+fma` on vmi1149989, same-binary
+paired median vs A/A null): 8M 2.004x (marginal, contended) → 24M 162.09→69.56ms = **2.330x DECIDED** (null
+[0.534,1.345], 73% margin). WITHIN-ULP: rel drift **9.4e-14** (458 raw ULP on ~17.3) = same reorder entropy ships +
+within scipy tol. TEST-GATE (mandatory for within-ULP): **fsci-stats --lib 2023/0** (cross_entropy scipy-ref tests
+pass). Shipped on the FRESH SYNCED checkout (post 33-behind resync) with push-after-commit. ENTROPY-FAMILY REDUCTIONS
+NOW FULLY PARALLEL: entropy (prior) + kl_divergence (c5b3351f7) + cross_entropy (this). The SIMD-reject was
+single-thread-only — cross-core parallelization of all three wins 2-2.6x. Confirms the re-open-SIMD-rejects lesson.
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::kl_divergence parallelize the ln reduction: 2.58x, WITHIN-ULP (first ULP-tolerant ship)
 40th win, and the FIRST within-ULP (not byte-identical) ship this campaign — the operator authorized "byte-identical
 OR within per-op ULP tolerance." `kl_divergence` did a serial `Σ pᵢ·ln(pᵢ/qᵢ)` (2 divides + a heavy `ln` per element

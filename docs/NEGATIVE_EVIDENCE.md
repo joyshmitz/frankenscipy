@@ -20302,3 +20302,14 @@ scipy-ref tests), ship. rch FLEET saturated end of this turn (sync --all did not
   strict-remote slot can run the full stats library plus focused SciPy/reference entropy gates; reapply this exact
   chunked-reduction lever, require relative drift <=1e-12, and repeat the same-binary median gate. No other lever may
   be folded into that retry.
+> **RESOLUTION (cc):** the cod-lane surface above was blocked only on the rch test gate; the cc lane then
+> measured 2.33x AND passed `fsci-stats --lib` 2023/0, so cross_entropy is SHIPPED (below). Both records kept.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED cross_entropy parallel ln reduction: 2.33x, WITHIN-ULP (queue drained after resync)
+The queued cross_entropy lever shipped once rch recovered (after a forced 33-behind resync of the local checkout).
+Applied the saved diff to the FRESH checkout, built, measured on vmi1149989: 24M 162.09→69.56ms = **2.330x DECIDED**
+(null [0.534,1.345] 73% margin; 8M was 2.00x marginal-contended). WITHIN-ULP rel 9.4e-14 (entropy's reorder, within
+scipy tol). TEST-GATE MANDATORY: fsci-stats 2023/0. `ce_sum` mirrors kl_sum/entropy_h_sum. **ENTROPY-FAMILY (entropy/
+kl_divergence/cross_entropy) NOW ALL CROSS-CORE PARALLEL** — the [[perf_stats_entropy_ln_reduction_reject]] was
+SIMD-single-thread-only; parallelization wins 2-2.6x on all three. Commit on the fresh synced checkout, push-after-
+commit workflow (operator directive). QUEUED artifacts consumed.
