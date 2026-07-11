@@ -7890,6 +7890,13 @@ pub fn maximum(
 pub static NDIMAGE_MEDIAN_LABELS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, force the global (no-labels) `median` onto the ORIG group path (redundant full-data
+/// clone). Byte-identical either way. Benchmark knob for the same-binary A/B (this cleanup measured
+/// IN-FLOOR — median is sort-dominated — but the clone removal is monotone/byte-identical).
+#[doc(hidden)]
+pub static NDIMAGE_MEDIAN_GLOBAL_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Median of values in optionally labeled regions.
 ///
 /// Matches `scipy.ndimage.median`; scalar SciPy results are returned as a
@@ -7899,6 +7906,15 @@ pub fn median(
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<Vec<f64>, NdimageError> {
+    if labels.is_none() && !NDIMAGE_MEDIAN_GLOBAL_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        // Global median (labels=None): `median_of_values(input.data)` directly, skipping the
+        // `measurement_label_groups` full-data clone (median double-clones: the group clone AND
+        // `median_of_values`'s own `.to_vec()` for the sort — this drops the first). BYTE-IDENTICAL
+        // (same values, same `total_cmp` sort). Monotone cleanup; the sort dominates so it measured
+        // IN-FLOOR (~1.07x), NOT a headline win.
+        return Ok(vec![median_of_values(&input.data)]);
+    }
     let groups = measurement_label_groups(input, labels, index)?;
 
     // Each label's median is an INDEPENDENT sort of its own values, written to its own output slot,

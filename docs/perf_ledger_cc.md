@@ -2627,3 +2627,16 @@ dwarfs it), **bitmism=0**. CAVEAT: 29x is for a LIGHT reducer (the ~384MB alloc/
 reducer amortizes the alloc so the win shrinks — but the alloc-removal is unconditional. bin
 `perf_labcomp_global`. This closes the last global-label-stat allocation on a hot path. 10 ndimage wins this
 session (1.5x → 29x, all byte-identical).
+
+### 2026-07-11 (ScarletChapel, cc) — global median redundant-clone removal: IN-FLOOR (1.07x), NOT a win
+`median` with `labels=None` DOUBLE-clones: `measurement_label_groups(None)` clones the whole array THEN
+`median_of_values` clones AGAIN (`.to_vec()`) for its sort. A global fast path calls
+`median_of_values(input.data)` directly, dropping the first clone. Byte-identical (same values, same sort;
+bitmism=0). MEASURED (strict-remote release, paired median vs A/A null, 16M px): 675.91->605.03ms = **1.070x**,
+INSIDE the A/A null band [0.798, 1.074] → **IN-FLOOR, not a decidable win**. ROOT CAUSE: median is
+SORT-dominated (16M-element `total_cmp` sort ≈ 600ms), so the removed 128MB clone (~50ms) is only ~7% — below
+the noise floor. Kept as a monotone byte-identical CLEANUP (a redundant clone removal can't be slower) but
+explicitly NOT a perf win; toggled by `NDIMAGE_MEDIAN_GLOBAL_FORCE_SERIAL`. bin `perf_median_global`. LESSON:
+clone-removal only pays when the clone is a large FRACTION — it dominated min/max/sum (cheap reduction, ~7x) but
+is negligible under a full sort. This confirms the global-label-stat vein is DRY (median's remaining cost is
+the inherent sort).
