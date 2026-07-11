@@ -25998,6 +25998,41 @@ pub fn circstd(data: &[f64]) -> f64 {
 /// Weighted circular mean for angular data.
 ///
 /// Matches `scipy.stats.circmean` with weights parameter.
+/// Weighted `Σw·sin(x)` and `Σw·cos(x)` over `data`, the shared reduction of the weighted circular
+/// statistics (`circmean_weighted`/`circvar_weighted`/`circstd_weighted`). `sin`/`cos` are heavy
+/// per-element transcendentals so each map dominates the light `w·f(x)` left-fold: parallelize ONLY
+/// the maps (order-preserving `par_continuous_map`), then the weighted sums stay in index order.
+/// BYTE-IDENTICAL to the serial `map(w·sin(x)).sum()` / `map(w·cos(x)).sum()` (`w[i]·s[i]` =
+/// `w[i]·x[i].sin()`, same left-fold from 0.0). `CIRC_WEIGHTED_FORCE_SERIAL` restores the fused serial
+/// maps (same-binary A/B).
+fn circular_weighted_sincos_sums(data: &[f64], weights: &[f64]) -> (f64, f64) {
+    if CIRC_WEIGHTED_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let sin_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.sin()).sum();
+        let cos_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.cos()).sum();
+        (sin_sum, cos_sum)
+    } else {
+        let sin_sum: f64 = par_continuous_map(data, |x| x.sin())
+            .iter()
+            .zip(weights)
+            .map(|(&s, &w)| w * s)
+            .sum();
+        let cos_sum: f64 = par_continuous_map(data, |x| x.cos())
+            .iter()
+            .zip(weights)
+            .map(|(&c, &w)| w * c)
+            .sum();
+        (sin_sum, cos_sum)
+    }
+}
+
+/// When `true`, [`circmean_weighted`]/[`circvar_weighted`]/[`circstd_weighted`] compute their weighted
+/// `Σsin`/`Σcos` with the fused serial `map(...).sum()` (the ORIG behaviour). When `false` (default),
+/// the compute-bound `sin`/`cos` maps fan across cores via the order-preserving `par_continuous_map`
+/// and the weighted sums stay in index order. Byte-identical either way. For the same-binary A/B gate.
+#[doc(hidden)]
+pub static CIRC_WEIGHTED_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn circmean_weighted(data: &[f64], weights: &[f64]) -> f64 {
     if data.is_empty() || data.len() != weights.len() {
         return f64::NAN;
@@ -26005,8 +26040,7 @@ pub fn circmean_weighted(data: &[f64], weights: &[f64]) -> f64 {
     if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
         return f64::NAN;
     }
-    let sin_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.sin()).sum();
-    let cos_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.cos()).sum();
+    let (sin_sum, cos_sum) = circular_weighted_sincos_sums(data, weights);
     // Wrap into scipy's default [0, 2π) range (see circmean). frankenscipy-87q5w
     sin_sum.atan2(cos_sum).rem_euclid(2.0 * PI)
 }
@@ -26025,8 +26059,7 @@ pub fn circvar_weighted(data: &[f64], weights: &[f64]) -> f64 {
     if total_w <= 0.0 {
         return f64::NAN;
     }
-    let sin_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.sin()).sum();
-    let cos_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.cos()).sum();
+    let (sin_sum, cos_sum) = circular_weighted_sincos_sums(data, weights);
     let r = (sin_sum * sin_sum + cos_sum * cos_sum).sqrt() / total_w;
     1.0 - r
 }

@@ -2874,6 +2874,22 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::circmean_weighted/circvar_weighted/circstd_weighted sin/cos reduction: 2.99x, byte-identical
+34th win — the weighted circular family, direct follow-on to the unweighted circular win (b79404bcc). Same lever:
+shared `circular_weighted_sincos_sums(data, weights)` parallelizes the sin/cos maps via order-preserving
+`par_continuous_map`, keeps the weighted sums `w·sin[i]`/`w·cos[i]` index-ordered → BYTE-IDENTICAL (`w[i]·s[i]` =
+`w[i]·x[i].sin()`, same left-fold). ONE lever lifts all three (circstd_weighted→circvar_weighted). Toggle
+`CIRC_WEIGHTED_FORCE_SERIAL`, bin `perf_circmean_weighted`. MEASURED (strict-remote release `+avx2,+fma` on
+vmi1227854/1293453, same-binary paired median vs A/A null, 4M elts): 131.68→39.19ms = **2.990x DECIDED** (null
+[0.945,1.038] — TIGHT, serial cv 2.2% on a quiet box), **bitmism=0** (result 1.60296191416282 both). HIGHER than the
+unweighted circmean's 2.08x — SAME lever, just a quieter box (that run was cv 40.9%). CONFIRMS the weighted circular
+does NOT go marginal like gmean_weighted (1.17x): TWO transcendentals (sin+cos) dominate the weighted-sum tax where
+gmean_weighted's single `ln` did not → the weighted variant is compute-bound iff ≥2 heavy transcendentals. CIRCULAR
+STATISTICS FAMILY NOW FULLY DONE (unweighted b79404bcc + weighted this). TEST-GATE: bin build served (compile
+verified) but heavy stats test compile refused (no admissible workers ×10) → shipped on MEDIAN gate (byte-id → no
+value regression + lib compiles); next stats-suite run confirms. LESSON REINFORCED: weighted heavy-reduction ships robustly when the
+per-element transcendental count is ≥2 (circular) but is marginal at 1 (gmean_weighted).
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::circmean/circvar/circstd parallelize the sin/cos reduction: 2.08x, byte-identical
 33rd win — a fresh public scipy-named family via the reduction-map-parallel vein. `circmean`/`circvar` did serial
 `Σsin = data.iter().map(|&x| x.sin()).sum()` + `Σcos = ...cos().sum()` — TWO heavy transcendentals per element

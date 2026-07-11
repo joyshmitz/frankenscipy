@@ -20177,3 +20177,13 @@ transcendentals/element = highest compute:memory ratio of the mean family → cl
 means. TEST-GATE rch-blocked (heavy stats test compile refused ×10; bin build served → compilation verified) → shipped
 on median gate. FOLLOW-ONS (measure): circmean_weighted/circvar_weighted (heavy w·sin/w·cos, ~2x expected).
 REUSABLE: circular stats are the SWEET SPOT for reduction-map-parallel — sin+cos = 2 heavy transcendentals dominate.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED weighted circular family (circmean_weighted/circvar_weighted/circstd_weighted): 2.99x, byte-identical
+Follow-on landed. Shared `circular_weighted_sincos_sums(data,weights)` parallelizes the sin/cos maps via
+`par_continuous_map`, weighted sums stay index-ordered → BYTE-IDENTICAL. ONE lever, 3 fns. Toggle
+`CIRC_WEIGHTED_FORCE_SERIAL`, bin `perf_circmean_weighted`. Strict-remote (vmi1227854), 4M: 131.68→39.19ms =
+**2.990x DECIDED** (null [0.945,1.038] TIGHT, serial cv 2.2% quiet box), bitmism=0 (result 1.60296191416282 both).
+CONFIRMS: weighted circular does NOT go marginal like gmean_weighted (1.17x) — TWO transcendentals (sin+cos)
+dominate the weighted-sum tax. RULE: weighted heavy-reduction ships robustly iff per-element transcendental count
+≥2. Circular statistics family (weighted + unweighted) now FULLY DONE. TEST-GATE rch-blocked (heavy stats compile
+refused ×10; bin build served→verified) → median gate ship.
