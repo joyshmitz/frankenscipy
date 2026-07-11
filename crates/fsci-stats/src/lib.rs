@@ -26093,8 +26093,10 @@ pub fn rayleightest(samples: &[f64]) -> (f64, f64) {
     }
     let nf = n as f64;
 
-    let sum_cos: f64 = samples.iter().map(|&x| x.cos()).sum();
-    let sum_sin: f64 = samples.iter().map(|&x| x.sin()).sum();
+    // `sin`/`cos` are heavy per-element transcendentals; reuse the shared circular reduction that
+    // parallelizes both maps (order-preserving `par_continuous_map`, index-ordered sums) — BYTE-IDENTICAL
+    // to the serial `map(cos).sum()`/`map(sin).sum()`. Gated by `CIRC_FORCE_SERIAL` (shared with circmean).
+    let (sum_sin, sum_cos) = circular_sincos_sums(samples);
 
     let r_bar = ((sum_cos * sum_cos + sum_sin * sum_sin) / (nf * nf)).sqrt();
     let z = nf * r_bar * r_bar;

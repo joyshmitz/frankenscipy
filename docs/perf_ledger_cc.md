@@ -2874,6 +2874,23 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::rayleightest reuse the parallel sin/cos reduction: 4.17x, byte-identical
+35th win — the circular-sin/cos vein extends to the directional TESTS. `rayleightest(samples)` (scipy.stats
+Rayleigh test of circular uniformity) did serial `sum_cos = map(cos).sum()` + `sum_sin = map(sin).sum()` — two heavy
+transcendentals, and NOTHING else heavy (r_bar/z/pvalue are O(1)). LEVER: one-line reuse of the existing shared
+`circular_sincos_sums(samples)` helper (from the circmean win b79404bcc) → BYTE-IDENTICAL (each sum is a par map +
+index-ordered sum; the cos-before-sin vs sin-before-cos order is irrelevant — independent sums). Shares the
+`CIRC_FORCE_SERIAL` gate; bin `perf_rayleightest`. MEASURED (strict-remote release `+avx2,+fma` on vmi1149989,
+same-binary paired median vs A/A null, 4M elts): 123.74→24.62ms = **4.172x DECIDED** (null [0.916,1.097] TIGHT, serial
+cv 3.7%), **bitmism=0** (z AND pvalue both bit-identical). HIGHEST reduction-map win of the campaign — because
+rayleightest is PURE two-transcendental sums with ZERO weighted-sum tax and NO other heavy work, so the two parallel
+maps dominate completely and reach ~4x on a good box. LESSON: the cleanest reduction-map targets are the ones whose
+ENTIRE cost is the transcendental map-sum (no weighting, no downstream heavy math) — rayleightest is the archetype.
+TEST-GATE: bin build served (compile verified) but heavy stats test compile refused (no admissible workers ×10) →
+shipped on MEDIAN gate (byte-id → no value regression + lib compiles); next stats-suite run confirms. Circular/
+directional sin/cos surface: circmean/circvar/circstd (2.08x) + weighted (2.99x) + rayleightest (4.17x) all DONE via
+ONE shared helper.
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::circmean_weighted/circvar_weighted/circstd_weighted sin/cos reduction: 2.99x, byte-identical
 34th win — the weighted circular family, direct follow-on to the unweighted circular win (b79404bcc). Same lever:
 shared `circular_weighted_sincos_sums(data, weights)` parallelizes the sin/cos maps via order-preserving

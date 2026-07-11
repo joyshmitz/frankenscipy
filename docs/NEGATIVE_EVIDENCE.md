@@ -20187,3 +20187,14 @@ CONFIRMS: weighted circular does NOT go marginal like gmean_weighted (1.17x) —
 dominate the weighted-sum tax. RULE: weighted heavy-reduction ships robustly iff per-element transcendental count
 ≥2. Circular statistics family (weighted + unweighted) now FULLY DONE. TEST-GATE rch-blocked (heavy stats compile
 refused ×10; bin build served→verified) → median gate ship.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED stats::rayleightest reuse parallel sin/cos reduction: 4.17x, byte-identical
+The circular sin/cos vein extends to directional TESTS. `rayleightest(samples)` (Rayleigh uniformity test) did serial
+`Σcos`+`Σsin` and nothing else heavy → one-line reuse of the existing `circular_sincos_sums` helper (from circmean).
+Strict-remote (vmi1149989), 4M: 123.74→24.62ms = **4.172x DECIDED** (null [0.916,1.097] TIGHT, cv 3.7%), bitmism=0
+(z AND pvalue). HIGHEST reduction-map win of the campaign — PURE two-transcendental sums, ZERO weighted-sum tax, no
+other heavy math → the two parallel maps dominate → ~4x. RULE: the cleanest reduction-map targets are fns whose
+ENTIRE cost is the transcendental map-sum (no weighting, no downstream heavy math). Shares CIRC_FORCE_SERIAL, bin
+perf_rayleightest. Test-gate rch-blocked → median-gate ship. Directional sin/cos surface now DONE (circmean family +
+weighted + rayleightest). kuipertest/rao_spacing_test are spacing-based (sorted angles, no sin/cos sum) — different
+vein, not this lever.
