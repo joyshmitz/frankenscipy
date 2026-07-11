@@ -20051,3 +20051,19 @@ pchip, and now filtfilt_axis_2d) cover every high-value recompute-in-loop site; 
 rebuilds (sosfiltfilt/welch/csd/spectrogram/coherence) are all rebuild≪per-line → single-digit-% → left as near-misses.
 STATE: both the parallelization/compute-bound-map AND the shared-predictor-hoist veins are now genuinely exhausted for
 non-marginal byte-identical wins across the accessible crates; remaining is owner-gated tolerance-parity or retry #2.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED stats::pmean map-parallel reduction (byte-id, NO ULP change needed): 1.94x
+Operator opened the within-ULP "reduction vein"; landed it BYTE-IDENTICAL instead (zero ULP risk). `pmean` did a
+fused serial `data.iter().map(|&x| x.powf(p)).sum()`. Parallelizing the SUM would reorder the fold (ULP change), but
+`powf` (~50-100 cyc) dominates the add, so parallelize ONLY the map via the order-preserving `par_continuous_map` and
+keep the sum in index order → byte-identical (`par_continuous_map(data,|x| x.powf(p)).iter().sum()` = fused
+`map(powf).sum()`; same values, same left-fold from 0.0). Toggle `PMEAN_FORCE_SERIAL`, bin `perf_pmean`. MEASURED
+strict-remote (vmi1149989), 4M elts p=2.5: 42.80→21.81ms = **1.940x DECIDED** (null [0.771,1.283]), bitmism=0 (result
+2.637360238656237 both arms). Lower than power_array's 3.61x — the serial ordered sum adds an O(N) read+add pass the
+fused form avoids (the byte-identity tax). REUSABLE RULE: a `map(heavy_transcendental).sum()` has a BYTE-IDENTICAL
+parallelization (parallel map + ordered sum) whenever the transcendental dominates the add — the ULP chunked-sum is
+NOT needed. FOLLOW-ONS: power_mean (dup powf-sum), gmean (ln-sum, lighter). hmean (1/x) is bandwidth-bound, skip.
+TEST-GATE: full `fsci-stats --lib` could not run (rch saturated ×14, strict-remote forbids local); shipped on the
+MEDIAN gate — byte-id (no value regression possible) + lib compiles (bin built). Re-run tests when rch recovers.
+NOTE re the operator's ULP directive: no lever this turn needed to move any bit — the reduction vein turned out to
+have a byte-identical formulation, so nothing to surface as "beyond ULP tolerance."

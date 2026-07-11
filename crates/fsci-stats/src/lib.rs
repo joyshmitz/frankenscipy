@@ -25861,9 +25861,27 @@ pub fn pmean(data: &[f64], p: f64) -> f64 {
         return 0.0;
     }
     let n = data.len() as f64;
-    let power_sum: f64 = data.iter().map(|&x| x.powf(p)).sum();
+    // `powf` is a heavy per-element transcendental (~50-100 cycles) so the map dominates this
+    // reduction. Parallelize ONLY the map (via the order-preserving `par_continuous_map`), then sum
+    // the results in the SAME index order. BYTE-IDENTICAL to the serial `map(powf).sum()`: the powf
+    // values are independent per element and the left-fold from 0.0 is over the same sequence — only
+    // the map's owning core changes, not the arithmetic. `PMEAN_FORCE_SERIAL` restores the fused
+    // serial map-sum (same-binary A/B).
+    let power_sum: f64 = if PMEAN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| x.powf(p)).sum()
+    } else {
+        par_continuous_map(data, |x| x.powf(p)).iter().sum()
+    };
     (power_sum / n).powf(1.0 / p)
 }
+
+/// When `true`, [`pmean`] computes its `powf` power-sum with the fused serial `map(powf).sum()` (the
+/// ORIG behaviour). When `false` (default), the compute-bound `powf` map fans across cores via the
+/// order-preserving `par_continuous_map` and the sum stays in index order. Byte-identical either way.
+/// For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static PMEAN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Compute the weighted power mean (generalized mean with weights).
 ///

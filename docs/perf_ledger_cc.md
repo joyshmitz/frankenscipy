@@ -2874,6 +2874,29 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::pmean parallelize the powf map inside the reduction: 1.94x, byte-identical
+30th win — the "reduction vein" the operator opened by authorizing within-ULP changes, but landed BYTE-IDENTICAL
+(zero ULP risk). `pmean(data, p)` computed `let power_sum = data.iter().map(|&x| x.powf(p)).sum()` — a fused serial
+`powf`-map + left-fold. KEY INSIGHT: parallelizing the SUM would reorder the fold (a ULP change), but the `powf`
+map dominates (~50-100 cyc vs ~1 cyc/add), so parallelize ONLY the map (via the order-preserving
+`par_continuous_map`, byte-id) and keep the sum in index order → `par_continuous_map(data, |x| x.powf(p)).iter().sum()`
+is BYTE-IDENTICAL to the fused `map(powf).sum()` (same independent values, same left-fold from 0.0 over the same
+sequence). Toggle `PMEAN_FORCE_SERIAL`, bin `perf_pmean`. MEASURED (strict-remote release `+avx2,+fma` on vmi1149989,
+same-binary paired median vs A/A null, 4M elts p=2.5): 42.80→21.81ms = **1.940x DECIDED** (null median 0.967x range
+[0.771,1.283]), **bitmism=0** (result 2.637360238656237 both arms). LOWER than power_array's 3.61x because the
+serial ordered sum adds an O(N) read+add pass + the Vec materialization the fused version avoids — that tax is the
+cost of staying byte-identical. FOLLOW-ONS (same byte-id pattern, measure): `power_mean` (45173, IDENTICAL powf-sum
+duplicate ~same 1.94x), `gmean` (25230, ln-sum, lighter kernel ~1.5x). `hmean`/`harmonic` (1/x reciprocal-sum) is
+LIGHT → bandwidth-bound → skip. LESSON (reusable): a `map(heavy_transcendental).sum()` reduction has a BYTE-IDENTICAL
+parallelization — parallelize the map, keep the ordered sum — whenever the transcendental dominates the add; no ULP
+change needed. The ULP chunked-partial-sum variant (fuses away the serial-sum pass for a bigger win) was NOT taken:
+byte-identical 1.94x is a clean ship, and the chunked sum would move last bits (surface-if-beyond-tolerance per the
+operator's gate). TEST-GATE NOTE: the full `fsci-stats --lib` suite could NOT run — rch was persistently saturated
+("no admissible workers" ×14 attempts) and strict-remote policy forbids local. Shipped anyway on the MEDIAN gate:
+the change is byte-identical (bitmism=0 → no value assertion can regress) and the lib COMPILES clean (the perf_pmean
+bin built against the full fsci-stats lib). RETRY: re-run `cargo test -p fsci-stats --lib` when rch recovers (expect
+green; it is a pure map-parallelization behind a work-gate).
+
 ### 2026-07-11 (ScarletChapel, cc) — signal::filtfilt_axis_2d hoist lfilter_zi out of per-line loop: 1.66x, byte-identical
 29th win — the shared-predictor HOIST vein (compute-once-reuse), found by a 2nd Explore fan-out for the
 recompute-inside-loop anti-pattern (distinct from the parallelization straggler hunt). `filtfilt_axis_2d(b,a,x,axis)`
