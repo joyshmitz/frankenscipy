@@ -2502,3 +2502,21 @@ serial label value/position gather stays serial (O(N)), so the win is bounded by
 coarser regions (heavier per-region sort) win more. bin `perf_labeled_comprehension`. LEVER (reusable): grep
 ndimage label-reduction fns whose closure lacks `+ Sync` — they map the reducer serially while the O(N) gather
 is shared; the fan-out is byte-identical because groups are independent.
+
+### 2026-07-11 (ScarletChapel, cc) — parallel label value/position GATHER: extrema ~1.4-1.7x, byte-identical
+Follow-on to the labeled_comprehension map-parallel: the shared `measurement_label_value_positions` gather
+(behind `extrema`/`labeled_comprehension` + 2 more) did a per-element std-HashMap (SipHash) lookup over all N
+elements SERIALLY — the dominant cost of the gather-based path (~2/3 of `extrema`'s time). LEVER: split the
+flat-index range into contiguous chunks across cores, each thread bucketing into PRIVATE per-label buckets,
+then merge in thread (= flat) order. BYTE-IDENTICAL: thread t owns a strictly lower flat range than t+1 and
+pushes stay flat-ascending within a thread, so the ordered concatenation reproduces the exact serial group
+contents/order — even `extrema`'s argmin/argmax tie-breaking. Work-gated + a `t*num_groups <= n` guard against
+many-label bucket blowup; toggled by `NDIMAGE_LABEL_GATHER_FORCE_SERIAL`. MEASURED (strict-remote release
+`+avx2,+fma`, paired median vs A/A null, via `extrema`, 4M px / 64 labels), DECIDED twice: 15 iters
+47.51->31.74ms **1.357x** (null [0.829,1.243]); 31 iters 41.90->23.39ms **1.687x** (null [0.665,1.173]);
+**bitmism=0** both (all 4 extrema outputs incl. positions). Consistently-positive byte-identical ~1.4-1.7x;
+magnitude noisy under heavy box contention, memory-bound by the serial merge-copy so caps ~2x. Full
+`fsci-ndimage` lib suite 272 passed / 0 failed. bin `perf_label_gather`. NOTE: the RCH admission for the heavy
+test build stalled ~15min behind a stuck build on vmi1227854 (`hard_preflight=1`); landed once a slot freed
+(never went local). LEVER (reusable): the sibling value-only gather `measurement_label_groups` (median +5
+callers) is the identical next follow-on.

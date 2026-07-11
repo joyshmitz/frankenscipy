@@ -7175,6 +7175,13 @@ fn measurement_label_mean(
         .collect())
 }
 
+/// When `true`, force the label value/position gather onto its ORIG serial per-element bucketing
+/// (bypasses the across-elements fan-out). Byte-identical either way. Benchmark knob for the
+/// same-binary A/B. Shared by `extrema`/`labeled_comprehension` (and any gather-based label stat).
+#[doc(hidden)]
+pub static NDIMAGE_LABEL_GATHER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn measurement_label_value_positions(
     input: &NdArray,
     labels: Option<&NdArray>,
@@ -7192,38 +7199,92 @@ fn measurement_label_value_positions(
         )));
     }
 
-    let mut groups = match index {
-        Some(index) => vec![Vec::new(); index.len()],
-        None => vec![Vec::new()],
+    let num_groups = match index {
+        Some(index) => index.len(),
+        None => 1,
     };
 
-    // See `measurement_label_groups`: one-time label -> first-position map turns
-    // the per-element O(K) `position` scan into an O(1) lookup (O(N + K) total),
-    // byte-identical via the canonical ±0.0 key and `or_insert` first-wins.
-    match index {
+    // One-time label -> first-position map (Some(index) case); see `measurement_label_groups`.
+    // Byte-identical via the canonical ±0.0 key and `or_insert` first-wins.
+    let label_to_pos: Option<std::collections::HashMap<u64, usize>> = match index {
         Some(index) => {
-            let mut label_to_pos: std::collections::HashMap<u64, usize> =
-                std::collections::HashMap::with_capacity(index.len());
+            let mut m = std::collections::HashMap::with_capacity(index.len());
             for (pos, &wanted_label) in index.iter().enumerate() {
-                label_to_pos
-                    .entry(measurement_label_key(wanted_label as f64))
-                    .or_insert(pos);
+                m.entry(measurement_label_key(wanted_label as f64)).or_insert(pos);
             }
-            for (flat, (&value, &label_value)) in input.data.iter().zip(&labels.data).enumerate() {
-                if let Some(&pos) = label_to_pos.get(&measurement_label_key(label_value)) {
-                    groups[pos].push((value, flat));
-                }
+            Some(m)
+        }
+        None => None,
+    };
+    // Classify one element's label -> output bucket (identical to the serial branches: the
+    // first-wins ±0.0-keyed map for the index case, `label != 0.0` otherwise).
+    let classify = |label_value: f64| -> Option<usize> {
+        match &label_to_pos {
+            Some(m) => m.get(&measurement_label_key(label_value)).copied(),
+            None => (label_value != 0.0).then_some(0),
+        }
+    };
+
+    let n = input.data.len();
+    // The bucketing is a per-element classify + push in flat order; each element is independent.
+    // Fan contiguous flat-index chunks across cores into PRIVATE per-thread buckets, then merge the
+    // buckets in thread (= flat) order. BYTE-IDENTICAL to the serial push loop: thread t owns a
+    // strictly lower flat range than t+1 and pushes stay flat-ascending within a thread, so the
+    // ordered concatenation reproduces the exact serial group contents and order. The per-element
+    // std-HashMap (SipHash) lookup is the dominant cost of the gather-based label stats
+    // (extrema/labeled_comprehension), so splitting it across cores lifts the whole family.
+    let nthreads = if NDIMAGE_LABEL_GATHER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        1
+    } else {
+        let t = ndimage_filter_thread_count(n, 4);
+        // Keep the per-thread bucket bookkeeping (t * num_groups) below the data volume.
+        if t <= 1 || num_groups.saturating_mul(t) > n {
+            1
+        } else {
+            t
+        }
+    };
+
+    if nthreads <= 1 {
+        let mut groups: Vec<Vec<(f64, usize)>> = vec![Vec::new(); num_groups];
+        for (flat, (&value, &label_value)) in input.data.iter().zip(&labels.data).enumerate() {
+            if let Some(pos) = classify(label_value) {
+                groups[pos].push((value, flat));
             }
         }
-        None => {
-            for (flat, (&value, &label_value)) in input.data.iter().zip(&labels.data).enumerate() {
-                if label_value != 0.0 {
-                    groups[0].push((value, flat));
-                }
-            }
-        }
+        return Ok(groups);
     }
 
+    let chunk = n.div_ceil(nthreads);
+    let classify = &classify;
+    let partials: Vec<Vec<Vec<(f64, usize)>>> = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        let mut start = 0usize;
+        while start < n {
+            let end = (start + chunk).min(n);
+            handles.push(scope.spawn(move || {
+                let mut local: Vec<Vec<(f64, usize)>> = vec![Vec::new(); num_groups];
+                for flat in start..end {
+                    if let Some(pos) = classify(labels.data[flat]) {
+                        local[pos].push((input.data[flat], flat));
+                    }
+                }
+                local
+            }));
+            start = end;
+        }
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("label gather chunk panicked"))
+            .collect()
+    });
+
+    let mut groups: Vec<Vec<(f64, usize)>> = vec![Vec::new(); num_groups];
+    for partial in partials {
+        for (pos, bucket) in partial.into_iter().enumerate() {
+            groups[pos].extend(bucket);
+        }
+    }
     Ok(groups)
 }
 
