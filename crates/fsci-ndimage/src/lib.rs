@@ -7606,6 +7606,13 @@ pub fn mean_labels(
 ///
 /// Matches `scipy.ndimage.variance`; scalar SciPy results are returned as a
 /// one-element vector, while explicit `index` lists return one value per label.
+/// When `true`, force the global (no-labels) `variance` onto the ORIG group path (clone + serial
+/// two-pass). Byte-identical either way. Benchmark knob for the same-binary A/B (also lifts
+/// `standard_deviation`, which is `variance(..).sqrt()`).
+#[doc(hidden)]
+pub static NDIMAGE_VARIANCE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn variance(
     input: &NdArray,
     labels: Option<&NdArray>,
@@ -7624,6 +7631,26 @@ pub fn variance(
                 ));
             }
         }
+    }
+    if labels.is_none() && !NDIMAGE_VARIANCE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        // Global variance (labels=None): compute over `input.data` directly, skipping the
+        // `measurement_label_groups` full-data clone. BYTE-IDENTICAL: same `mean_of_values`, same
+        // increasing-flat-index Σ(x-mean)² order (float ops are non-associative → single serial pass).
+        let values = input.data.as_slice();
+        let mean = mean_of_values(values);
+        let var = if mean.is_nan() {
+            f64::NAN
+        } else {
+            values
+                .iter()
+                .map(|value| {
+                    let diff = *value - mean;
+                    diff * diff
+                })
+                .sum::<f64>()
+                / values.len() as f64
+        };
+        return Ok(vec![var]);
     }
     Ok(measurement_label_groups(input, labels, index)?
         .iter()

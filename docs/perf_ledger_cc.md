@@ -2589,3 +2589,15 @@ serial fold, NOT parallelized) — and drops the clone. Toggled by `NDIMAGE_SUM_
 `perf_sum`. TAKEAWAY: the `measurement_label_groups(None)` clone is the single biggest ndimage global-label-stat
 inefficiency (~7x each). Remaining identical follow-ons: `mean`/`variance`/`standard_deviation` global (same
 clone; variance/std keep the serial 2-pass so still byte-identical, just no clone).
+
+### 2026-07-11 (ScarletChapel, cc) — global variance (+std) drop clone: 4.30x, byte-identical
+Closes the clone-removal family. `variance` with `labels=None` cloned the whole array via
+`measurement_label_groups(None)` THEN ran its serial two-pass (mean, then Σ(x-mean)²). Fast path computes over
+`input.data` DIRECTLY — BYTE-IDENTICAL (same `mean_of_values`, same increasing-flat-index Σ order; float
+two-pass stays serial) — no clone. Toggled by `NDIMAGE_VARIANCE_FORCE_SERIAL`; also lifts
+`standard_deviation` (= `variance(..).sqrt()`). MEASURED (strict-remote release `+avx2,+fma`, paired median vs
+A/A null, 16M px): 68.14->16.27ms = **4.299x** (null [0.902,1.119]), **bitmism=0**. Lower than sum's 7.21x
+because variance's TWO passes over the data make the clone a smaller fraction. bin `perf_variance`.
+CLONE-REMOVAL FAMILY COMPLETE: min/max 7.21x, sum 7.21x, histogram 5.78x, variance/std 4.30x; `mean` was
+already clone-free (`measurement_label_mean` has a direct global path). `measurement_label_groups(None)`'s
+clone is no longer on any global-stat hot path.
