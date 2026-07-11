@@ -2614,3 +2614,16 @@ trackers so fusing the two scans is exact) — no pair allocation, and 2 scans �
 `perf_extrema_global`. ALLOCATION-REMOVAL FAMILY now FULLY CLOSED: the `measurement_label_groups(None)` clone
 (min/max/sum/variance/std/histogram) and the `measurement_label_value_positions(None)` pair-alloc (extrema) are
 off every global-stat hot path; `mean` was already direct. 9 ndimage wins this session (1.5-7.2x, all byte-id).
+
+### 2026-07-11 (ScarletChapel, cc) — global labeled_comprehension direct reducer: 29.25x, byte-identical
+The last global-label-stat allocation. `labeled_comprehension` with `labels=None` + `pass_positions=false`
+allocated ALL `(value, position)` pairs via `measurement_label_value_positions(None)` (~256MB at 16M px) AND a
+per-group value-extraction copy (~128MB) before calling the reducer. LEVER: hand `input.data` to the reducer
+DIRECTLY — BYTE-IDENTICAL (the single group is every value in flat order; `func(&input.data, None)` matches the
+group path's `func(&values, None)` where `values == input.data`; `func` deterministic). Toggled by
+`NDIMAGE_LABELED_COMPREHENSION_GLOBAL_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`, paired median
+vs A/A null, 16M px, light reducer): 121.95->4.08ms = **29.25x** (null [0.846,1.946], noisy cv~35% but 29x
+dwarfs it), **bitmism=0**. CAVEAT: 29x is for a LIGHT reducer (the ~384MB alloc/copy dominates); a heavy
+reducer amortizes the alloc so the win shrinks — but the alloc-removal is unconditional. bin
+`perf_labcomp_global`. This closes the last global-label-stat allocation on a hot path. 10 ndimage wins this
+session (1.5x → 29x, all byte-identical).

@@ -7935,6 +7935,13 @@ pub fn median(
 pub static NDIMAGE_LABELED_COMPREHENSION_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, force the global (no-labels, no-positions) `labeled_comprehension` onto the ORIG
+/// group path (pair-alloc + value-extraction) instead of handing `input.data` to the reducer
+/// directly. Byte-identical either way. Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static NDIMAGE_LABELED_COMPREHENSION_GLOBAL_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Apply a reducer to optionally labeled regions.
 ///
 /// Matches `scipy.ndimage.labeled_comprehension` for numeric outputs. Scalar
@@ -7956,6 +7963,19 @@ where
         return Err(NdimageError::InvalidArgument(
             "index without defined labels".to_string(),
         ));
+    }
+
+    if labels.is_none()
+        && !pass_positions
+        && !NDIMAGE_LABELED_COMPREHENSION_GLOBAL_FORCE_SERIAL
+            .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        // Global comprehension (labels=None ⇒ index=None; positions not requested): hand the reducer
+        // `input.data` DIRECTLY, skipping the `measurement_label_value_positions` (value, position)
+        // pair allocation AND the per-group value-extraction copy. BYTE-IDENTICAL: the single group is
+        // every value in increasing-flat-index order, and `func` is deterministic (matches the group
+        // path's `func(&values, None)` where `values == input.data`).
+        return Ok(vec![func(&input.data, None)]);
     }
 
     let groups = measurement_label_value_positions(input, labels, index)?;
