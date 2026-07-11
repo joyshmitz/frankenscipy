@@ -2874,6 +2874,25 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::kl_divergence parallelize the ln reduction: 2.58x, WITHIN-ULP (first ULP-tolerant ship)
+40th win, and the FIRST within-ULP (not byte-identical) ship this campaign — the operator authorized "byte-identical
+OR within per-op ULP tolerance." `kl_divergence` did a serial `Σ pᵢ·ln(pᵢ/qᵢ)` (2 divides + a heavy `ln` per element
+≈ 50-80 cyc → COMPUTE-bound) while its SIBLING `entropy` was already parallel via `entropy_h_sum`. LEVER: added
+`kl_sum` mirroring `entropy_h_sum` EXACTLY (chunked across cores, 4-way-unrolled), toggle `KL_DIVERGENCE_FORCE_SERIAL`,
+bin `perf_kl_divergence`. The `qi==0 && pi>0` term naturally yields `+INF` (pi/0=+INF, ln=+INF) → preserves the
+scalar's INFINITY result. MEASURED (strict-remote release `+avx2,+fma` on vmi1227854, same-binary paired median vs A/A
+null, 8M elts): 68.78→25.31ms = **2.578x DECIDED** (null [0.642,1.336]) — the HEAVIEST-kernel reduction win (2 div +
+ln beats the single-transcendental means). **ULP DRIFT: rel 6.08e-14 (498 raw-bit ULP on a ~0.45 value)** — this is
+the SAME 4-way-unroll+chunk reorder `entropy` ALREADY ships (so it's the codebase's accepted standard for this family)
+AND within scipy's own pairwise-sum tolerance. **TEST-GATE MANDATORY for a within-ULP change (a byte-lock/tight-tol
+test could break) — ran it: fsci-stats --lib 2023/0, incl. `kl_divergence_matches_scipy_reference_values` ✓ and
+`entropy_kl_divergence_match_scipy` ✓** → the reordered result STILL matches scipy's references within tolerance =
+proof the drift is within per-op ULP tolerance. Corrects the SIBLING-STRADDLER (entropy parallel, kl serial) and
+CONTRADICTS the stale [[perf_stats_entropy_ln_reduction_reject]] (that was SIMD-ln ~1.15x single-thread; this is
+PARALLELIZATION across cores = a different lever). FOLLOW-ON (same pattern): `cross_entropy` (28x/300 serial, sibling).
+LESSON: a "rejected" reduction may have been rejected for SIMD (irreducible ln single-thread) — PARALLELIZATION across
+cores is orthogonal and wins (2.58x here).
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::geometric_mean parallelize the ln reduction: 1.46x, byte-identical
 39th win — a SEPARATE public geometric-mean fn from `gmean` (which uses the already-parallel gmean_log_sum).
 `geometric_mean(data)` did fused serial `log_sum = data.iter().map(ln).sum()` then `exp(log_sum/n)`. LEVER:

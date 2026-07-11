@@ -20245,3 +20245,14 @@ are inside the lambda-optimization LOOP = called many times but each is one pass
 embedded/small) are NOT clean standalone large-N — geometric_mean was the last clean one. Reduction-map stats surface
 now essentially fully harvested; further wins are marginal single-ln in embedded/opt-loop contexts (skip) or a fresh
 non-stats vein.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED stats::kl_divergence parallel ln reduction: 2.58x, WITHIN-ULP (rel 6e-14)
+FIRST within-ULP ship (operator authorized). `kl_divergence` did serial `Σ pᵢ·ln(pᵢ/qᵢ)` (2 div + ln/elt = COMPUTE
+-bound) while its sibling `entropy` was already parallel (entropy_h_sum). Added `kl_sum` mirroring entropy_h_sum
+EXACTLY (chunked 4-way-unrolled). Toggle KL_DIVERGENCE_FORCE_SERIAL, bin perf_kl_divergence. 8M on vmi1227854:
+68.78→25.31ms = **2.578x DECIDED** (null [0.642,1.336]). ULP drift rel **6.08e-14** = the SAME reorder entropy ships +
+within scipy pairwise tol. **TEST-GATE (mandatory for within-ULP): fsci-stats 2023/0, kl scipy-reference-match tests
+PASS** → drift within per-op ULP tolerance, proven. CONTRADICTS the stale [[perf_stats_entropy_ln_reduction_reject]]
+— that reject was SIMD-ln single-thread (~1.15x, "N logs irreducible"); PARALLELIZATION across cores is orthogonal and
+wins 2.58x (2 div + ln = heaviest reduction kernel yet). KEY LESSON: a reduction "rejected for SIMD" is NOT rejected
+for parallelization — re-measure across-cores. FOLLOW-ON: cross_entropy (identical sibling-straggler pattern, serial).

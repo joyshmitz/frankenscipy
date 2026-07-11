@@ -38901,22 +38901,93 @@ pub fn kl_divergence(pk: &[f64], qk: &[f64], base: Option<f64>) -> f64 {
         return f64::NAN;
     }
 
-    let mut kl = 0.0;
-    for (&p, &q) in pk.iter().zip(qk) {
-        let pi = p / sum_p;
-        let qi = q / sum_q;
-        if pi > 0.0 {
-            if qi == 0.0 {
-                return f64::INFINITY;
+    // `(pi/qi).ln()` per element (~50-80 cycles: two divides + a heavy `ln`) makes this reduction
+    // COMPUTE-bound. Mirror the already-parallel sibling `entropy` (`entropy_h_sum`): fan the term
+    // sum across cores (chunked, 4-way-unrolled), WITHIN per-op ULP tolerance — the parallel reorder
+    // matches entropy's shipped reordering exactly (bounded ~few ULP for a probability vector). The
+    // `qi==0 && pi>0` case yields a `+INF` term (pi/0 = +INF, ln = +INF), preserving the scalar's
+    // `INFINITY` result. `KL_DIVERGENCE_FORCE_SERIAL` restores the exact scalar loop (same-binary A/B).
+    let kl = if KL_DIVERGENCE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut kl = 0.0;
+        for (&p, &q) in pk.iter().zip(qk) {
+            let pi = p / sum_p;
+            let qi = q / sum_q;
+            if pi > 0.0 {
+                if qi == 0.0 {
+                    return f64::INFINITY;
+                }
+                kl += pi * (pi / qi).ln();
             }
-            kl += pi * (pi / qi).ln();
         }
-    }
+        kl
+    } else {
+        let s = kl_sum(pk, qk, sum_p, sum_q);
+        if s == f64::INFINITY {
+            return f64::INFINITY;
+        }
+        s
+    };
 
     match base {
         Some(b) => kl / b.ln(),
         None => kl,
     }
+}
+
+/// When `true`, [`kl_divergence`] sums its terms with the exact scalar loop (the ORIG behaviour). When
+/// `false` (default), the compute-bound `Σ pᵢ·ln(pᵢ/qᵢ)` fans across cores (chunked, 4-way-unrolled),
+/// mirroring the parallel sibling `entropy`. WITHIN per-op ULP tolerance (same reordering as the
+/// shipped `entropy_h_sum`). For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static KL_DIVERGENCE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `Σ (pₖ/Σpₖ)·ln((pₖ/Σpₖ)/(qₖ/Σqₖ))` over aligned probability vectors, fanned across cores exactly
+/// as [`entropy_h_sum`] (chunked, 4-way-unrolled). Within per-op ULP tolerance (parallel reorder).
+fn kl_sum(pk: &[f64], qk: &[f64], sum_p: f64, sum_q: f64) -> f64 {
+    let chunk_sum = |pc: &[f64], qc: &[f64]| -> f64 {
+        let term = |p: f64, q: f64| -> f64 {
+            let pi = p / sum_p;
+            let qi = q / sum_q;
+            if pi > 0.0 { pi * (pi / qi).ln() } else { 0.0 }
+        };
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= pc.len() {
+            a[0] += term(pc[i], qc[i]);
+            a[1] += term(pc[i + 1], qc[i + 1]);
+            a[2] += term(pc[i + 2], qc[i + 2]);
+            a[3] += term(pc[i + 3], qc[i + 3]);
+            i += 4;
+        }
+        let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+        while i < pc.len() {
+            s += term(pc[i], qc[i]);
+            i += 1;
+        }
+        s
+    };
+    let n = pk.len();
+    if n < (1 << 16) {
+        return chunk_sum(pk, qk);
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let threads = cores.min((n / (1 << 16)).max(1)).min(16);
+    if threads <= 1 {
+        return chunk_sum(pk, qk);
+    }
+    let chunk = n.div_ceil(threads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        let handles: Vec<_> = pk
+            .chunks(chunk)
+            .zip(qk.chunks(chunk))
+            .map(|(pc, qc)| scope.spawn(move || chunk_sum(pc, qc)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    parts.iter().sum()
 }
 
 /// Compute the cross entropy H(P, Q) = -Σ p_k * log(q_k).
