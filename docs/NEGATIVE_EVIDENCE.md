@@ -20313,3 +20313,17 @@ scipy tol). TEST-GATE MANDATORY: fsci-stats 2023/0. `ce_sum` mirrors kl_sum/entr
 kl_divergence/cross_entropy) NOW ALL CROSS-CORE PARALLEL** — the [[perf_stats_entropy_ln_reduction_reject]] was
 SIMD-single-thread-only; parallelization wins 2-2.6x on all three. Commit on the fresh synced checkout, push-after-
 commit workflow (operator directive). QUEUED artifacts consumed.
+
+## 2026-07-11 - ScarletChapel (cc) - QUEUED-READY (rch degraded): boxcox_llf parallel transform + Σln (byte-identical)
+Fresh byte-identical lever, code-complete but UNMEASURED — rch persistently saturated (17+ "no admissible workers"
+incl. after `rch sync --all`). `boxcox_llf(lmb, data)` (public + the objective `boxcox_normmax` optimizes over
+lambda) has TWO serial heavy passes: the Box-Cox `transform` (powf/ln per element, materialized) and `Σ ln(data)`.
+Both parallelize BYTE-IDENTICALLY — `par_map_inline` (order-preserving, the same helper `boxcox`'s transform uses)
+for the transform, `par_continuous_map`+serial ordered sum for the log-sum; mean/variance passes unchanged. Toggle
+`BOXCOX_LLF_FORCE_SERIAL`, bin `perf_boxcox_llf`. Expected ~2x. **NOT shipped**: rch down → no build/verify/measure;
+rch-degraded=surface, no-unmeasured-ship. Change STASHED (stash@{0} "boxcox-llf-queued-rch-blocked") + diff saved to
+memory dir (QUEUED_boxcox_llf.lib.diff + QUEUED_perf_boxcox_llf.rs.saved). RETRY when rch recovers: `git stash pop`
+(or apply diff), build+run perf_boxcox_llf 8000000 21 0.5, gate median+bitmism=0, `cargo test -p fsci-stats --lib`,
+ship+push. FOLLOW-ON: yeojohnson_llf (transform already parallel; its `Σ signum·ln` log_term is still serial).
+CONTEXT: boxcox/yeojohnson TRANSFORMS already parallel; only the LLF objectives had serial reduction passes left.
+NOTE: stash@{1} = peer's wip-before-sync (still preserved, operator to coordinate).
