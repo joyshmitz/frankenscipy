@@ -6649,41 +6649,86 @@ fn measurement_label_groups(
         )));
     }
 
-    let mut groups = match index {
-        Some(index) => vec![Vec::new(); index.len()],
-        None => vec![Vec::new()],
+    let num_groups = match index {
+        Some(index) => index.len(),
+        None => 1,
     };
 
-    match index {
+    // One-time label -> first-position map (Some(index) case): O(1) bucketing instead of an
+    // O(K) linear scan, O(N + K) total. Byte-identical via the canonical ±0.0 key + first-wins.
+    let label_to_pos: Option<std::collections::HashMap<u64, usize>> = match index {
         Some(index) => {
-            // Build a label -> first-position map once (O(K)), then bucket each
-            // element in O(1) instead of the old O(K) linear `position` scan.
-            // This makes label-indexed statistics O(N + K) rather than O(N · K).
-            // Byte-identical to the scan: `position` returns the first matching
-            // index, integer/zero labels compare bit-for-bit via the canonical
-            // key, and `or_insert` keeps the first occurrence on duplicates.
-            let mut label_to_pos: std::collections::HashMap<u64, usize> =
-                std::collections::HashMap::with_capacity(index.len());
+            let mut m = std::collections::HashMap::with_capacity(index.len());
             for (pos, &wanted_label) in index.iter().enumerate() {
-                label_to_pos
-                    .entry(measurement_label_key(wanted_label as f64))
-                    .or_insert(pos);
+                m.entry(measurement_label_key(wanted_label as f64)).or_insert(pos);
             }
-            for (&value, &label_value) in input.data.iter().zip(&labels.data) {
-                if let Some(&pos) = label_to_pos.get(&measurement_label_key(label_value)) {
-                    groups[pos].push(value);
-                }
+            Some(m)
+        }
+        None => None,
+    };
+    let classify = |label_value: f64| -> Option<usize> {
+        match &label_to_pos {
+            Some(m) => m.get(&measurement_label_key(label_value)).copied(),
+            None => (label_value != 0.0).then_some(0),
+        }
+    };
+
+    let n = input.data.len();
+    // Value-only sibling of `measurement_label_value_positions`; parallelize the per-element
+    // classify+push identically. Private per-thread buckets over contiguous flat-chunks merged in
+    // thread (= flat) order → BYTE-IDENTICAL group contents/order (each group's ascending-flat-order
+    // value list is reproduced exactly). The per-element std-HashMap (SipHash) lookup dominates.
+    let nthreads = if NDIMAGE_LABEL_GATHER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        1
+    } else {
+        let t = ndimage_filter_thread_count(n, 4);
+        if t <= 1 || num_groups.saturating_mul(t) > n {
+            1
+        } else {
+            t
+        }
+    };
+
+    if nthreads <= 1 {
+        let mut groups: Vec<Vec<f64>> = vec![Vec::new(); num_groups];
+        for (&value, &label_value) in input.data.iter().zip(&labels.data) {
+            if let Some(pos) = classify(label_value) {
+                groups[pos].push(value);
             }
         }
-        None => {
-            for (&value, &label_value) in input.data.iter().zip(&labels.data) {
-                if label_value != 0.0 {
-                    groups[0].push(value);
-                }
-            }
-        }
+        return Ok(groups);
     }
 
+    let chunk = n.div_ceil(nthreads);
+    let classify = &classify;
+    let partials: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        let mut start = 0usize;
+        while start < n {
+            let end = (start + chunk).min(n);
+            handles.push(scope.spawn(move || {
+                let mut local: Vec<Vec<f64>> = vec![Vec::new(); num_groups];
+                for flat in start..end {
+                    if let Some(pos) = classify(labels.data[flat]) {
+                        local[pos].push(input.data[flat]);
+                    }
+                }
+                local
+            }));
+            start = end;
+        }
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("label gather chunk panicked"))
+            .collect()
+    });
+
+    let mut groups: Vec<Vec<f64>> = vec![Vec::new(); num_groups];
+    for partial in partials {
+        for (pos, bucket) in partial.into_iter().enumerate() {
+            groups[pos].extend(bucket);
+        }
+    }
     Ok(groups)
 }
 

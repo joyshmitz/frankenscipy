@@ -2520,3 +2520,18 @@ magnitude noisy under heavy box contention, memory-bound by the serial merge-cop
 test build stalled ~15min behind a stuck build on vmi1227854 (`hard_preflight=1`); landed once a slot freed
 (never went local). LEVER (reusable): the sibling value-only gather `measurement_label_groups` (median +5
 callers) is the identical next follow-on.
+
+### 2026-07-11 (ScarletChapel, cc) — parallel value-only label GATHER (measurement_label_groups): 1.6-1.7x, byte-identical
+Completes the label-gather family (value-only sibling of 7d624045). `measurement_label_groups` — behind
+`median` (all cases, no streaming path) + `histogram`/`sum`/`variance`/`minimum`/`maximum` FALLBACK when the
+index is not one-based-contiguous — bucketed per-element serially with the same per-element SipHash lookup.
+Parallelized identically: private per-thread buckets over contiguous flat-chunks + thread-order merge =
+BYTE-IDENTICAL (each group's ascending-flat-order value list reproduced exactly); reuses
+`NDIMAGE_LABEL_GATHER_FORCE_SERIAL` + the `t*num_groups<=n` guard. MEASURED (strict-remote release
+`+avx2,+fma`, paired median vs A/A null, via `sum` with a REVERSED index — bypasses `sum`'s
+`measurement_one_based_scatter` streaming path to force the gather, gather-dominated), DECIDED twice: 21 iters
+50.58->28.71ms **1.607x** (null [0.792,1.474]); 31 iters 51.63->26.44ms **1.735x** (null [0.706,1.258]);
+**bitmism=0** both. Full `fsci-ndimage` lib suite 272/0. bin `perf_label_groups_gather`. SCOPE: lifts `median`
+(all cases) + non-contiguous-index label stats; the contiguous-index common case uses the unaffected
+`measurement_one_based_scatter`. The label-stat parallelization vein is now SATURATED (map +
+`labeled_comprehension`, both shared gathers done); no clean sibling remains in it.
