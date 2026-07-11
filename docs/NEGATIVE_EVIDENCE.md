@@ -20344,3 +20344,13 @@ log_term is a small fraction and parallelizing it alone caps at ~1.2x — within
 Stashed as reject (stash "yeojohnson_llf-REJECT..."). LESSON: when only ONE of a fn's heavy passes is serial and the
 others are already parallel, parallelizing that one pass rarely clears the median gate — need ≥2 serial heavy passes
 (boxcox_llf) or a dominant single one.
+
+## 2026-07-11 - ScarletChapel (cc) - REJECT (byte-id, marginal): spectral_flatness log_sum parallelization
+Parallelized the serial `Σ ln` in `signal::spectral_flatness` (via par_index_fill + serial sum, byte-id). MEASURED
+bitmism=0 but MARGINAL: 16M 1.281x with null_hi 1.261 → only 1.6% margin (noise floor, cv 12%). ROOT CAUSE (the
+yeojohnson_llf trap again): the fn has THREE O(N) passes — a serial validation scan (`any(!finite||m<0)`) + a serial
+`arith_mean` sum + the log_sum — and only log_sum is heavy/parallelizable byte-id (arith_mean's sum reorder would be
+ULP; validation+mean are light/bandwidth-bound). Parallelizing 1-of-3 passes caps at ~1.28x, within noise. Do NOT
+ship (1.6% margin ≈ gmean_weighted's held 2.5% → not robust). Stashed reject. RULE (reconfirmed twice now:
+yeojohnson_llf, spectral_flatness): a fn with MULTIPLE serial O(N) passes where only ONE is byte-id-parallelizable
+caps at a marginal ~1.2-1.3x — need the heavy pass to DOMINATE, or ≥2 heavy passes both parallelizable (boxcox_llf).
