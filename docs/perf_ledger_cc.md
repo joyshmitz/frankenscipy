@@ -2758,3 +2758,19 @@ than group_delay's per-coefficient trig, so the serial baseline is smaller (68ms
 straggler `magnitude_response` shares the pattern but is lighter still (1 sqrt vs 2 atan2) — likely IN-FLOOR
 without a very high order; left on the frontier. VEIN NOW EXHAUSTED for the signal response family (freqz/
 group_delay already parallel; group_delay_from_ba + phase_response landed; magnitude_response too light).
+
+### 2026-07-11 (ScarletChapel, cc) — signal::magnitude_response parallel across frequencies: 3.51x, byte-identical
+Last straggler of the signal response family (same public-straddler vein as group_delay_from_ba/phase_response).
+`magnitude_response(b, a, n_freqs)` computed each frequency's |H| in a SERIAL `for k in 0..n_freqs` loop while
+scipy-named `freqz`/`group_delay` already route their per-ω kernel through `freqz_par_collect`. Kernel = two
+Horner `eval_poly_on_unit_circle` sweeps (O(len(b)+len(a)) complex MACs + cos/sin each) + a `sqrt` — pure per-ω
+function of the index. LEVER: fan across disjoint contiguous ω-chunks via `freqz_par_collect` (index-aligned,
+pure kernel) → byte-identical to the serial loop; gate `freqz_response_thread_count(n_freqs, len(b)+len(a))`,
+toggle `MAGNITUDE_RESPONSE_FORCE_SERIAL`. `magnitude_response_db` WRAPS this fn (calls it then maps log10) so it
+inherits the speedup for free. MEASURED (strict-remote release `+avx2,+fma`, paired median vs A/A null,
+order=3072 / n_freqs=16384): 102.41->22.39ms = **3.509x** (null [0.937,1.105], serial cv 2.6%), **bitmism=0**.
+Lower than phase_response's 5.79x — the `sqrt` tail is lighter than phase's 2 atan2, so a larger fraction of the
+parallel time is fixed thread overhead (hence order=3072 to clear the floor). bin `perf_magnitude_response`.
+19 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats + 3 signal). SIGNAL RESPONSE FAMILY FULLY
+EXHAUSTED: freqz/group_delay already parallel; group_delay_from_ba (5.69x) + phase_response (5.79x) +
+magnitude_response (3.51x)/magnitude_response_db (inherits) landed. No more per-ω response stragglers.
