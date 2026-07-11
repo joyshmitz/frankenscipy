@@ -2695,3 +2695,16 @@ so the per-column evals dominate → this pays. Committed via a WORKTREE (opt/li
 14 cc wins this session (10 ndimage + 3 spatial + 1 opt). LEVER (reusable): grep public callback-based fns
 that map a user closure over independent items (FD Jacobians, custom-metric distances, comprehensions) and
 lack `+ Sync` — parallelize byte-identically.
+
+### 2026-07-11 (ScarletChapel, cc) — opt::approx_fprime parallel across gradient components: 2.55x, byte-identical
+Direct sibling of approx_derivative — the FD GRADIENT (scalar objective; scipy's is serial). Each component's
+forward difference perturbs ONLY `xk[index]` and evaluates `f` independently → fan the components across cores
+(each thread a PRIVATE perturb buffer). BYTE-IDENTICAL: identical `(f(xk+ε·eᵢ)-f0)/ε` per component in index
+order, AND the non-finite error reports the SAME lowest index the serial loop hits first (each component
+returns `Result<f64,usize>`; the merge scans in index order for the first `Err`). Added `+ Sync` to `f` — the
+only internal caller is `check_grad` (leaf, test-only callers), so the cascade is bounded (added `+ Sync`
+there too). Toggled by `OPT_APPROX_FPRIME_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`, paired
+median vs A/A null, n=64 components, expensive `f`): 116.14->42.16ms = **2.547x** (null [0.860,1.095]),
+**bitmism=0**. Lower than approx_derivative (5.99x) — the scalar `f` is lighter so parallel overhead + the
+Result-collection are a bigger fraction. Committed via WORKTREE (opt/lib.rs peer WIP). bin `perf_approx_fprime`.
+15 cc wins this session (10 ndimage + 3 spatial + 2 opt).

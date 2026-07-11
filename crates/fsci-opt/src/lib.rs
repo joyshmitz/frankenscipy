@@ -128,9 +128,15 @@ pub struct HessianResult {
 /// Forward-difference gradient approximation.
 ///
 /// Matches `scipy.optimize.approx_fprime(xk, f, epsilon)`.
+/// When `true`, force `approx_fprime` onto its ORIG serial per-component loop. Byte-identical either
+/// way. Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static OPT_APPROX_FPRIME_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn approx_fprime<F>(xk: &[f64], f: F, epsilon: f64) -> Result<Vec<f64>, OptError>
 where
-    F: Fn(&[f64]) -> f64,
+    F: Fn(&[f64]) -> f64 + Sync,
 {
     if xk.is_empty() {
         return Err(OptError::InvalidArgument {
@@ -155,22 +161,65 @@ where
         });
     }
 
-    let mut gradient = Vec::with_capacity(xk.len());
-    let mut x_perturbed = xk.to_vec();
-    for index in 0..xk.len() {
-        let original = x_perturbed[index];
-        x_perturbed[index] += epsilon;
-        let f_plus = f(&x_perturbed);
-        x_perturbed[index] = original; // restore
-
+    // Each component's forward difference perturbs ONLY `xk[index]` and evaluates `f` independently,
+    // so the components fan out across cores (each thread uses a PRIVATE perturbation buffer). Result
+    // is BYTE-IDENTICAL to the serial loop: identical `(f(xk+ε·eᵢ) - f0)/ε` per component in index
+    // order, and the non-finite error reports the SAME (lowest) index the serial loop would hit first.
+    // `f` evaluations dominate a finite-difference gradient; scipy's `approx_fprime` is serial.
+    let n = xk.len();
+    let component = |index: usize| -> Result<f64, usize> {
+        let mut xp = xk.to_vec();
+        xp[index] += epsilon;
+        let f_plus = f(&xp);
         if !f_plus.is_finite() {
+            return Err(index);
+        }
+        Ok((f_plus - f0) / epsilon)
+    };
+    let nthreads = if OPT_APPROX_FPRIME_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+    let results: Vec<Result<f64, usize>> = if nthreads <= 1 {
+        (0..n).map(component).collect()
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let component = &component;
+        let parts: Vec<Vec<Result<f64, usize>>> = std::thread::scope(|scope| {
+            (0..n)
+                .step_by(chunk)
+                .map(|i0| {
+                    scope.spawn(move || {
+                        let i1 = (i0 + chunk).min(n);
+                        (i0..i1).map(component).collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| handle.join().expect("approx_fprime chunk panicked"))
+                .collect()
+        });
+        let mut r = Vec::with_capacity(n);
+        for part in parts {
+            r.extend(part);
+        }
+        r
+    };
+    // Lowest-index non-finite error, matching the serial loop's first-error return.
+    for res in &results {
+        if let &Err(index) = res {
             return Err(OptError::NonFiniteInput {
                 detail: format!("objective returned non-finite value at perturbed index {index}"),
             });
         }
-        gradient.push((f_plus - f0) / epsilon);
     }
-
+    let gradient: Vec<f64> = results.into_iter().map(|r| r.unwrap_or(0.0)).collect();
     Ok(gradient)
 }
 
@@ -446,7 +495,7 @@ where
 /// Matches `scipy.optimize.check_grad`.
 pub fn check_grad<F, G>(func: F, grad: G, x0: &[f64]) -> Result<f64, OptError>
 where
-    F: Fn(&[f64]) -> f64,
+    F: Fn(&[f64]) -> f64 + Sync,
     G: Fn(&[f64]) -> Vec<f64>,
 {
     let analytical = grad(x0);
