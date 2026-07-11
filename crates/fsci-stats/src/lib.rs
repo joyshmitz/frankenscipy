@@ -23247,6 +23247,13 @@ impl ContinuousDistribution for InvWeibull {
     }
 }
 
+/// When `true`, [`GenNorm::logpdf_many`] runs its `powf` map serially (the ORIG behaviour). When
+/// `false` (default), it fans across cores via `par_continuous_map_min` (byte-identical, order-
+/// preserving — the same helper the sibling `pdf_many` uses). For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static GENNORM_LOGPDF_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Generalized normal distribution (exponential power).
 ///
 /// Matches `scipy.stats.gennorm`.
@@ -23269,7 +23276,16 @@ impl GenNorm {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let b = self.beta;
         let lead = b.ln() - 2.0_f64.ln() - ln_gamma(1.0 / b);
-        xs.iter().map(|&x| lead - x.abs().powf(b)).collect()
+        // `powf` per element is compute-bound; fan across cores via the order-preserving
+        // `par_continuous_map_min` — the SAME helper (and gate) the sibling `pdf_many` already uses.
+        // BYTE-IDENTICAL to the serial map (`lead` hoisted, pure per-element `powf`). This lone
+        // `logpdf_many` was the one distribution `_many` left serial. `GENNORM_LOGPDF_FORCE_SERIAL`
+        // restores the serial map (same-binary A/B).
+        if GENNORM_LOGPDF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+            xs.iter().map(|&x| lead - x.abs().powf(b)).collect()
+        } else {
+            par_continuous_map_min(xs, 65536, |x| lead - x.abs().powf(b))
+        }
     }
 
     /// Density at many points; hoists the `β / (2·Γ(1/β))` coefficient like

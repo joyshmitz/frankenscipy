@@ -2874,6 +2874,19 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::GenNorm::logpdf_many parallelize the powf map: 3.08x, byte-identical
+43rd win — found by an Explore sweep for "dominant serial heavy compute": `GenNorm::logpdf_many` (23269, scipy
+`gennorm.logpdf` batch) was the LONE distribution `_many` method still serial — `xs.iter().map(|&x| lead -
+x.abs().powf(b)).collect()` — while its sibling `pdf_many` (23281) AND every other distribution's `logpdf_many`
+already use `par_continuous_map_min`. LEVER: route through `par_continuous_map_min(xs, 65536, |x| lead - x.abs()
+.powf(b))` (the same helper+gate the sibling uses) → BYTE-IDENTICAL (order-preserving map, `lead` hoisted, pure
+per-element powf). Toggle `GENNORM_LOGPDF_FORCE_SERIAL`, bin `perf_gennorm_logpdf`. MEASURED (strict-remote release
+`+avx2,+fma` on vmi1167313, same-binary paired median vs A/A null, 8M elts, β=1.5): 116.40→32.33ms = **3.080x
+DECIDED** (null [0.761,1.117] — robust, serial cv 6.3%), **bitmism=0** (full output vector). Clean single-powf
+elementwise map (no reduction tax) → high 3.08x, like power_array/power_mean. TEST-GATE: bin build served (compile
+verified); byte-id (bitmism=0) → shipped on median gate. LESSON: the "one sibling left serial" straggler recurs —
+when N methods of a family are parallel and 1 isn't, that 1 is a byte-id win (freqs, SmoothBiv, filtfilt, now this).
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::boxcox_llf parallelize the transform + Σln passes: 2.33x, byte-identical
 42nd win — the Box-Cox log-likelihood objective (public + what `boxcox_normmax` optimizes over lambda). `boxcox_llf`
 had TWO serial heavy passes: the transform (`(x^λ-1)/λ` or `ln x` per element, materialized) + `Σ ln(data)`. LEVER:
