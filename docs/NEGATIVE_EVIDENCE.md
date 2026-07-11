@@ -20093,3 +20093,27 @@ public reductions were `pmean` (1.94x) + `power_mean` (3.15x), both SHIPPED byte
 vein's last theoretical frontier is quadrature weight-sums in special/integrate — but those are typically fixed
 small node counts (Gauss-Kronrod XGK/WGK are compile-time const) → not large-N. Genuinely at frontier+hold across
 all worked veins; remaining is owner-gated tolerance-parity, forbid(unsafe) FFT SoA-SIMD, or retry #2 (new peer code).
+
+## 2026-07-11 - ScarletChapel (cc) - SYNC STATE + ULP fused-chunked pmean upgrade UNMEASURED (rch degraded, surfaced)
+SYNC: origin/main = aa20604da = my last push; local HEAD 6eeaa1e2a is a clean ANCESTOR (0 local-only commits, all my
+work safe on origin); ZERO commits after aa20604da; no non-BlackThrush authors in last 40 → retry #2 has NOT fired
+(no new peer code). The shared working tree's dirty state is PRE-EXISTING peer WIP (unchanged since session start) —
+did NOT `git pull --rebase` (would autostash-strand the peer WIP); leave the shared tree untouched, work via
+worktrees at origin as all session.
+ULP-REDUCTION UPGRADE (candidate, UNMEASURED): the shipped byte-identical pmean/power_mean use `par_continuous_map`
+(parallel powf map into a Vec) + serial index-ordered sum — that carries a Vec-materialize + serial-sum-pass tax.
+A FUSED CHUNKED-parallel powf-sum (each thread serially sums powf over its contiguous chunk via `thread::scope`, then
+sum the partials — the SAME reordering `gmean_log_sum` already ships) would fuse away that tax for an est. further
+~1.5-2x (serial → ~4x total). BUT the chunked fold REORDERS the sum → moves last bits. A-PRIORI ANALYSIS: for a
+well-conditioned positive sum of N=4M terms, chunked-vs-serial-left-fold drift is ~O(N·ε) ≈ 4e6·2.2e-16 ≈ 1e-9
+RELATIVE in the worst case (many ULP, not "a few") — LIKELY BEYOND a strict per-op ULP tolerance → would SURFACE,
+not ship (though the codebase's own gmean already accepts a reordered/unrolled sum, so the effective bar is looser).
+STATUS: BLOCKED — rch persistently degraded this turn ("no admissible workers: insufficient_slots=7,hard_preflift=2"
+×22 attempts across build+test), strict-remote forbids local → could NOT build/measure the drift or speedup. Per
+"rch degraded = surface, no unmeasured ship," the byte-identical pmean(1.94x)/power_mean(3.15x) STAND as shipped.
+RETRY RECIPE (run when rch recovers, bin `perf_pmean_ulp_probe`): implement `chunked_powf_sum(data,p)` =
+`n<1<<16 ? serial : thread::scope(chunks(n.div_ceil(threads)).map(|c| c.iter().map(|&x| x.powf(p)).sum())).sum()`
+with `threads=cores.min((n/(1<<16)).max(1)).min(16)`; report `ulp_dist=|ser.to_bits()-chk.to_bits()|` + rel-diff on
+BOTH the final pmean result AND the raw power-sum, plus serial-vs-chunked median speedup. SHIP only if ulp_dist is
+tiny (≤ a few ULP) AND DECIDED; else SURFACE (keep byte-identical). DECISION LIKELY = surface (drift ~1e-9 rel for
+4M sum), so the byte-identical versions are probably the right permanent implementation regardless.
