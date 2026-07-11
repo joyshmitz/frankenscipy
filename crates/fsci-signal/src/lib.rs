@@ -3720,6 +3720,14 @@ pub fn barthann(m: usize) -> Vec<f64> {
     })
 }
 
+/// When `true`, [`nuttall_window`]/[`bohman_window`] fill serially (the ORIG behaviour). When `false`
+/// (default), the compute-bound per-sample trig kernel fans across cores via the order-preserving
+/// `par_index_fill` (byte-identical), matching the already-parallel siblings `blackmanharris`/`barthann`.
+/// Same-binary A/B gate.
+#[doc(hidden)]
+pub static WINDOW_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Nuttall window (minimum 4-term Blackman-Harris).
 ///
 /// Matches `scipy.signal.windows.nuttall(M)`.
@@ -3739,13 +3747,18 @@ pub fn nuttall_window(m: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let n = m - 1;
-    (0..m)
-        .map(|i| {
-            let x = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
-            0.363_581_9 - 0.489_177_5 * x.cos() + 0.136_599_5 * (2.0 * x).cos()
-                - 0.010_641_1 * (3.0 * x).cos()
-        })
-        .collect()
+    // Each sample is an independent 3-`cos` kernel; fan across cores via the order-preserving
+    // `par_index_fill` (BYTE-IDENTICAL to the serial map), like the sibling `blackmanharris`.
+    let kernel = |i: usize| {
+        let x = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+        0.363_581_9 - 0.489_177_5 * x.cos() + 0.136_599_5 * (2.0 * x).cos()
+            - 0.010_641_1 * (3.0 * x).cos()
+    };
+    if WINDOW_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        (0..m).map(kernel).collect()
+    } else {
+        par_index_fill(m, kernel)
+    }
 }
 
 /// Bohman window.
@@ -3759,17 +3772,22 @@ pub fn bohman_window(m: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let n = m - 1;
-    (0..m)
-        .map(|i| {
-            let x = (2.0 * i as f64 / n as f64 - 1.0).abs();
-            if x >= 1.0 {
-                0.0
-            } else {
-                (1.0 - x) * (std::f64::consts::PI * x).cos()
-                    + (1.0 / std::f64::consts::PI) * (std::f64::consts::PI * x).sin()
-            }
-        })
-        .collect()
+    // Each sample is an independent `cos`+`sin` kernel; fan across cores via the order-preserving
+    // `par_index_fill` (BYTE-IDENTICAL to the serial map), like the sibling `barthann`.
+    let kernel = |i: usize| {
+        let x = (2.0 * i as f64 / n as f64 - 1.0).abs();
+        if x >= 1.0 {
+            0.0
+        } else {
+            (1.0 - x) * (std::f64::consts::PI * x).cos()
+                + (1.0 / std::f64::consts::PI) * (std::f64::consts::PI * x).sin()
+        }
+    };
+    if WINDOW_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        (0..m).map(kernel).collect()
+    } else {
+        par_index_fill(m, kernel)
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════

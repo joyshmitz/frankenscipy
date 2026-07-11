@@ -3229,3 +3229,20 @@ gated so short wavelets stay serial (no regression). Peer scipy.signal.morlet/mo
 NEW REUSABLE PRIMITIVE: `par_index_fill_pairs` (the tuple twin of `par_index_fill`) unlocks every complex/paired-
 output generator. QUEUED (same vein, single-output `par_index_fill` drop-ins): `nuttall_window` (3×cos, sibling
 blackmanharris par), `bohman_window` (cos+sin, sibling barthann par); stats `vtest` (Σcos+Σsin shifted, circular family).
+
+### 2026-07-11 (cc) — signal::nuttall_window + bohman_window parallel fill: 11.0x / 6.4x, byte-identical
+Drained the two queued single-output window stragglers. `nuttall_window(m)` (3×`cos`/sample) and `bohman_window(m)`
+(`cos`+`sin`/sample) each filled `Vec<f64>` with a serial `(0..m).map(...).collect()` while their direct siblings
+`blackmanharris` and `barthann` were ALREADY `par_index_fill`. Trivial precedent-backed drop-in: factor each kernel
+into a closure, route through the order-preserving `par_index_fill` (byte-id), gate the same-binary A/B on a shared
+`WINDOW_FORCE_SERIAL`, bin `perf_windows` (measures both). MEASURED (release `+avx2,+fma`, same-binary median vs A/A
+null, m=4M, 21 iters, ×2): nuttall serial 98.96→8.47ms = **10.964x DECIDED** (null [0.916,1.063]) and 97.98→8.26ms =
+**10.948x DECIDED** (null [0.932,1.081]); bohman 44.84→6.50ms = **6.390x DECIDED** (null [0.887,1.110]) and
+44.78→6.64ms = **6.575x DECIDED** (null [0.895,1.105]); **bitmism=0** all four runs. fsci-signal --lib 674/0 (incl.
+nuttall_window_matches_scipy_reference / bohman_window_matches_scipy_reference / nuttall_window_symmetric). nuttall's
+11x is the HIGHEST single-output map win of the campaign (3 cos, ~99ms serial → the parallel 8.5ms rides the full core
+count). `m`=window length, large for long-FFT segments (nperseg 2^16+); gated so short windows stay serial. Peer
+scipy.signal.windows.nuttall/.bohman is single-threaded numpy. SIGNAL WINDOW GENERATORS now all parallel (hann/hamming/
+blackman/blackmanharris/barthann/flattop/tukey/kaiser/... + nuttall/bohman landed). WAVEFORM/WINDOW/WAVELET VEIN this
+session: gauspuls 8.9x + morlet/morlet2 7.9x + nuttall 11.0x + bohman 6.4x = 5 fns, 3 commits. Remaining serial gen
+straggler: `general_hamming` (799, 1×cos — light, likely marginal). Cross-crate: stats `vtest` (circular family).
