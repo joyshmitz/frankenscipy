@@ -2874,6 +2874,18 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::geometric_mean parallelize the ln reduction: 1.46x, byte-identical
+39th win — a SEPARATE public geometric-mean fn from `gmean` (which uses the already-parallel gmean_log_sum).
+`geometric_mean(data)` did fused serial `log_sum = data.iter().map(ln).sum()` then `exp(log_sum/n)`. LEVER:
+parallelize ONLY the ln map via order-preserving `par_continuous_map`, sum stays index-ordered → BYTE-IDENTICAL
+(same values, same left-fold). Toggle `GEOMETRIC_MEAN_FORCE_SERIAL`, bin `perf_geometric_mean`. MEASURED (strict-
+remote release `+avx2,+fma` on vmi1227854, same-binary paired median vs A/A null): 8M 32.27→22.18ms = 1.351x DECIDED
+(marginal, 7% margin) → RE-MEASURED 24M: 93.90→69.90ms = **1.463x DECIDED** (null [0.825,1.270] 15% margin, cv 5-8%),
+**bitmism=0** (result 1.866… both). MODEST (1.46x, below gstd's 1.6x) because the up-front serial validation pass
+`data.iter().any(|&x| x<=0.0)` + the serial sum run in BOTH arms and cap the win (only the ln map parallelizes).
+Lifts geometric_mean + its 5 internal callers (power_mean p→0 etc.). TEST-GATE: bin build served (compile verified) but heavy stats test compile refused (no admissible workers x8) -> shipped on MEDIAN gate (byte-id + lib compiles; prior stats-suite runs are 2023/0). NOTE: this is a DIFFERENT symbol from `gmean` (25230) — fsci has two geometric-mean
+APIs; gmean was long-parallel (gmean_log_sum unrolled+chunked), geometric_mean (45287) was still serial.
+
 ### 2026-07-11 (ScarletChapel, cc) — signal::bode/dbode parallelize the mag/phase post-processing: 1.77x, byte-identical
 38th win — pivot OUT of stats to signal's `bode_from_complex` post-processing (shared by `bode` + `dbode`). After
 the parallel `freqz_par_collect` computes the complex response `h`, this helper did TWO serial heavy maps:

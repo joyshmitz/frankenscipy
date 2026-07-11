@@ -20233,3 +20233,15 @@ other multi-stage fns where stage-1 is already parallel but a heavy stage-2 map/
 mag/phase, FFT→post-process, filter→envelope). CHECKED & EXHAUSTED THIS TURN: ndimage elementwise (power/exp/log done;
 abs/sqrt/scale light), opt callback-map (fixed_point_many already parallel; DE/PSO embedded), signal
 instantaneous_frequency (FFT-dominated, atan2 map ~10% → skip).
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED stats::geometric_mean parallel ln reduction: 1.46x, byte-identical
+A SEPARATE public geometric-mean symbol from `gmean` (which is long-parallel via gmean_log_sum). `geometric_mean`
+(45287) did fused serial `data.iter().map(ln).sum()` → par_continuous_map (byte-id). Toggle GEOMETRIC_MEAN_FORCE
+_SERIAL, bin perf_geometric_mean. 8M 1.35x marginal → 24M 93.90→69.90ms **1.463x DECIDED** (null [0.825,1.270] 15%
+margin), bitmism=0. MODEST — the serial `any(x<=0)` validation pass + serial sum run in both arms and cap it (only ln
+map parallelizes). Test-gate rch-blocked (heavy stats compile ×8; bin served→verified) → median gate. STATS
+SINGLE-LN REDUCTION CENSUS: most remaining `data.iter().map(ln).sum()` sites (boxcox_llf/boxcox_normmax 39158/39221
+are inside the lambda-optimization LOOP = called many times but each is one pass; fit_many/distribution-new are
+embedded/small) are NOT clean standalone large-N — geometric_mean was the last clean one. Reduction-map stats surface
+now essentially fully harvested; further wins are marginal single-ln in embedded/opt-loop contexts (skip) or a fresh
+non-stats vein.

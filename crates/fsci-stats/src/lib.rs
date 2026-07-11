@@ -45284,11 +45284,26 @@ pub fn balanced_accuracy_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
 }
 
 /// Geometric mean of positive values.
+/// When `true`, [`geometric_mean`] computes its `ln` log-sum with the fused serial `map(ln).sum()`
+/// (the ORIG behaviour). When `false` (default), the compute-bound `ln` map fans across cores via the
+/// order-preserving `par_continuous_map` and the sum stays in index order. Byte-identical either way.
+/// For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static GEOMETRIC_MEAN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn geometric_mean(data: &[f64]) -> f64 {
     if data.is_empty() || data.iter().any(|&x| x <= 0.0) {
         return f64::NAN;
     }
-    let log_sum: f64 = data.iter().map(|&x| x.ln()).sum();
+    // `ln` is a heavy per-element transcendental that dominates this reduction. Parallelize ONLY the
+    // map (order-preserving `par_continuous_map`), sum stays in index order → BYTE-IDENTICAL to the
+    // fused serial `data.iter().map(ln).sum()` (same values, same left-fold from 0.0).
+    let log_sum: f64 = if GEOMETRIC_MEAN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| x.ln()).sum()
+    } else {
+        par_continuous_map(data, |x| x.ln()).iter().sum()
+    };
     (log_sum / data.len() as f64).exp()
 }
 
