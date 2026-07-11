@@ -19855,3 +19855,35 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
   diff. Every Cargo command used `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- ...`; no local Cargo ran.
   Retry only if a future profile makes validation a separately measurable share of a real workload. Bead:
   `frankenscipy-8l8r1.158`.
+
+## 2026-07-11 - ScarletChapel (cod) - KEEP (bit-identical): differential-evolution candidate scratch reuse cuts median 17.44-19.44%
+
+- PROFILE-FIRST: this measured retry excluded cc-owned `ndimage`/`interpolate`. A fresh strict-remote focused
+  `differential_evolution/rosen_5d` baseline on `vmi1149989` stored **906.166387 us** median (95% median CI
+  **[899.526286, 957.443681] us**). A remote `perf` profile of the exact benchmark binary sampled the
+  trial-construction iterator fold at approximately **12.15%** and Rust allocation at **12.09%**, selecting the
+  repeated candidate-vector allocation rather than an already-closed optimize family.
+- ONE LEVER: allocate `mutant` and `trial` once per solve, overwrite every coordinate in the original order, and
+  copy accepted trial values into the existing population row. Mutation arithmetic, clamps, crossover
+  short-circuit/RNG draw order, objective order, `<=` ties, fitness/best updates, and convergence logic are unchanged.
+  No `select_three` or other allocation was touched. Scratch pointer identity changes, so an objective that branches
+  on `x.as_ptr()` could observe reuse; value-based numerical objectives receive exactly the same bits.
+- **MEDIAN GATE, same worker `vmi1264463`, candidate/control/candidate:** candidate-before **1.258514574 ms**
+  (CI **[1.179776291, 1.313392352] ms**), original allocating control **1.524340348 ms**
+  (CI **[1.487641395, 1.570968857] ms**), and candidate-after **1.228015922 ms**
+  (CI **[1.179222620, 1.265438369] ms**). The candidate brackets are respectively **1.211222x / 17.4387%** and
+  **1.241303x / 19.4395%** faster by stored median. The middle control was restored manually and the identical
+  candidate was reapplied afterward; cross-worker numbers and console slope estimates did not decide the result.
+- BIT-IDENTITY: seeded 5-D Rosenbrock remained
+  `x=[3feffd541a99f908,3ff0063d28ffc97b,3ff00c7b8733cbae,3ff0199eaa5b07ea,3ff02ad908490820]`,
+  `fun=3f4f87af07bb6109`, `nfev=7575`, `nit=100`. Strict-remote proof passed **327** `fsci-opt` unit tests, **56**
+  optimization metamorphic tests, and focused DE conformance
+  `e2e_p2c003_11_differential_evolution_rastrigin` (**1/1**).
+- Verdict: **KEEP** under bead `frankenscipy-8l8r1.157`. All explicit Cargo commands used
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- ...`; capacity failures surfaced without local fallback.
+  Focused remote `-D warnings` clippy is blocked by three pre-existing findings in `curvefit.rs:549` and
+  `lib.rs:4367/4371`, none in the candidate hunk. Two remote workspace-check attempts were blocked by a reproducible
+  `blake3` build-script `SIGILL` on RCH-selected `ovh-b`; no local Cargo substitute ran. Separately, the mandated
+  `ubs` wrapper unexpectedly launched local Cargo health checks in its temporary shadow workspace; that accidental
+  wrapper behavior was disclosed and is excluded from the proof bundle. Retry only when a fresh profile independently
+  elevates the untouched `select_three` allocation; do not reopen the two-vector scratch lever.

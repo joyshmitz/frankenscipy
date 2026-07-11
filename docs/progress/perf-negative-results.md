@@ -4,6 +4,39 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-11 - frankenscipy-8l8r1.157 - KEEP: reuse differential-evolution candidate scratch (bit-identical, median -17.44% to -19.44%)
+
+- Agent: cod / ScarletChapel. Domain: `fsci-opt`; cc-owned `ndimage` and `interpolate` were excluded. This is the
+  measured retry of the SURFACE entry below. A fresh strict-remote baseline on `vmi1149989` stored a
+  **906.166387 us** median (95% median CI **[899.526286, 957.443681] us**). A remote `perf` profile of that exact
+  benchmark/binary attributed approximately **12.15%** of sampled cycles to the trial-construction iterator fold and
+  **12.09%** to Rust allocation, selecting candidate-vector allocation as the first open hot lever.
+- One lever allocates `mutant` and `trial` once per solve, overwrites every coordinate in the original order, and
+  copies accepted trial values into the existing population row. Mutation arithmetic, clamping, crossover
+  short-circuit/RNG draws, objective-call order, `<=` acceptance ties, fitness/best updates, and solver termination
+  remain unchanged. The allocation address is not part of the numerical API contract; an adversarial objective that
+  branches on `x.as_ptr()` could observe scratch reuse, while all value-based objectives retain the exact slice bits.
+- **MEDIAN GATE, same remote worker `vmi1264463`, candidate/control/candidate:** candidate-before
+  **1.258514574 ms** (CI **[1.179776291, 1.313392352] ms**), original allocating control **1.524340348 ms**
+  (CI **[1.487641395, 1.570968857] ms**), and candidate-after **1.228015922 ms**
+  (CI **[1.179222620, 1.265438369] ms**). Both candidate brackets beat control: **1.211222x / 17.4387%** and
+  **1.241303x / 19.4395%** lower median self-time. The production source was restored to the identical candidate
+  after the middle control run; no second optimization lever was folded in.
+- Seeded 5-D Rosenbrock proof is bit-identical to the banked control:
+  `x=[3feffd541a99f908,3ff0063d28ffc97b,3ff00c7b8733cbae,3ff0199eaa5b07ea,3ff02ad908490820]`,
+  `fun=3f4f87af07bb6109`, `nfev=7575`, `nit=100`. Strict-remote verification passed all **327** `fsci-opt` unit
+  tests, all **56** optimization metamorphic tests, and focused differential-evolution conformance
+  `e2e_p2c003_11_differential_evolution_rastrigin` (**1/1**).
+- Decision: **KEEP**. Every explicit Cargo invocation used
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- ...`; capacity refusals were surfaced and never retried
+  locally. Focused `-D warnings` clippy reached a remote worker but remains blocked by three pre-existing warnings in
+  `curvefit.rs:549` and `lib.rs:4367/4371`, outside this lever. The workspace check was attempted twice remotely but
+  the selected `ovh-b` worker's `blake3` build script reproducibly died with `SIGILL`; that RCH degradation is
+  surfaced, with no local Cargo substitute. The mandated `ubs` wrapper was also invoked once and unexpectedly ran
+  local Cargo health checks inside its temporary shadow workspace; those results were disclosed immediately and were
+  not used as build or correctness evidence. Retry this family only if a new profile exposes the deliberately
+  untouched `select_three` allocation as an independently material hotspot.
+
 ## 2026-07-11 - frankenscipy-8l8r1.158 - REJECT: `diags` endpoint bound proof is median-neutral/slower
 
 - Agent: cod / ScarletChapel. Domain: `fsci-sparse`; cc-owned `ndimage` and `interpolate` were excluded. Ledger and

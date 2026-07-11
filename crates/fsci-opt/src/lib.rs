@@ -2184,6 +2184,8 @@ where
 
     let mut converged = false;
     let mut generation = 0;
+    let mut mutant = vec![0.0; ndim];
+    let mut trial = vec![0.0; ndim];
 
     for g in 0..opts.maxiter {
         generation = g;
@@ -2197,30 +2199,26 @@ where
                 DeStrategy::Best1Bin => &population[best_idx],
                 DeStrategy::Rand1Bin => &population[r0],
             };
-            let mutant: Vec<f64> = base
-                .iter()
-                .zip(population[r1].iter().zip(population[r2].iter()))
-                .map(|(&b, (&v1, &v2))| b + opts.mutation * (v1 - v2))
-                .collect();
+            for j in 0..ndim {
+                mutant[j] = base[j] + opts.mutation * (population[r1][j] - population[r2][j]);
+            }
 
             // Binomial crossover.
             let j_rand = rng.random_range(0..ndim);
-            let trial: Vec<f64> = (0..ndim)
-                .map(|j| {
-                    if j == j_rand || rng.random_range(0.0..1.0) < opts.recombination {
-                        // Clip to bounds.
-                        mutant[j].clamp(bounds[j].0, bounds[j].1)
-                    } else {
-                        population[i][j]
-                    }
-                })
-                .collect();
+            for j in 0..ndim {
+                trial[j] = if j == j_rand || rng.random_range(0.0..1.0) < opts.recombination {
+                    // Clip to bounds.
+                    mutant[j].clamp(bounds[j].0, bounds[j].1)
+                } else {
+                    population[i][j]
+                };
+            }
 
             // Selection.
             let f_trial = func(&trial);
             nfev += 1;
             if f_trial <= fitness[i] {
-                population[i] = trial;
+                population[i].copy_from_slice(&trial);
                 fitness[i] = f_trial;
                 if f_trial < best_fun {
                     best_fun = f_trial;
@@ -7249,6 +7247,47 @@ mod tests {
             "y ~ 1.0, got {}",
             result.x[1]
         );
+    }
+
+    #[test]
+    fn differential_evolution_rosen_5d_seed_is_bit_identical() {
+        let rosen_5d = |x: &[f64]| -> f64 {
+            let mut sum = 0.0;
+            for i in 0..4 {
+                sum += 100.0 * (x[i + 1] - x[i] * x[i]).powi(2) + (1.0 - x[i]).powi(2);
+            }
+            sum
+        };
+        let result = differential_evolution(
+            rosen_5d,
+            &[(-5.0, 5.0); 5],
+            DifferentialEvolutionOptions {
+                maxiter: 100,
+                popsize: 15,
+                tol: 1e-8,
+                seed: Some(1),
+                ..Default::default()
+            },
+        )
+        .expect("differential evolution should run");
+
+        let x_bits: Vec<u64> = result.x.iter().map(|value| value.to_bits()).collect();
+        assert_eq!(
+            x_bits,
+            [
+                0x3fef_fd54_1a99_f908,
+                0x3ff0_063d_28ff_c97b,
+                0x3ff0_0c7b_8733_cbae,
+                0x3ff0_199e_aa5b_07ea,
+                0x3ff0_2ad9_0849_0820,
+            ]
+        );
+        assert_eq!(
+            result.fun.expect("objective value").to_bits(),
+            0x3f4f_87af_07bb_6109
+        );
+        assert_eq!(result.nfev, 7_575);
+        assert_eq!(result.nit, 100);
     }
 
     #[test]
