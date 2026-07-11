@@ -2805,3 +2805,19 @@ order=3072 / n_freqs=16384): 148.09->22.09ms = **5.994x** (null [0.931,1.038], s
 bin `perf_lti_freqresp`. 21 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats + 5 signal). FOLLOW-ON
 (next turn): `Dlti::freqresp` (18818) is the IDENTICAL serial method (uses `eval_at_freq`) and already reads the
 shared `FREQRESP_METHOD_FORCE_SERIAL` gate name — same one-line routing through `freqz_par_collect`.
+
+### 2026-07-11 (ScarletChapel, cc) — signal::Dlti::freqresp parallel across frequencies: 5.31x, byte-identical
+Discrete-time sibling of `Lti::freqresp` (identical method straggler, shares the `FREQRESP_METHOD_FORCE_SERIAL`
+gate already on origin). `Dlti::freqresp(&self, w)` (discrete-time transfer-function frequency response
+H(e^{jωdt})=num/den; scipy `dlti.freqresp`) looped `for &omega in w` SERIALLY while the free-fn `bode`/`dfreqresp`
+sweeps already route the identical shape through `freqz_par_collect`. `Dlti` is a `Vec<f64>`+`dt` struct
+(Send+Sync); each ω is independent: `eval_at_freq(ω)` = two Horner `poly_eval_complex` + complex divide + sqrt +
+atan2. LEVER: fan across disjoint contiguous ω-chunks via `freqz_par_collect` (index-aligned, pure kernel;
+closure captures `&self`+`w`, both Sync) → byte-identical to the serial loop; gate
+`freqz_response_thread_count(w.len(), 2·(len(num)+len(den)))`, toggle the SHARED `FREQRESP_METHOD_FORCE_SERIAL`
+(commit is METHOD-ONLY — the atomic already landed with Lti::freqresp). MEASURED (strict-remote release
+`+avx2,+fma`, paired median vs A/A null, order=3072 / n_freqs=16384): 103.56->15.47ms = **5.313x** (null
+[0.956,1.038], serial cv 1.2%), **bitmism=0**. bin `perf_dlti_freqresp`. 22 cc wins this session (10 ndimage +
+3 spatial + 2 opt + 1 stats + 6 signal). SIGNAL FREQUENCY-RESPONSE SURFACE NOW FULLY EXHAUSTED: free fns
+(freqz/freqz_zpk/sosfreqz/freqs/freqs_zpk/group_delay/bode + group_delay_from_ba/phase_response/
+magnitude_response/dfreqresp) AND methods (Lti/Dlti::freqresp) all parallel. No per-ω response stragglers remain.

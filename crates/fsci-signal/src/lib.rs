@@ -18923,13 +18923,30 @@ impl Dlti {
 
     /// Compute the frequency response H(e^{jω}) at angular frequencies.
     pub fn freqresp(&self, w: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        // Each frequency's response is independent — `eval_at_freq` does two Horner
+        // `poly_eval_complex` sweeps (O(len(num)+len(den)) complex MACs) + a complex divide, then a
+        // `sqrt`/`atan2`, reading only the immutable `num`/`den`/`dt`. Fan across disjoint contiguous
+        // chunks through the shared `freqz_par_collect` helper (the same path the free-fn `bode`/
+        // `dfreqresp` sweeps use): chunks are index-aligned and the kernel is pure, so the (mag,
+        // phase) result is byte-identical to the serial `for &omega in w` loop. Discrete-time sibling
+        // of `Lti::freqresp`, sharing the `FREQRESP_METHOD_FORCE_SERIAL` gate.
+        let force_serial =
+            FREQRESP_METHOD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+        let work = (self.num.len() + self.den.len()).saturating_mul(2).max(8);
+        let nthreads = if force_serial {
+            1
+        } else {
+            freqz_response_thread_count(w.len(), work)
+        };
+        let pairs: Vec<(f64, f64)> = freqz_par_collect(w.len(), nthreads, |i| {
+            let (re, im) = self.eval_at_freq(w[i]);
+            ((re * re + im * im).sqrt(), im.atan2(re))
+        });
         let mut mag = Vec::with_capacity(w.len());
         let mut phase = Vec::with_capacity(w.len());
-
-        for &omega in w {
-            let (re, im) = self.eval_at_freq(omega);
-            mag.push((re * re + im * im).sqrt());
-            phase.push(im.atan2(re));
+        for (m, p) in pairs {
+            mag.push(m);
+            phase.push(p);
         }
 
         (mag, phase)
