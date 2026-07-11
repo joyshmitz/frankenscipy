@@ -9464,3 +9464,26 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   AND the existing cspline2d_qspline2d_match_scipy still passes (rewrite preserved output). Gate
   nlines*line_len >= 2^16, serial for <2 lines. transpose_rowmajor_blocked (T=32) keeps the transpose
   cache-friendly so it doesn't eat the parallel IIR win. Safe Rust; no external BLAS/LAPACK/MKL/XLA.
+
+## 2026-07-11 - frankenscipy-8l8r1.160 - SURFACE: measured `cross_entropy` reduction win awaits remote proof capacity
+
+- Agent: cod / ScarletChapel. The origin-current negative ledger and robot triage selected the explicit
+  `cross_entropy` follow-on to the 2.58x `kl_divergence` keep; closed/rejected sparse/opt work and stale open beads
+  were excluded before editing.
+- Strict-remote profile on `vmi1149989` (8M elements, 20 samples) ranked the exact normalized-log term loop at
+  **43.070952 ms** median, 57.61% of the full **74.762619 ms** median. Both normalization sums took only
+  **8.996376 ms**. Full raw p50/p95/p99 were **74.744050/88.864169/134.590523 ms**.
+- One candidate parallelized only the large-N term reduction via contiguous chunks, four accumulators per chunk, and
+  at most 16 workers; inputs below 65,536 retained the original scalar bit pattern. All validation, normalization,
+  per-element arithmetic, infinity behavior, and base conversion stayed unchanged.
+- One strict-remote same-binary bracket on `vmi1149989` stored medians of **68.938851 ms** serial-before,
+  **37.277865 ms** candidate, and **58.439002 ms** serial-after. Candidate speedups were **1.849324x** and
+  **1.567660x** against the two controls. Its raw p95/p99 were **44.800866/47.524718 ms**.
+- The scored output moved from **1.61426871901219791e1** to **1.61426871901224374e1**: **129 ULP** and
+  **2.839e-14 relative**, inside the established `1e-12` entropy/KL tolerance.
+- Ship was blocked at the required proof gate. The first strict-remote `cargo test -p fsci-stats --lib` request was
+  refused before compilation with `no admissible workers: insufficient_slots=8,hard_preflight=1`; fail-closed RCH
+  prevented local fallback. The standing no-retry-on-degradation rule was honored.
+- Decision: **SURFACE, not keep/reject**. Candidate code, test, toggle, and A/B instrumentation were removed; only
+  this evidence and the open retry bead remain. Retry the identical one-lever patch only when strict-remote capacity
+  can complete full stats and focused entropy/reference gates, then repeat the median/tolerance decision.

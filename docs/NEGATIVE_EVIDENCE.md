@@ -20269,3 +20269,36 @@ surface, no unmeasured/untested ship. Exact diff+bin saved: memory dir QUEUED_cr
 QUEUED_perf_cross_entropy.rs.saved. RETRY when rch recovers: apply diff at origin, build+run perf_cross_entropy
 8000000 21, confirm ULP rel≲1e-13 + DECIDED, run `cargo test -p fsci-stats --lib` (MUST be 2023/0 incl. cross_entropy
 scipy-ref tests), ship. rch FLEET saturated end of this turn (sync --all did not recover it this time).
+
+## 2026-07-11 - ScarletChapel (cod) - SURFACE measured `cross_entropy` parallel reduction after strict-remote proof refusal
+
+- Negative-ledger and origin-current `bv --robot-triage` screening came first. Closed `.157` differential-evolution
+  scratch reuse, rejected `.158` sparse `diags`, kept `.159` sparse `eye`, stale already-implemented open beads, and
+  owner-restricted Cholesky lanes were excluded. The newest ledger row explicitly routed to the still-serial
+  `stats::cross_entropy` sibling after the `kl_divergence` keep.
+- PROFILE-FIRST, strict-remote `vmi1149989`, 8,000,000 positive elements, 20 Criterion samples. Stored median for the
+  full original call was **74.762619 ms** (95% median CI **[69.205211, 78.944661] ms**; raw p50/p95/p99
+  **74.744050/88.864169/134.590523 ms**). The exact normalized-log term loop alone was **43.070952 ms** median
+  (57.61% of the full median; raw p95/p99 **52.282489/60.140334 ms**), while both normalization sums were only
+  **8.996376 ms**. This made the term loop the ranked hot lever (Impact 3 x Confidence 5 / Effort 2 = 7.5).
+- ONE LEVER was evaluated: retain the original scalar path below 65,536 elements, but for large inputs split the
+  existing `-pi * ln(qi)` terms into contiguous chunks, use four accumulators per chunk, cap at 16 workers, and sum
+  chunk partials in order. Validation, serial normalization sums, per-element divisions/logarithm, zero-`q` infinity,
+  base conversion, and small-input bits were unchanged; only the large reduction was reassociated.
+- MEDIAN GATE, one strict-remote binary on the same `vmi1149989` worker, 20 samples per row: serial-before
+  **68.938851 ms** (CI **[66.655296, 75.087946]**), candidate **37.277865 ms**
+  (CI **[34.574144, 38.857953]**), serial-after **58.439002 ms**
+  (CI **[54.690489, 62.598325]**). The candidate cleared both brackets: **1.849324x / -45.9262%** versus before and
+  **1.567660x / -36.2106%** versus after. Candidate raw p95/p99 were **44.800866/47.524718 ms**.
+- Numerical proof inside that scored binary: original **1.61426871901219791e1**, candidate
+  **1.61426871901224374e1**, distance **129 ULP**, relative error **2.839e-14**. That is below the established
+  entropy/KL `1e-12` per-operation tolerance, but it is deliberately not called a shipped proof without the required
+  suite and conformance gates.
+- The first strict-remote full `fsci-stats --lib` proof request was refused before compilation:
+  `no admissible workers: insufficient_slots=8,hard_preflight=1`; `RCH_REQUIRE_REMOTE=1` refused local fallback.
+  Per the standing `rch degraded = SURFACE` rule, no retry and no local Cargo followed. The candidate, proof test,
+  toggle, and benchmark instrumentation were removed manually; production and benchmark source match `origin/main`.
+- Verdict: **MEASURED KEEP CANDIDATE / SURFACED, NOT SHIPPED** under `frankenscipy-8l8r1.160`. Retry only when one
+  strict-remote slot can run the full stats library plus focused SciPy/reference entropy gates; reapply this exact
+  chunked-reduction lever, require relative drift <=1e-12, and repeat the same-binary median gate. No other lever may
+  be folded into that retry.
