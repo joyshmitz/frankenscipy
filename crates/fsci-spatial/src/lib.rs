@@ -6923,16 +6923,56 @@ where
     dists
 }
 
+/// When `true`, force `cdist_func` onto its ORIG serial row map. Byte-identical either way.
+/// Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static SPATIAL_CDIST_FUNC_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute pairwise distances between two sets using a metric function.
 ///
 /// Returns an m×n matrix.
 pub fn cdist_func<F>(xa: &[Vec<f64>], xb: &[Vec<f64>], metric: F) -> Vec<Vec<f64>>
 where
-    F: Fn(&[f64], &[f64]) -> f64,
+    F: Fn(&[f64], &[f64]) -> f64 + Sync,
 {
-    xa.iter()
-        .map(|a| xb.iter().map(|b| metric(a, b)).collect())
-        .collect()
+    // Each `xa` row's distances to all of `xb` are INDEPENDENT, so fan contiguous row-chunks across
+    // cores. BYTE-IDENTICAL to the serial map: identical per-pair `metric` calls, rows assembled in
+    // order; only the owning core changes. Custom-metric cdist over a compute-bound `metric`
+    // (euclidean/minkowski) is O(m·n·d) — worth splitting; scipy's callable-metric cdist is serial.
+    let row = |a: &[f64]| -> Vec<f64> { xb.iter().map(|b| metric(a, b)).collect() };
+    let m = xa.len();
+    let nthreads = if SPATIAL_CDIST_FUNC_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || m < 2
+        || (m as u64).saturating_mul(xb.len() as u64) < (1 << 14)
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(m)
+    };
+
+    if nthreads <= 1 {
+        return xa.iter().map(|a| row(a)).collect();
+    }
+
+    let chunk = m.div_ceil(nthreads);
+    let row = &row;
+    let parts: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {
+        xa.chunks(chunk)
+            .map(|c| scope.spawn(move || c.iter().map(|a| row(a)).collect::<Vec<_>>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("cdist_func chunk panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(m);
+    for part in parts {
+        out.extend(part);
+    }
+    out
 }
 
 /// Compute the nearest neighbor for each point in a dataset.

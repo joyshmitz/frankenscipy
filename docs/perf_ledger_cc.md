@@ -2653,3 +2653,15 @@ n_t=500k, d=64): 107.89->49.05ms = **2.118x** (null [0.900,1.166]), **bitmism=0*
 256MB `Vec<Vec<f64>>` output allocation. bin `perf_slerp`. LEVER (reusable): grep for serial per-point
 transcendental interpolation/mapping loops over an INPUT array (independent points) — a byte-identical
 parallel win. CLEAN cc crates left: fsci-fft (kernel wall), fsci-spatial, fsci-stats.
+
+### 2026-07-11 (ScarletChapel, cc) — spatial::cdist_func parallel across rows: 4.47x, byte-identical
+`cdist_func(xa, xb, metric)` (the CUSTOM-metric cdist; scipy's callable-metric cdist is serial) mapped each
+`xa` row to its distances-to-all-`xb` SERIALLY. Each row is INDEPENDENT → fan contiguous row-chunks across
+cores (chunked `thread::scope`, rows concatenated in order). BYTE-IDENTICAL (identical per-pair `metric` calls,
+order preserved) — added `+ Sync` to the metric bound (only caller is a conformance test passing Sync fns).
+Work-gated (`m·n ≥ 2^14`); toggled by `SPATIAL_CDIST_FUNC_FORCE_SERIAL`. MEASURED (strict-remote release
+`+avx2,+fma`, paired median vs A/A null, m=n=1000, d=64, euclidean metric): 22.28->5.20ms = **4.468x** (null
+[0.885,1.208]), **bitmism=0**. Better scaling than slerp (small m×n output alloc). Conformance
+`diff_spatial_pdist_cdist_func` (cdist_func(euclidean)≡cdist_metric) unaffected (byte-identical). bin
+`perf_cdist_func`. FOLLOW-ON: `pdist_func` (condensed, same pattern, trickier disjoint-range output indexing).
+12 cc wins this session (10 ndimage + 2 spatial).
