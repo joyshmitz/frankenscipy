@@ -19837,3 +19837,21 @@ now COMPLETE (dft/hadamard/circulant/toeplitz/hankel/hilbert/fiedler/kron/tri/tr
 - Verdict: **UNMEASURED / SURFACED**, not a win or reject. Retry only with an immediately admissible strict-remote
   slot, preferably the baseline worker `vmi1149989`; require the exact seeded bits and gate candidate median against
   **747.592910 us**, or use a same-binary A/B if worker affinity is unavailable.
+
+## 2026-07-11 - ScarletChapel (cod) - REJECT (bit-identical): sparse `diags` endpoint proof fails the median gate
+
+- PROFILE-FIRST: after excluding closed sparse families and cc-owned `ndimage`/`interpolate`, the fresh structural row
+  was `sparse_diags/tridiag/10000`. The constructor scanned all 29,998 entries only to prove monotone diagonal bounds.
+  A strict-remote `vmi1149989` baseline stored **134.130410 us** median. A standalone candidate on different worker
+  `vmi1293453` appeared 1.1394x faster, but cross-worker timing was discarded as routing evidence.
+- ONE LEVER: replace the entry scan with the equivalent endpoint inequality
+  `len <= min(rows-start_row, cols-start_col)`, expressed with `saturating_sub`. Error precedence/message, CSR emission,
+  metadata, and all floating-point operations were unchanged; successful outputs were bit-identical by construction.
+- **MEDIAN GATE, same binary RCH `vmi1227854`:** entry-scan before **118.279213 us**, endpoint **119.061622 us**,
+  entry-scan after **109.593143 us**. The candidate was **0.661493% slower** than the before control and
+  **8.639664% slower** than the after control, so it fails the stored-median gate despite a favorable console slope
+  estimate.
+- Verdict: **REJECT / SURFACE**. All source, proof, and A/B instrumentation was removed; there is no owned sparse code
+  diff. Every Cargo command used `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- ...`; no local Cargo ran.
+  Retry only if a future profile makes validation a separately measurable share of a real workload. Bead:
+  `frankenscipy-8l8r1.158`.

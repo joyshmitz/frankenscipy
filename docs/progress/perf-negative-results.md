@@ -4,6 +4,35 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-11 - frankenscipy-8l8r1.158 - REJECT: `diags` endpoint bound proof is median-neutral/slower
+
+- Agent: cod / ScarletChapel. Domain: `fsci-sparse`; cc-owned `ndimage` and `interpolate` were excluded. Ledger and
+  source history screening left `sparse_diags/tridiag/10000` as a fresh structural row: the constructor still scanned
+  all 29,998 tridiagonal entries solely to prove their monotone row/column endpoints fit the explicit shape. Earlier
+  `diags` keeps covered direct CSR emission and sorted-offset streaming, not this validation scan.
+- A strict-remote focused baseline on effective worker `vmi1149989` stored median **134.130410 us** (95% median CI
+  **[117.299147, 140.387698] us**). A standalone candidate request was routed to different worker `vmi1293453` and
+  stored **117.718746 us** median. That apparent 1.1394x result was cross-worker routing evidence only and was not
+  allowed to decide the lever.
+- One lever replaced the per-entry validation loop with
+  `len <= min(rows.saturating_sub(start_row), cols.saturating_sub(start_col))`. This is exactly equivalent for empty
+  and non-empty diagonals because row and column increase monotonically together. Duplicate-offset, inferred-shape,
+  first-invalid-diagonal, exact `InvalidShape` message, capacity-overflow, CSR emission, metadata, and every floating-
+  point operation remained untouched, so successful outputs were bit-identical by construction.
+- **MEDIAN GATE, same binary and remote worker `vmi1227854`:** a temporary control/candidate/control Criterion group
+  used the exact `n=10000` vectors, clones, offsets, explicit shape, and timed body from the production benchmark.
+  Stored medians were entry scan before **118.279213 us** (CI **[115.301347, 120.954382] us**), endpoint proof
+  **119.061622 us** (CI **[113.414668, 127.089615] us**), and entry scan after **109.593143 us** (CI
+  **[101.270080, 119.897748] us**). The candidate was **0.661493% slower** than the before control and
+  **8.639664% slower** than the after control. It fails the requested stored-median gate; console slope estimates do
+  not override that verdict.
+- Decision: **REJECT / SURFACE**, no production keep. The candidate, exactness test, atomic control, and A/B benchmark
+  were removed manually; `sparse_bench.rs` is restored exactly and `construct.rs` retains only pre-existing peer
+  formatting outside this lever. Every Cargo invocation used
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- ...`; no local Cargo fallback ran. Do not retry the
+  endpoint-bound rewrite unless a future profile isolates the validation loop above the benchmark's allocation/CSR
+  floor or a more sensitive real workload makes its median effect decidable.
+
 ## 2026-07-11 - frankenscipy-8l8r1.157 - SURFACE: differential-evolution scratch reuse unscored after strict-remote capacity refusal
 
 - Agent: cod / ScarletChapel. Domain: `fsci-opt`; cc-owned `ndimage` and `interpolate` were excluded. A strict-remote
