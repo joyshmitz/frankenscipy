@@ -7689,6 +7689,63 @@ pub fn standard_deviation(
 ///
 /// Matches `scipy.ndimage.minimum`; scalar SciPy results are returned as a
 /// one-element vector, while explicit `index` lists return one value per label.
+/// When `true`, force the global (no-labels) `minimum`/`maximum` onto the ORIG group path
+/// (full-data clone + serial fold). Byte-identical either way. Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static NDIMAGE_MINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Global NaN-propagating min/max reduction over `data` (the labels=None case), matching the ORIG
+/// `measurement_label_groups(None)` fold exactly but WITHOUT the full-data clone: a chunked parallel
+/// reduction (min/max are associative + NaN propagates through the combine → BYTE-IDENTICAL to the
+/// sequential fold). `is_max` selects max (init `-inf`) vs min (init `+inf`).
+fn global_minmax_reduce(data: &[f64], is_max: bool) -> f64 {
+    let init = if is_max { f64::NEG_INFINITY } else { f64::INFINITY };
+    let n = data.len();
+    let nthreads = ndimage_filter_thread_count(n, 4);
+    if nthreads <= 1 {
+        return data.iter().copied().fold(init, |a, b| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else if is_max {
+                a.max(b)
+            } else {
+                a.min(b)
+            }
+        });
+    }
+    let chunk = n.div_ceil(nthreads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|c| {
+                scope.spawn(move || {
+                    c.iter().copied().fold(init, |a, b| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else if is_max {
+                            a.max(b)
+                        } else {
+                            a.min(b)
+                        }
+                    })
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("minmax chunk panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(init, |a, b| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else if is_max {
+            a.max(b)
+        } else {
+            a.min(b)
+        }
+    })
+}
+
 pub fn minimum(
     input: &NdArray,
     labels: Option<&NdArray>,
@@ -7707,6 +7764,16 @@ pub fn minimum(
                 ));
             }
         }
+    }
+    if labels.is_none()
+        && !NDIMAGE_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        // Global min (labels=None): fold the whole array directly, skipping the
+        // `measurement_label_groups` full-data clone. Byte-identical (associative + NaN-propagating).
+        if input.data.is_empty() {
+            return Ok(vec![0.0]);
+        }
+        return Ok(vec![global_minmax_reduce(&input.data, false)]);
     }
     Ok(measurement_label_groups(input, labels, index)?
         .iter()
@@ -7748,6 +7815,16 @@ pub fn maximum(
                 ));
             }
         }
+    }
+    if labels.is_none()
+        && !NDIMAGE_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        // Global max (labels=None): fold the whole array directly, skipping the
+        // `measurement_label_groups` full-data clone. Byte-identical (associative + NaN-propagating).
+        if input.data.is_empty() {
+            return Ok(vec![0.0]);
+        }
+        return Ok(vec![global_minmax_reduce(&input.data, true)]);
     }
     Ok(measurement_label_groups(input, labels, index)?
         .iter()

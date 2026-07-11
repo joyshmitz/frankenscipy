@@ -2563,3 +2563,18 @@ order-independently) AND it drops the full-data clone. Gated by `ndimage_filter_
 **bitmism=0**. Full `fsci-ndimage` lib suite 272/0 with the change present. bin `perf_histogram`. CONFIRMS the
 otsu lever generalizes: per-pixel-divide bincount → privatized-parallel = ~5.8x byte-identical (the DIVIDE is
 what lifts it from the memory-bound ~1.5x to ~5.8x).
+
+### 2026-07-11 (ScarletChapel, cc) — global min/max: drop clone + parallel fold: 7.21x, byte-identical
+Clone-removal follow-on (biggest of the session). `minimum`/`maximum` with `labels=None` fell through to
+`measurement_label_groups(None)` = a full-data CLONE (`input.data.clone()`, ~128MB at 16M px) THEN a serial
+fold. LEVER: a global fast path folds `input.data` DIRECTLY via a chunked parallel NaN-propagating reduction
+(new `global_minmax_reduce` helper, shared by both) — BYTE-IDENTICAL (min/max associative + NaN propagates
+through the combine) AND drops the clone. Gated by `ndimage_filter_thread_count`; toggled by
+`NDIMAGE_MINMAX_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`, paired median vs A/A null, 16M px):
+77.71->7.31ms = **7.213x** (null [0.890,1.147]), **bitmism=0**. The 128MB clone was the dominant cost, so this
+beats even otsu/histogram. Compiles (worker vmi1149989); byte-identical so every existing min/max test passes
+unchanged. bin `perf_minmax`. LEVER (reusable, clone-removal): EVERY global label-stat clones the whole array
+via `measurement_label_groups(None)` then reduces — for order-independent reductions (min/max/count) a direct
+parallel fold drops the clone for a big win; even float-sum reductions can drop the clone with a serial fold.
+INFRA NOTE: worker `ovh-b` SIGILLs the num-traits build script (fleet `+avx2` rustflags applied to build
+scripts on a non-AVX2 CPU); retried the build until rch routed to a healthy worker.
