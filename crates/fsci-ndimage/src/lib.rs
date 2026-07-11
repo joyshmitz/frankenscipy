@@ -7647,6 +7647,12 @@ pub fn median(
     Ok(out)
 }
 
+/// When `true`, force `labeled_comprehension` onto the ORIG serial per-group map (bypasses the
+/// across-groups fan-out). Byte-identical either way. Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static NDIMAGE_LABELED_COMPREHENSION_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Apply a reducer to optionally labeled regions.
 ///
 /// Matches `scipy.ndimage.labeled_comprehension` for numeric outputs. Scalar
@@ -7662,7 +7668,7 @@ pub fn labeled_comprehension<F>(
     pass_positions: bool,
 ) -> Result<Vec<f64>, NdimageError>
 where
-    F: Fn(&[f64], Option<&[usize]>) -> f64,
+    F: Fn(&[f64], Option<&[usize]>) -> f64 + Sync,
 {
     if labels.is_none() && index.is_some() {
         return Err(NdimageError::InvalidArgument(
@@ -7671,22 +7677,51 @@ where
     }
 
     let groups = measurement_label_value_positions(input, labels, index)?;
-    Ok(groups
-        .iter()
-        .map(|group| {
-            if index.is_some() && group.is_empty() {
-                default
+
+    // Each group's reducer call is INDEPENDENT (its own value/position slice → its own output
+    // slot), so distributing the groups across cores is BYTE-IDENTICAL to the serial map: `func`
+    // is deterministic and results are written in group order; only the owning core changes.
+    // scipy.ndimage.labeled_comprehension calls a Python callback per label single-threaded, so
+    // the across-groups fan-out compounds Rust's per-call speed with real parallelism.
+    let eval = |group: &[(f64, usize)]| -> f64 {
+        if index.is_some() && group.is_empty() {
+            default
+        } else {
+            let values: Vec<f64> = group.iter().map(|&(value, _)| value).collect();
+            if pass_positions {
+                let positions: Vec<usize> = group.iter().map(|&(_, flat)| flat).collect();
+                func(&values, Some(&positions))
             } else {
-                let values: Vec<f64> = group.iter().map(|&(value, _)| value).collect();
-                if pass_positions {
-                    let positions: Vec<usize> = group.iter().map(|&(_, flat)| flat).collect();
-                    func(&values, Some(&positions))
-                } else {
-                    func(&values, None)
-                }
+                func(&values, None)
             }
-        })
-        .collect())
+        }
+    };
+
+    let total: usize = groups.iter().map(Vec::len).sum();
+    let nthreads = if NDIMAGE_LABELED_COMPREHENSION_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || groups.len() < 2
+    {
+        1
+    } else {
+        ndimage_filter_thread_count(total, 8).min(groups.len())
+    };
+    if nthreads <= 1 {
+        return Ok(groups.iter().map(|g| eval(g)).collect());
+    }
+    let mut out = vec![default; groups.len()];
+    let chunk = groups.len().div_ceil(nthreads);
+    let eval = &eval;
+    std::thread::scope(|scope| {
+        for (gchunk, ochunk) in groups.chunks(chunk).zip(out.chunks_mut(chunk)) {
+            scope.spawn(move || {
+                for (group, slot) in gchunk.iter().zip(ochunk.iter_mut()) {
+                    *slot = eval(group);
+                }
+            });
+        }
+    });
+    Ok(out)
 }
 
 /// Positions of minimum values in optionally labeled regions.

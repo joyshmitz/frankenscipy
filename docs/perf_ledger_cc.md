@@ -2481,3 +2481,24 @@ Byte-identical to serial (0 mismatches across all 8), 1121/1121 special tests gr
 grep fsci-special `_scalar`-only fns whose scipy peer is a slow ufunc → add parallel `*_many` wrapper. Remaining
 slow-peer scalar-only candidates for follow-on: itj0y0/iti0k0 (~580-601ms), expn (440ms), shichi (288ms),
 fresnel (165ms), sici/poch (~90ms) — all vectorizable the same way.
+
+### 2026-07-11 (ScarletChapel, cc) — labeled_comprehension parallel-across-groups: 1.55-1.96x, byte-identical
+Re-swept the lane after a context reset; almost everything is harvested (griddata already grid-accelerated,
+welch/cwt/csd + all `*_axis_2d` filters parallel, dctn fiber-parallel, special `_many` vein done, io shipped).
+The one clean-file un-parallelized reduction left was `ndimage::labeled_comprehension`: it had NO `Sync` bound
+(unlike its already-parallel sibling `generic_filter`) and mapped the per-group reducer SERIALLY. The N-D
+`median`/`generic_filter1d` parallelizations landed the same day but this generic sibling was missed. LEVER:
+add `+ Sync` to the reducer closure and fan the independent per-group `func` calls across cores (chunked
+`thread::scope`, work-gated by `ndimage_filter_thread_count(total, 8).min(groups)`), toggled by
+`NDIMAGE_LABELED_COMPREHENSION_FORCE_SERIAL` for the same-binary A/B. BYTE-IDENTICAL: each group's reducer is
+independent → its own output slot, results collected in group order, `func` deterministic. scipy.ndimage.
+labeled_comprehension runs a Python callback per label single-threaded, so this compounds Rust's per-call speed
+with real parallelism on the realistic per-region-statistic workload. MEASURED (strict-remote release
+`+avx2,+fma`, hz2/vmi1227854, paired median vs A/A NULL control; `p90` = per-region 90th percentile over 4M px):
+16 labels 135.9→68.2ms = **1.955x** (NULL [0.876,1.127]); 64 labels 127.3→69.6ms = **1.639x** (NULL
+[0.853,1.175]); 1024 labels 150.9→96.7ms = **1.546x** (NULL [0.918,1.098]); **bitmism=0** all three, DECIDED.
+Full `fsci-ndimage` lib suite 272 passed/0 failed incl. `labeled_comprehension_matches_scipy_fixtures`. The
+serial label value/position gather stays serial (O(N)), so the win is bounded by the reducer's fraction —
+coarser regions (heavier per-region sort) win more. bin `perf_labeled_comprehension`. LEVER (reusable): grep
+ndimage label-reduction fns whose closure lacks `+ Sync` — they map the reducer serially while the O(N) gather
+is shared; the fan-out is byte-identical because groups are independent.
