@@ -3211,3 +3211,21 @@ LEVER (reusable): a MULTI-OUTPUT serial waveform generator (i/q/envelope, real/i
 dedicated N-buffer chunked fill even when no single-output helper fits — factor the kernel into one shared closure
 so serial and parallel arms are provably identical. AUDIT: grep waveform/window/wavelet generators for the lone
 serial member whose sibling is already `par_index_fill` (gausspulse→gauspuls; nuttall/bohman/morlet2 remain).
+
+### 2026-07-11 (cc) — signal::morlet/morlet2 parallel tuple fill: 7.9x, byte-identical
+Next straggler from the same waveform/wavelet-generator vein. The complex Morlet wavelet generators `morlet(m,w,s,
+complete)` (3108) and `morlet2(m,s,w)` (3153, the default cwt wavelet) each filled their `Vec<(f64,f64)>` output
+SERIALLY with a per-sample `exp` + `sin_cos` (3 transcendentals/element — same weight as gauspuls). Added a
+tuple-valued twin of `par_index_fill`, **`par_index_fill_pairs`** (same >=4096-idx/thread work gate, order-preserving,
+byte-identical), and routed BOTH generators through it — one shared helper + one shared toggle `MORLET_FORCE_SERIAL`
+lifts the whole family. Each per-sample kernel is factored into ONE closure `|i| -> (f64,f64)` reused by the serial
+`(0..m).map(kernel).collect()` and the parallel arm → provably identical arithmetic → byte-id (each pair is a pure
+function of `i`). bin `perf_morlet2`. MEASURED (release `+avx2,+fma`, same-binary paired median vs A/A null, m=4M,
+w=5, s=m/16, 21 iters, ×2): serial 93.33→parallel 11.42ms = **7.931x DECIDED** (null [0.904,1.070]) and 95.78→11.64ms
+= **7.793x DECIDED** (null [0.909,1.123]); **bitmism=0** across all (re,im) pairs both runs. fsci-signal --lib 674/0
+(incl. morlet2_optimized_matches_naive / morlet_optimized_matches_naive / morlet2_centering_matches_scipy_golden).
+`m` is the wavelet length — large in cwt (scipy caps at min(10·width, len(data))) and for standalone long wavelets;
+gated so short wavelets stay serial (no regression). Peer scipy.signal.morlet/morlet2 is single-threaded numpy.
+NEW REUSABLE PRIMITIVE: `par_index_fill_pairs` (the tuple twin of `par_index_fill`) unlocks every complex/paired-
+output generator. QUEUED (same vein, single-output `par_index_fill` drop-ins): `nuttall_window` (3×cos, sibling
+blackmanharris par), `bohman_window` (cos+sin, sibling barthann par); stats `vtest` (Σcos+Σsin shifted, circular family).

@@ -601,6 +601,42 @@ where
     out
 }
 
+/// Tuple-valued twin of [`par_index_fill`]: fill `Vec<(f64, f64)>` in parallel from a per-index
+/// closure, same WORK gate (>=4096 indices/thread, capped at available cores). Order-preserved, so
+/// byte-identical to the serial `(0..n).map(f).collect()`. Used by the complex-wavelet generators
+/// (`morlet`/`morlet2`) whose output is one array of (re, im) pairs.
+fn par_index_fill_pairs<F>(n: usize, f: F) -> Vec<(f64, f64)>
+where
+    F: Fn(usize) -> (f64, f64) + Sync,
+{
+    let nthreads = if n < 4096 || PAR_INDEX_FILL_SERIAL.with(|c| c.get()) {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 4096)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(&f).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let mut out = vec![(0.0f64, 0.0f64); n];
+    let fref = &f;
+    std::thread::scope(|scope| {
+        for (ci, block) in out.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in block.iter_mut().enumerate() {
+                    *slot = fref(base + k);
+                }
+            });
+        }
+    });
+    out
+}
+
 /// Least-squares polynomial fit of `degree` to `(xs, ys)` via the normal
 /// equations, returning coefficients in ascending power order.
 fn polyfit(xs: &[f64], ys: &[f64], degree: usize) -> Result<Vec<f64>, SignalError> {
@@ -3094,6 +3130,13 @@ pub fn ricker(points: usize, a: f64) -> Vec<f64> {
     output
 }
 
+/// When `true`, [`morlet`]/[`morlet2`] fill their (re, im) samples serially (the ORIG behaviour).
+/// When `false` (default), the compute-bound per-sample kernel (one `exp` + one `sin_cos`) fans
+/// across cores via the order-preserving [`par_index_fill_pairs`] (byte-identical). Same-binary A/B gate.
+#[doc(hidden)]
+pub static MORLET_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Complex Morlet wavelet.
 ///
 /// ψ(t) = exp(2πi w₀ t) exp(-t²/2) (with optional correction for non-zero mean)
@@ -3109,7 +3152,6 @@ pub fn morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
     if m == 0 || s <= 0.0 || !s.is_finite() || !w.is_finite() {
         return vec![];
     }
-    let mut output = Vec::with_capacity(m);
     let center = (m as f64 - 1.0) / 2.0;
 
     // Resolves [frankenscipy-tmnrh]: hoist the loop-invariant
@@ -3124,7 +3166,9 @@ pub fn morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
         0.0
     };
 
-    for i in 0..m {
+    // Each sample is an independent compute-bound kernel (one `exp` + one `sin_cos`); fan across
+    // cores via the order-preserving `par_index_fill_pairs` — BYTE-IDENTICAL to the serial push loop.
+    let kernel = |i: usize| -> (f64, f64) {
         let t = (i as f64 - center) / s;
         let gauss = (-t * t / 2.0).exp();
         let phase = two_pi_w * t;
@@ -3137,9 +3181,13 @@ pub fn morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
             re -= gauss * correction;
         }
 
-        output.push((re, im));
+        (re, im)
+    };
+    if MORLET_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        (0..m).map(kernel).collect()
+    } else {
+        par_index_fill_pairs(m, kernel)
     }
-    output
 }
 
 /// Morlet-2 wavelet kernel (the default cwt wavelet in modern scipy).
@@ -3154,7 +3202,6 @@ pub fn morlet2(m: usize, s: f64, w: f64) -> Vec<(f64, f64)> {
     if m == 0 || s <= 0.0 || !s.is_finite() || !w.is_finite() {
         return Vec::new();
     }
-    let mut out = Vec::with_capacity(m);
     let coeff = (std::f64::consts::PI * s * s).powf(-0.25);
     // scipy.signal.morlet2 centers on (M-1)/2, not M/2: see scipy
     // _wavelets.py — a half-sample offset would phase-rotate every value.
@@ -3164,15 +3211,21 @@ pub fn morlet2(m: usize, s: f64, w: f64) -> Vec<(f64, f64)> {
     // cos/sin into one sin_cos. Each saves M ops on the hot path.
     let two_s_sq = 2.0 * s * s;
     let w_over_s = w / s;
-    for i in 0..m {
+    // Each sample is an independent compute-bound kernel (one `exp` + one `sin_cos`); fan across
+    // cores via the order-preserving `par_index_fill_pairs` — BYTE-IDENTICAL to the serial push loop.
+    let kernel = |i: usize| -> (f64, f64) {
         let t = i as f64 - half;
         let phase = w_over_s * t;
         let gauss = (-t * t / two_s_sq).exp();
         let envelope = coeff * gauss;
         let (sin_phase, cos_phase) = phase.sin_cos();
-        out.push((envelope * cos_phase, envelope * sin_phase));
+        (envelope * cos_phase, envelope * sin_phase)
+    };
+    if MORLET_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        (0..m).map(kernel).collect()
+    } else {
+        par_index_fill_pairs(m, kernel)
     }
-    out
 }
 
 /// Continuous Wavelet Transform.
