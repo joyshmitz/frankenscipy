@@ -7496,6 +7496,12 @@ pub fn value_indices(
 ///
 /// Matches `scipy.ndimage.sum`; scalar SciPy results are returned as a
 /// one-element vector, while explicit `index` lists return one value per label.
+/// When `true`, force the global (no-labels) `sum` onto the ORIG group path (clone + serial sum).
+/// Byte-identical either way. Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static NDIMAGE_SUM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn sum(
     input: &NdArray,
     labels: Option<&NdArray>,
@@ -7512,6 +7518,12 @@ pub fn sum(
                 return Ok(sums);
             }
         }
+    }
+    if labels.is_none() && !NDIMAGE_SUM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        // Global sum (labels=None): sum `input.data` directly, skipping the
+        // `measurement_label_groups` full-data clone. BYTE-IDENTICAL: same increasing-flat-index
+        // summation order (float add is non-associative, so this stays a single serial fold).
+        return Ok(vec![input.data.iter().sum()]);
     }
     Ok(measurement_label_groups(input, labels, index)?
         .iter()

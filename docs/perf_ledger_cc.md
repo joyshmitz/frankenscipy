@@ -2578,3 +2578,14 @@ via `measurement_label_groups(None)` then reduces — for order-independent redu
 parallel fold drops the clone for a big win; even float-sum reductions can drop the clone with a serial fold.
 INFRA NOTE: worker `ovh-b` SIGILLs the num-traits build script (fleet `+avx2` rustflags applied to build
 scripts on a non-AVX2 CPU); retried the build until rch routed to a healthy worker.
+
+### 2026-07-11 (ScarletChapel, cc) — global sum: drop clone: 7.21x, byte-identical
+Pure clone-removal (no parallelization needed). `sum` with `labels=None` cloned the whole array via
+`measurement_label_groups(None)` (~128MB at 16M px) THEN serial-summed it. Fast path sums `input.data`
+DIRECTLY — BYTE-IDENTICAL (same increasing-flat-index order; float add is non-associative so it stays a single
+serial fold, NOT parallelized) — and drops the clone. Toggled by `NDIMAGE_SUM_FORCE_SERIAL`. MEASURED
+(strict-remote release `+avx2,+fma`, paired median vs A/A null, 16M px): 57.88->8.03ms = **7.212x** (null
+[0.748,1.171]), **bitmism=0**. The 128MB clone was ~85% of the time — a serial fold with no clone is 7x. bin
+`perf_sum`. TAKEAWAY: the `measurement_label_groups(None)` clone is the single biggest ndimage global-label-stat
+inefficiency (~7x each). Remaining identical follow-ons: `mean`/`variance`/`standard_deviation` global (same
+clone; variance/std keep the serial 2-pass so still byte-identical, just no clone).
