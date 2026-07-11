@@ -10433,11 +10433,23 @@ pub fn freqs_zpk(zpk: &ZpkCoeffs, w: &[f64]) -> Result<FreqzResult, SignalError>
     }
     validate_zpk_response_values_finite(zpk, "freqs_zpk")?;
     validate_real_values_finite(w, "freqs_zpk frequencies must be finite")?;
-    let cmul = |a: (f64, f64), b: (f64, f64)| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
 
-    let mut h_mag = Vec::with_capacity(w.len());
-    let mut h_phase = Vec::with_capacity(w.len());
-    for &omega in w {
+    // Each frequency's response H(jω) = k·Π(jω−z) / Π(jω−p) is a pure function of its
+    // index (two factored-product sweeps over the immutable zero/pole lists + a complex
+    // divide). Fan the sweep across disjoint contiguous chunks through the shared
+    // `freqz_parallel_fill` helper — the same path the already-parallel analog sibling
+    // `bode`/`freqs` use. Chunks are index-aligned and the kernel is pure, so the
+    // (ω, |H|, ∠H) result is byte-identical to the serial `for &omega in w` loop.
+    let force_serial = FREQS_ZPK_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let work = (zpk.zeros_re.len() + zpk.poles_re.len()).saturating_mul(2).max(8);
+    let nthreads = if force_serial {
+        1
+    } else {
+        freqz_response_thread_count(w.len(), work)
+    };
+    Ok(freqz_parallel_fill(w.len(), nthreads, |i| {
+        let omega = w[i];
+        let cmul = |a: (f64, f64), b: (f64, f64)| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
         // numerator = k · Π (jω − z); denominator = Π (jω − p).
         let mut num = (zpk.gain, 0.0);
         for (&zr, &zi) in zpk.zeros_re.iter().zip(zpk.zeros_im.iter()) {
@@ -10449,21 +10461,25 @@ pub fn freqs_zpk(zpk: &ZpkCoeffs, w: &[f64]) -> Result<FreqzResult, SignalError>
         }
         let dd = den.0 * den.0 + den.1 * den.1;
         if dd < 1e-300 {
-            h_mag.push(f64::INFINITY);
-            h_phase.push(0.0);
+            (omega, f64::INFINITY, 0.0)
         } else {
             let h_re = (num.0 * den.0 + num.1 * den.1) / dd;
             let h_im = (num.1 * den.0 - num.0 * den.1) / dd;
-            h_mag.push((h_re * h_re + h_im * h_im).sqrt());
-            h_phase.push(h_im.atan2(h_re));
+            (
+                omega,
+                (h_re * h_re + h_im * h_im).sqrt(),
+                h_im.atan2(h_re),
+            )
         }
-    }
-    Ok(FreqzResult {
-        w: w.to_vec(),
-        h_mag,
-        h_phase,
-    })
+    }))
 }
+
+/// When `true`, [`freqs_zpk`] runs its per-frequency sweep serially (the ORIG behaviour).
+/// When `false` (default), independent frequencies fan across cores via
+/// `freqz_parallel_fill`. Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static FREQS_ZPK_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Find a logarithmically-spaced array of frequencies covering the "interesting"
 /// part of an analog filter's response.

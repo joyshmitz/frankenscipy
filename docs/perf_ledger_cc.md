@@ -2839,6 +2839,23 @@ line drifted. FOLLOW-ON (queued, identical vein): `freqs_zpk(zpk, w)` (10415) is
 (kernel = k·Π(jω−z)/Π(jω−p) → (mag,phase)) — same one-fn routing through `freqz_parallel_fill`, separate
 `FREQS_ZPK_FORCE_SERIAL` gate + bin.
 
+### 2026-07-11 (ScarletChapel, cc) — signal::freqs_zpk parallel across frequencies: 5.60x, byte-identical
+24th win — completes the analog-response straggler pair opened by `freqs` (23rd). `freqs_zpk(zpk, w)` (10415)
+looped `for &omega in w` SERIALLY while the sibling `bode`/`freqs` sweeps already route the identical
+`(ω, |H|, ∠H)` shape through `freqz_parallel_fill`. Each ω is independent: two factored-product sweeps
+(num = k·Π(jω−z), den = Π(jω−p) via the local `cmul`) over the immutable zero/pole lists + a complex divide +
+a sqrt/atan2 tail — pure per-ω function of the index (`ZpkCoeffs` is a `Vec<f64>`+gain struct, Send+Sync, so
+the kernel closure captures `&zpk`+`w`, both Sync). LEVER: fan across disjoint contiguous ω-chunks via
+`freqz_parallel_fill` (index-aligned, pure kernel) → byte-identical to the serial push loop; gate
+`freqz_response_thread_count(w.len(), 2·(zeros+poles))`, toggle new `FREQS_ZPK_FORCE_SERIAL`, `cmul` moved
+inside the kernel (pure local, no arithmetic change). MEASURED (strict-remote release `+avx2,+fma` on
+vmi1227854, same-binary paired median vs A/A null, order=1024 zeros=poles / n_freqs=16384): 58.03->8.40ms =
+**5.595x** (null median 1.011x range [0.960,1.046], serial cv 1.9%), **bitmism=0** (w+h_mag+h_phase all
+bit-identical). bin `perf_freqs_zpk`. SIGNAL FREQUENCY-RESPONSE SURFACE NOW GENUINELY EXHAUSTED (verified against
+ORIGIN SOURCE, not ledger prose): every free fn (freqz/freqz_zpk/sosfreqz/freqs/freqs_zpk/group_delay/bode +
+group_delay_from_ba/phase_response/magnitude_response/dfreqresp) AND both methods (Lti/Dlti::freqresp) now route
+per-ω through a parallel helper. No serial per-ω response fn remains. 24 cc wins across the campaign.
+
 ---
 
 ## SESSION CONSOLIDATION — 2026-07-11 (ScarletChapel, cc): 22 byte-identical wins, then FRONTIER+HOLD

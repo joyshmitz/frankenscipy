@@ -19971,3 +19971,18 @@ serially. Routed the per-ω sweep through `freqz_parallel_fill` (the same helper
 release `+avx2,+fma`, same-binary paired median vs A/A null, order=3072/n_freqs=16384): 954.84→183.27ms =
 **4.832x**, null median 1.005x range [0.938,1.143], serial cv 4.4%, **bitmism=0** (w+h_mag+h_phase bit-identical).
 bin `perf_freqs`. STILL QUEUED (identical vein, same retry #1): `freqs_zpk` (10415) — the serial zpk twin.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED signal::freqs_zpk (completes the analog straggler pair): 5.60x, byte-identical
+Landed the last queued analog-response straggler `signal::freqs_zpk` parallel across frequencies = **5.595x,
+bitmism=0** (commit lands on origin/main after this note). `freqs_zpk(zpk, w)` looped `for &omega in w` serially
+while `bode`/`freqs` already route the identical `(ω,|H|,∠H)` shape through `freqz_parallel_fill`. Kernel = two
+factored-product sweeps (k·Π(jω−z) / Π(jω−p) via local `cmul`) over the immutable zero/pole lists + complex
+divide + sqrt/atan2 — pure per-ω of the index; `ZpkCoeffs` is Send+Sync so the closure captures `&zpk`+`w`.
+Routed through `freqz_parallel_fill`, gate `freqz_response_thread_count(w.len(), 2·(zeros+poles))`, toggle
+`FREQS_ZPK_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma` on vmi1227854, same-binary paired median
+vs A/A null, order=1024 zeros=poles / n_freqs=16384): 58.03→8.40ms = **5.595x**, null median 1.011x range
+[0.960,1.046], serial cv 1.9%, **bitmism=0**. bin `perf_freqs_zpk`. SIGNAL FREQUENCY-RESPONSE SURFACE NOW
+GENUINELY EXHAUSTED (source-verified): freqz/freqz_zpk/sosfreqz/freqs/freqs_zpk/group_delay/bode +
+group_delay_from_ba/phase_response/magnitude_response/dfreqresp + Lti/Dlti::freqresp all parallel. Retry
+condition #1 fully consumed — the queued freqs/freqs_zpk pair is DONE. Next lever needs a fresh vein (retry #2:
+new peer code) or an owner-gated frontier.
