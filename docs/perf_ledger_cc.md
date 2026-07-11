@@ -2790,3 +2790,18 @@ complex divide with NO atan2/sqrt tail, so the per-ω compute is cleaner and thr
 fraction. bin `perf_dfreqresp`. 20 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats + 4 signal).
 AUDIT NOTE: found by grepping the analog-vs-digital response sibling pair (bode parallel, dfreqresp/dbode serial)
 — the same public-straddler heuristic across a DIFFERENT kernel (eval_poly_complex, not eval_poly_on_unit_circle).
+
+### 2026-07-11 (ScarletChapel, cc) — signal::Lti::freqresp parallel across frequencies: 5.99x, byte-identical
+Method straggler (public-straddler vein, on a struct method rather than a free fn). `Lti::freqresp(&self, w)`
+(continuous-time transfer-function frequency response H(jω)=num(jω)/den(jω); scipy `lti.freqresp`) looped
+`for &omega in w` SERIALLY while the free-fn `bode`/`dfreqresp` sweeps already route the identical shape through
+`freqz_par_collect`. `Lti` is a `Vec<f64>` struct (Send+Sync) so `&self` is shareable; each ω is independent:
+`eval_at(0,ω)` = two Horner `poly_eval_complex` sweeps (O(len(num)+len(den)) MACs) + complex divide + sqrt +
+atan2 — pure per-ω function of the index. LEVER: fan across disjoint contiguous ω-chunks via `freqz_par_collect`
+(index-aligned, pure kernel; the closure captures `&self` + `w`, both Sync) → byte-identical to the serial loop;
+gate `freqz_response_thread_count(w.len(), 2·(len(num)+len(den)))`, toggle `FREQRESP_METHOD_FORCE_SERIAL` (shared
+with the Dlti method — same lever). MEASURED (strict-remote release `+avx2,+fma`, paired median vs A/A null,
+order=3072 / n_freqs=16384): 148.09->22.09ms = **5.994x** (null [0.931,1.038], serial cv 2.8%), **bitmism=0**.
+bin `perf_lti_freqresp`. 21 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats + 5 signal). FOLLOW-ON
+(next turn): `Dlti::freqresp` (18818) is the IDENTICAL serial method (uses `eval_at_freq`) and already reads the
+shared `FREQRESP_METHOD_FORCE_SERIAL` gate name — same one-line routing through `freqz_par_collect`.

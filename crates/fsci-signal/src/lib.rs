@@ -18539,6 +18539,13 @@ pub struct Lti {
     pub den: Vec<f64>,
 }
 
+/// When `true`, the `Lti`/`Dlti` `freqresp` methods run their per-frequency sweep serially (the ORIG
+/// behaviour). When `false` (default), independent frequencies fan across cores via
+/// `freqz_par_collect`. Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static FREQRESP_METHOD_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl Lti {
     /// Create a new continuous-time LTI system from transfer function coefficients.
     ///
@@ -18584,13 +18591,29 @@ impl Lti {
     ///
     /// Returns (magnitude, phase) arrays.
     pub fn freqresp(&self, w: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        // Each frequency's response is independent — `eval_at` does two Horner `poly_eval_complex`
+        // sweeps (O(len(num)+len(den)) complex MACs) + a complex divide, then a `sqrt`/`atan2`,
+        // reading only the immutable `num`/`den`. Fan across disjoint contiguous chunks through the
+        // shared `freqz_par_collect` helper (the same path the free-fn `bode`/`dfreqresp` sweeps use):
+        // chunks are index-aligned and the kernel is pure, so the (mag, phase) result is byte-
+        // identical to the serial `for &omega in w` loop.
+        let force_serial =
+            FREQRESP_METHOD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+        let work = (self.num.len() + self.den.len()).saturating_mul(2).max(8);
+        let nthreads = if force_serial {
+            1
+        } else {
+            freqz_response_thread_count(w.len(), work)
+        };
+        let pairs: Vec<(f64, f64)> = freqz_par_collect(w.len(), nthreads, |i| {
+            let (re, im) = self.eval_at(0.0, w[i]);
+            ((re * re + im * im).sqrt(), im.atan2(re))
+        });
         let mut mag = Vec::with_capacity(w.len());
         let mut phase = Vec::with_capacity(w.len());
-
-        for &omega in w {
-            let (re, im) = self.eval_at(0.0, omega);
-            mag.push((re * re + im * im).sqrt());
-            phase.push(im.atan2(re));
+        for (m, p) in pairs {
+            mag.push(m);
+            phase.push(p);
         }
 
         (mag, phase)
