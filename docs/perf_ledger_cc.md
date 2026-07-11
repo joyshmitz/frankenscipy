@@ -2640,3 +2640,16 @@ explicitly NOT a perf win; toggled by `NDIMAGE_MEDIAN_GLOBAL_FORCE_SERIAL`. bin 
 clone-removal only pays when the clone is a large FRACTION — it dominated min/max/sum (cheap reduction, ~7x) but
 is negligible under a full sort. This confirms the global-label-stat vein is DRY (median's remaining cost is
 the inherent sort).
+
+### 2026-07-11 (ScarletChapel, cc) — spatial::geometric_slerp parallel across t-values: 2.12x, byte-identical
+First win OUTSIDE ndimage (crate restriction lifted; cod owns linalg/sparse). `spatial::geometric_slerp`
+(spherical linear interpolation over an array of t-values; scipy's is serial) computed each interpolated point
+in a SERIAL loop. Each point is INDEPENDENT — `a=sin((1-t)ω)/sinω`, `b=sin(tω)/sinω`, `point=a·start+b·end`
+(two `sin` + `d` FMAs, compute-bound) — with the angle `ω` computed once up front. LEVER: fan the t-values
+across cores (chunked `thread::scope`, results concatenated in t order). BYTE-IDENTICAL (identical per-t
+arithmetic, order preserved; only the owning core changes). Work-gated (`n_t·(d+8) ≥ 2^16`); toggled by
+`SPATIAL_SLERP_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`, paired median vs A/A null,
+n_t=500k, d=64): 107.89->49.05ms = **2.118x** (null [0.900,1.166]), **bitmism=0**. Capped ~2x by the serial
+256MB `Vec<Vec<f64>>` output allocation. bin `perf_slerp`. LEVER (reusable): grep for serial per-point
+transcendental interpolation/mapping loops over an INPUT array (independent points) — a byte-identical
+parallel win. CLEAN cc crates left: fsci-fft (kernel wall), fsci-spatial, fsci-stats.

@@ -6094,6 +6094,12 @@ fn scale_matrix(data: &mut [Vec<f64>], factor: f64) {
 /// * `start` — Starting point on the unit sphere.
 /// * `end` — Ending point on the unit sphere.
 /// * `t` — Interpolation parameters in [0, 1]. Can be multiple values.
+/// When `true`, force `geometric_slerp` onto its ORIG serial per-t loop. Byte-identical either way.
+/// Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static SPATIAL_SLERP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn geometric_slerp(
     start: &[f64],
     end: &[f64],
@@ -6124,13 +6130,50 @@ pub fn geometric_slerp(
 
     let sin_omega = omega.sin();
 
-    for &t in t_values {
+    // Each t's interpolated point is INDEPENDENT (its `a`/`b` come from `t` + the shared `omega`,
+    // then `a·start + b·end`), so distribute the t-values across cores. BYTE-IDENTICAL to the serial
+    // loop: identical per-t arithmetic, results collected in t order; only the owning core changes.
+    // The per-point work (two `sin` + `d` FMAs) is compute-bound. scipy's geometric_slerp is serial.
+    let point_at = |t: f64| -> Vec<f64> {
         let a = ((1.0 - t) * omega).sin() / sin_omega;
         let b = (t * omega).sin() / sin_omega;
-        let point: Vec<f64> = (0..d).map(|i| a * start[i] + b * end[i]).collect();
-        results.push(point);
+        (0..d).map(|i| a * start[i] + b * end[i]).collect()
+    };
+
+    let n_t = t_values.len();
+    let nthreads = if SPATIAL_SLERP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n_t < 2
+    {
+        1
+    } else if (n_t as u64).saturating_mul((d + 8) as u64) < (1 << 16) {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n_t)
+    };
+
+    if nthreads <= 1 {
+        for &t in t_values {
+            results.push(point_at(t));
+        }
+        return Ok(results);
     }
 
+    let chunk = n_t.div_ceil(nthreads);
+    let point_at = &point_at;
+    let parts: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {
+        t_values
+            .chunks(chunk)
+            .map(|c| scope.spawn(move || c.iter().map(|&t| point_at(t)).collect::<Vec<_>>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("slerp chunk panicked"))
+            .collect()
+    });
+    for part in parts {
+        results.extend(part);
+    }
     Ok(results)
 }
 
