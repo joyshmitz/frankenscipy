@@ -2679,3 +2679,19 @@ balanced-by-cumulative-pairs split would recover it but breaks the simple order-
 `perf_pdist_func`. 13 cc wins this session (10 ndimage + 3 spatial: slerp 2.12x, cdist_func 4.47x, pdist_func
 3.65x). LEVER (reusable): serial closure-based map/double-loop over independent rows/pairs/points = byte-id
 parallel win; add `+ Sync`, chunk contiguously to preserve output order.
+
+### 2026-07-11 (ScarletChapel, cc) — opt::approx_derivative parallel across Jacobian columns: 5.99x, byte-identical
+First win in fsci-opt. `approx_derivative` (the PUBLIC finite-difference Jacobian; scipy's is serial) computed
+each Jacobian column in a SERIAL loop. Each column perturbs ONLY component `i` and evaluates `fun`
+independently — so fan the columns across cores (chunked `thread::scope`, columns concatenated in order).
+BYTE-IDENTICAL (identical per-column FD arithmetic, each `jt[i]` written once). Added `+ Sync` to the user
+function bound (no internal callers — only Sync-closure tests; the parallel `fd_jacobian` benchmarked by
+`perf_fd_jacobian_parallel` is a DIFFERENT internal fn, so this public one was missed). Toggled by
+`OPT_APPROX_DERIV_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`, paired median vs A/A null,
+n=48 params, m=48 outputs, expensive `fun`, ThreePoint): 829.36->127.59ms = **5.990x** (null [0.888,1.075]),
+**bitmism=0**. A finite-difference Jacobian is used precisely when `fun` is expensive (ODE solve/simulation),
+so the per-column evals dominate → this pays. Committed via a WORKTREE (opt/lib.rs had interleaved peer WIP in
+`pub use`/`nnls_chol_refactor`/tests — pathspec commit would have swept it). bin `perf_approx_derivative`.
+14 cc wins this session (10 ndimage + 3 spatial + 1 opt). LEVER (reusable): grep public callback-based fns
+that map a user closure over independent items (FD Jacobians, custom-metric distances, comprehensions) and
+lack `+ Sync` — parallelize byte-identically.

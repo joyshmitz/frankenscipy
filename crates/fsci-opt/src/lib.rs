@@ -206,6 +206,12 @@ impl FiniteDiffMethod {
 /// `rel_step`/`abs_step` are scalars broadcast to every component (`None`
 /// selects scipy's default relative step). `bounds` is `None` for the
 /// unconstrained case or `Some((lb, ub))` with per-variable bounds.
+/// When `true`, force `approx_derivative` onto its ORIG serial per-column loop. Byte-identical either
+/// way. Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static OPT_APPROX_DERIV_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn approx_derivative<F>(
     fun: F,
     x0: &[f64],
@@ -215,7 +221,7 @@ pub fn approx_derivative<F>(
     bounds: Option<(&[f64], &[f64])>,
 ) -> Result<Vec<Vec<f64>>, OptError>
 where
-    F: Fn(&[f64]) -> Vec<f64>,
+    F: Fn(&[f64]) -> Vec<f64> + Sync,
 {
     let n = x0.len();
     if n == 0 {
@@ -342,9 +348,13 @@ where
         }
     }
 
-    // Dense difference: J_transposed[i] is the i-th column of the Jacobian.
-    let mut jt = vec![vec![0.0_f64; m]; n];
-    for i in 0..n {
+    // Dense difference: `jt[i]` is the i-th Jacobian column. Each column perturbs ONLY component `i`
+    // and evaluates `fun` independently, so the columns fan out across cores — BYTE-IDENTICAL to the
+    // serial loop (identical per-column FD arithmetic, each `jt[i]` written once; only the owning core
+    // changes). The `fun` evaluations are the dominant cost of a finite-difference Jacobian, so this
+    // pays whenever `fun` is non-trivial. `scipy`'s `approx_derivative` is serial.
+    let compute_col = |i: usize| -> Vec<f64> {
+        let mut col = vec![0.0_f64; m];
         match method {
             FiniteDiffMethod::TwoPoint => {
                 let mut x1 = x0.to_vec();
@@ -352,7 +362,7 @@ where
                 let f1 = fun(&x1);
                 let dx = (x0[i] + h[i]) - x0[i];
                 for k in 0..m {
-                    jt[i][k] = (f1[k] - f0[k]) / dx;
+                    col[k] = (f1[k] - f0[k]) / dx;
                 }
             }
             FiniteDiffMethod::ThreePoint => {
@@ -365,7 +375,7 @@ where
                     let f2 = fun(&x2);
                     let dx = (x0[i] + 2.0 * h[i]) - x0[i];
                     for k in 0..m {
-                        jt[i][k] = (-3.0 * f0[k] + 4.0 * f1[k] - f2[k]) / dx;
+                        col[k] = (-3.0 * f0[k] + 4.0 * f1[k] - f2[k]) / dx;
                     }
                 } else {
                     let mut x1 = x0.to_vec();
@@ -376,12 +386,50 @@ where
                     let f2 = fun(&x2);
                     let dx = (x0[i] + h[i]) - (x0[i] - h[i]);
                     for k in 0..m {
-                        jt[i][k] = (f2[k] - f1[k]) / dx;
+                        col[k] = (f2[k] - f1[k]) / dx;
                     }
                 }
             }
         }
-    }
+        col
+    };
+
+    let nthreads = if OPT_APPROX_DERIV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+
+    let jt: Vec<Vec<f64>> = if nthreads <= 1 {
+        (0..n).map(compute_col).collect()
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let compute_col = &compute_col;
+        let parts: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {
+            (0..n)
+                .step_by(chunk)
+                .map(|i0| {
+                    scope.spawn(move || {
+                        let i1 = (i0 + chunk).min(n);
+                        (i0..i1).map(compute_col).collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| handle.join().expect("approx_derivative chunk panicked"))
+                .collect()
+        });
+        let mut jt = Vec::with_capacity(n);
+        for part in parts {
+            jt.extend(part);
+        }
+        jt
+    };
 
     // Transpose to the m × n Jacobian.
     let mut j = vec![vec![0.0_f64; n]; m];
