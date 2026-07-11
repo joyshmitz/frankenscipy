@@ -19960,3 +19960,14 @@ same-binary `*_FORCE_SERIAL` toggle and `bitmism=0` (bit-for-bit output equality
 
 HOLD: the accessible byte-identical parallelization + hoist + structural surface is saturated; no further
 lever-hunting until one of the retry conditions above is met.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED signal::freqs (retry condition #1 fired): 4.83x, byte-identical
+Retry condition #1 above ("rch fleet recovers → ship the queued `freqs`") FIRED — rch healthy this turn (build
+completed ~118s on vmi1293453). Landed the queued analog-response straggler `signal::freqs` parallel across
+frequencies. CORRECTION to the FRONTIER SUMMARY / ledger prose: the "surface fully exhausted" line had drifted to
+list `freqs`/`freqs_zpk` as already-parallel; reading ORIGIN SOURCE showed `freqs` still looped `for &omega in w`
+serially. Routed the per-ω sweep through `freqz_parallel_fill` (the same helper its sibling `bode` uses), gate
+`freqz_response_thread_count(w.len(), 2·(len(b)+len(a)))`, toggle `FREQS_FORCE_SERIAL`. MEASURED (strict-remote
+release `+avx2,+fma`, same-binary paired median vs A/A null, order=3072/n_freqs=16384): 954.84→183.27ms =
+**4.832x**, null median 1.005x range [0.938,1.143], serial cv 4.4%, **bitmism=0** (w+h_mag+h_phase bit-identical).
+bin `perf_freqs`. STILL QUEUED (identical vein, same retry #1): `freqs_zpk` (10415) — the serial zpk twin.

@@ -10556,10 +10556,21 @@ pub fn freqs(b: &[f64], a: &[f64], w: &[f64]) -> Result<FreqzResult, SignalError
     validate_ba_coefficients_finite(b, a, "freqs")?;
     validate_real_values_finite(w, "freqs frequencies must be finite")?;
 
-    let mut h_mag = Vec::with_capacity(w.len());
-    let mut h_phase = Vec::with_capacity(w.len());
-
-    for &omega in w {
+    // Each frequency's response H(jω) = B(jω)/A(jω) is a pure function of its index
+    // (two `eval_analog_poly` sweeps + a complex divide, reading only the immutable
+    // b/a/w). Fan the sweep across disjoint contiguous chunks through the shared
+    // `freqz_parallel_fill` helper — the same path the already-parallel analog sibling
+    // `bode` uses. Chunks are index-aligned and the kernel is pure, so the (ω, |H|, ∠H)
+    // result is byte-identical to the serial `for &omega in w` loop.
+    let force_serial = FREQS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let work = (b.len() + a.len()).saturating_mul(2).max(8);
+    let nthreads = if force_serial {
+        1
+    } else {
+        freqz_response_thread_count(w.len(), work)
+    };
+    Ok(freqz_parallel_fill(w.len(), nthreads, |i| {
+        let omega = w[i];
         // Evaluate B(jω) and A(jω)
         // B(s) = b[0]*s^n + b[1]*s^{n-1} + ... + b[n]
         // At s = jω: (jω)^k = (jω)^k computed via complex arithmetic
@@ -10568,22 +10579,25 @@ pub fn freqs(b: &[f64], a: &[f64], w: &[f64]) -> Result<FreqzResult, SignalError
 
         let denom = a_re * a_re + a_im * a_im;
         if denom < 1e-30 {
-            h_mag.push(f64::INFINITY);
-            h_phase.push(0.0);
+            (omega, f64::INFINITY, 0.0)
         } else {
             let h_re = (b_re * a_re + b_im * a_im) / denom;
             let h_im = (b_im * a_re - b_re * a_im) / denom;
-            h_mag.push((h_re * h_re + h_im * h_im).sqrt());
-            h_phase.push(h_im.atan2(h_re));
+            (
+                omega,
+                (h_re * h_re + h_im * h_im).sqrt(),
+                h_im.atan2(h_re),
+            )
         }
-    }
-
-    Ok(FreqzResult {
-        w: w.to_vec(),
-        h_mag,
-        h_phase,
-    })
+    }))
 }
+
+/// When `true`, [`freqs`] runs its per-frequency sweep serially (the ORIG behaviour).
+/// When `false` (default), independent frequencies fan across cores via
+/// `freqz_parallel_fill`. Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static FREQS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Evaluate a real polynomial in descending-power order at a complex point via
 /// Horner's method, returning `(re, im)`.

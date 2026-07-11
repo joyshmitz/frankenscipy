@@ -2822,6 +2822,23 @@ closure captures `&self`+`w`, both Sync) → byte-identical to the serial loop; 
 (freqz/freqz_zpk/sosfreqz/freqs/freqs_zpk/group_delay/bode + group_delay_from_ba/phase_response/
 magnitude_response/dfreqresp) AND methods (Lti/Dlti::freqresp) all parallel. No per-ω response stragglers remain.
 
+### 2026-07-11 (ScarletChapel, cc) — signal::freqs parallel across frequencies: 4.83x, byte-identical
+23rd win — REOPENS a straggler the consolidation below mis-listed as done. LEDGER-DRIFT CAUGHT: the "surface
+fully exhausted" line above lists `freqs`/`freqs_zpk` as already-parallel, but reading ORIGIN SOURCE (not the
+ledger prose) showed the ANALOG `freqs(b, a, w)` still looped `for &omega in w` SERIALLY — its sibling `bode`
+(10620) already routes the identical `(ω, |H|, ∠H)` shape through `freqz_parallel_fill`. Each ω is independent:
+two Horner `eval_analog_poly` sweeps (O(len(b)+len(a)) complex MACs) + a complex divide + a sqrt/atan2 tail —
+pure per-ω function of the index. LEVER: fan across disjoint contiguous ω-chunks via `freqz_parallel_fill`
+(index-aligned, pure kernel reading only immutable b/a/w) → byte-identical to the serial push loop; gate
+`freqz_response_thread_count(w.len(), 2·(len(b)+len(a)))` (mirrors bode's work estimate), toggle new
+`FREQS_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma` on vmi1293453, paired median vs A/A null,
+order=3072 / n_freqs=16384): 954.84->183.27ms = **4.832x** (null median 1.005x range [0.938,1.143], serial cv
+4.4%), **bitmism=0** (w + h_mag + h_phase all bit-identical across arms). bin `perf_freqs`. LESSON (reinforced):
+VERIFY an "already parallel" claim against origin SOURCE before trusting exhaustion — the ledger's own summary
+line drifted. FOLLOW-ON (queued, identical vein): `freqs_zpk(zpk, w)` (10415) is the STILL-SERIAL zpk twin
+(kernel = k·Π(jω−z)/Π(jω−p) → (mag,phase)) — same one-fn routing through `freqz_parallel_fill`, separate
+`FREQS_ZPK_FORCE_SERIAL` gate + bin.
+
 ---
 
 ## SESSION CONSOLIDATION — 2026-07-11 (ScarletChapel, cc): 22 byte-identical wins, then FRONTIER+HOLD
