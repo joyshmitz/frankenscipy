@@ -2708,3 +2708,15 @@ median vs A/A null, n=64 components, expensive `f`): 116.14->42.16ms = **2.547x*
 **bitmism=0**. Lower than approx_derivative (5.99x) — the scalar `f` is lighter so parallel overhead + the
 Result-collection are a bigger fraction. Committed via WORKTREE (opt/lib.rs peer WIP). bin `perf_approx_fprime`.
 15 cc wins this session (10 ndimage + 3 spatial + 2 opt).
+
+### 2026-07-11 (ScarletChapel, cc) — stats::jackknife parallel across leave-one-out replicates: 4.61x, byte-identical
+First win in fsci-stats. `jackknife` (leave-one-out resampling; DETERMINISTIC — no RNG, unlike bootstrap)
+computed each replicate's `statistic(data-minus-i)` in a SERIAL map. Each replicate is INDEPENDENT → fan across
+cores (chunked `thread::scope`, replicates concatenated in `i` order). BYTE-IDENTICAL (identical per-replicate
+subset + `statistic` call; the downstream jack_mean/bias/se operate on the same i-ordered replicates). Added
+`+ Sync` to the statistic (callers are concrete Sync-closure wrappers — no cascade). Toggled by
+`STATS_JACKKNIFE_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`, paired median vs A/A null,
+n=3000, median statistic): 119.18->22.19ms = **4.612x** (null [0.869,1.316]), **bitmism=0**. stats crate was
+CLEAN but the LEDGER was behind origin/main (opt entries landed via worktree), so committed via WORKTREE too.
+bin `perf_jackknife`. 16 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats). KEY: jackknife is
+byte-id-parallelizable (deterministic); bootstrap/permutation are NOT (RNG-order-dependent).

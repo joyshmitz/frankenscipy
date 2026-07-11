@@ -43655,9 +43655,15 @@ pub struct JackknifeResult {
 ///
 /// # Returns
 /// `JackknifeResult` with bias, standard error, and replicates.
+/// When `true`, force `jackknife` onto its ORIG serial per-replicate loop. Byte-identical either way.
+/// Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static STATS_JACKKNIFE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn jackknife<F>(data: &[f64], statistic: F) -> JackknifeResult
 where
-    F: Fn(&[f64]) -> f64,
+    F: Fn(&[f64]) -> f64 + Sync,
 {
     let n = data.len();
     if n < 2 {
@@ -43672,17 +43678,55 @@ where
     let nf = n as f64;
     let original = statistic(data);
 
-    let replicates: Vec<f64> = (0..n)
-        .map(|i| {
-            let subset: Vec<f64> = data
-                .iter()
-                .enumerate()
-                .filter(|&(j, _)| j != i)
-                .map(|(_, &v)| v)
-                .collect();
-            statistic(&subset)
-        })
-        .collect();
+    // Each leave-one-out replicate omits ONLY element `i` and evaluates `statistic` independently
+    // (jackknife is deterministic — no RNG), so the replicates fan out across cores. BYTE-IDENTICAL to
+    // the serial map: identical per-replicate subset + `statistic` call, collected in `i` order; only
+    // the owning core changes. The `statistic` evaluations dominate (n calls over ~n elements each),
+    // so this pays for non-trivial statistics / large n. scipy's resampling helpers are serial.
+    let replicate = |i: usize| -> f64 {
+        let subset: Vec<f64> = data
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != i)
+            .map(|(_, &v)| v)
+            .collect();
+        statistic(&subset)
+    };
+    let nthreads = if STATS_JACKKNIFE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+    let replicates: Vec<f64> = if nthreads <= 1 {
+        (0..n).map(replicate).collect()
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let replicate = &replicate;
+        let parts: Vec<Vec<f64>> = std::thread::scope(|scope| {
+            (0..n)
+                .step_by(chunk)
+                .map(|i0| {
+                    scope.spawn(move || {
+                        let i1 = (i0 + chunk).min(n);
+                        (i0..i1).map(replicate).collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| handle.join().expect("jackknife chunk panicked"))
+                .collect()
+        });
+        let mut replicates = Vec::with_capacity(n);
+        for part in parts {
+            replicates.extend(part);
+        }
+        replicates
+    };
 
     let jack_mean: f64 = replicates.iter().sum::<f64>() / nf;
     let bias = (nf - 1.0) * (jack_mean - original);
