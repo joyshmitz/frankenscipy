@@ -2740,3 +2740,21 @@ worker — the raw ~2x was swamped by 43% parallel-arm cv; larger work amortised
 stragglers `magnitude_response`/`phase_response` share the pattern but their per-ω kernel is Horner (1 cos+sin,
 memory-bound) — lighter payoff, left for a follow-on. LEVER (reusable): grep public vs scipy-named sibling pairs
 where the sibling routes a per-item kernel through a parallel helper but the convenience fn still loops serially.
+
+### 2026-07-11 (ScarletChapel, cc) — signal::phase_response parallel across frequencies: 5.79x, byte-identical
+Sibling straggler to `group_delay_from_ba` (same public-straddler vein). `phase_response(b, a, n_freqs)`
+computed each frequency's phase in a SERIAL `for k in 0..n_freqs` loop, while the scipy-named `freqz`/
+`group_delay` sweeps already route their per-ω kernel through the shared `freqz_par_collect` helper. Each
+frequency's phase is a PURE function of its index `ω_k=π·k/n`: two Horner `eval_poly_on_unit_circle` sweeps
+(O(len(b)+len(a)) complex MACs + a cos/sin each) plus two `atan2` — compute-bound at high filter order
+(coeffs stay in L1, reused across all ω; the bottleneck is the per-ω arithmetic, not memory). LEVER: fan the
+sweep across disjoint contiguous ω-chunks via `freqz_par_collect` (index-aligned, kernel pure) → byte-identical
+to the serial loop; gated by `freqz_response_thread_count(n_freqs, len(b)+len(a))`. Toggled by
+`PHASE_RESPONSE_FORCE_SERIAL`. MEASURED (strict-remote release `+avx2,+fma`, paired median vs A/A null,
+order=2048 / n_freqs=16384): 68.76->10.40ms = **5.792x** (null [0.934,1.310], serial cv 7.0%), **bitmism=0**.
+Needed order=2048 (2x group_delay's 1024) to clear the noise floor — the Horner kernel is ~10x lighter per-ω
+than group_delay's per-coefficient trig, so the serial baseline is smaller (68ms vs 264ms). bin
+`perf_phase_response`. 18 cc wins this session (10 ndimage + 3 spatial + 2 opt + 1 stats + 2 signal). REMAINING
+straggler `magnitude_response` shares the pattern but is lighter still (1 sqrt vs 2 atan2) — likely IN-FLOOR
+without a very high order; left on the frontier. VEIN NOW EXHAUSTED for the signal response family (freqz/
+group_delay already parallel; group_delay_from_ba + phase_response landed; magnitude_response too light).

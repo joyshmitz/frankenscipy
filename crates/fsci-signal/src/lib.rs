@@ -6101,13 +6101,21 @@ pub fn magnitude_response_db(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>,
 ///
 /// Returns (frequencies, phase_radians).
 pub fn phase_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f64>) {
-    let mut freqs = Vec::with_capacity(n_freqs);
-    let mut phases = Vec::with_capacity(n_freqs);
-
-    for k in 0..n_freqs {
+    // Each frequency's phase is a pure function of its index — two Horner
+    // `eval_poly_on_unit_circle` sweeps (O(len(b)+len(a)) complex MACs + a cos/sin each) plus two
+    // `atan2`, reading only the immutable `b`/`a`. Fan the sweep across disjoint contiguous chunks
+    // through the shared `freqz_par_collect` helper (the same path the scipy-named `freqz`/
+    // `group_delay` sweeps use): chunks are index-aligned and the kernel is pure, so the result is
+    // byte-identical to the serial `for k in 0..n_freqs` loop. Sibling straggler to
+    // `group_delay_from_ba`, which was already routed this way.
+    let force_serial = PHASE_RESPONSE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let nthreads = if force_serial {
+        1
+    } else {
+        freqz_response_thread_count(n_freqs, b.len() + a.len())
+    };
+    let pairs: Vec<(f64, f64)> = freqz_par_collect(n_freqs, nthreads, |k| {
         let w = std::f64::consts::PI * k as f64 / n_freqs as f64;
-        freqs.push(w);
-
         // Polynomial-on-unit-circle via Horner (frankenscipy-9l5oo): 1 cos+sin per frequency
         // instead of one per coefficient — the same lever as freqz.
         let (br, bi) = eval_poly_on_unit_circle(b, w);
@@ -6116,11 +6124,24 @@ pub fn phase_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f6
         // H = B/A, phase = arg(B) - arg(A)
         let phase_b = bi.atan2(br);
         let phase_a = ai.atan2(ar);
-        phases.push(phase_b - phase_a);
+        (w, phase_b - phase_a)
+    });
+    let mut freqs = Vec::with_capacity(n_freqs);
+    let mut phases = Vec::with_capacity(n_freqs);
+    for (w, ph) in pairs {
+        freqs.push(w);
+        phases.push(ph);
     }
 
     (freqs, phases)
 }
+
+/// When `true`, [`phase_response`] runs its per-frequency sweep serially (the ORIG behaviour).
+/// When `false` (default), independent frequencies fan across cores via `freqz_par_collect`.
+/// Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static PHASE_RESPONSE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Normalize filter coefficients so the denominator is monic.
 ///
