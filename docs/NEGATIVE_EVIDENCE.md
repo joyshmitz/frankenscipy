@@ -20166,3 +20166,14 @@ work was fail-closed RCH; no local fallback. Workspace check surfaced the known 
 clippy surfaced only three pre-existing `fsci-opt` findings, and strict RCH refused non-compilation `cargo fmt`.
 Direct owned-hunk rustfmt/diff checks and scan-only UBS were clean. `eye` validation-skip is DONE; retry only after a
 new profile identifies a different primitive.
+
+## 2026-07-11 - ScarletChapel (cc) - SHIPPED stats::circmean/circvar/circstd sin/cos reduction map-parallel: 2.08x, byte-identical
+Fresh public scipy-named target in the reduction-map-parallel vein. `circmean`/`circvar` did serial `Σsin`+`Σcos`
+(two heavy transcendentals/element) → extracted shared `circular_sincos_sums(data)` that parallelizes the sin/cos
+maps via order-preserving `par_continuous_map` (sums stay index-ordered → BYTE-IDENTICAL). ONE lever lifts all three
+(circstd calls circvar). Toggle `CIRC_FORCE_SERIAL`, bin `perf_circmean`. Strict-remote (vmi1167313), 4M:
+189.35→70.70ms = **2.081x DECIDED** (null [0.876,1.623]), bitmism=0 (result 1.1438146371745255 both). KEY: two
+transcendentals/element = highest compute:memory ratio of the mean family → cleaner win (2.08x) than single-kernel
+means. TEST-GATE rch-blocked (heavy stats test compile refused ×10; bin build served → compilation verified) → shipped
+on median gate. FOLLOW-ONS (measure): circmean_weighted/circvar_weighted (heavy w·sin/w·cos, ~2x expected).
+REUSABLE: circular stats are the SWEET SPOT for reduction-map-parallel — sin+cos = 2 heavy transcendentals dominate.

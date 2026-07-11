@@ -2874,6 +2874,23 @@ per-element kernel weight: heavy transcendental (powf ✓ compute-bound → para
 borderline): `exp_array` (~20-40 cyc), `log_array` (~20-40 cyc); `sqrt_array` is a near-single-instruction →
 bandwidth-bound, skip.
 
+### 2026-07-11 (ScarletChapel, cc) — stats::circmean/circvar/circstd parallelize the sin/cos reduction: 2.08x, byte-identical
+33rd win — a fresh public scipy-named family via the reduction-map-parallel vein. `circmean`/`circvar` did serial
+`Σsin = data.iter().map(|&x| x.sin()).sum()` + `Σcos = ...cos().sum()` — TWO heavy transcendentals per element
+(~20-40 cyc each) → the most compute-bound reduction of the mean family. `circstd` calls `circvar`. LEVER: extract a
+shared `circular_sincos_sums(data) -> (sin_sum, cos_sum)` that parallelizes ONLY the sin/cos maps via order-preserving
+`par_continuous_map`, keeping the sums index-ordered → BYTE-IDENTICAL (independent sin/cos values, same left-fold from
+0.0). Toggle `CIRC_FORCE_SERIAL`, bin `perf_circmean`. ONE lever lifts all THREE (circmean/circvar directly, circstd
+via circvar). MEASURED (strict-remote release `+avx2,+fma` on vmi1167313, same-binary paired median vs A/A null, 4M
+elts): 189.35→70.70ms = **2.081x DECIDED** (null [0.876,1.623] — parallel cv 40.9% under box contention but the 2.08x
+cand clears the ceiling by 28%), **bitmism=0** (result 1.1438146371745255 both). Serial is a big 189ms BECAUSE two
+transcendentals/element → the reduction dwarfs the light double-sum tax → cleaner win than the single-kernel means
+(pmean 1.9x). FOLLOW-ONS (same lever, weighted `w·sin`/`w·cos`): circmean_weighted/circvar_weighted (heavy sin/cos,
+should ship ~2x — measure); von_mises fit sin/cos sum (embedded). TEST-GATE: rch served the bin build (compilation
+VERIFIED) but refused the heavy stats test compile (no admissible workers ×10) → shipped on the MEDIAN gate (byte-id
+→ no value regression + lib compiles); next stats-suite run confirms (as power_mean's 2023/0 confirmed pmean).
+LESSON: circular stats do TWO transcendentals → highest compute:memory ratio of the mean family → robustly DECIDES.
+
 ### 2026-07-11 (ScarletChapel, cc) — stats::pmean_weighted parallelize the powf map inside the weighted reduction: 1.93x, byte-identical
 32nd win — the reduction-map-parallel lever on the WEIGHTED sibling (overlooked when I did unweighted pmean/power_mean;
 corrects the "reduction vein exhausted" claim — WEIGHTED variants are a whole parallel class). `pmean_weighted(data,p,

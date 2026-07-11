@@ -25934,12 +25934,37 @@ pub static PMEAN_WEIGHTED_FORCE_SERIAL: std::sync::atomic::AtomicBool =
 /// Circular mean for angular data.
 ///
 /// Matches `scipy.stats.circmean`.
+/// Σsin(x) and Σcos(x) over `data`, the shared reduction of the circular statistics
+/// (`circmean`/`circvar`/`circstd`). `sin`/`cos` are heavy per-element transcendentals (~20-40 cycles
+/// each) so each map dominates its light left-fold: parallelize ONLY the maps (order-preserving
+/// `par_continuous_map`), sums stay in index order. BYTE-IDENTICAL to the serial `map(sin).sum()` /
+/// `map(cos).sum()` (independent values, same left-fold from 0.0). `CIRC_FORCE_SERIAL` restores the
+/// fused serial maps (same-binary A/B).
+fn circular_sincos_sums(data: &[f64]) -> (f64, f64) {
+    if CIRC_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let sin_sum: f64 = data.iter().map(|&x| x.sin()).sum();
+        let cos_sum: f64 = data.iter().map(|&x| x.cos()).sum();
+        (sin_sum, cos_sum)
+    } else {
+        let sin_sum: f64 = par_continuous_map(data, |x| x.sin()).iter().sum();
+        let cos_sum: f64 = par_continuous_map(data, |x| x.cos()).iter().sum();
+        (sin_sum, cos_sum)
+    }
+}
+
+/// When `true`, [`circmean`]/[`circvar`]/[`circstd`] compute their `Σsin`/`Σcos` with the fused serial
+/// `map(...).sum()` (the ORIG behaviour). When `false` (default), the compute-bound `sin`/`cos` maps
+/// fan across cores via the order-preserving `par_continuous_map` and the sums stay in index order.
+/// Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static CIRC_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn circmean(data: &[f64]) -> f64 {
     if data.is_empty() {
         return f64::NAN;
     }
-    let sin_sum: f64 = data.iter().map(|&x| x.sin()).sum();
-    let cos_sum: f64 = data.iter().map(|&x| x.cos()).sum();
+    let (sin_sum, cos_sum) = circular_sincos_sums(data);
     // scipy.stats.circmean wraps into the default range [0, 2π); atan2 alone
     // returns [-π, π], which is 2π too low for a negative mean angle.
     // frankenscipy-87q5w
@@ -25954,8 +25979,7 @@ pub fn circvar(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let n = data.len() as f64;
-    let sin_sum: f64 = data.iter().map(|&x| x.sin()).sum();
-    let cos_sum: f64 = data.iter().map(|&x| x.cos()).sum();
+    let (sin_sum, cos_sum) = circular_sincos_sums(data);
     let r = (sin_sum * sin_sum + cos_sum * cos_sum).sqrt() / n;
     1.0 - r
 }
