@@ -2551,3 +2551,15 @@ serial path vs Python — so it transitively covers the parallel path. bin `perf
 a GLOBAL histogram/threshold fn with a per-pixel divide is compute-bound → privatized-parallel bincount is a
 ~5x byte-identical win (vs the memory-bound label gathers' ~1.5x — the per-pixel DIVIDE is what makes it 5x).
 NEXT: `histogram`'s global (labels=None) path is the identical pattern (+drops a full-data clone).
+
+### 2026-07-11 (ScarletChapel, cc) — global histogram direct privatized-parallel bincount: 5.78x, byte-identical
+Direct follow-on to otsu (same compute-bound bincount pattern). `ndimage::histogram` with `labels=None` cloned
+the ENTIRE array into one group via `measurement_label_groups` THEN serial-binned it. LEVER: for the global
+case, bin `input.data` DIRECTLY with a privatized per-thread parallel bincount — BYTE-IDENTICAL (one group =
+every element; the `< min || > max` range filter + per-value bin assignment are unchanged; integer counts sum
+order-independently) AND it drops the full-data clone. Gated by `ndimage_filter_thread_count`; toggled by
+`NDIMAGE_HISTOGRAM_FORCE_SERIAL` (serial arm = ORIG clone+group path). MEASURED (strict-remote release
+`+avx2,+fma`, paired median vs A/A null, 16M px / 256 bins): 95.13->12.49ms = **5.777x** (null [0.753,1.202]),
+**bitmism=0**. Full `fsci-ndimage` lib suite 272/0 with the change present. bin `perf_histogram`. CONFIRMS the
+otsu lever generalizes: per-pixel-divide bincount → privatized-parallel = ~5.8x byte-identical (the DIVIDE is
+what lifts it from the memory-bound ~1.5x to ~5.8x).

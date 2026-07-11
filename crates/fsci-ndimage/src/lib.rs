@@ -5148,6 +5148,12 @@ pub fn black_tophat_with_origins(
 /// Matches `scipy.ndimage.histogram`; scalar SciPy results are returned as a
 /// one-element vector of bin counts, while explicit `index` lists return one
 /// histogram per label.
+/// When `true`, force the global (no-labels) `histogram` onto the ORIG group path (clone + serial
+/// bincount). Byte-identical either way. Benchmark knob for the same-binary A/B.
+#[doc(hidden)]
+pub static NDIMAGE_HISTOGRAM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn histogram(
     input: &NdArray,
     min_val: f64,
@@ -5181,6 +5187,60 @@ pub fn histogram(
             }
         }
     }
+    // Global histogram (no labels): bin the whole array with a privatized parallel bincount,
+    // skipping the `measurement_label_groups` full-data CLONE. BYTE-IDENTICAL to the group path
+    // (one group = every element; the range filter and per-value bin assignment are unchanged, and
+    // integer counts sum order-independently). Same validation short-circuit as the group path.
+    if labels.is_none()
+        && !NDIMAGE_HISTOGRAM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        if nbins == 0
+            || !min_val.is_finite()
+            || !max_val.is_finite()
+            || max_val <= min_val
+            || input.data.iter().any(|value| !value.is_finite())
+        {
+            return Ok(vec![vec![0usize; nbins]]);
+        }
+        let bin_width = (max_val - min_val) / nbins as f64;
+        let data = input.data.as_slice();
+        let n = data.len();
+        let bincount = |chunk: &[f64]| -> Vec<usize> {
+            let mut h = vec![0usize; nbins];
+            for &value in chunk {
+                if value < min_val || value > max_val {
+                    continue;
+                }
+                let bin = ((value - min_val) / bin_width).floor() as usize;
+                h[bin.min(nbins - 1)] += 1;
+            }
+            h
+        };
+        let nthreads = ndimage_filter_thread_count(n, 4);
+        let hist = if nthreads <= 1 {
+            bincount(data)
+        } else {
+            let cw = n.div_ceil(nthreads);
+            let bincount = &bincount;
+            let parts: Vec<Vec<usize>> = std::thread::scope(|scope| {
+                data.chunks(cw)
+                    .map(|c| scope.spawn(move || bincount(c)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("histogram chunk panicked"))
+                    .collect()
+            });
+            let mut h = vec![0usize; nbins];
+            for p in parts {
+                for (i, c) in p.into_iter().enumerate() {
+                    h[i] += c;
+                }
+            }
+            h
+        };
+        return Ok(vec![hist]);
+    }
+
     let groups = measurement_label_groups(input, labels, index)?;
     let mut histograms = vec![vec![0usize; nbins]; groups.len()];
     if nbins == 0
