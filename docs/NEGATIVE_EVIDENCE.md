@@ -20147,3 +20147,22 @@ N (may still be a real ~1.2-1.5x but needs a tight null to prove). TEST-GATE for
 (builds landed, test compile refused ×18) — shipped on median gate, byte-id guarantees no value regression, next
 stats-suite run confirms. hmean_weighted (`w/x`) bandwidth-bound = skip. Weighted-mean reduction class now: pmean_w
 DONE, gmean_w held, hmean_w skip.
+
+## 2026-07-11 - ScarletChapel (cod) - SHIPPED sparse::eye trusted CSR construction: 5.86x, byte-identical
+Negative-ledger and `bv --robot-triage` screening excluded the stale Cholesky `.151` recommendation and every
+closed/rejected sparse family before a current strict-remote sweep selected `sparse_eye/eye/10000`. A valid delayed
+`perf` profile on `vmi1264463` recorded 7,358 samples with 0 lost: `validate_compressed` was **83.45%** self,
+`construct::eye` 11.24%, and `indptr` collection 4.12%. The ONE lever retains the exact final vectors
+`data=[1.0;n]`, `indices=0..n`, and `indptr=0..=n`, builds through the crate-private unchecked constructor, and
+stamps canonical `{sorted_indices:true,deduplicated:true}`. Each row owns one in-bounds diagonal entry, so every
+removed validation branch is unreachable and every output field/value bit is unchanged, including `n=0`.
+
+MEDIAN GATE, same strict-remote worker `vmi1264463`: **34.996512→5.968541 us = 5.863495x / -82.945325%**;
+candidate median CI **[5.502887,6.167589] us**, Criterion median-change CI **[-84.565985%,-81.705454%]**, `p=0.00`.
+The earlier `vmi1227854` candidate was cross-worker routing evidence only, and an accidental `vmi1149989` cold
+request was cancelled before measurement. Proof: 362 sparse lib tests passed (0 failed, 4 ignored), 7/7 focused
+`eye_*` tests passed with exact `to_bits`/CSR/meta assertions, and focused sparse conformance passed 1/1. All Cargo
+work was fail-closed RCH; no local fallback. Workspace check surfaced the known `ovh-b` `blake3` `SIGILL`, workspace
+clippy surfaced only three pre-existing `fsci-opt` findings, and strict RCH refused non-compilation `cargo fmt`.
+Direct owned-hunk rustfmt/diff checks and scan-only UBS were clean. `eye` validation-skip is DONE; retry only after a
+new profile identifies a different primitive.

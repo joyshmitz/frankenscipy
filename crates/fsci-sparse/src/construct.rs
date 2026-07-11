@@ -11,7 +11,12 @@ pub fn eye(size: usize) -> SparseResult<CsrMatrix> {
     let data = vec![1.0; size];
     let indices: Vec<usize> = (0..size).collect();
     let indptr: Vec<usize> = (0..=size).collect();
-    CsrMatrix::from_components(shape, data, indices, indptr, true)
+    let mut result = CsrMatrix::from_components_unchecked(shape, data, indices, indptr);
+    result.canonical = CanonicalMeta {
+        sorted_indices: true,
+        deduplicated: true,
+    };
+    Ok(result)
 }
 
 /// Identity-like sparse array with ones on the `k`-th diagonal, matching
@@ -1132,6 +1137,22 @@ mod tests {
         let id = eye(4).expect("identity");
         assert_eq!(id.shape(), Shape2D::new(4, 4));
         assert_eq!(id.nnz(), 4);
+        assert_eq!(
+            id.data()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            vec![1.0_f64.to_bits(); 4]
+        );
+        assert_eq!(id.indices(), &[0, 1, 2, 3]);
+        assert_eq!(id.indptr(), &[0, 1, 2, 3, 4]);
+        assert_eq!(
+            id.canonical_meta(),
+            CanonicalMeta {
+                sorted_indices: true,
+                deduplicated: true,
+            }
+        );
 
         let coo = id.to_coo().expect("csr->coo");
         for idx in 0..coo.nnz() {
@@ -1155,6 +1176,16 @@ mod tests {
         let id = eye(0).expect("identity");
         assert_eq!(id.shape(), Shape2D::new(0, 0));
         assert_eq!(id.nnz(), 0);
+        assert!(id.data().is_empty());
+        assert!(id.indices().is_empty());
+        assert_eq!(id.indptr(), &[0]);
+        assert_eq!(
+            id.canonical_meta(),
+            CanonicalMeta {
+                sorted_indices: true,
+                deduplicated: true,
+            }
+        );
     }
 
     #[test]

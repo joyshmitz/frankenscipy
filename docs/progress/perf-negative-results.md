@@ -4,6 +4,41 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-11 - frankenscipy-8l8r1.159 - KEEP: skip redundant `eye` CSR validation (bit-identical, median -82.95%)
+
+- Agent: cod / ScarletChapel. Domain: `fsci-sparse`; cc-owned `ndimage` and `interpolate` were excluded. The current
+  negative ledgers and `bv --robot-triage` were screened before editing. The triage recommendation for stale
+  Cholesky bead `.151` and the already-landed sparse-random-zero row were excluded, along with the closed COO,
+  SpMM, CSR-add, kron, SPILU, `block_diag`, `diags`, and `spsolve` families. A strict-remote sparse sweep left
+  `sparse_eye/eye/10000` at **32.719874 us** median (95% median CI **[32.170531, 35.262055] us**) as a fresh row.
+- A valid delayed remote `perf` profile of that control benchmark on `vmi1264463` recorded **7,358 samples, 0
+  lost** and attributed **83.45%** self cycles to `validate_compressed`, **11.24%** to `construct::eye`, and
+  **4.12%** to the inclusive-range `indptr` collection. An earlier profile without Criterion's `--bench` mode was
+  discarded as INVALID because it sampled setup/COO work rather than the timed `eye` path.
+- **ONE LEVER:** `eye` still creates the exact final `data=[1.0;n]`, `indices=0..n`, and `indptr=0..=n`, but now
+  passes them to the crate-private unchecked CSR constructor and stamps `sorted_indices=true` and
+  `deduplicated=true` instead of rescanning all components. Row `r` owns exactly `[r,r+1)` containing in-bounds
+  column `r`, so the old validator's shape, monotonicity, sortedness, and deduplication checks are proofs over
+  construction invariants. Every successful output field and `f64::to_bits()` is identical, including `n=0`;
+  there are no floating-point operations, ties, RNG draws, or ordering changes. The old `SparseError` branches are
+  unreachable for these internally generated vectors, and all allocations still occur before construction.
+- **MEDIAN GATE, same remote worker `vmi1264463`:** validating control **34.996512 us** (95% median CI
+  **[33.411737, 36.489306] us**) versus unchecked candidate **5.968541 us** (CI **[5.502887, 6.167589] us**) =
+  **5.863495x / 82.945325% lower median self-time**. Criterion's median-change CI is **[-84.565985%,
+  -81.705454%]**, `p=0.00`. A candidate median from `vmi1227854` (**1.843602 us**) was explicitly discarded as
+  cross-worker routing evidence; an accidental cold request on `vmi1149989` was cancelled before any benchmark.
+- Strict-remote correctness passed all **362** `fsci-sparse` lib tests (**0 failed, 4 ignored**), the seven focused
+  `eye_*` tests (**7/7**), and conformance `diff_007_eye_identity_vs_dense` (**1/1**). The focused tests assert exact
+  shape, `data` bits, `indices`, `indptr`, canonical metadata, zero-size output, and SciPy-reference values.
+- Decision: **KEEP**. Every Cargo benchmark/test/check/clippy request used
+  `RCH_REQUIRE_REMOTE=1 env -u CARGO_TARGET_DIR rch exec -- ...` (with `RCH_WORKER=vmi1264463` when a same-worker
+  pin was required); capacity refusals were surfaced and never ran locally. Remote workspace check remains blocked
+  by `ovh-b`'s `blake3` build-script `SIGILL`; remote workspace clippy reached three pre-existing `fsci-opt`
+  warnings at `curvefit.rs:549` and `lib.rs:4367/4371`. Strict RCH refused `cargo fmt --check` as non-compilation;
+  direct `rustfmt --check` shows only pre-existing formatting drift outside the owned hunk, while `git diff --check`
+  passes. Scan-only UBS (`--no-cargo`) found zero critical issues and no production-`eye` finding. Retry condition:
+  none for this validation scan; future `eye` work must start from a new profile and a different primitive.
+
 ## 2026-07-11 - frankenscipy-8l8r1.157 - KEEP: reuse differential-evolution candidate scratch (bit-identical, median -17.44% to -19.44%)
 
 - Agent: cod / ScarletChapel. Domain: `fsci-opt`; cc-owned `ndimage` and `interpolate` were excluded. This is the
