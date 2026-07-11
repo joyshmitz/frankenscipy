@@ -3260,3 +3260,20 @@ bin `perf_vtest`. MEASURED (release `+avx2,+fma`, same-binary median vs A/A null
 vtest_returns_valid_results). ~5.4x = pure two-transcendental sums with no downstream heavy math (rayleightest-class);
 higher than circmean's 2.08x (which has atan2+rem_euclid tails). Peer: astropy.stats.vtest (scipy has no vtest) →
 byte-identical self-speedup. **DIRECTIONAL sin/cos-sum FAMILY NOW FULLY EXHAUSTED.** 49 cc wins total this campaign.
+
+### 2026-07-11 (cc) — REJECT: special::softmax parallel exp/divide map — IN-FLOOR (bandwidth-bound)
+`special::softmax` (scipy.special.softmax, convenience.rs:4269) was flagged as a serial `exp`-map straggler that
+bypasses the elementwise family's `par_map_light`. Parallelized the two per-element maps (exp, divide) via
+`par_map_light` (byte-identical, gated LIGHT_KERNEL_PAR_MIN), max/sum kept serial. MEASURED (release `+avx2,+fma`,
+same-binary median vs A/A null, 8M, 21 iters, ×2): serial 107.86→104.16ms = **1.034x IN-FLOOR** (null [0.581,1.114])
+and 107.52→100.85ms = **1.059x IN-FLOOR** (null [0.912,1.118]); **bitmism=0**. ROOT CAUSE = MEMORY-BANDWIDTH-BOUND:
+softmax streams FOUR O(N) passes over 64MB Vecs (max reduce / exp map / sum reduce / divide map) — the `exp` is only
+~25% of the 107ms serial time (a single 8M exp map ≈ 27ms cf. ndimage exp_array), so the two light reductions + the
+memory streaming dominate, AND `par_map_light` adds a serial per-chunk concat copy. Under a bandwidth-contended box the
+parallel arm can't reclaim time (bandwidth is a SHARED resource — unlike compute contention, which the median-null gate
+absorbs). Quiet-box ceiling is only ~2-2.5x even in theory. REVERTED (no ship). **RULE (extends the elementwise-map
+discriminator): a HEAVY-transcendental map WINS parallelized only when the transcendental DOMINATES the per-element
+cost AND the fn is few-pass; a multi-pass streaming fn (softmax/log_softmax = max+exp+sum+divide) DILUTES the
+transcendental below the memory-traffic floor → WASH, even at 8M.** Same applies to the queued log_softmax/logsumexp
+(exp buried among light passes) — SKIP. `jensenshannon` (spatial:517, 2 ln/elt) is heavier per-element but a
+single-(p,q)-pair scalar reduction (byte-id parallel-sum awkward) → only large-D, deprioritized.
