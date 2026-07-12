@@ -36367,8 +36367,17 @@ pub struct QuantileTestResult {
 /// * `q` - Hypothesized quantile value
 /// * `p` - Probability level (0 < p < 1), default 0.5 for median
 ///
+/// When `true`, [`quantile_test`] counts `<= q` and `< q` in two separate passes (the ORIG
+/// behaviour); default `false` counts both in one pass. Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static QUANTILE_TEST_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// # Returns
 /// `QuantileTestResult` with statistic, statistic_type, and pvalue.
+///
+/// When [`QUANTILE_TEST_FUSE_DISABLE`] is `true`, the `<=`/`<` counts run as two separate
+/// passes (the ORIG behaviour); default `false` counts both in one pass. Byte-identical.
 pub fn quantile_test(x: &[f64], q: f64, p: f64) -> QuantileTestResult {
     let n = x.len();
     if n == 0 || !(0.0..1.0).contains(&p) || p == 0.0 {
@@ -36379,10 +36388,27 @@ pub fn quantile_test(x: &[f64], q: f64, p: f64) -> QuantileTestResult {
         };
     }
 
-    // T1 = count of x <= q
-    let t1 = x.iter().filter(|&&xi| xi <= q).count();
-    // T2 = count of x < q
-    let t2 = x.iter().filter(|&&xi| xi < q).count();
+    // T1 = count of x <= q, T2 = count of x < q — two independent traversals; count both in
+    // ONE pass. BYTE-IDENTICAL: the counts are exact integers, order-independent, and every
+    // `xi < q` also satisfies `xi <= q`.
+    let (t1, t2) = if QUANTILE_TEST_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        (
+            x.iter().filter(|&&xi| xi <= q).count(),
+            x.iter().filter(|&&xi| xi < q).count(),
+        )
+    } else {
+        let mut t1 = 0usize;
+        let mut t2 = 0usize;
+        for &xi in x {
+            if xi <= q {
+                t1 += 1;
+                if xi < q {
+                    t2 += 1;
+                }
+            }
+        }
+        (t1, t2)
+    };
 
     let binom = Binomial::new(n as u64, p);
 
