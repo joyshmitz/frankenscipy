@@ -34586,7 +34586,15 @@ pub fn zmap_ddof(scores: &[f64], compare: &[f64], ddof: usize) -> Vec<f64> {
         return vec![f64::NAN; scores.len()];
     };
 
-    let mut out: Vec<f64> = scores.iter().map(|&score| (score - mean) / std).collect();
+    // `mean_std_ddof(compare)` is float Σ (serial), but the `(score - mean)/std` map over `scores`
+    // is a per-element pure function of its index — fan it across threads via the order-preserving
+    // `par_continuous_map_min` (BYTE-IDENTICAL to `scores.iter().map(..).collect()`). The same-slice
+    // NaN-fill special case runs AFTER the map, unchanged. `ZSCORE_FORCE_SERIAL` (shared knob).
+    let mut out: Vec<f64> = if ZSCORE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        scores.iter().map(|&score| (score - mean) / std).collect()
+    } else {
+        par_continuous_map_min(scores, 4096, move |score| (score - mean) / std)
+    };
 
     // SciPy's zscore special-cases the exact same array object by replacing
     // constant slices with NaN rather than leaving mixed NaN/inf outputs.
