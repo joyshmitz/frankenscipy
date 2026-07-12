@@ -145,6 +145,57 @@ fn simd_dot(a: &[f64], b: &[f64]) -> f64 {
     s
 }
 
+/// Fused 8-wide `(Σ a·b, Σ a², Σ b²)` in ONE pass — byte-identical to
+/// `(simd_dot(a,b), simd_sqsum(a), simd_sqsum(b))` when `a.len() == b.len()`: each of the six
+/// accumulators receives the exact same SIMD-lane operation sequence, the same two-accumulator
+/// layout, the same `(acc0+acc1).reduce_sum()` reduction and the same scalar tail as its standalone
+/// helper. Reading `a`/`b` once each instead of twice halves the memory traffic. The caller only
+/// takes this path for equal-length inputs (the helpers iterate different ranges otherwise).
+#[inline]
+fn fused_dot_sqsum(a: &[f64], b: &[f64]) -> (f64, f64, f64) {
+    use std::simd::{Simd, num::SimdFloat};
+    const L: usize = 8;
+    let n = a.len().min(b.len());
+    let mut d0 = Simd::<f64, L>::splat(0.0);
+    let mut d1 = Simd::<f64, L>::splat(0.0);
+    let mut sa0 = Simd::<f64, L>::splat(0.0);
+    let mut sa1 = Simd::<f64, L>::splat(0.0);
+    let mut sb0 = Simd::<f64, L>::splat(0.0);
+    let mut sb1 = Simd::<f64, L>::splat(0.0);
+    let mut i = 0;
+    while i + 2 * L <= n {
+        let av0 = Simd::<f64, L>::from_slice(&a[i..i + L]);
+        let bv0 = Simd::<f64, L>::from_slice(&b[i..i + L]);
+        let av1 = Simd::<f64, L>::from_slice(&a[i + L..i + 2 * L]);
+        let bv1 = Simd::<f64, L>::from_slice(&b[i + L..i + 2 * L]);
+        d0 += av0 * bv0;
+        d1 += av1 * bv1;
+        sa0 += av0 * av0;
+        sa1 += av1 * av1;
+        sb0 += bv0 * bv0;
+        sb1 += bv1 * bv1;
+        i += 2 * L;
+    }
+    if i + L <= n {
+        let av = Simd::<f64, L>::from_slice(&a[i..i + L]);
+        let bv = Simd::<f64, L>::from_slice(&b[i..i + L]);
+        d0 += av * bv;
+        sa0 += av * av;
+        sb0 += bv * bv;
+        i += L;
+    }
+    let mut dot = (d0 + d1).reduce_sum();
+    let mut sa = (sa0 + sa1).reduce_sum();
+    let mut sb = (sb0 + sb1).reduce_sum();
+    while i < n {
+        dot += a[i] * b[i];
+        sa += a[i] * a[i];
+        sb += b[i] * b[i];
+        i += 1;
+    }
+    (dot, sa, sb)
+}
+
 /// 8-wide `Σ x[i]²` (two accumulators + scalar tail).
 #[inline]
 fn simd_sqsum(x: &[f64]) -> f64 {
@@ -281,11 +332,26 @@ pub fn chebyshev(a: &[f64], b: &[f64]) -> f64 {
     max
 }
 
+/// When `true`, [`cosine`] computes its dot product and two squared-norms as three separate SIMD
+/// passes (the ORIG behaviour); default `false` fuses them into one pass. Byte-identical.
+#[doc(hidden)]
+pub static COSINE_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Cosine distance: 1 - cosine_similarity(a, b).
 pub fn cosine(a: &[f64], b: &[f64]) -> f64 {
-    let dot = simd_dot(a, b);
-    let norm_a = simd_sqsum(a).sqrt();
-    let norm_b = simd_sqsum(b).sqrt();
+    // Fuse the dot product and the two squared-norms into ONE pass over (a, b) — byte-identical to
+    // the three separate SIMD helpers (see `fused_dot_sqsum`) but reading each vector once instead
+    // of twice. Only for equal-length inputs (the helpers cover different ranges otherwise).
+    let (dot, sqsum_a, sqsum_b) = if COSINE_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+        || a.len() != b.len()
+    {
+        (simd_dot(a, b), simd_sqsum(a), simd_sqsum(b))
+    } else {
+        fused_dot_sqsum(a, b)
+    };
+    let norm_a = sqsum_a.sqrt();
+    let norm_b = sqsum_b.sqrt();
     let denom = norm_a * norm_b;
     if denom == 0.0 {
         // scipy returns NaN when either vector has zero norm: the cosine
