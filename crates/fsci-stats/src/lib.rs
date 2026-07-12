@@ -47303,14 +47303,38 @@ pub fn expit(x: f64) -> f64 {
 }
 
 /// Softmax function over an array.
+/// When `true`, [`softmax`] runs its exp and normalize maps serially (the ORIG behaviour); default
+/// `false` fans the order-preserving maps across cores for large inputs. Byte-identical. A/B knob.
+#[doc(hidden)]
+pub static SOFTMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn softmax(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
     let max_x = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let exp_x: Vec<f64> = x.iter().map(|&xi| (xi - max_x).exp()).collect();
+    // The per-element `exp` is the dominant cost and is an order-preserving map (each output
+    // independent), so fan it across cores for large inputs — BYTE-IDENTICAL to the serial map (same
+    // `(xi-max_x).exp()` per index, same order). The Σ stays serial (float reassociation) and the
+    // final normalize is another order-preserving map. `par_continuous_map` self-gates small arrays
+    // to serial (2048/thread). `SOFTMAX_FORCE_SERIAL` restores the fully-serial path for A/B.
+    // 700k elements/thread: at n≥~7M the core count saturates (same as any lower gate) yet arrays up
+    // to ~1.4M stay serial, avoiding the thread-spawn over-subscription that regresses a small softmax
+    // (the exp/normalize maps are lighter than gammainc, so the default 2048/thread gate is too eager).
+    const SOFTMAX_MIN_PER_THREAD: usize = 700_000;
+    let serial = SOFTMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let exp_x: Vec<f64> = if serial {
+        x.iter().map(|&xi| (xi - max_x).exp()).collect()
+    } else {
+        par_continuous_map_min(x, SOFTMAX_MIN_PER_THREAD, |xi| (xi - max_x).exp())
+    };
     let sum_exp: f64 = exp_x.iter().sum();
-    exp_x.iter().map(|&e| e / sum_exp).collect()
+    if serial {
+        exp_x.iter().map(|&e| e / sum_exp).collect()
+    } else {
+        par_continuous_map_min(&exp_x, SOFTMAX_MIN_PER_THREAD, |e| e / sum_exp)
+    }
 }
 
 /// Log-softmax function (numerically stable).
