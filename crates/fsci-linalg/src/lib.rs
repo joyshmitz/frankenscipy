@@ -16826,42 +16826,90 @@ pub fn adjugate(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
     adj
 }
 
+/// When `true`, the element-wise matrix ops ([`mat_abs`]/[`mat_add`]/[`mat_sub`]/[`mat_scale`]/
+/// [`hadamard_product`]) build their output rows serially (the ORIG behaviour); default `false` fans
+/// the row build across threads. Byte-identical.
+#[doc(hidden)]
+pub static LINALG_MAT_ELEMENTWISE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Build a `nrows`-row matrix where each output row is `row_of(i)`, parallelized across row-chunks.
+/// BYTE-IDENTICAL to `(0..nrows).map(row_of).collect()`: rows are assembled in ascending index order
+/// (each chunk holds a contiguous range, concatenated in order), and each row is a pure function of
+/// its index. Gated on total work (`nrows * ncols`) so small matrices stay serial.
+fn linalg_par_matrix_rows<F>(nrows: usize, ncols: usize, row_of: F) -> Vec<Vec<f64>>
+where
+    F: Fn(usize) -> Vec<f64> + Sync,
+{
+    let nthreads = if LINALG_MAT_ELEMENTWISE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nrows.saturating_mul(ncols) < 65_536
+        || nrows < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nrows)
+    };
+    if nthreads <= 1 {
+        return (0..nrows).map(&row_of).collect();
+    }
+    let chunk = nrows.div_ceil(nthreads);
+    let row_ref = &row_of;
+    let chunks: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {
+        (0..nrows)
+            .step_by(chunk)
+            .map(|start| {
+                let end = (start + chunk).min(nrows);
+                scope.spawn(move || (start..end).map(row_ref).collect::<Vec<Vec<f64>>>())
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("matrix elementwise chunk panicked"))
+            .collect()
+    });
+    let mut out: Vec<Vec<f64>> = Vec::with_capacity(nrows);
+    for c in chunks {
+        out.extend(c);
+    }
+    out
+}
+
 /// Compute the element-wise absolute value of a matrix.
 pub fn mat_abs(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    a.iter()
-        .map(|row| row.iter().map(|&v| v.abs()).collect())
-        .collect()
+    let ncols = a.first().map_or(0, Vec::len);
+    linalg_par_matrix_rows(a.len(), ncols, |i| a[i].iter().map(|&v| v.abs()).collect())
 }
 
 /// Add two matrices element-wise.
 pub fn mat_add(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    a.iter()
-        .zip(b.iter())
-        .map(|(ra, rb)| ra.iter().zip(rb.iter()).map(|(&x, &y)| x + y).collect())
-        .collect()
+    let ncols = a.first().map_or(0, Vec::len);
+    linalg_par_matrix_rows(a.len(), ncols, |i| {
+        a[i].iter().zip(b[i].iter()).map(|(&x, &y)| x + y).collect()
+    })
 }
 
 /// Subtract two matrices element-wise.
 pub fn mat_sub(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    a.iter()
-        .zip(b.iter())
-        .map(|(ra, rb)| ra.iter().zip(rb.iter()).map(|(&x, &y)| x - y).collect())
-        .collect()
+    let ncols = a.first().map_or(0, Vec::len);
+    linalg_par_matrix_rows(a.len(), ncols, |i| {
+        a[i].iter().zip(b[i].iter()).map(|(&x, &y)| x - y).collect()
+    })
 }
 
 /// Scale a matrix by a scalar.
 pub fn mat_scale(a: &[Vec<f64>], s: f64) -> Vec<Vec<f64>> {
-    a.iter()
-        .map(|row| row.iter().map(|&v| v * s).collect())
-        .collect()
+    let ncols = a.first().map_or(0, Vec::len);
+    linalg_par_matrix_rows(a.len(), ncols, |i| a[i].iter().map(|&v| v * s).collect())
 }
 
 /// Element-wise multiply (Hadamard product) of two matrices.
 pub fn hadamard_product(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    a.iter()
-        .zip(b.iter())
-        .map(|(ra, rb)| ra.iter().zip(rb.iter()).map(|(&x, &y)| x * y).collect())
-        .collect()
+    let ncols = a.first().map_or(0, Vec::len);
+    linalg_par_matrix_rows(a.len(), ncols, |i| {
+        a[i].iter().zip(b[i].iter()).map(|(&x, &y)| x * y).collect()
+    })
 }
 
 /// Extract a submatrix from row r1..r2 and column c1..c2.
