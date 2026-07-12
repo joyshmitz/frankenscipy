@@ -31943,6 +31943,13 @@ pub fn skew(data: &[f64]) -> f64 {
     skew_from_moments(nf, m2, m3)
 }
 
+/// When `true`, [`skew_weighted`] runs its weights finite-check, `Σw` and the weighted-mean sum as
+/// separate passes (the ORIG behaviour); default `false` folds all three into one pass over
+/// (data, weights). Byte-identical.
+#[doc(hidden)]
+pub static SKEW_W_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the weighted sample skewness.
 ///
 /// Matches `scipy.stats.skew` with weights parameter.
@@ -31950,14 +31957,37 @@ pub fn skew_weighted(data: &[f64], weights: &[f64]) -> f64 {
     if data.len() < 3 || data.len() != weights.len() {
         return f64::NAN;
     }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-        return f64::NAN;
-    }
-    let total_w: f64 = weights.iter().sum();
-    if total_w <= 0.0 {
-        return f64::NAN;
-    }
-    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    // BYTE-IDENTICAL fusion: the weights finite/non-negative check, `Σw`, and the weighted-mean
+    // numerator `Σw·x` are three INDEPENDENT reductions — fold them into ONE pass (the m2/m3 moment
+    // loop below is already fused). Each Σ keeps its left-to-right order and `w * x` expression; a
+    // bad weight still returns NaN (polluted sums discarded exactly as the original early-out did).
+    let (total_w, mean_val) = if SKEW_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+            return f64::NAN;
+        }
+        let total_w: f64 = weights.iter().sum();
+        if total_w <= 0.0 {
+            return f64::NAN;
+        }
+        let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+        (total_w, mean_val)
+    } else {
+        let mut total_w = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        let mut valid = true;
+        for (&x, &w) in data.iter().zip(weights) {
+            valid &= w.is_finite() && w >= 0.0;
+            total_w += w;
+            sum_wx += w * x;
+        }
+        if !valid {
+            return f64::NAN;
+        }
+        if total_w <= 0.0 {
+            return f64::NAN;
+        }
+        (total_w, sum_wx / total_w)
+    };
     let mut m2 = 0.0;
     let mut m3 = 0.0;
     for (&x, &w) in data.iter().zip(weights) {
