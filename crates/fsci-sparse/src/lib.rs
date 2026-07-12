@@ -122,6 +122,7 @@ pub use linalg::{
     sparse_density,
     sparse_diagonal,
     sparse_eliminate_zeros,
+    SPARSE_ELIMINATE_ZEROS_FORCE_SERIAL,
     sparse_frobenius_inner,
     sparse_has_explicit_zeros,
     sparse_is_symmetric,

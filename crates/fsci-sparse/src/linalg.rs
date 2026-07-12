@@ -6045,23 +6045,91 @@ pub fn sparse_has_explicit_zeros(a: &CsrMatrix) -> bool {
     a.data().contains(&0.0)
 }
 
+/// Filter rows `[base..end)` down to their nonzero entries into local `(counts, indices, data)`
+/// buffers, preserving stored order. `counts[k]` is the surviving nnz of row `base+k`. Factored so
+/// the serial path and each parallel worker run byte-identical filter code over a contiguous range.
+fn eliminate_zeros_row_block(
+    a: &CsrMatrix,
+    base: usize,
+    end: usize,
+) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+    let mut counts = Vec::with_capacity(end.saturating_sub(base));
+    let mut indices = Vec::new();
+    let mut data = Vec::new();
+    for i in base..end {
+        let start = a.indptr()[i];
+        let row_end = a.indptr()[i + 1];
+        let mut c = 0usize;
+        for idx in start..row_end {
+            if a.data()[idx] != 0.0 {
+                indices.push(a.indices()[idx]);
+                data.push(a.data()[idx]);
+                c += 1;
+            }
+        }
+        counts.push(c);
+    }
+    (counts, indices, data)
+}
+
+/// When `true`, [`sparse_eliminate_zeros`] filters rows serially (the ORIG behaviour); default
+/// `false` fans the independent per-row nonzero filter across contiguous row-blocks. Byte-identical.
+#[doc(hidden)]
+pub static SPARSE_ELIMINATE_ZEROS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Eliminate explicit zeros from a CSR matrix.
 pub fn sparse_eliminate_zeros(a: &CsrMatrix) -> CsrMatrix {
     let n = a.shape().rows;
-    let mut new_indptr = vec![0usize; n + 1];
-    let mut new_indices = Vec::new();
-    let mut new_data = Vec::new();
 
-    for i in 0..n {
-        let start = a.indptr()[i];
-        let end = a.indptr()[i + 1];
-        for idx in start..end {
-            if a.data()[idx] != 0.0 {
-                new_indices.push(a.indices()[idx]);
-                new_data.push(a.data()[idx]);
-            }
+    // Each output row keeps input row `i`'s nonzero entries in unchanged stored order — a pure
+    // function of that row, independent of the others. The surviving COUNT is data-dependent, so
+    // use gather-then-concat: each worker filters a contiguous row-block into a local buffer, then
+    // the blocks are concatenated in ascending row order and `indptr` is rebuilt from per-row
+    // counts. Concatenating in row order reproduces the exact serial layout → BYTE-IDENTICAL.
+    let nthreads = if SPARSE_ELIMINATE_ZEROS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || a.data().len() < 65_536
+        || n < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+
+    let parts: Vec<(Vec<usize>, Vec<usize>, Vec<f64>)> = if nthreads <= 1 {
+        vec![eliminate_zeros_row_block(a, 0, n)]
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .map(|t| {
+                    let base = (t * chunk).min(n);
+                    let end = ((t + 1) * chunk).min(n);
+                    scope.spawn(move || eliminate_zeros_row_block(a, base, end))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        })
+    };
+
+    let total: usize = parts.iter().map(|(_, idx, _)| idx.len()).sum();
+    let mut new_indices = Vec::with_capacity(total);
+    let mut new_data = Vec::with_capacity(total);
+    let mut new_indptr = vec![0usize; n + 1];
+    let mut row_i = 0usize;
+    for (counts, indices, data) in &parts {
+        for &c in counts {
+            new_indptr[row_i + 1] = c;
+            row_i += 1;
         }
-        new_indptr[i + 1] = new_data.len();
+        new_indices.extend_from_slice(indices);
+        new_data.extend_from_slice(data);
+    }
+    for i in 0..n {
+        new_indptr[i + 1] += new_indptr[i];
     }
 
     CsrMatrix::from_components_unchecked(a.shape(), new_data, new_indices, new_indptr)
