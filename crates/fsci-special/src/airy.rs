@@ -275,10 +275,21 @@ pub fn bi_zeros(n: usize) -> Vec<f64> {
     airy_zeros_inner(n, false)
 }
 
+/// When `true`, [`ai_zeros`]/[`bi_zeros`] compute their zeros serially (the ORIG behaviour); default
+/// `false` fans the independent per-zero root-finds across index-chunks. Byte-identical.
+/// `#[doc(hidden)]` — internal, exposed only for the same-binary A/B benchmark.
+#[doc(hidden)]
+pub static AIRY_ZEROS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn airy_zeros_inner(n: usize, ai_kind: bool) -> Vec<f64> {
-    let mut out = Vec::with_capacity(n);
-    for k in 1..=n {
-        let kf = k as f64;
+    // Each output element is a pure function of its index `i` (zero number k = i+1): a closed-form
+    // asymptotic guess, then a self-contained bracket-expansion + up-to-120-step bisection that
+    // calls the expensive `airy_scalar` ~40-128× to pin the root. No dependency on any other zero
+    // (no `prev`, no shared state, no scatter), so the loop is embarrassingly parallel and each
+    // element is written to its own index slot → BYTE-IDENTICAL to `(0..n).map(compute).collect()`.
+    let compute = |i: usize| -> f64 {
+        let kf = (i + 1) as f64;
         let t_arg = if ai_kind {
             3.0 * std::f64::consts::PI * (4.0 * kf - 1.0) / 8.0
         } else {
@@ -324,8 +335,7 @@ fn airy_zeros_inner(n: usize, ai_kind: bool) -> Vec<f64> {
         if !f_lo.is_finite() || !f_hi.is_finite() || f_lo.signum() == f_hi.signum() {
             // Fallback: keep the asymptotic guess if bracket couldn't be
             // formed (only realistically happens on numerical pathologies).
-            out.push(initial);
-            continue;
+            return initial;
         }
         for _ in 0..120 {
             let mid = 0.5 * (lo + hi);
@@ -344,9 +354,13 @@ fn airy_zeros_inner(n: usize, ai_kind: bool) -> Vec<f64> {
                 break;
             }
         }
-        out.push(0.5 * (lo + hi));
+        0.5 * (lo + hi)
+    };
+
+    if AIRY_ZEROS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return (0..n).map(&compute).collect();
     }
-    out
+    par_map_indices(n, |i| Ok::<f64, SpecialError>(compute(i))).expect("airy zeros are infallible")
 }
 
 fn airy_scalar(x: f64, mode: RuntimeMode) -> Result<AiryResult, SpecialError> {

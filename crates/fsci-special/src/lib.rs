@@ -14,7 +14,8 @@ pub mod orthopoly;
 pub mod types;
 
 pub use airy::{
-    AIRY_DISPATCH_PLAN, AIRYE_DISPATCH_PLAN, AiryResult, ai, ai_zeros, airy, airye, bi, bi_zeros,
+    AIRY_DISPATCH_PLAN, AIRY_ZEROS_FORCE_SERIAL, AIRYE_DISPATCH_PLAN, AiryResult, ai, ai_zeros, airy,
+    airye, bi, bi_zeros,
 };
 pub use audit::{
     SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger,
