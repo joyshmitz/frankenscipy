@@ -19854,15 +19854,14 @@ pub fn matvec(a: &[Vec<f64>], x: &[f64]) -> Result<Vec<f64>, LinalgError> {
 ///
 /// Matches `numpy.outer`.
 pub fn outer(a: &[f64], b: &[f64]) -> Vec<Vec<f64>> {
-    let m = a.len();
+    // Row `i` of the result is `a[i] * b` — a pure function of `i`, so build the rows across threads
+    // via the order-preserving `linalg_par_matrix_rows` (BYTE-IDENTICAL: each `result[i][j] = a[i] *
+    // b[j]` in the same order as the serial double loop). Shares `LINALG_MAT_ELEMENTWISE_FORCE_SERIAL`.
     let n = b.len();
-    let mut result = vec![vec![0.0; n]; m];
-    for i in 0..m {
-        for j in 0..n {
-            result[i][j] = a[i] * b[j];
-        }
-    }
-    result
+    linalg_par_matrix_rows(a.len(), n, |i| {
+        let ai = a[i];
+        b.iter().map(|&bj| ai * bj).collect()
+    })
 }
 
 /// Vector dot product.
