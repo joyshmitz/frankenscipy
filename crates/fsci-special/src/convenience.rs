@@ -831,11 +831,21 @@ pub fn fresnel(z: f64) -> (f64, f64) {
 /// `z₀ = (½pu − ½ln(pv)/pu) + i(½pu + ½ln(pv)/pu)`, `pu = √(π(4nr−½))`,
 /// `pv = π√(2nr−¼)`.
 #[must_use]
+/// When `true`, [`erf_zeros`] computes its zeros serially (the ORIG behaviour); default `false` fans
+/// the independent per-zero Newton root-finds across index-chunks. Byte-identical. `#[doc(hidden)]`.
+#[doc(hidden)]
+pub static ERF_ZEROS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn erf_zeros(nt: usize) -> Vec<Complex64> {
     let two_over_sqrt_pi = 2.0 / PI.sqrt();
-    let mut out = Vec::with_capacity(nt);
-    for nr in 1..=nt {
-        let nrf = nr as f64;
+    // Each output zero `nr = i+1` is a pure function of its index: a closed-form asymptotic guess,
+    // then a self-contained 60-step Newton refinement whose per-step cost is an `erf_complex_scalar`
+    // plus a complex exp. No dependency on any other zero (no prev/shared state/scatter), so the
+    // loop is embarrassingly parallel and each element is written to its own index slot →
+    // BYTE-IDENTICAL to `(0..nt).map(compute).collect()`.
+    let compute = |i: usize| -> Complex64 {
+        let nrf = (i + 1) as f64;
         let pu = (PI * (4.0 * nrf - 0.5)).sqrt();
         let pv = PI * (2.0 * nrf - 0.25).sqrt();
         let ln_pv = pv.ln();
@@ -849,9 +859,14 @@ pub fn erf_zeros(nt: usize) -> Vec<Complex64> {
                 break;
             }
         }
-        out.push(z);
+        z
+    };
+
+    if ERF_ZEROS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return (0..nt).map(&compute).collect();
     }
-    out
+    par_map_indices(nt, |i| Ok::<Complex64, SpecialError>(compute(i)))
+        .expect("erf zeros are infallible")
 }
 
 /// Complex Fresnel integrals `(S(z), C(z))` for complex argument `z`, matching

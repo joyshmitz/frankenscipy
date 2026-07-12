@@ -97,6 +97,7 @@ pub use convenience::{
     elu,
     entr,
     erf_zeros,
+    ERF_ZEROS_FORCE_SERIAL,
     erfc_conv,
     erfcinv_conv,
     erfcx,
