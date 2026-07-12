@@ -34308,10 +34308,13 @@ pub fn zscore(data: &[f64]) -> Vec<f64> {
     // `mean_std_ddof` is float Σ (serial), but the `(x - mean)/std` output map is a per-element pure
     // function of its index — fan it across threads via the order-preserving `par_continuous_map_min`
     // (BYTE-IDENTICAL to `data.iter().map(..).collect()`). `ZSCORE_FORCE_SERIAL` restores the serial map.
+    // 800k/thread gate (was 4096): the map is LIGHT (a subtract + divide), so the old eager gate
+    // OVER-SUBSCRIBED medium arrays — measured 0.25x@200k, 0.43x@500k, 0.59x@1M (10 threads on a
+    // sub-10ms op). 800k keeps arrays below ~1.6M serial while n≥8M still saturates the cores.
     if ZSCORE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         data.iter().map(|&x| (x - mean_val) / std_val).collect()
     } else {
-        par_continuous_map_min(data, 4096, move |x| (x - mean_val) / std_val)
+        par_continuous_map_min(data, 800_000, move |x| (x - mean_val) / std_val)
     }
 }
 
