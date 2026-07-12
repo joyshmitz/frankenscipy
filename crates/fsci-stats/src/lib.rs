@@ -32500,6 +32500,12 @@ pub fn iqr_weighted(data: &[f64], weights: &[f64]) -> f64 {
     q[1] - q[0]
 }
 
+/// When `true`, [`peak_to_peak`] runs its min/max/NaN scan serially (the ORIG behaviour);
+/// default `false` fans it across cores above the work gate. Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static PTP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Range of data (maximum - minimum).
 ///
 /// Matches `numpy.ptp` (peak-to-peak).
@@ -32508,18 +32514,56 @@ pub fn peak_to_peak(data: &[f64]) -> f64 {
     if data.is_empty() {
         return f64::NAN;
     }
-    let mut min_val = f64::INFINITY;
-    let mut max_val = f64::NEG_INFINITY;
-    for &x in data {
-        if x.is_nan() {
-            return f64::NAN;
+    // Serial scan: min/max via strict compare + any-NaN → NaN. This is the reference arm.
+    let serial = |d: &[f64]| -> (f64, f64, bool) {
+        let mut mn = f64::INFINITY;
+        let mut mx = f64::NEG_INFINITY;
+        let mut nan = false;
+        for &x in d {
+            if x.is_nan() {
+                nan = true;
+            }
+            if x < mn {
+                mn = x;
+            }
+            if x > mx {
+                mx = x;
+            }
         }
-        if x < min_val {
-            min_val = x;
-        }
-        if x > max_val {
-            max_val = x;
-        }
+        (mn, mx, nan)
+    };
+    let n = data.len();
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = if PTP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < 131_072 {
+        1
+    } else {
+        cores.min(n / 65_536).max(1)
+    };
+    let (min_val, max_val, saw_nan) = if nthreads <= 1 {
+        serial(data)
+    } else {
+        // Each chunk scans independently; min/max are associative and NaN is detected per
+        // chunk, so merging is BYTE-IDENTICAL to the serial scan (any NaN ⇒ NaN, else the
+        // same min/max — and `max - min` is invariant to which signed zero each holds).
+        let chunk = n.div_ceil(nthreads);
+        let serial = &serial;
+        let parts: Vec<(f64, f64, bool)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|c| scope.spawn(move || serial(c)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect()
+        });
+        parts.into_iter().fold(
+            (f64::INFINITY, f64::NEG_INFINITY, false),
+            |(amn, amx, anan), (mn, mx, nan)| (amn.min(mn), amx.max(mx), anan || nan),
+        )
+    };
+    if saw_nan {
+        return f64::NAN;
     }
     max_val - min_val
 }
