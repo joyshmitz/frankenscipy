@@ -4594,11 +4594,44 @@ pub fn sparse_transpose(a: &CsrMatrix) -> CsrMatrix {
     CsrMatrix::from_components_unchecked(Shape2D::new(cols, rows), t_data, t_indices, t_indptr)
 }
 
+/// When `true`, [`sparse_nnz`] counts serially (the ORIG behaviour); default `false` chunks the count
+/// across threads. Byte-identical.
+#[doc(hidden)]
+pub static SPARSE_NNZ_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Count the number of nonzero elements in a CSR matrix.
 ///
 /// Matches `scipy.sparse.csr_matrix.nnz`.
 pub fn sparse_nnz(a: &CsrMatrix) -> usize {
-    a.data().iter().filter(|&&v| v != 0.0).count()
+    // The stored-value count is an exact integer sum of an order-independent per-element predicate
+    // (`v != 0.0`), and integer addition is associative — so summing per-chunk counts equals the
+    // sequential count exactly. Fan it across threads for large nnz. `SPARSE_NNZ_FORCE_SERIAL` A/B.
+    let data = a.data();
+    let n = data.len();
+    let nthreads = if SPARSE_NNZ_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 65_536
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+    if nthreads <= 1 {
+        return data.iter().filter(|&&v| v != 0.0).count();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let parts: Vec<usize> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|c| scope.spawn(move || c.iter().filter(|&&v| v != 0.0).count()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("sparse_nnz chunk panicked"))
+            .collect()
+    });
+    parts.into_iter().sum()
 }
 
 /// Compute the density of a CSR matrix (fraction of nonzeros).
