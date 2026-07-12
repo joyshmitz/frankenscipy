@@ -49815,11 +49815,49 @@ pub fn cumprod(data: &[f64]) -> Vec<f64> {
 /// Compute differences between consecutive elements.
 ///
 /// Matches `numpy.diff`.
+/// When `true`, [`diff`] computes the first differences serially (the ORIG behaviour); default
+/// `false` fills the output in parallel for large inputs. Byte-identical. A/B knob.
+#[doc(hidden)]
+pub static DIFF_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn diff(data: &[f64]) -> Vec<f64> {
     if data.len() < 2 {
         return vec![];
     }
-    data.windows(2).map(|w| w[1] - w[0]).collect()
+    let m = data.len() - 1;
+    // Each `out[i] = data[i+1] - data[i]` is independent, so fill the output in parallel for large
+    // inputs — FILL-IN-PLACE via `chunks_mut` (not collect-then-concat), BYTE-IDENTICAL to
+    // `windows(2).map(..).collect()` (same values, index order). 800k/thread gate (light map).
+    const MIN_PER_THREAD: usize = 800_000;
+    let nthreads = if DIFF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || m < 2 * MIN_PER_THREAD
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(m / MIN_PER_THREAD)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return data.windows(2).map(|w| w[1] - w[0]).collect();
+    }
+    let mut out = vec![0.0f64; m];
+    let chunk = m.div_ceil(nthreads);
+    std::thread::scope(|scope| {
+        for (ci, block) in out.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (j, slot) in block.iter_mut().enumerate() {
+                    let i = base + j;
+                    *slot = data[i + 1] - data[i];
+                }
+            });
+        }
+    });
+    out
 }
 
 /// Return the index of the minimum value in the array.
