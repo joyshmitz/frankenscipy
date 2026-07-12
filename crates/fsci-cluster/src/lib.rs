@@ -5103,6 +5103,13 @@ pub fn cophenet(z: &[[f64; 4]]) -> Vec<f64> {
     condensed
 }
 
+/// When `true`, [`inconsistent`] computes its per-merge statistics serially (the ORIG behaviour);
+/// default `false` fans the independent per-merge subtree walks across step-chunks. Byte-identical.
+/// `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static INCONSISTENT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the inconsistency statistic for each merge.
 ///
 /// Matches `scipy.cluster.hierarchy.inconsistent`.
@@ -5114,18 +5121,21 @@ pub fn inconsistent(z: &[[f64; 4]], depth: usize) -> Vec<[f64; 4]> {
         return z.iter().map(|row| [row[2], 0.0, 1.0, 0.0]).collect();
     }
     let n = z.len() + 1;
-    let mut result = Vec::with_capacity(z.len());
+    let m = z.len();
 
-    for (step, row) in z.iter().enumerate() {
-        // Collect distances of all merges within `depth` levels below this merge
+    // Each output row `result[step]` is a pure function of `step`: it walks `depth` levels of the
+    // (read-only) linkage subtree below merge `n+step` via `collect_depths`, then reduces those
+    // distances to (mean, std, count, incon). No cross-step state — the merges are independent — so
+    // the loop fans across step-chunks. Every row is computed by the identical expression in the
+    // identical order → BYTE-IDENTICAL to the serial build. Gated on the merge count.
+    let stat = |step: usize| -> [f64; 4] {
         let mut dists = Vec::new();
         collect_depths(z, n + step, n, depth, &mut dists);
-
         let count = dists.len() as f64;
         let mean = if count > 0.0 {
             dists.iter().sum::<f64>() / count
         } else {
-            row[2]
+            z[step][2]
         };
         let std = if count > 1.0 {
             let var = dists.iter().map(|&d| (d - mean).powi(2)).sum::<f64>() / (count - 1.0);
@@ -5134,14 +5144,39 @@ pub fn inconsistent(z: &[[f64; 4]], depth: usize) -> Vec<[f64; 4]> {
             0.0
         };
         let incon = if std > 0.0 {
-            (row[2] - mean) / std
+            (z[step][2] - mean) / std
         } else {
             0.0
         };
+        [mean, std, count, incon]
+    };
 
-        result.push([mean, std, count, incon]);
+    let nthreads = if INCONSISTENT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || m < 4096
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(m)
+    };
+    if nthreads <= 1 {
+        return (0..m).map(stat).collect();
     }
-
+    let mut result = vec![[0.0f64; 4]; m];
+    let chunk = m.div_ceil(nthreads);
+    let stat_ref = &stat;
+    std::thread::scope(|scope| {
+        for (ci, block) in result.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in block.iter_mut().enumerate() {
+                    *slot = stat_ref(base + k);
+                }
+            });
+        }
+    });
     result
 }
 
