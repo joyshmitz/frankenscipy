@@ -4647,6 +4647,12 @@ fn has_invalid_paired_spectral_bins(magnitudes: &[f64], freqs: &[f64]) -> bool {
         .any(|(&m, &f)| !m.is_finite() || m < 0.0 || !f.is_finite())
 }
 
+/// When `true`, [`spectral_centroid`] runs its validity check, magnitude total and weighted sum as
+/// three separate passes (the ORIG behaviour); default `false` folds them into one pass. Byte-identical.
+#[doc(hidden)]
+pub static SPECTRAL_CENTROID_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the spectral centroid of a magnitude spectrum.
 ///
 /// Returns the weighted mean frequency.
@@ -4654,19 +4660,41 @@ pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
     if magnitudes.is_empty() || freqs.is_empty() {
         return 0.0;
     }
-    if has_invalid_paired_spectral_bins(magnitudes, freqs) {
+    // The paired-bin validity check, the magnitude total `Σm` and the weighted numerator `Σ(m·f)`
+    // are three INDEPENDENT reductions over the same (magnitudes, freqs) — fold them into ONE pass.
+    // BYTE-IDENTICAL: `total`/`wsum` keep their exact left-to-right `+=` order and `m * f` expression;
+    // an invalid bin still returns NaN and a zero total still returns 0.0, exactly as the original
+    // early-outs did (the accumulated sums are discarded on those paths).
+    if SPECTRAL_CENTROID_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if has_invalid_paired_spectral_bins(magnitudes, freqs) {
+            return f64::NAN;
+        }
+        let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
+        if total == 0.0 {
+            return 0.0;
+        }
+        return magnitudes
+            .iter()
+            .zip(freqs.iter())
+            .map(|(&m, &f)| m * f)
+            .sum::<f64>()
+            / total;
+    }
+    let mut total = 0.0f64;
+    let mut wsum = 0.0f64;
+    let mut valid = true;
+    for (&m, &f) in magnitudes.iter().zip(freqs.iter()) {
+        valid &= m.is_finite() && m >= 0.0 && f.is_finite();
+        total += m;
+        wsum += m * f;
+    }
+    if !valid {
         return f64::NAN;
     }
-    let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
     if total == 0.0 {
         return 0.0;
     }
-    magnitudes
-        .iter()
-        .zip(freqs.iter())
-        .map(|(&m, &f)| m * f)
-        .sum::<f64>()
-        / total
+    wsum / total
 }
 
 /// Compute the spectral rolloff frequency.
