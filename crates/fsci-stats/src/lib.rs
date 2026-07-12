@@ -45970,7 +45970,18 @@ pub fn zscore_ddof(data: &[f64], ddof: usize) -> Vec<f64> {
     if std == 0.0 {
         return vec![f64::NAN; data.len()];
     }
-    data.iter().map(|&x| (x - mean) / std).collect()
+    // Same output-map parallelisation as [`zscore`] (the ddof=0 sibling): `mean_std_ddof` is a serial
+    // float Σ, but `(x-mean)/std` is a per-element pure function of its index, so fan it across cores
+    // via the order-preserving `par_continuous_map_min` — BYTE-IDENTICAL to `iter().map(..).collect()`.
+    // Shares [`ZSCORE_FORCE_SERIAL`]. (Previously `zscore_ddof` stayed serial while `zscore` did not.)
+    // 800k/thread: the map is LIGHT (a subtract + divide), so keep arrays below ~1.6M serial to avoid
+    // thread-spawn over-subscription (a 1M zscore is ~1.5ms — 10 threads there REGRESS it); at n≥8M the
+    // core count still saturates, so the large-array win is unaffected.
+    if ZSCORE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| (x - mean) / std).collect()
+    } else {
+        par_continuous_map_min(data, 800_000, move |x| (x - mean) / std)
+    }
 }
 
 /// Compute the expected value of the order statistic for the normal distribution.
