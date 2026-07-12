@@ -34042,6 +34042,13 @@ pub fn zscore(data: &[f64]) -> Vec<f64> {
     data.iter().map(|&x| (x - mean_val) / std_val).collect()
 }
 
+/// When `true`, [`zscore_weighted`] runs its weights finite-check, `Σw` and the weighted-mean sum as
+/// separate passes (the ORIG behaviour); default `false` folds all three into one pass over
+/// (data, weights). Byte-identical.
+#[doc(hidden)]
+pub static ZSCORE_W_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute weighted z-scores: (x - weighted_mean) / weighted_std.
 ///
 /// Matches `scipy.stats.zscore` with weights parameter.
@@ -34049,14 +34056,39 @@ pub fn zscore_weighted(data: &[f64], weights: &[f64]) -> Vec<f64> {
     if data.is_empty() || data.len() != weights.len() {
         return vec![f64::NAN; data.len()];
     }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-        return vec![f64::NAN; data.len()];
-    }
-    let total_w: f64 = weights.iter().sum();
-    if total_w <= 0.0 {
-        return vec![f64::NAN; data.len()];
-    }
-    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    // BYTE-IDENTICAL fusion: the finite/non-negative check, `Σw`, and the weighted-mean numerator
+    // `Σw·x` are three INDEPENDENT reductions over the input — compute them in ONE pass. Each Σ keeps
+    // its exact left-to-right order and `w * x` expression; a bad weight still returns the NaN vector
+    // (the polluted sums discarded exactly as the original early-out discarded them). The `var` pass
+    // stays separate — it depends on the mean.
+    let (total_w, sum_wx) = if ZSCORE_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+            return vec![f64::NAN; data.len()];
+        }
+        let total_w: f64 = weights.iter().sum();
+        if total_w <= 0.0 {
+            return vec![f64::NAN; data.len()];
+        }
+        let sum_wx: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>();
+        (total_w, sum_wx)
+    } else {
+        let mut total_w = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        let mut valid = true;
+        for (&x, &w) in data.iter().zip(weights) {
+            valid &= w.is_finite() && w >= 0.0;
+            total_w += w;
+            sum_wx += w * x;
+        }
+        if !valid {
+            return vec![f64::NAN; data.len()];
+        }
+        if total_w <= 0.0 {
+            return vec![f64::NAN; data.len()];
+        }
+        (total_w, sum_wx)
+    };
+    let mean_val: f64 = sum_wx / total_w;
     let var: f64 = data
         .iter()
         .zip(weights)
