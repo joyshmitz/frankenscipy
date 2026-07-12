@@ -44144,6 +44144,13 @@ pub fn yule_y(table: &[[f64; 2]; 2]) -> f64 {
 // Additional Statistical Functions
 // ══════════════════════════════════════════════════════════════════════
 
+/// When `true`, [`sign_test`] materializes the `x−y` differences into a `Vec` then counts
+/// positives/negatives in two passes (the ORIG behaviour); default `false` counts both in one
+/// alloc-free zip pass. Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static SIGN_TEST_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the sign test for a paired sample.
 ///
 /// Tests whether the median of differences is zero.
@@ -44154,9 +44161,29 @@ pub fn sign_test(x: &[f64], y: &[f64]) -> Result<TtestResult, StatsError> {
         ));
     }
 
-    let diffs: Vec<f64> = x.iter().zip(y.iter()).map(|(&a, &b)| a - b).collect();
-    let n_pos = diffs.iter().filter(|&&d| d > 0.0).count();
-    let n_neg = diffs.iter().filter(|&&d| d < 0.0).count();
+    // Count positive and negative x−y differences in ONE zip pass, without materializing the
+    // `diffs` Vec. BYTE-IDENTICAL: the counts are exact integers, order-independent; each
+    // `d = a − b` is the same value, and `d > 0` / `d < 0` are mutually exclusive (ties, d==0,
+    // are excluded by both — matching the two separate `filter` counts).
+    let (n_pos, n_neg) = if SIGN_TEST_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let diffs: Vec<f64> = x.iter().zip(y.iter()).map(|(&a, &b)| a - b).collect();
+        (
+            diffs.iter().filter(|&&d| d > 0.0).count(),
+            diffs.iter().filter(|&&d| d < 0.0).count(),
+        )
+    } else {
+        let mut n_pos = 0usize;
+        let mut n_neg = 0usize;
+        for (&a, &b) in x.iter().zip(y.iter()) {
+            let d = a - b;
+            if d > 0.0 {
+                n_pos += 1;
+            } else if d < 0.0 {
+                n_neg += 1;
+            }
+        }
+        (n_pos, n_neg)
+    };
     let n = n_pos + n_neg; // exclude ties
 
     if n == 0 {
