@@ -4530,18 +4530,19 @@ pub fn sparse_norm(a: &CsrMatrix, kind: &str) -> f64 {
 /// Matches `scipy.sparse.csr_matrix.diagonal()`.
 pub fn sparse_diagonal(a: &CsrMatrix) -> Vec<f64> {
     let n = a.shape().rows.min(a.shape().cols);
-    let mut diag = vec![0.0; n];
-    for (i, d) in diag.iter_mut().enumerate().take(n) {
+    // Each `diag[i]` is the first stored entry of row `i` at column `i` (else 0.0) — a pure function
+    // of row `i`, independent of the others, so the per-row searches fan across index-chunks.
+    // Returning on first match reproduces the serial `break` exactly → BYTE-IDENTICAL.
+    sparse_par_index_map(n, a.data().len(), |i| {
         let start = a.indptr()[i];
         let end = a.indptr()[i + 1];
         for idx in start..end {
             if a.indices()[idx] == i {
-                *d = a.data()[idx];
-                break;
+                return a.data()[idx];
             }
         }
-    }
-    diag
+        0.0
+    })
 }
 
 /// Compute the trace of a CSR matrix (sum of diagonal elements).
@@ -5999,16 +6000,16 @@ pub fn sparse_col_sums(a: &CsrMatrix) -> Vec<f64> {
 pub static SPARSE_ROW_MINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// Fill `out[i] = row_of(i)` for `i in 0..a.shape().rows`, parallelized across row-chunks. BYTE-
-/// IDENTICAL to `(0..n).map(row_of).collect()`: each output element is a pure function of its row
-/// index, written to a disjoint slot in ascending order. Gated on stored-nnz work.
-fn sparse_par_row_map<F>(a: &CsrMatrix, row_of: F) -> Vec<f64>
+/// Fill `out[i] = f(i)` for `i in 0..n`, parallelized across index-chunks once `work` (stored-nnz)
+/// is large enough. BYTE-IDENTICAL to `(0..n).map(f).collect()`: each output element is a pure
+/// function of its index, written to a disjoint slot in ascending order. Shares the
+/// [`SPARSE_ROW_MINMAX_FORCE_SERIAL`] toggle.
+fn sparse_par_index_map<F>(n: usize, work: usize, f: F) -> Vec<f64>
 where
     F: Fn(usize) -> f64 + Sync,
 {
-    let n = a.shape().rows;
     let nthreads = if SPARSE_ROW_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || a.data().len() < 65_536
+        || work < 65_536
         || n < 2
     {
         1
@@ -6019,22 +6020,31 @@ where
             .min(n)
     };
     if nthreads <= 1 {
-        return (0..n).map(&row_of).collect();
+        return (0..n).map(&f).collect();
     }
     let chunk = n.div_ceil(nthreads);
     let mut out = vec![0.0f64; n];
-    let row_ref = &row_of;
+    let f_ref = &f;
     std::thread::scope(|scope| {
         for (ci, block) in out.chunks_mut(chunk).enumerate() {
             let base = ci * chunk;
             scope.spawn(move || {
                 for (k, slot) in block.iter_mut().enumerate() {
-                    *slot = row_ref(base + k);
+                    *slot = f_ref(base + k);
                 }
             });
         }
     });
     out
+}
+
+/// Fill `out[i] = row_of(i)` for `i in 0..a.shape().rows`, parallelized across row-chunks. BYTE-
+/// IDENTICAL to `(0..n).map(row_of).collect()`. Thin wrapper over [`sparse_par_index_map`].
+fn sparse_par_row_map<F>(a: &CsrMatrix, row_of: F) -> Vec<f64>
+where
+    F: Fn(usize) -> f64 + Sync,
+{
+    sparse_par_index_map(a.shape().rows, a.data().len(), row_of)
 }
 
 pub fn sparse_row_max(a: &CsrMatrix) -> Vec<f64> {
