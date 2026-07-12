@@ -25829,6 +25829,12 @@ pub fn nanmedian(data: &[f64]) -> f64 {
     median_in_place(&mut valid)
 }
 
+/// When `true`, [`nanquantile`] fully sorts the filtered values (the ORIG behaviour); default
+/// `false` quickselects each quantile's rank(s) when few relative to log2(n). Byte-identical.
+#[doc(hidden)]
+pub static NANQUANTILE_FORCE_SORT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute quantiles ignoring NaN values.
 ///
 /// Matches `numpy.nanquantile`.
@@ -25837,22 +25843,40 @@ pub fn nanquantile(data: &[f64], q: &[f64]) -> Vec<f64> {
     if valid.is_empty() {
         return vec![f64::NAN; q.len()];
     }
-    valid.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = valid.len();
-    q.iter()
-        .map(|&qi| {
-            let qi = qi.clamp(0.0, 1.0);
-            let idx = qi * (n - 1) as f64;
-            let lo = idx.floor() as usize;
-            let hi = idx.ceil() as usize;
-            let frac = idx - lo as f64;
-            if lo == hi || hi >= n {
-                valid[lo.min(n - 1)]
+    // Each quantile reads only 1-2 order statistics, so when there are few of them relative
+    // to log2(n) it is cheaper to `select_ranks` (partition, O(n)) per quantile on the shared
+    // buffer than to fully sort once (O(n log n)). Both paths are BYTE-IDENTICAL — the k-th
+    // order statistic (and the linear interpolation) is the same whether read from a fully
+    // sorted array or partitioned out. `NANQUANTILE_FORCE_SORT` pins the full-sort path.
+    let use_sort = NANQUANTILE_FORCE_SORT.load(std::sync::atomic::Ordering::Relaxed)
+        || (q.len() as f64) >= (n as f64).log2().max(1.0);
+    if use_sort {
+        valid.sort_unstable_by(|a, b| a.total_cmp(b));
+    }
+    let mut out = Vec::with_capacity(q.len());
+    for &qi in q {
+        let qi = qi.clamp(0.0, 1.0);
+        let idx = qi * (n - 1) as f64;
+        let lo = idx.floor() as usize;
+        let hi = idx.ceil() as usize;
+        let frac = idx - lo as f64;
+        let v = if lo == hi || hi >= n {
+            let r = lo.min(n - 1);
+            if use_sort {
+                valid[r]
             } else {
-                valid[lo] * (1.0 - frac) + valid[hi] * frac
+                select_ranks(&mut valid, r, r).0
             }
-        })
-        .collect()
+        } else if use_sort {
+            valid[lo] * (1.0 - frac) + valid[hi] * frac
+        } else {
+            let (v_lo, v_hi) = select_ranks(&mut valid, lo, hi);
+            v_lo * (1.0 - frac) + v_hi * frac
+        };
+        out.push(v);
+    }
+    out
 }
 
 /// Compute percentile ignoring NaN values.
