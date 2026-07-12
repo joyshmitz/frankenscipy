@@ -48962,6 +48962,15 @@ pub fn excess_kurtosis(data: &[f64]) -> f64 {
 pub static COV_MATRIX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`cov_matrix`] builds its transposed centered per-variable series SERIALLY (the
+/// ORIG behaviour, a strided gather that was the residual serial pass capping the end-to-end
+/// speedup); default `false` fans the independent columns across cores. Byte-identical (each cell
+/// `xt[v][obs] = data[obs][v] - means[v]` written once, value independent of build order).
+/// `#[doc(hidden)]` — the A/B knob.
+#[doc(hidden)]
+pub static COV_MATRIX_TRANSPOSE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn cov_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let n = data.len();
     if n < 2 {
@@ -49012,11 +49021,46 @@ pub fn cov_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
     // turns each entry into a streamed dot (cache-friendly, auto-vectorisable) and
     // makes the output rows independent — they fan out across threads. The values
     // and summation order are unchanged, so the result is bit-identical.
+    // The `d` centered per-variable series are independent Vecs (each cell written once, value
+    // independent of build order), so they fan across threads BYTE-IDENTICALLY. The per-column
+    // gather `data[obs][v]` strides across the row-major input, so this serial pass is
+    // cache-thrashing and — with the dot-fill below already parallel — is the residual serial cost
+    // that caps the end-to-end speedup; parallelising it recovers that.
     let mut xt = vec![vec![0.0f64; n]; d];
-    for (obs, row) in data.iter().enumerate() {
-        for v in 0..d {
-            xt[v][obs] = row[v] - means[v];
+    let build_col = |v: usize, col: &mut [f64]| {
+        let mv = means[v];
+        for (obs, slot) in col.iter_mut().enumerate() {
+            *slot = data[obs][v] - mv;
         }
+    };
+    let t_nthreads = if COV_MATRIX_TRANSPOSE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || work < 1 << 22
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(d)
+            .max(1)
+    };
+    if t_nthreads <= 1 {
+        for (v, col) in xt.iter_mut().enumerate() {
+            build_col(v, col);
+        }
+    } else {
+        let chunk = d.div_ceil(t_nthreads);
+        let build_col = &build_col;
+        std::thread::scope(|scope| {
+            for (ci, block) in xt.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (lv, col) in block.iter_mut().enumerate() {
+                        build_col(base + lv, col);
+                    }
+                });
+            }
+        });
     }
     let denom = (n - 1) as f64;
     let mut cov = vec![vec![0.0f64; d]; d];
