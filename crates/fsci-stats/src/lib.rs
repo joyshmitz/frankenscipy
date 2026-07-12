@@ -25882,15 +25882,23 @@ pub fn nanzscore(data: &[f64]) -> Vec<f64> {
         return vec![f64::NAN; data.len()];
     }
 
-    data.iter()
-        .map(|&x| {
+    // The NaN-aware `(x-mean)/std` output map over the full `data` is the dominant pass and is a
+    // per-element pure function of its index, so fan it across cores via the order-preserving
+    // `par_continuous_map_min` — BYTE-IDENTICAL to `iter().map(..).collect()` (NaNs still pass through,
+    // same index order). Shares [`ZSCORE_FORCE_SERIAL`]; 800k gate keeps small arrays serial.
+    if ZSCORE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter()
+            .map(|&x| if x.is_nan() { f64::NAN } else { (x - mean) / std })
+            .collect()
+    } else {
+        par_continuous_map_min(data, 800_000, move |x| {
             if x.is_nan() {
                 f64::NAN
             } else {
                 (x - mean) / std
             }
         })
-        .collect()
+    }
 }
 
 /// Compute NaN-aware sum.
