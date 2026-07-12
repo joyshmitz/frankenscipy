@@ -5038,16 +5038,52 @@ pub fn deemphasis(x: &[f64], coeff: f64) -> Vec<f64> {
 /// Frame a signal into overlapping windows.
 ///
 /// Returns frames of length `frame_len` with `hop_len` stride.
+/// When `true`, [`frame_signal`] copies its frames serially (the ORIG behaviour); default `false`
+/// fans the independent per-frame window copies across cores. Byte-identical. `#[doc(hidden)]` — the
+/// same-binary A/B knob.
+#[doc(hidden)]
+pub static FRAME_SIGNAL_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>> {
     if frame_len == 0 || hop_len == 0 || x.len() < frame_len {
         return vec![];
     }
-    let mut frames = Vec::new();
-    let mut start = 0;
-    while start + frame_len <= x.len() {
-        frames.push(x[start..start + frame_len].to_vec());
-        start += hop_len;
+    // Frame `f` (start = f·hop) is a verbatim copy of `x[start..start+frame_len]` — a pure function
+    // of its own index, independent of every other frame — so fanning the copies (and their per-
+    // frame Vec allocations) across cores is BYTE-IDENTICAL. Gated on total copied-sample work.
+    let n_frames = (x.len() - frame_len) / hop_len + 1;
+    let frame_at = |f: usize| -> Vec<f64> {
+        let start = f * hop_len;
+        x[start..start + frame_len].to_vec()
+    };
+    let nthreads = if FRAME_SIGNAL_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n_frames < 2
+        || n_frames.saturating_mul(frame_len) < 65_536
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n_frames)
+    };
+    if nthreads <= 1 {
+        return (0..n_frames).map(frame_at).collect();
     }
+    let mut frames: Vec<Vec<f64>> = vec![Vec::new(); n_frames];
+    let chunk = n_frames.div_ceil(nthreads);
+    let fref = &frame_at;
+    std::thread::scope(|scope| {
+        for (ci, block) in frames.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in block.iter_mut().enumerate() {
+                    *slot = fref(base + k);
+                }
+            });
+        }
+    });
     frames
 }
 
