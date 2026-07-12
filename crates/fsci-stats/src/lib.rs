@@ -34153,6 +34153,13 @@ pub fn variation(data: &[f64]) -> f64 {
     var.sqrt() / mean_val
 }
 
+/// When `true`, [`variation_weighted`] runs its weights finite-check, `Σw` and the weighted-mean sum
+/// as separate passes (the ORIG behaviour); default `false` folds all three into one pass over
+/// (data, weights). Byte-identical.
+#[doc(hidden)]
+pub static VARIATION_W_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Weighted coefficient of variation (weighted std / weighted mean).
 ///
 /// Matches `scipy.stats.variation` with weights parameter.
@@ -34160,14 +34167,39 @@ pub fn variation_weighted(data: &[f64], weights: &[f64]) -> f64 {
     if data.len() < 2 || data.len() != weights.len() {
         return f64::NAN;
     }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-        return f64::NAN;
-    }
-    let total_w: f64 = weights.iter().sum();
-    if total_w <= 0.0 {
-        return f64::NAN;
-    }
-    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    // BYTE-IDENTICAL fusion: the weights finite/non-negative check, `Σw`, and the weighted-mean
+    // numerator `Σw·x` are three INDEPENDENT reductions — fold them into ONE pass. Each Σ keeps its
+    // left-to-right order and `w * x` expression; a bad weight still returns NaN (polluted sums
+    // discarded exactly as the original early-out did). The `var` pass depends on the mean.
+    let (total_w, mean_val) =
+        if VARIATION_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+                return f64::NAN;
+            }
+            let total_w: f64 = weights.iter().sum();
+            if total_w <= 0.0 {
+                return f64::NAN;
+            }
+            let mean_val: f64 =
+                data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+            (total_w, mean_val)
+        } else {
+            let mut total_w = 0.0f64;
+            let mut sum_wx = 0.0f64;
+            let mut valid = true;
+            for (&x, &w) in data.iter().zip(weights) {
+                valid &= w.is_finite() && w >= 0.0;
+                total_w += w;
+                sum_wx += w * x;
+            }
+            if !valid {
+                return f64::NAN;
+            }
+            if total_w <= 0.0 {
+                return f64::NAN;
+            }
+            (total_w, sum_wx / total_w)
+        };
     if mean_val == 0.0 {
         return f64::NAN;
     }
