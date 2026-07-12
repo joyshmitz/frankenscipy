@@ -42997,6 +42997,12 @@ pub fn cochrans_q(data: &[Vec<u8>]) -> CochranQResult {
     }
 }
 
+/// When `true`, [`power_divergence`] runs the f_obs / f_exp finite-checks and their sums as separate
+/// passes (the ORIG behaviour); default `false` folds each check into its sum pass. Byte-identical.
+#[doc(hidden)]
+pub static POWER_DIV_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Power divergence statistic and test.
 ///
 /// Computes the power divergence statistic for testing whether observed
@@ -43016,12 +43022,26 @@ pub fn power_divergence(f_obs: &[f64], f_exp: Option<&[f64]>, lambda_: f64) -> (
     if n < 2 {
         return (f64::NAN, f64::NAN);
     }
-    if f_obs.iter().any(|&value| !value.is_finite() || value < 0.0) {
-        return (f64::NAN, f64::NAN);
-    }
-
-    // Default expected: uniform
-    let total: f64 = f_obs.iter().sum();
+    // Fold the f_obs finite/non-negative check into the `Σf_obs` pass (both all-light reductions).
+    // BYTE-IDENTICAL: `total` keeps its left-to-right `+=` order and a bad frequency still returns
+    // (NaN, NaN), exactly as the original early-out did.
+    let total: f64 = if POWER_DIV_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if f_obs.iter().any(|&value| !value.is_finite() || value < 0.0) {
+            return (f64::NAN, f64::NAN);
+        }
+        f_obs.iter().sum()
+    } else {
+        let mut total = 0.0f64;
+        let mut valid = true;
+        for &value in f_obs {
+            valid &= value.is_finite() && value >= 0.0;
+            total += value;
+        }
+        if !valid {
+            return (f64::NAN, f64::NAN);
+        }
+        total
+    };
     if !total.is_finite() || total <= 0.0 {
         return (f64::NAN, f64::NAN);
     }
@@ -43032,10 +43052,24 @@ pub fn power_divergence(f_obs: &[f64], f_exp: Option<&[f64]>, lambda_: f64) -> (
     if exp.len() != n {
         return (f64::NAN, f64::NAN);
     }
-    if exp.iter().any(|&value| !value.is_finite() || value < 0.0) {
-        return (f64::NAN, f64::NAN);
-    }
-    let exp_total: f64 = exp.iter().sum();
+    // Same fold for the expected frequencies: finite/non-negative check + `Σexp` in one pass.
+    let exp_total: f64 = if POWER_DIV_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if exp.iter().any(|&value| !value.is_finite() || value < 0.0) {
+            return (f64::NAN, f64::NAN);
+        }
+        exp.iter().sum()
+    } else {
+        let mut exp_total = 0.0f64;
+        let mut valid = true;
+        for &value in exp {
+            valid &= value.is_finite() && value >= 0.0;
+            exp_total += value;
+        }
+        if !valid {
+            return (f64::NAN, f64::NAN);
+        }
+        exp_total
+    };
     let rel_tol = f64::EPSILON.sqrt();
     let scale = total.abs().max(exp_total.abs()).max(1.0);
     if (total - exp_total).abs() > rel_tol * scale {
