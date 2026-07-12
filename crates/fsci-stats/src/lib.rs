@@ -34678,26 +34678,76 @@ pub fn tsem(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
 /// * `inclusive` - If true, values equal to limit are included
 ///
 /// # Returns
+/// When `true`, [`tmin`]/[`tmax`] materialize the filtered `Vec` then fold serially (the
+/// ORIG behaviour); default `false` folds inline (no alloc) and fans across cores above the
+/// work gate. Byte-identical.
+#[doc(hidden)]
+pub static TMINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Fold `reduce` over the elements of `data` that satisfy `keep`, WITHOUT materializing a
+/// filtered `Vec`, fanning across cores above the work gate. Returns `None` if nothing is
+/// kept. BYTE-IDENTICAL to `data.iter().copied().filter(keep).fold(ident, reduce)`: the kept
+/// set and its data order are unchanged, and `f64::min`/`f64::max` are associative with a
+/// total order over signed zeros, so the chunk-then-merge equals the serial left fold.
+fn par_filter_fold<F>(data: &[f64], ident: f64, keep: F, reduce: fn(f64, f64) -> f64) -> Option<f64>
+where
+    F: Fn(f64) -> bool + Sync,
+{
+    let n = data.len();
+    let scan = |d: &[f64]| -> (f64, bool) {
+        let mut acc = ident;
+        let mut any = false;
+        for &x in d {
+            if keep(x) {
+                acc = reduce(acc, x);
+                any = true;
+            }
+        }
+        (acc, any)
+    };
+    let nthreads = if TMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 131_072
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 65_536)
+            .max(1)
+    };
+    let (acc, any) = if nthreads <= 1 {
+        scan(data)
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let scan = &scan;
+        let parts: Vec<(f64, bool)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|c| scope.spawn(move || scan(c)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect()
+        });
+        parts
+            .into_iter()
+            .fold((ident, false), |(a, aa), (b, ab)| (reduce(a, b), aa || ab))
+    };
+    if any { Some(acc) } else { None }
+}
+
 /// The trimmed minimum, or NaN if no values remain.
 pub fn tmin(data: &[f64], lowerlimit: f64, inclusive: bool) -> f64 {
-    let filtered: Vec<f64> = data
-        .iter()
-        .copied()
-        .filter(|&x| {
-            x.is_finite()
-                && if inclusive {
-                    x >= lowerlimit
-                } else {
-                    x > lowerlimit
-                }
-        })
-        .collect();
-
-    if filtered.is_empty() {
-        return f64::NAN;
+    let keep = |x: f64| x.is_finite() && if inclusive { x >= lowerlimit } else { x > lowerlimit };
+    if TMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let filtered: Vec<f64> = data.iter().copied().filter(|&x| keep(x)).collect();
+        if filtered.is_empty() {
+            return f64::NAN;
+        }
+        return filtered.iter().copied().fold(f64::INFINITY, f64::min);
     }
-
-    filtered.iter().copied().fold(f64::INFINITY, f64::min)
+    par_filter_fold(data, f64::INFINITY, keep, f64::min).unwrap_or(f64::NAN)
 }
 
 /// Compute the trimmed maximum.
@@ -34714,24 +34764,15 @@ pub fn tmin(data: &[f64], lowerlimit: f64, inclusive: bool) -> f64 {
 /// # Returns
 /// The trimmed maximum, or NaN if no values remain.
 pub fn tmax(data: &[f64], upperlimit: f64, inclusive: bool) -> f64 {
-    let filtered: Vec<f64> = data
-        .iter()
-        .copied()
-        .filter(|&x| {
-            x.is_finite()
-                && if inclusive {
-                    x <= upperlimit
-                } else {
-                    x < upperlimit
-                }
-        })
-        .collect();
-
-    if filtered.is_empty() {
-        return f64::NAN;
+    let keep = |x: f64| x.is_finite() && if inclusive { x <= upperlimit } else { x < upperlimit };
+    if TMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let filtered: Vec<f64> = data.iter().copied().filter(|&x| keep(x)).collect();
+        if filtered.is_empty() {
+            return f64::NAN;
+        }
+        return filtered.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     }
-
-    filtered.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+    par_filter_fold(data, f64::NEG_INFINITY, keep, f64::max).unwrap_or(f64::NAN)
 }
 
 /// Compute the expectile at a given alpha level.
