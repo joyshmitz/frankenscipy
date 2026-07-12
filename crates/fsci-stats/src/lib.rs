@@ -32410,11 +32410,52 @@ pub fn sobol_indices(
 /// Interquartile range (IQR = Q3 - Q1).
 ///
 /// Matches `scipy.stats.iqr(a)`.
+/// When `true`, [`iqr`] computes Q3 and Q1 with two independent `quantile_select`
+/// calls (the ORIG: two buffer copies + two full quickselects). When `false`
+/// (default) it shares ONE buffer and restricts Q1's search to the prefix Q3 already
+/// partitioned. Byte-identical either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static IQR_HOIST_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn iqr(data: &[f64]) -> f64 {
     if data.is_empty() || data.iter().any(|v| v.is_nan()) {
         return f64::NAN;
     }
-    quantile_select(data, 0.75) - quantile_select(data, 0.25)
+    if IQR_HOIST_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return quantile_select(data, 0.75) - quantile_select(data, 0.25);
+    }
+    let n = data.len();
+    if n == 1 {
+        return 0.0; // quantile_select(_, q) == data[0] for n==1, so Q3 - Q1 == 0
+    }
+    // Q3 and Q1 from ONE buffer instead of two independent `quantile_select` copies.
+    // Selecting Q3 first partitions `buf` so `buf[..=hi3]` holds the smallest `hi3+1`
+    // elements (ranks 0..=hi3); Q1's ranks (lo1 <= hi1 <= hi3) lie in that prefix, so
+    // its quickselect scans only ~0.75n elements. BYTE-IDENTICAL to two `quantile_select`
+    // calls: each order statistic and the linear interpolation are unchanged.
+    let idx = |q: f64| {
+        let pos = q * (n - 1) as f64;
+        let lo = pos.floor() as usize;
+        let hi = pos.ceil() as usize;
+        (lo, hi, pos - lo as f64)
+    };
+    let (lo3, hi3, frac3) = idx(0.75);
+    let (lo1, hi1, frac1) = idx(0.25);
+    let mut buf = data.to_vec();
+    let (v_lo3, v_hi3) = select_ranks(&mut buf, lo3, hi3);
+    let q3 = if lo3 == hi3 {
+        v_lo3
+    } else {
+        v_lo3 * (1.0 - frac3) + v_hi3 * frac3
+    };
+    let (v_lo1, v_hi1) = select_ranks(&mut buf[..=hi3], lo1, hi1);
+    let q1 = if lo1 == hi1 {
+        v_lo1
+    } else {
+        v_lo1 * (1.0 - frac1) + v_hi1 * frac1
+    };
+    q3 - q1
 }
 
 /// Weighted interquartile range (IQR = Q3 - Q1).
