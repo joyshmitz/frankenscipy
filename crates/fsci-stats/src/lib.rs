@@ -34195,7 +34195,16 @@ pub fn percentile_weighted(data: &[f64], q: f64, weights: &[f64]) -> f64 {
 ///   - `"strict"`: Percentage of values <= score
 ///   - `"mean"`: Average of weak and strict
 ///
+/// When `true`, [`percentileofscore`] counts `< score` and `<= score` in two separate passes
+/// (the ORIG behaviour); default `false` counts both in one pass. Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static PERCENTILEOFSCORE_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Matches `scipy.stats.percentileofscore(a, score, kind)`.
+///
+/// When [`PERCENTILEOFSCORE_FUSE_DISABLE`] is `true`, the `<`/`<=` counts run as two separate
+/// passes (the ORIG behaviour); default `false` counts both in one pass. Byte-identical.
 pub fn percentileofscore(data: &[f64], score: f64, kind: Option<&str>) -> f64 {
     if data.is_empty() {
         return f64::NAN;
@@ -34213,8 +34222,28 @@ pub fn percentileofscore(data: &[f64], score: f64, kind: Option<&str>) -> f64 {
     //   weak  = right * 100 / n            (% values <= score)
     //   strict= left * 100 / n             (% values < score)
     //   mean  = (left + right) * 50 / n    (avg of weak and strict)
-    let left = data.iter().filter(|&&x| x < score).count() as f64;
-    let right = data.iter().filter(|&&x| x <= score).count() as f64;
+    // `left = count(< score)` and `right = count(<= score)` are two independent traversals;
+    // count both in ONE pass. BYTE-IDENTICAL: the counts are exact integers, independent of
+    // order, and every `x < score` also satisfies `x <= score`.
+    let (left, right) = if PERCENTILEOFSCORE_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        (
+            data.iter().filter(|&&x| x < score).count() as f64,
+            data.iter().filter(|&&x| x <= score).count() as f64,
+        )
+    } else {
+        let mut l = 0usize;
+        let mut r = 0usize;
+        for &x in data {
+            if x <= score {
+                r += 1;
+                if x < score {
+                    l += 1;
+                }
+            }
+        }
+        (l as f64, r as f64)
+    };
     let plus1: f64 = if left < right { 1.0 } else { 0.0 };
     match kind {
         "rank" => (left + right + plus1) * 50.0 / n,
