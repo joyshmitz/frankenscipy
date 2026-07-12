@@ -20467,3 +20467,21 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   unchanged; `rustfmt --check`, `git diff --check`, and targeted UBS passed. Two `ovh-b` attempts failed closed on a
   worker-side `num-traits` `SIGILL`; no local Cargo fallback was used. Keep the `validate_tol_audit_fingerprint_ab`
   seam as the regression witness.
+
+## 2026-07-12 - cod - KEEP arrayapi rank-2 C-order unit slicing bulk copy (1.605x)
+
+- Negative-ledger-first selection found no prior `basic_getitem` or unit-step slicing result. The stored arrayapi
+  profile ranked `arrayapi_indexing/getitem_basic/10000` as the leading residual, but its historical 37-83 us spread
+  used different workers/flags and was treated only as routing evidence, not a live acceptance baseline.
+- Strict-remote baseline on pinned worker `vmi1293453`, C-order `[10000,4]` with all rows and columns `1..3`, was
+  `[42.003, 43.312, 44.406]` us. The path materialized row/column index vectors, then selected every value through a
+  per-element memory-order branch even though both slices were contiguous.
+- ONE rank-2 fast path handles exact C order with both steps equal to one. It preserves row-then-column endpoint
+  validation, normalizes the same strict/hardened unit-step bounds without index vectors, and bulk-copies each row's
+  contiguous column span. Rank 1, F/A/K order, negative/non-unit steps, and the generic scalar gather are unchanged.
+- Same-worker release-perf re-benchmark measured `[26.061, 26.984, 28.199]` us: a centered **1.605x** speedup.
+  Criterion reported **-36.433%**, `p=0.00`.
+- Exact proof passed 2/2 remotely. The new scalar-reference test covers full, partial, negative-endpoint, strict-clamp,
+  empty-row, and empty-column slices; compares copied `f64` payloads by bits including NaN and `-0.0`; and proves a
+  hardened invalid column is still checked after an empty row slice. `rustfmt --check`, `git diff --check`, and
+  targeted UBS passed. All Cargo benchmark/test commands were strict remote-only.

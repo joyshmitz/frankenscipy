@@ -1199,6 +1199,40 @@ fn basic_slice_indices(
     Ok(out)
 }
 
+fn basic_unit_slice_bounds(
+    spec: &SliceSpec,
+    len: usize,
+    mode: ExecutionMode,
+) -> ArrayApiResult<(usize, usize)> {
+    debug_assert_eq!(spec.step, 1);
+    let len_i = len as isize;
+    if mode == ExecutionMode::Hardened {
+        for endpoint in [spec.start, spec.stop] {
+            if let Some(value) = endpoint
+                && (value < -len_i || value > len_i)
+            {
+                return Err(ArrayApiError::new(
+                    ArrayApiErrorKind::InvalidIndex,
+                    "slice bounds out of range in hardened mode",
+                ));
+            }
+        }
+    }
+
+    let mut start = spec.start.unwrap_or(0);
+    let mut stop = spec.stop.unwrap_or(len_i);
+    if start < 0 {
+        start += len_i;
+    }
+    if stop < 0 && spec.stop.is_some() {
+        stop += len_i;
+    }
+    start = start.clamp(0, len_i);
+    stop = stop.clamp(0, len_i);
+    let end = stop.max(start);
+    Ok((start as usize, end as usize))
+}
+
 fn basic_getitem(
     array: &CoreArray,
     slices: &[SliceSpec],
@@ -1230,6 +1264,26 @@ fn basic_getitem(
                     ArrayApiErrorKind::InvalidIndex,
                     "2D indexing requires two slices",
                 ));
+            }
+            if array.order == MemoryOrder::C && slices[0].step == 1 && slices[1].step == 1 {
+                let (row_start, row_end) =
+                    basic_unit_slice_bounds(&slices[0], array.shape.dims[0], mode)?;
+                let (col_start, col_end) =
+                    basic_unit_slice_bounds(&slices[1], array.shape.dims[1], mode)?;
+                let row_count = row_end - row_start;
+                let col_count = col_end - col_start;
+                let ncols = array.shape.dims[1];
+                let mut values = Vec::with_capacity(row_count.saturating_mul(col_count));
+                for row in row_start..row_end {
+                    let start = row * ncols + col_start;
+                    values.extend_from_slice(&array.values[start..start + col_count]);
+                }
+                return Ok(CoreArray {
+                    shape: Shape::new(vec![row_count, col_count]),
+                    dtype: array.dtype,
+                    values,
+                    order: MemoryOrder::C,
+                });
             }
             let rows = basic_slice_indices(&slices[0], array.shape.dims[0], mode)?;
             let cols = basic_slice_indices(&slices[1], array.shape.dims[1], mode)?;
@@ -1319,6 +1373,28 @@ mod tests {
     use proptest::prelude::*;
     use serde::Serialize;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn basic_getitem_scalar_reference(
+        array: &CoreArray,
+        slices: &[SliceSpec],
+        mode: ExecutionMode,
+    ) -> ArrayApiResult<CoreArray> {
+        let rows = basic_slice_indices(&slices[0], array.shape.dims[0], mode)?;
+        let cols = basic_slice_indices(&slices[1], array.shape.dims[1], mode)?;
+        let ncols = array.shape.dims[1];
+        let mut values = Vec::with_capacity(rows.len().saturating_mul(cols.len()));
+        for row in &rows {
+            for col in &cols {
+                values.push(array.values[row * ncols + col]);
+            }
+        }
+        Ok(CoreArray {
+            shape: Shape::new(vec![rows.len(), cols.len()]),
+            dtype: array.dtype,
+            values,
+            order: MemoryOrder::C,
+        })
+    }
 
     fn strict_backend() -> CoreArrayBackend {
         CoreArrayBackend::new(ExecutionMode::Strict)
@@ -1488,6 +1564,128 @@ mod tests {
 
         let hardened_error =
             getitem(&hardened, &hardened_array, &request).expect_err("hardened should reject");
+        assert_eq!(hardened_error.kind, ArrayApiErrorKind::InvalidIndex);
+    }
+
+    #[test]
+    fn basic_getitem_c_unit_slices_match_scalar_reference_bits() {
+        let values = [
+            ScalarValue::F64(f64::from_bits(0x7ff8_0000_0000_0042)),
+            ScalarValue::F64(-0.0),
+            ScalarValue::F64(f64::INFINITY),
+            ScalarValue::F64(3.0),
+            ScalarValue::F64(4.0),
+            ScalarValue::F64(5.0),
+            ScalarValue::F64(6.0),
+            ScalarValue::F64(7.0),
+            ScalarValue::F64(8.0),
+            ScalarValue::F64(9.0),
+            ScalarValue::F64(10.0),
+            ScalarValue::F64(11.0),
+        ];
+        let array = CoreArray {
+            shape: Shape::new(vec![3, 4]),
+            dtype: DType::Float64,
+            values: values.to_vec(),
+            order: MemoryOrder::C,
+        };
+        let all = SliceSpec {
+            start: None,
+            stop: None,
+            step: 1,
+        };
+        let cases = [
+            [all, all],
+            [
+                SliceSpec {
+                    start: Some(1),
+                    stop: Some(3),
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(1),
+                    stop: Some(4),
+                    step: 1,
+                },
+            ],
+            [
+                SliceSpec {
+                    start: Some(-2),
+                    stop: None,
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(-3),
+                    stop: Some(-1),
+                    step: 1,
+                },
+            ],
+            [
+                SliceSpec {
+                    start: Some(-99),
+                    stop: Some(99),
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(-99),
+                    stop: Some(99),
+                    step: 1,
+                },
+            ],
+            [
+                SliceSpec {
+                    start: Some(2),
+                    stop: Some(1),
+                    step: 1,
+                },
+                all,
+            ],
+            [
+                all,
+                SliceSpec {
+                    start: Some(3),
+                    stop: Some(1),
+                    step: 1,
+                },
+            ],
+        ];
+
+        for slices in cases {
+            let expected = basic_getitem_scalar_reference(&array, &slices, ExecutionMode::Strict)
+                .expect("reference slice");
+            let actual =
+                basic_getitem(&array, &slices, ExecutionMode::Strict).expect("unit-step slice");
+            assert_eq!(actual.shape, expected.shape);
+            assert_eq!(actual.dtype, expected.dtype);
+            assert_eq!(actual.order, expected.order);
+            assert_eq!(actual.values.len(), expected.values.len());
+            for (actual, expected) in actual.values.iter().zip(&expected.values) {
+                match (*actual, *expected) {
+                    (ScalarValue::F64(actual), ScalarValue::F64(expected)) => {
+                        assert_eq!(actual.to_bits(), expected.to_bits());
+                    }
+                    _ => assert_eq!(actual, expected),
+                }
+            }
+        }
+
+        let hardened_error = basic_getitem(
+            &array,
+            &[
+                SliceSpec {
+                    start: Some(0),
+                    stop: Some(0),
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(0),
+                    stop: Some(99),
+                    step: 1,
+                },
+            ],
+            ExecutionMode::Hardened,
+        )
+        .expect_err("column bounds must be checked after an empty row slice");
         assert_eq!(hardened_error.kind, ArrayApiErrorKind::InvalidIndex);
     }
 
