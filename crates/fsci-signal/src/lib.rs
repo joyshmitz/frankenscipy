@@ -7045,6 +7045,13 @@ pub fn mel_filterbank(n_mels: usize, n_fft: usize, sr: f64, fmin: f64, fmax: f64
 /// Compute Mel-frequency cepstral coefficients (MFCCs).
 ///
 /// Returns a matrix of shape (n_frames, n_mfcc).
+/// When `true`, [`mfcc`] computes its frames serially (the ORIG behaviour); default `false` fans the
+/// independent per-frame FFT+filterbank+DCT across cores. Byte-identical. `#[doc(hidden)]` — the
+/// same-binary A/B knob.
+#[doc(hidden)]
+pub static MFCC_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn mfcc(
     signal: &[f64],
     sr: f64,
@@ -7068,10 +7075,21 @@ pub fn mfcc(
         })
         .collect();
 
-    let mut mfccs = Vec::new();
-    let mut start = 0;
+    // Frame count matches the ORIG `while start + frame_len <= len { start += hop }` walk:
+    // starts at 0, hop, 2·hop, … The MFCC coefficients of frame `f` (start = f·hop) are a pure
+    // function of that frame's samples plus the shared read-only `window`/`fb` — no cross-frame
+    // state — so the frames are embarrassingly parallel. Each does an FFT + Mel filterbank + DCT.
+    let n_frames = if signal.len() >= frame_len {
+        (signal.len() - frame_len) / hop_len + 1
+    } else {
+        0
+    };
+    if n_frames == 0 {
+        return vec![];
+    }
 
-    while start + frame_len <= signal.len() {
+    let compute_frame = |f: usize| -> Vec<f64> {
+        let start = f * hop_len;
         // Windowed frame
         let frame: Vec<f64> = signal[start..start + frame_len]
             .iter()
@@ -7114,11 +7132,38 @@ pub fn mfcc(
             }
             coeffs.push(sum * (2.0 / n_mels as f64).sqrt());
         }
+        coeffs
+    };
 
-        mfccs.push(coeffs);
-        start += hop_len;
+    // Byte-identical whether the frames are computed serially or fanned across cores (each frame's
+    // FFT/filterbank/DCT is a pure function, written to its own ordered slot). Gated on total work.
+    let nthreads = if MFCC_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n_frames < 2
+        || n_frames.saturating_mul(frame_len) < 65_536
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n_frames)
+    };
+    if nthreads <= 1 {
+        return (0..n_frames).map(&compute_frame).collect();
     }
-
+    let mut mfccs: Vec<Vec<f64>> = vec![Vec::new(); n_frames];
+    let chunk = n_frames.div_ceil(nthreads);
+    let cf = &compute_frame;
+    std::thread::scope(|scope| {
+        for (ci, block) in mfccs.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in block.iter_mut().enumerate() {
+                    *slot = cf(base + k);
+                }
+            });
+        }
+    });
     mfccs
 }
 
