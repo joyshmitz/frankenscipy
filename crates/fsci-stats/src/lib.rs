@@ -34260,19 +34260,39 @@ pub fn zmap_weighted(scores: &[f64], compare: &[f64], weights: &[f64]) -> Vec<f6
     if compare.is_empty() || compare.len() != weights.len() {
         return vec![f64::NAN; scores.len()];
     }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-        return vec![f64::NAN; scores.len()];
-    }
-    let total_w: f64 = weights.iter().sum();
-    if total_w <= 0.0 {
-        return vec![f64::NAN; scores.len()];
-    }
-    let mean: f64 = compare
-        .iter()
-        .zip(weights)
-        .map(|(&x, &w)| w * x)
-        .sum::<f64>()
-        / total_w;
+    // BYTE-IDENTICAL fusion (same shape as `zscore_weighted`): the weights finite/non-negative
+    // check, `Σw`, and the weighted-mean numerator `Σw·x` are three INDEPENDENT reductions over
+    // `compare`/`weights` — fold them into ONE pass. Each Σ keeps its left-to-right order and
+    // `w * x` expression; a bad weight still returns the NaN vector (polluted sums discarded exactly
+    // as the original early-out discarded them). The `var` pass depends on the mean and stays separate.
+    let (total_w, sum_wx) = if ZSCORE_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+            return vec![f64::NAN; scores.len()];
+        }
+        let total_w: f64 = weights.iter().sum();
+        if total_w <= 0.0 {
+            return vec![f64::NAN; scores.len()];
+        }
+        let sum_wx: f64 = compare.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>();
+        (total_w, sum_wx)
+    } else {
+        let mut total_w = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        let mut valid = true;
+        for (&x, &w) in compare.iter().zip(weights) {
+            valid &= w.is_finite() && w >= 0.0;
+            total_w += w;
+            sum_wx += w * x;
+        }
+        if !valid {
+            return vec![f64::NAN; scores.len()];
+        }
+        if total_w <= 0.0 {
+            return vec![f64::NAN; scores.len()];
+        }
+        (total_w, sum_wx)
+    };
+    let mean: f64 = sum_wx / total_w;
     let var: f64 = compare
         .iter()
         .zip(weights)
