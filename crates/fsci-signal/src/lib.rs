@@ -6518,19 +6518,32 @@ fn collapse_unique_root_group(
     mult.push(n);
 }
 
+/// When `true`, [`normalize_signal`] runs its `(v-mean)/std` output map serially (the ORIG behaviour);
+/// default `false` fans it across threads. Byte-identical.
+#[doc(hidden)]
+pub static NORMALIZE_SIGNAL_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Normalize a signal to have zero mean and unit variance.
 pub fn normalize_signal(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
     let n = x.len() as f64;
+    // `mean`/`var` are float Σ (reassociate ⇒ stay serial), but the `(v-mean)/std` output map is a
+    // per-element pure function of its index — fan it across threads via the order-preserving
+    // `par_index_fill` (BYTE-IDENTICAL to `x.iter().map(..).collect()`).
     let mean: f64 = x.iter().sum::<f64>() / n;
     let var: f64 = x.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
     let std = var.sqrt();
     if std == 0.0 {
         return vec![0.0; x.len()];
     }
-    x.iter().map(|&v| (v - mean) / std).collect()
+    if NORMALIZE_SIGNAL_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        x.iter().map(|&v| (v - mean) / std).collect()
+    } else {
+        par_index_fill(x.len(), |i| (x[i] - mean) / std)
+    }
 }
 
 /// When `true`, [`normalize_minmax`] runs its min/max folds and output map serially (the ORIG
