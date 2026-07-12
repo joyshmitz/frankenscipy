@@ -1,8 +1,9 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_signal::{
-    coherence, csd, cwt, detrend, fftconvolve, filtfilt, find_peaks_cwt, firls, firwin, freqz,
+    ConvolveMode, DetrendType, FindPeaksCwtOptions, FirWindow, SosSection, coherence, csd, cwt,
+    detrend, dominant_frequency, fftconvolve, filtfilt, find_peaks_cwt, firls, firwin, freqz,
     hilbert, lfilter, medfilt, medfilt2d, mfcc, order_filter, remez, resample, ricker, sosfilt,
-    upfirdn, welch, ConvolveMode, DetrendType, FindPeaksCwtOptions, FirWindow, SosSection,
+    upfirdn, welch,
 };
 use std::hint::black_box;
 use std::io::Write;
@@ -119,6 +120,56 @@ fn bench_spectral(c: &mut Criterion) {
             ))
         })
     });
+}
+
+fn dominant_frequency_original(magnitudes: &[f64], freqs: &[f64]) -> f64 {
+    if magnitudes.is_empty() || freqs.is_empty() {
+        return 0.0;
+    }
+    if magnitudes
+        .iter()
+        .zip(freqs)
+        .any(|(&m, &f)| !m.is_finite() || m < 0.0 || !f.is_finite())
+    {
+        return f64::NAN;
+    }
+    let max_idx = magnitudes
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    freqs.get(max_idx).copied().unwrap_or(0.0)
+}
+
+fn bench_dominant_frequency_ab(c: &mut Criterion) {
+    const N: usize = 8_000_000;
+    let magnitudes: Vec<f64> = (0..N)
+        .map(|i| ((i.wrapping_mul(2_654_435_761) % 1_000_003) + 1) as f64)
+        .collect();
+    let freqs: Vec<f64> = (0..N).map(|i| i as f64 * 0.125).collect();
+    let mut group = c.benchmark_group("dominant_frequency_ab");
+    group.sample_size(12);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+
+    group.bench_function("original", |b| {
+        b.iter(|| {
+            black_box(dominant_frequency_original(
+                black_box(&magnitudes),
+                black_box(&freqs),
+            ))
+        })
+    });
+    group.bench_function("current", |b| {
+        b.iter(|| {
+            black_box(dominant_frequency(
+                black_box(&magnitudes),
+                black_box(&freqs),
+            ))
+        })
+    });
+    group.finish();
 }
 
 fn deterministic_coherence_pair(len: usize) -> (Vec<f64>, Vec<f64>) {
@@ -581,6 +632,7 @@ fn bench_find_peaks_cwt(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_dominant_frequency_ab,
     bench_resample,
     bench_upfirdn,
     bench_detrend_hilbert,

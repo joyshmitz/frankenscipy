@@ -9503,3 +9503,17 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - **REJECT; candidate removed.** The durable output is the `kelvin_zeros_ab` benchmark seam plus this no-retry
   boundary. Per-call OS-thread creation costs more than these root searches. Continue only with validated asymptotic
   coarse-scan seeding, or a persistent executor supplied by a future runtime/API design.
+
+## 2026-07-12 - cod - REJECT `dominant_frequency` paired-validation/argmax fusion
+
+- Ledger-first scope: neighboring spectral pass fusions are shipped, while spectral-flatness's materializing
+  parallel reduction is rejected; no entry covered this allocation-free helper. The original validates paired bins,
+  then scans all magnitudes again for the last `total_cmp` maximum.
+- Strict-remote `vmi1227854` baseline at 8M bins measured literal-original/current A/A centers of
+  **21.924/24.194 ms**, an inverse row-order floor of **1.104x**.
+- ONE fused candidate preserved paired-only validation, last-equal tie selection, mismatched-length behavior,
+  ignored extra frequencies, and unvalidated tail magnitudes. The exact reference test covered each edge case.
+- Decisive same-binary `vmi1149989` centers were original **22.371 ms** and fused **19.908 ms** (**1.124x**), but
+  confidence intervals overlapped and the gain cleared the A/A floor by only ~1.8%.
+- **REJECT / IN-FLOOR; candidate removed.** The durable output is the `dominant_frequency_ab` benchmark seam plus
+  this no-retry boundary. Only reconsider as part of producer-side maximum tracking that removes a full array scan.

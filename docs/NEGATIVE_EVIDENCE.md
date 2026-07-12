@@ -20429,3 +20429,21 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   this evidence. Do not retry per-call OS-thread fan-out: spawn/scheduling cost dominates these short root searches.
   The credible Kelvin follow-up remains reducing each family's coarse scan with validated asymptotic seeds, or a
   persistent executor only if the API/runtime architecture later supplies one without per-call worker creation.
+
+## 2026-07-12 - cod - REJECT signal `dominant_frequency` validity/argmax pass fusion (1.124x, IN-FLOOR)
+
+- Negative-ledger-first selection excluded the spectral-flatness parallel-log reject and the already-landed
+  `spectral_centroid`/bandwidth/rolloff fusions. `dominant_frequency` had no prior entry: it validates paired
+  `(magnitude, frequency)` bins, then separately scans all magnitudes for the last `total_cmp` maximum.
+- Strict-remote baseline/profile on `vmi1227854`, 8,000,000 bins, confirmed a ~22-24 ms two-pass wall. The literal
+  original and unchanged wrapper A/A rows were `[21.090, 21.924, 23.056]` ms and
+  `[23.034, 24.194, 25.288]` ms, respectively, exposing a **1.104x inverse row-order null floor**.
+- ONE candidate fused validation with argmax over the paired prefix and scanned only the unpaired magnitude tail.
+  It preserved the original last-equal tie rule, paired-only validation, ignored extra frequencies, unvalidated tail
+  magnitudes, and `0.0` when an unpaired winner has no frequency. A reference-bit test covered those edge cases.
+- The decisive strict-remote same-binary run on `vmi1149989` measured original
+  `[20.113, 22.371, 25.066]` ms versus fused `[19.074, 19.908, 21.177]` ms: a centered **1.124x** apparent speedup,
+  but the confidence intervals overlapped and the margin over the A/A null ceiling was only about **1.8%**.
+- Decision: **REJECT / IN-FLOOR; production and proof-test code removed.** Keep only the
+  `dominant_frequency_ab` benchmark seam and this evidence. Do not retry validation+argmax fusion alone; revisit
+  only if a producer can supply the maximum during spectrum construction and remove an entire public-array scan.
