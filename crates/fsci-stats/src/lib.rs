@@ -25608,15 +25608,38 @@ pub fn semi_partial_corr(x: &[f64], y: &[f64], z: &[f64]) -> f64 {
     (r_xy - r_xz * r_yz) / denom.sqrt()
 }
 
+/// When `true`, [`nanmean`] materializes the NaN-filtered `Vec` then sums it (the ORIG
+/// behaviour); default `false` folds `(sum, count)` inline with no allocation. Byte-identical.
+#[doc(hidden)]
+pub static NANMEAN_FORCE_COLLECT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute mean ignoring NaN values.
 ///
 /// Matches `numpy.nanmean`.
 pub fn nanmean(data: &[f64]) -> f64 {
-    let valid: Vec<f64> = data.iter().copied().filter(|x| !x.is_nan()).collect();
-    if valid.is_empty() {
+    if NANMEAN_FORCE_COLLECT.load(std::sync::atomic::Ordering::Relaxed) {
+        let valid: Vec<f64> = data.iter().copied().filter(|x| !x.is_nan()).collect();
+        if valid.is_empty() {
+            return f64::NAN;
+        }
+        return valid.iter().sum::<f64>() / valid.len() as f64;
+    }
+    // Fold Σ and the count in ONE pass without materializing the filtered Vec. BYTE-IDENTICAL:
+    // Σ is the same left-to-right fold from 0.0 over the same non-NaN elements in data order
+    // as `valid.iter().sum()`, and `count == valid.len()`.
+    let mut sum = 0.0f64;
+    let mut count = 0usize;
+    for &x in data {
+        if !x.is_nan() {
+            sum += x;
+            count += 1;
+        }
+    }
+    if count == 0 {
         return f64::NAN;
     }
-    valid.iter().sum::<f64>() / valid.len() as f64
+    sum / count as f64
 }
 
 /// Compute variance ignoring NaN values.
