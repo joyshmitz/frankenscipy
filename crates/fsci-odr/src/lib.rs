@@ -1523,21 +1523,73 @@ where
     Ok(jac)
 }
 
+/// When `true`, [`solve_lm_step`] builds its `JᵀJ` normal matrix and `Jᵀr` vector serially (the ORIG
+/// row-outer accumulation); default `false` fans the build across output rows. Byte-identical.
+/// `#[doc(hidden)]` — internal, exposed only for the same-binary A/B benchmark.
+#[doc(hidden)]
+pub static ODR_LMSTEP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn solve_lm_step(
     jacobian: &[Vec<f64>],
     residuals: &[f64],
     damping: f64,
 ) -> Result<Vec<f64>, OdrError> {
     let n = jacobian.first().map_or(0, Vec::len);
+    let nrows = jacobian.len();
     let mut normal = vec![vec![0.0; n]; n];
     let mut rhs = vec![0.0; n];
-    for (row_idx, row) in jacobian.iter().enumerate() {
-        for lhs in 0..n {
-            rhs[lhs] -= row[lhs] * residuals[row_idx];
-            for rhs_idx in 0..n {
-                normal[lhs][rhs_idx] += row[lhs] * row[rhs_idx];
+
+    // Each output row `lhs` of the normal matrix and its `rhs[lhs]` are a pure reduction over the
+    // Jacobian rows: `normal[lhs][j] = Σ_row J[row][lhs]·J[row][j]` and `rhs[lhs] = −Σ_row
+    // J[row][lhs]·r[row]`, both summed in ascending row order. The rows of the output are mutually
+    // independent (each owns a disjoint `normal[lhs]` Vec and `rhs[lhs]` slot), so fanning across
+    // output-row chunks accumulates every cell in the SAME row order as the serial build → BYTE-
+    // IDENTICAL. For ODR the residual count exceeds `n` (delta penalties), so this JᵀJ build is the
+    // per-iteration hot spot. Gated on the build work `n²·nrows`.
+    let parallel = !ODR_LMSTEP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        && n >= 32
+        && (n as u64) * (n as u64) * (nrows as u64) >= (1 << 20);
+    if !parallel {
+        for (row_idx, row) in jacobian.iter().enumerate() {
+            for lhs in 0..n {
+                rhs[lhs] -= row[lhs] * residuals[row_idx];
+                for rhs_idx in 0..n {
+                    normal[lhs][rhs_idx] += row[lhs] * row[rhs_idx];
+                }
             }
         }
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n);
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (ci, (norm_rows, rhs_slots)) in normal
+                .chunks_mut(chunk)
+                .zip(rhs.chunks_mut(chunk))
+                .enumerate()
+            {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (k, (norm_row, rhs_slot)) in
+                        norm_rows.iter_mut().zip(rhs_slots.iter_mut()).enumerate()
+                    {
+                        let lhs = base + k;
+                        let mut acc_rhs = 0.0;
+                        for (row_idx, row) in jacobian.iter().enumerate() {
+                            let jl = row[lhs];
+                            acc_rhs -= jl * residuals[row_idx];
+                            for (rhs_idx, cell) in norm_row.iter_mut().enumerate() {
+                                *cell += jl * row[rhs_idx];
+                            }
+                        }
+                        *rhs_slot = acc_rhs;
+                    }
+                });
+            }
+        });
     }
     for (idx, row) in normal.iter_mut().enumerate() {
         row[idx] += damping;
