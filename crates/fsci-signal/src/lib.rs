@@ -6533,30 +6533,72 @@ pub fn normalize_signal(x: &[f64]) -> Vec<f64> {
     x.iter().map(|&v| (v - mean) / std).collect()
 }
 
+/// When `true`, [`normalize_minmax`] runs its min/max folds and output map serially (the ORIG
+/// behaviour); default `false` chunks the min/max reduce and fans the output map across threads.
+/// Byte-identical.
+#[doc(hidden)]
+pub static NORMALIZE_MINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Normalize a signal to range [0, 1].
 pub fn normalize_minmax(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
-    let min = x.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.min(b)
+    let nan_min = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) };
+    let nan_max = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) };
+
+    if NORMALIZE_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let min = x.iter().copied().fold(f64::INFINITY, nan_min);
+        let max = x.iter().copied().fold(f64::NEG_INFINITY, nan_max);
+        let range = max - min;
+        if range == 0.0 {
+            return vec![0.5; x.len()];
         }
-    });
-    let max = x.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.max(b)
-        }
-    });
+        return x.iter().map(|&v| (v - min) / range).collect();
+    }
+
+    // Parallel: chunk the min/max reduce (associative + NaN-propagating ⇒ chunk-then-merge is
+    // BYTE-IDENTICAL to the sequential folds), then fan the `(v-min)/range` map across threads via
+    // the order-preserving `par_index_fill` (byte-identical to `x.iter().map(..).collect()`).
+    let n = x.len();
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / 4096)
+        .max(1);
+    let (min, max) = if nthreads <= 1 {
+        (
+            x.iter().copied().fold(f64::INFINITY, nan_min),
+            x.iter().copied().fold(f64::NEG_INFINITY, nan_max),
+        )
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+            x.chunks(chunk)
+                .map(|c| {
+                    scope.spawn(move || {
+                        (
+                            c.iter().copied().fold(f64::INFINITY, nan_min),
+                            c.iter().copied().fold(f64::NEG_INFINITY, nan_max),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("normalize_minmax chunk panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(
+            (f64::INFINITY, f64::NEG_INFINITY),
+            |(amn, amx), (bmn, bmx)| (nan_min(amn, bmn), nan_max(amx, bmx)),
+        )
+    };
     let range = max - min;
     if range == 0.0 {
-        return vec![0.5; x.len()];
+        return vec![0.5; n];
     }
-    x.iter().map(|&v| (v - min) / range).collect()
+    par_index_fill(n, |i| (x[i] - min) / range)
 }
 
 /// Downsample a signal by taking every n-th sample.
