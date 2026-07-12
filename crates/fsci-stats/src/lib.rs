@@ -32910,6 +32910,12 @@ pub fn compare_medians_ms(group_1: &[f64], group_2: &[f64]) -> f64 {
 /// IQR `r` and bandwidth `h = 1.2·(r₁ − r₀)/n^(1/5)`, returns
 /// `(#{xᵢ ≤ p + h} − #{xᵢ < p − h}) / (2nh)` for each point `p`. If `points` is
 /// empty, the data itself is used. NaNs ignored.
+/// When `true`, [`rsh`] counts each point's window by a linear scan (the ORIG O(|pts|·n)
+/// behaviour); default `false` uses a sorted copy + binary search (O(n log n)). Byte-identical.
+#[doc(hidden)]
+pub static RSH_FORCE_QUADRATIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[must_use]
 pub fn rsh(data: &[f64], points: Option<&[f64]>) -> Vec<f64> {
     let clean: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
@@ -32921,10 +32927,27 @@ pub fn rsh(data: &[f64], points: Option<&[f64]>) -> Vec<f64> {
         Some(p) if !p.is_empty() => p,
         _ => &clean,
     };
+    if RSH_FORCE_QUADRATIC.load(std::sync::atomic::Ordering::Relaxed) {
+        // ORIGINAL O(|pts|·n): a linear scan of `clean` for every point.
+        return pts
+            .iter()
+            .map(|&p| {
+                let nhi = clean.iter().filter(|&&x| x <= p + h).count() as f64;
+                let nlo = clean.iter().filter(|&&x| x < p - h).count() as f64;
+                (nhi - nlo) / (2.0 * nf * h)
+            })
+            .collect();
+    }
+    // O((n + |pts|)·log n): sort `clean` ONCE (into a separate buffer so `pts`, which may alias
+    // `clean`, keeps its original order), then each point's window counts are binary searches.
+    // BYTE-IDENTICAL: `clean` is finite (NaN filtered above), so `partition_point` gives the SAME
+    // integer counts (#{x ≤ p+h}, #{x < p−h}) as the linear scans, hence the same density value.
+    let mut sorted = clean.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).expect("finite (NaN filtered above)"));
     pts.iter()
         .map(|&p| {
-            let nhi = clean.iter().filter(|&&x| x <= p + h).count() as f64;
-            let nlo = clean.iter().filter(|&&x| x < p - h).count() as f64;
+            let nhi = sorted.partition_point(|&x| x <= p + h) as f64;
+            let nlo = sorted.partition_point(|&x| x < p - h) as f64;
             (nhi - nlo) / (2.0 * nf * h)
         })
         .collect()
