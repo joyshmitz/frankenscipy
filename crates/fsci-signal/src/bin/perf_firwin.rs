@@ -1,0 +1,71 @@
+//! Median-null-gated A/B for `firwin`'s per-tap sinc build: ORIG serial band-outer accumulation
+//! (restructured tap-outer, byte-identical) vs par_index_fill fan-out. Toggled by
+//! `FIRWIN_FORCE_SERIAL`. BYTE-IDENTICAL: each tap sums the passbands in the same order. Args:
+//! numtaps [iters].
+use fsci_signal::{FIRWIN_FORCE_SERIAL, FirWindow, firwin};
+use std::hint::black_box;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
+
+fn med(v: &mut [f64]) -> f64 {
+    v.sort_by(f64::total_cmp);
+    v[v.len() / 2]
+}
+fn cv(v: &[f64]) -> f64 {
+    let m = v.iter().sum::<f64>() / v.len() as f64;
+    let var = v.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / v.len() as f64;
+    if m > 0.0 { var.sqrt() / m * 100.0 } else { 0.0 }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let numtaps: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2_000_001);
+    let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
+
+    // Bandpass (two bands) with a trivial window so the sinc build dominates.
+    let cutoff = [0.2_f64, 0.5];
+    let win = FirWindow::Rectangular;
+
+    FIRWIN_FORCE_SERIAL.store(true, Ordering::Relaxed);
+    let a = firwin(numtaps, &cutoff, win, false).expect("firwin");
+    FIRWIN_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    let b = firwin(numtaps, &cutoff, win, false).expect("firwin");
+    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+        + usize::from(a.len() != b.len());
+    println!("# signal::firwin numtaps={numtaps} h[1]={} bitmism={bitmism}", a[1]);
+
+    let bench = |serial: bool| -> f64 {
+        FIRWIN_FORCE_SERIAL.store(serial, Ordering::Relaxed);
+        let _ = black_box(firwin(black_box(numtaps), &cutoff, win, false).unwrap());
+        let t = Instant::now();
+        for _ in 0..5 {
+            let _ = black_box(firwin(black_box(numtaps), &cutoff, win, false).unwrap());
+        }
+        t.elapsed().as_secs_f64() / 5.0 * 1e3
+    };
+
+    let (mut ov, mut fv, mut nr, mut cr) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..iters {
+        let o = bench(true);
+        let f = bench(false);
+        let o2 = bench(true);
+        nr.push(o / o2);
+        cr.push(o / f);
+        ov.push(o);
+        fv.push(f);
+    }
+    FIRWIN_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    let cand_med = med(&mut cr.clone());
+    let null_lo = nr.iter().copied().fold(f64::MAX, f64::min);
+    let null_hi = nr.iter().copied().fold(f64::MIN, f64::max);
+    let decidable = cand_med > null_hi || cand_med < null_lo;
+    let ob = ov.iter().copied().fold(f64::MAX, f64::min);
+    let fb = fv.iter().copied().fold(f64::MAX, f64::min);
+    println!(
+        "{} firwin serial {ob:.2}ms (cv {:.1}%) parallel {fb:.2}ms (cv {:.1}%) | \
+         CAND(serial/par) median {cand_med:.3}x | NULL(A/A) range [{null_lo:.3}, {null_hi:.3}] | bitmism={bitmism}",
+        if decidable { "DECIDED " } else { "IN-FLOOR" },
+        cv(&ov),
+        cv(&fv),
+    );
+}

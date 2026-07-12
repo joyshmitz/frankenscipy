@@ -11830,6 +11830,13 @@ pub enum FirWindow {
 ///   One value for lowpass/highpass, two for bandpass/bandstop.
 /// * `window` — Window function to apply.
 /// * `pass_zero` — If true, DC gain is 1 (lowpass/bandstop). If false, DC gain is 0 (highpass/bandpass).
+/// When `true`, [`firwin`] builds its sinc taps serially (the ORIG behaviour); default `false` fans
+/// the per-tap sinc sum across cores via `par_index_fill`. Byte-identical. `#[doc(hidden)]` — the
+/// same-binary A/B knob.
+#[doc(hidden)]
+pub static FIRWIN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn firwin(
     numtaps: usize,
     cutoff: &[f64],
@@ -11877,23 +11884,34 @@ pub fn firwin(
         bands.push(1.0);
     }
 
-    // Sum of sinc responses for each passband
-    let mut h = vec![0.0; m];
-    for pair in bands.chunks(2) {
-        if pair.len() < 2 {
-            break;
-        }
-        let (left, right) = (pair[0], pair[1]);
-        for (n, hi) in h.iter_mut().enumerate() {
-            let x = n as f64 - alpha;
+    // Sum of sinc responses for each passband. Each tap `h[n]` is a pure function of `n`: it sums,
+    // over the (few) passbands, a windowed-sinc difference (2 `sin` + a divide per band). The taps
+    // are mutually independent, so build them tap-outer and fan across cores via `par_index_fill`.
+    // BYTE-IDENTICAL to the ORIG band-outer accumulation: for a fixed `n` the per-band contributions
+    // are summed in the SAME (ascending-band) order, so every `h[n]` is the identical float sequence.
+    let bands_ref = &bands;
+    let sinc_tap = move |n: usize| -> f64 {
+        let x = n as f64 - alpha;
+        let mut acc = 0.0;
+        for pair in bands_ref.chunks(2) {
+            if pair.len() < 2 {
+                break;
+            }
+            let (left, right) = (pair[0], pair[1]);
             if x.abs() < 1e-15 {
-                *hi += right - left;
+                acc += right - left;
             } else {
-                *hi += (std::f64::consts::PI * right * x).sin() / (std::f64::consts::PI * x)
+                acc += (std::f64::consts::PI * right * x).sin() / (std::f64::consts::PI * x)
                     - (std::f64::consts::PI * left * x).sin() / (std::f64::consts::PI * x);
             }
         }
-    }
+        acc
+    };
+    let mut h = if FIRWIN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        (0..m).map(&sinc_tap).collect::<Vec<f64>>()
+    } else {
+        par_index_fill(m, &sinc_tap)
+    };
 
     // Apply window
     let win = make_window(m, window);
