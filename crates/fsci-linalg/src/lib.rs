@@ -16985,17 +16985,51 @@ pub fn mat_norm_1(a: &[Vec<f64>]) -> f64 {
     max_col_sum
 }
 
+/// When `true`, [`mat_norm_inf`] folds the max over per-row abs-sums serially (the ORIG behaviour);
+/// default `false` chunks it across rows. Byte-identical.
+#[doc(hidden)]
+pub static LINALG_MAT_NORM_INF_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the infinity-norm of a matrix (maximum row sum of absolute values).
 pub fn mat_norm_inf(a: &[Vec<f64>]) -> f64 {
-    a.iter()
-        .map(|row| row.iter().map(|&v| v.abs()).sum::<f64>())
-        .fold(0.0f64, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
-        })
+    // Each row's `Σ|v|` is an INDEPENDENT per-row serial float sum (kept serial ⇒ bit-identical), and
+    // the outer `max` over those row sums is associative + NaN-propagating ⇒ chunk-across-rows +
+    // merge is BYTE-IDENTICAL to the sequential fold. Parallelize the outer max for large matrices.
+    let nan_max = |x: f64, y: f64| {
+        if x.is_nan() || y.is_nan() {
+            f64::NAN
+        } else {
+            x.max(y)
+        }
+    };
+    let row_sum = |row: &Vec<f64>| -> f64 { row.iter().map(|&v| v.abs()).sum::<f64>() };
+    let nrows = a.len();
+    let ncols = a.first().map_or(0, Vec::len);
+    let nthreads = if LINALG_MAT_NORM_INF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nrows.saturating_mul(ncols) < 65_536
+        || nrows < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nrows)
+    };
+    if nthreads <= 1 {
+        return a.iter().map(row_sum).fold(0.0f64, nan_max);
+    }
+    let chunk = nrows.div_ceil(nthreads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        a.chunks(chunk)
+            .map(|rows| scope.spawn(move || rows.iter().map(row_sum).fold(0.0f64, nan_max)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("mat_norm_inf chunk panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(0.0f64, nan_max)
 }
 
 /// Check if a matrix is diagonal.
