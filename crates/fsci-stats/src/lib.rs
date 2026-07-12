@@ -31465,6 +31465,13 @@ pub struct DescribeResult {
     pub kurtosis: f64,
 }
 
+/// When `true`, [`describe`] runs its Σ/min/max reductions as three separate passes (the
+/// ORIG behaviour); when `false` (default) it fuses them into one traversal. Byte-identical
+/// either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static DESCRIBE_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute several descriptive statistics of a data set.
 ///
 /// Matches `scipy.stats.describe(a)`.
@@ -31486,24 +31493,48 @@ pub fn describe(data: &[f64]) -> DescribeResult {
     }
 
     let nf = n as f64;
-    let mean_val = data.iter().sum::<f64>() / nf;
-    let min_val = data.iter().copied().fold(f64::INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.min(b)
-        }
-    });
-    let max_val = data
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+    // Σ, min and max are three INDEPENDENT reductions over `data`; fuse them into ONE
+    // traversal instead of three (saves two full memory passes at large n). BYTE-IDENTICAL:
+    // Σ is the same left-to-right fold from 0.0 as `iter().sum()`, and the NaN-aware min/max
+    // are order-independent comparisons — interleaving them per element changes nothing.
+    let (sum, min_val, max_val) = if DESCRIBE_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        let sum = data.iter().sum::<f64>();
+        let min_val = data.iter().copied().fold(f64::INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.min(b)
+            }
+        });
+        let max_val = data.iter().copied().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
             if a.is_nan() || b.is_nan() {
                 f64::NAN
             } else {
                 a.max(b)
             }
         });
+        (sum, min_val, max_val)
+    } else {
+        let mut sum = 0.0f64;
+        let mut min_val = f64::INFINITY;
+        let mut max_val = f64::NEG_INFINITY;
+        for &x in data {
+            sum += x;
+            min_val = if min_val.is_nan() || x.is_nan() {
+                f64::NAN
+            } else {
+                min_val.min(x)
+            };
+            max_val = if max_val.is_nan() || x.is_nan() {
+                f64::NAN
+            } else {
+                max_val.max(x)
+            };
+        }
+        (sum, min_val, max_val)
+    };
+    let mean_val = sum / nf;
 
     let mut m2 = 0.0;
     let mut m3 = 0.0;
