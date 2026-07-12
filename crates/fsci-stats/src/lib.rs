@@ -29319,6 +29319,13 @@ pub struct LogRankResult {
 /// The statistic is `(O_x − E_x) / sqrt(V)` where `O_x`/`E_x` are the observed
 /// and expected numbers of events in `x` and `V` is the hypergeometric variance
 /// summed over the distinct event times of the pooled sample.
+/// When `true`, [`logrank`] computes each time's at-risk/death counts by a linear scan (the
+/// ORIG O(|times|·n) behaviour); default `false` uses pre-sorted binary search (O(n log n)).
+/// Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static LOGRANK_FORCE_QUADRATIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[must_use]
 pub fn logrank(x: &[f64], y: &[f64], alternative: &str) -> LogRankResult {
     if x.is_empty() || y.is_empty() || x.iter().chain(y.iter()).any(|v| v.is_nan()) {
@@ -29333,23 +29340,56 @@ pub fn logrank(x: &[f64], y: &[f64], alternative: &str) -> LogRankResult {
     times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     times.dedup();
 
-    let count_ge = |s: &[f64], t: f64| s.iter().filter(|&&v| v >= t).count() as f64;
-    let count_eq = |s: &[f64], t: f64| s.iter().filter(|&&v| v == t).count() as f64;
-
-    let mut sum_var = 0.0_f64;
-    let mut sum_exp_x = 0.0_f64;
-    for &t in &times {
-        let at_risk_x = count_ge(x, t);
-        let at_risk_xy = at_risk_x + count_ge(y, t);
-        let deaths_xy = count_eq(x, t) + count_eq(y, t);
-        let at_risk_y = at_risk_xy - at_risk_x;
-        // Variance term is identically zero when only one subject is at risk.
-        if at_risk_xy > 1.0 {
-            sum_var += at_risk_x * at_risk_y * deaths_xy * (at_risk_xy - deaths_xy)
-                / (at_risk_xy * at_risk_xy * (at_risk_xy - 1.0));
+    let (sum_var, sum_exp_x) = if LOGRANK_FORCE_QUADRATIC
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        // ORIGINAL O(|times|·n): a linear scan of x and y for every distinct time.
+        let count_ge = |s: &[f64], t: f64| s.iter().filter(|&&v| v >= t).count() as f64;
+        let count_eq = |s: &[f64], t: f64| s.iter().filter(|&&v| v == t).count() as f64;
+        let mut sum_var = 0.0_f64;
+        let mut sum_exp_x = 0.0_f64;
+        for &t in &times {
+            let at_risk_x = count_ge(x, t);
+            let at_risk_xy = at_risk_x + count_ge(y, t);
+            let deaths_xy = count_eq(x, t) + count_eq(y, t);
+            let at_risk_y = at_risk_xy - at_risk_x;
+            if at_risk_xy > 1.0 {
+                sum_var += at_risk_x * at_risk_y * deaths_xy * (at_risk_xy - deaths_xy)
+                    / (at_risk_xy * at_risk_xy * (at_risk_xy - 1.0));
+            }
+            sum_exp_x += at_risk_x * (deaths_xy / at_risk_xy);
         }
-        sum_exp_x += at_risk_x * (deaths_xy / at_risk_xy);
-    }
+        (sum_var, sum_exp_x)
+    } else {
+        // O((n + |times|)·log n): sort x and y ONCE, then get each time's at-risk/death counts
+        // by binary search instead of a full scan. The data is guaranteed finite (NaN was
+        // rejected above), so `partition_point` on the ascending-sorted arrays yields the SAME
+        // integer counts as the linear scans (count_ge = n − #{v < t}, count_eq = #{v ≤ t} −
+        // #{v < t}) — BYTE-IDENTICAL sums (same integer values accumulated over `times` in the
+        // same order).
+        let mut sx = x.to_vec();
+        let mut sy = y.to_vec();
+        sx.sort_by(|a, b| a.partial_cmp(b).expect("finite (NaN rejected above)"));
+        sy.sort_by(|a, b| a.partial_cmp(b).expect("finite (NaN rejected above)"));
+        let count_ge = |s: &[f64], t: f64| (s.len() - s.partition_point(|&v| v < t)) as f64;
+        let count_eq = |s: &[f64], t: f64| {
+            (s.partition_point(|&v| v <= t) - s.partition_point(|&v| v < t)) as f64
+        };
+        let mut sum_var = 0.0_f64;
+        let mut sum_exp_x = 0.0_f64;
+        for &t in &times {
+            let at_risk_x = count_ge(&sx, t);
+            let at_risk_xy = at_risk_x + count_ge(&sy, t);
+            let deaths_xy = count_eq(&sx, t) + count_eq(&sy, t);
+            let at_risk_y = at_risk_xy - at_risk_x;
+            if at_risk_xy > 1.0 {
+                sum_var += at_risk_x * at_risk_y * deaths_xy * (at_risk_xy - deaths_xy)
+                    / (at_risk_xy * at_risk_xy * (at_risk_xy - 1.0));
+            }
+            sum_exp_x += at_risk_x * (deaths_xy / at_risk_xy);
+        }
+        (sum_var, sum_exp_x)
+    };
 
     let observed_x = x.len() as f64;
     let statistic = (observed_x - sum_exp_x) / sum_var.sqrt();
