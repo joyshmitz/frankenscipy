@@ -25400,6 +25400,13 @@ pub fn cov(x: &[f64], y: &[f64]) -> f64 {
         / (n - 1.0)
 }
 
+/// When `true`, [`cov_weighted`] runs its weights finite-check and the two weighted-mean sums as
+/// separate passes (the ORIG behaviour); default `false` folds the check into `Σw` and computes both
+/// mean sums in one zip pass. Byte-identical.
+#[doc(hidden)]
+pub static CW_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the weighted covariance between two arrays.
 ///
 /// cov_w(x, y) = Σ(w·(x - mean_x)(y - mean_y)) / Σw
@@ -25407,15 +25414,45 @@ pub fn cov_weighted(x: &[f64], y: &[f64], weights: &[f64]) -> f64 {
     if x.len() != y.len() || x.len() != weights.len() || x.len() < 2 {
         return f64::NAN;
     }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-        return f64::NAN;
-    }
-    let total_w: f64 = weights.iter().sum();
-    if total_w <= 0.0 {
-        return f64::NAN;
-    }
-    let mean_x: f64 = x.iter().zip(weights).map(|(&xi, &w)| w * xi).sum::<f64>() / total_w;
-    let mean_y: f64 = y.iter().zip(weights).map(|(&yi, &w)| w * yi).sum::<f64>() / total_w;
+    // BYTE-IDENTICAL fusion: fold the weights finite/non-negative check into the `Σw` pass, and
+    // compute `Σw·xi` and `Σw·yi` in ONE zip pass (two independent accumulators over the same order
+    // as the separate passes). Every Σ keeps its exact left-to-right order and `w * xi` / `w * yi`
+    // expressions; a bad weight still returns NaN (the polluted sums discarded exactly as the
+    // original early-out discarded them).
+    let (total_w, sum_wx, sum_wy) = if CW_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+            return f64::NAN;
+        }
+        let total_w: f64 = weights.iter().sum();
+        if total_w <= 0.0 {
+            return f64::NAN;
+        }
+        let sum_wx: f64 = x.iter().zip(weights).map(|(&xi, &w)| w * xi).sum::<f64>();
+        let sum_wy: f64 = y.iter().zip(weights).map(|(&yi, &w)| w * yi).sum::<f64>();
+        (total_w, sum_wx, sum_wy)
+    } else {
+        let mut total_w = 0.0f64;
+        let mut valid = true;
+        for &w in weights {
+            valid &= w.is_finite() && w >= 0.0;
+            total_w += w;
+        }
+        if !valid {
+            return f64::NAN;
+        }
+        if total_w <= 0.0 {
+            return f64::NAN;
+        }
+        let mut sum_wx = 0.0f64;
+        let mut sum_wy = 0.0f64;
+        for ((&xi, &yi), &w) in x.iter().zip(y).zip(weights) {
+            sum_wx += w * xi;
+            sum_wy += w * yi;
+        }
+        (total_w, sum_wx, sum_wy)
+    };
+    let mean_x: f64 = sum_wx / total_w;
+    let mean_y: f64 = sum_wy / total_w;
     x.iter()
         .zip(y)
         .zip(weights)
