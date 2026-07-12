@@ -34395,13 +34395,62 @@ pub fn zscore_weighted(data: &[f64], weights: &[f64]) -> Vec<f64> {
 /// # Arguments
 /// * `data` - Input data
 /// * `scale` - If true (default), scale IQR by 1.349 to match normal std
+/// When `true`, [`robust_zscore`] computes its median and IQR via separate `median(data)` and
+/// `iqr(data)` calls (the ORIG behaviour — 3 buffer copies + 3 independent quickselects); default
+/// `false` hoists them onto ONE buffer copy with cascaded selects. Byte-identical. A/B knob.
+#[doc(hidden)]
+pub static ROBUST_ZSCORE_HOIST_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn robust_zscore(data: &[f64], scale: bool) -> Vec<f64> {
     if data.len() < 4 {
         return vec![f64::NAN; data.len()];
     }
+    let n = data.len();
 
-    let med = median(data);
-    let iqr_val = iqr(data);
+    // median(data) and iqr(data) each COPY data and quickselect independently (3 copies, 3 selects,
+    // ~90% of the runtime). Hoist onto ONE copy: select Q3, then the median rank from the Q3 prefix,
+    // then Q1 from the median prefix (each `select_ranks` leaves buf[..=hi] as the hi+1 smallest, so
+    // the ranks cascade). BYTE-IDENTICAL: each order statistic is unique, and each value uses its own
+    // fn's exact formula — median's even-case `(lo+hi)/2.0`, iqr's frac-weighted linear interpolation.
+    let (med, iqr_val) = if ROBUST_ZSCORE_HOIST_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        (median(data), iqr(data))
+    } else {
+        let qidx = |q: f64| {
+            let pos = q * (n - 1) as f64;
+            let lo = pos.floor() as usize;
+            let hi = pos.ceil() as usize;
+            (lo, hi, pos - lo as f64)
+        };
+        let (lo3, hi3, f3) = qidx(0.75);
+        let (lo1, hi1, f1) = qidx(0.25);
+        // Median ranks exactly as `median_in_place`: even → (n/2-1, n/2) averaged; odd → (n/2, n/2).
+        let (med_lo, med_hi) = if n.is_multiple_of(2) {
+            (n / 2 - 1, n / 2)
+        } else {
+            (n / 2, n / 2)
+        };
+        let mut buf = data.to_vec();
+        let (v_lo3, v_hi3) = select_ranks(&mut buf, lo3, hi3);
+        let q3 = if lo3 == hi3 {
+            v_lo3
+        } else {
+            v_lo3 * (1.0 - f3) + v_hi3 * f3
+        };
+        let (v_ml, v_mh) = select_ranks(&mut buf[..=hi3], med_lo, med_hi);
+        let med = if n.is_multiple_of(2) {
+            (v_ml + v_mh) / 2.0
+        } else {
+            v_ml
+        };
+        let (v_lo1, v_hi1) = select_ranks(&mut buf[..=med_hi], lo1, hi1);
+        let q1 = if lo1 == hi1 {
+            v_lo1
+        } else {
+            v_lo1 * (1.0 - f1) + v_hi1 * f1
+        };
+        (med, q3 - q1)
+    };
 
     if iqr_val == 0.0 {
         return vec![f64::NAN; data.len()];
