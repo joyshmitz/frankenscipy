@@ -32724,12 +32724,20 @@ pub fn peak_to_peak(data: &[f64]) -> f64 {
 
 /// Returns ideal fourths (robust quartile estimators).
 ///
+/// When `true`, [`idealfourths`] fully sorts the filtered values (the ORIG behaviour); default
+/// `false` quickselects the four needed ranks in O(n). Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static IDEALFOURTHS_FORCE_SORT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Matches `scipy.stats.mstats.idealfourths(data)`.
 /// Returns (lower_quartile, upper_quartile) using the ideal fourths algorithm.
+///
+/// When [`IDEALFOURTHS_FORCE_SORT`] is `true`, the filtered values are fully sorted (the ORIG
+/// behaviour); default `false` quickselects the four needed ranks. Byte-identical.
 pub fn idealfourths(data: &[f64]) -> (f64, f64) {
-    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
-    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
-    let n = sorted.len();
+    let mut buf: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    let n = buf.len();
     if n < 3 {
         return (f64::NAN, f64::NAN);
     }
@@ -32737,9 +32745,22 @@ pub fn idealfourths(data: &[f64]) -> (f64, f64) {
     let frac = nf / 4.0 + 5.0 / 12.0;
     let j = frac.floor() as usize;
     let h = frac - frac.floor();
-    let qlo = (1.0 - h) * sorted[j - 1] + h * sorted[j];
     let k = n - j;
-    let qup = (1.0 - h) * sorted[k] + h * sorted[k - 1];
+    // Only the four order statistics at ranks j-1, j, k-1, k are read, so quickselect the two
+    // adjacent pairs via `select_ranks` (O(n)) on the shared buffer instead of a full O(n log n)
+    // sort. BYTE-IDENTICAL: each rank's order statistic is unique whether read from a full
+    // total_cmp sort or partitioned out, and the interpolation weights are unchanged.
+    let (qlo, qup) = if IDEALFOURTHS_FORCE_SORT.load(std::sync::atomic::Ordering::Relaxed) {
+        buf.sort_unstable_by(|a, b| a.total_cmp(b));
+        (
+            (1.0 - h) * buf[j - 1] + h * buf[j],
+            (1.0 - h) * buf[k] + h * buf[k - 1],
+        )
+    } else {
+        let (lo_j1, lo_j) = select_ranks(&mut buf, j - 1, j);
+        let (up_k1, up_k) = select_ranks(&mut buf, k - 1, k);
+        ((1.0 - h) * lo_j1 + h * lo_j, (1.0 - h) * up_k + h * up_k1)
+    };
     (qlo, qup)
 }
 
