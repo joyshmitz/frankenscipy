@@ -33347,6 +33347,12 @@ pub fn hdquantiles_sd(data: &[f64], prob: &[f64]) -> Vec<f64> {
 /// `W_j = I_{j/n}(m-1, n-m) - I_{(j-1)/n}(m-1, n-m)` (`I` the regularized
 /// incomplete beta), and the SE is `sqrt(Σ W_j x_j² − (Σ W_j x_j)²)`. Degenerate
 /// beta parameters (`m == 1` or `m == n`) yield `NaN`, as in scipy.
+///
+/// Toggle forcing [`mjci`]'s per-breakpoint incomplete-beta map onto the serial
+/// path, for A/B measurement. Default `false` = the breakpoints fan across cores.
+pub static MJCI_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[must_use]
 pub fn mjci(data: &[f64], prob: &[f64]) -> Vec<f64> {
     let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
@@ -33361,17 +33367,29 @@ pub fn mjci(data: &[f64], prob: &[f64]) -> Vec<f64> {
             if a <= 0.0 || b <= 0.0 {
                 return f64::NAN;
             }
+            // The weights are consecutive differences of I_{j/n}(a,b) for j=0..=n, so
+            // each of the n+1 breakpoints' incomplete beta is INDEPENDENT — precompute
+            // them across cores (work-gated), then take the ordered weighted sum. The
+            // betainc values and the left-to-right c1/c2 accumulation are unchanged, so
+            // this is BYTE-IDENTICAL to the serial `prev`/`cur` loop; betainc is a costly
+            // continued fraction, so the parallel map is the dominant win (mirrors the
+            // hdquantiles/hdquantiles_sd breakpoint precompute).
+            let breakpoints: Vec<f64> = (0..=n).map(|j| j as f64 / nf).collect();
+            let cdfs = if MJCI_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+                breakpoints
+                    .iter()
+                    .map(|&x| regularized_incomplete_beta(a, b, x))
+                    .collect::<Vec<f64>>()
+            } else {
+                par_continuous_map(&breakpoints, |x| regularized_incomplete_beta(a, b, x))
+            };
             let mut c1 = 0.0_f64;
             let mut c2 = 0.0_f64;
-            let mut prev = regularized_incomplete_beta(a, b, 0.0); // y at j=1 is 0
             for j in 1..=n {
-                let xj = j as f64 / nf;
-                let cur = regularized_incomplete_beta(a, b, xj);
-                let w = cur - prev;
+                let w = cdfs[j] - cdfs[j - 1];
                 let d = sorted[j - 1];
                 c1 += w * d;
                 c2 += w * d * d;
-                prev = cur;
             }
             (c2 - c1 * c1).max(0.0).sqrt()
         })
