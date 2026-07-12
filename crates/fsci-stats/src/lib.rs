@@ -25799,6 +25799,12 @@ pub fn nanmax(data: &[f64]) -> f64 {
     par_nan_fold(data, f64::NEG_INFINITY, f64::max)
 }
 
+/// When `true`, [`nanmedian`] fully sorts the filtered values (the ORIG behaviour); default
+/// `false` quickselects the central rank(s) in O(n). Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static NANMEDIAN_FORCE_SORT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute median ignoring NaN values.
 ///
 /// Matches `numpy.nanmedian`.
@@ -25807,13 +25813,20 @@ pub fn nanmedian(data: &[f64]) -> f64 {
     if valid.is_empty() {
         return f64::NAN;
     }
-    valid.sort_unstable_by(|a, b| a.total_cmp(b));
-    let n = valid.len();
-    if n.is_multiple_of(2) {
-        (valid[n / 2 - 1] + valid[n / 2]) / 2.0
-    } else {
-        valid[n / 2]
+    if NANMEDIAN_FORCE_SORT.load(std::sync::atomic::Ordering::Relaxed) {
+        valid.sort_unstable_by(|a, b| a.total_cmp(b));
+        let n = valid.len();
+        return if n.is_multiple_of(2) {
+            (valid[n / 2 - 1] + valid[n / 2]) / 2.0
+        } else {
+            valid[n / 2]
+        };
     }
+    // The median only needs the one or two central order statistics, so quickselect them in
+    // O(n) via `median_in_place` instead of a full O(n log n) `sort_unstable`. BYTE-IDENTICAL:
+    // `median_in_place` selects the same central ranks (even ⇒ mean of ranks n/2-1 and n/2;
+    // odd ⇒ rank n/2) that indexing a full total_cmp sort would read.
+    median_in_place(&mut valid)
 }
 
 /// Compute quantiles ignoring NaN values.
