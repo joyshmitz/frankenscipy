@@ -34415,6 +34415,12 @@ pub fn mad_zscore(data: &[f64], scale: bool) -> Vec<f64> {
     data.iter().map(|&x| (x - med) / mad_val).collect()
 }
 
+/// When `true`, [`min_max_scale`] runs its min/max folds and scale map serially (the ORIG behaviour);
+/// default `false` chunks the min/max reduce and fans the output map across threads. Byte-identical.
+#[doc(hidden)]
+pub static MIN_MAX_SCALE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Min-max scale data to a given range.
 ///
 /// Scales data linearly to [feature_min, feature_max].
@@ -34428,22 +34434,71 @@ pub fn min_max_scale(data: &[f64], feature_range: Option<(f64, f64)>) -> Vec<f64
 
     let (feature_min, feature_max) = feature_range.unwrap_or((0.0, 1.0));
 
-    let min_val = data.iter().copied().fold(f64::INFINITY, f64::min);
-    let max_val = data.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    // The min/max reduce and the `(x-min)*scale+feature_min` output map are both parallelizable
+    // byte-identically: `f64::min`/`f64::max` are associative + commutative (NaN-ignoring identically
+    // in any chunk, signed-zero order-independent), and the map is a per-element pure function of its
+    // index. FUSING the min/max preamble was IN-FLOOR (the output map dominates); PARALLELIZING the
+    // map (order-preserving `par_continuous_map_min`) is the win. `MIN_MAX_SCALE_FORCE_SERIAL` A/B.
+    let n = data.len();
+    let (min_val, max_val) = if MIN_MAX_SCALE_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        (
+            data.iter().copied().fold(f64::INFINITY, f64::min),
+            data.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        )
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 4096)
+            .max(1);
+        if nthreads <= 1 {
+            (
+                data.iter().copied().fold(f64::INFINITY, f64::min),
+                data.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            )
+        } else {
+            let chunk = n.div_ceil(nthreads);
+            let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|c| {
+                        scope.spawn(move || {
+                            (
+                                c.iter().copied().fold(f64::INFINITY, f64::min),
+                                c.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("min_max_scale chunk panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold(
+                (f64::INFINITY, f64::NEG_INFINITY),
+                |(amn, amx), (bmn, bmx)| (f64::min(amn, bmn), f64::max(amx, bmx)),
+            )
+        }
+    };
 
     if !min_val.is_finite() || !max_val.is_finite() {
-        return vec![f64::NAN; data.len()];
+        return vec![f64::NAN; n];
     }
 
     let range = max_val - min_val;
     if range == 0.0 {
-        return vec![(feature_min + feature_max) / 2.0; data.len()];
+        return vec![(feature_min + feature_max) / 2.0; n];
     }
 
     let scale = (feature_max - feature_min) / range;
-    data.iter()
-        .map(|&x| (x - min_val) * scale + feature_min)
-        .collect()
+    if MIN_MAX_SCALE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter()
+            .map(|&x| (x - min_val) * scale + feature_min)
+            .collect()
+    } else {
+        par_continuous_map_min(data, 4096, move |x| (x - min_val) * scale + feature_min)
+    }
 }
 
 /// Center data by subtracting the mean.
