@@ -32764,6 +32764,12 @@ pub fn idealfourths(data: &[f64]) -> (f64, f64) {
     (qlo, qup)
 }
 
+/// When `true`, [`stde_median`] fully sorts the filtered values (the ORIG behaviour); default
+/// `false` quickselects the two needed ranks in O(n). Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static STDE_MEDIAN_FORCE_SORT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// McKean-Schrader estimate of the standard error of the sample median.
 ///
 /// Matches `scipy.stats.mstats.stde_median(data)` (1-D). With the sorted data,
@@ -32771,16 +32777,27 @@ pub fn idealfourths(data: &[f64]) -> (f64, f64) {
 /// SE is `(x_(n-k) − x_(k-1)) / (2z)` (0-based order statistics). NaNs ignored.
 #[must_use]
 pub fn stde_median(data: &[f64]) -> f64 {
-    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
-    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
-    let n = sorted.len();
+    let mut buf: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    let n = buf.len();
     let z = 2.5758293035489004_f64;
     let nf = n as f64;
     // numpy round() is banker's rounding; values here are non-half in practice,
     // but match it exactly via round-half-to-even.
     let kf = (nf + 1.0) / 2.0 - z * (nf / 4.0).sqrt();
     let k = round_half_even(kf) as usize;
-    (sorted[n - k] - sorted[k - 1]) / (2.0 * z)
+    // Only the two order statistics at ranks n-k and k-1 are read, so quickselect them via
+    // `select_ranks` (O(n)) on the shared buffer instead of a full O(n log n) sort. BYTE-
+    // IDENTICAL: each rank's order statistic is unique whether read from a full total_cmp sort
+    // or partitioned out.
+    let (upper, lower) = if STDE_MEDIAN_FORCE_SORT.load(std::sync::atomic::Ordering::Relaxed) {
+        buf.sort_unstable_by(|a, b| a.total_cmp(b));
+        (buf[n - k], buf[k - 1])
+    } else {
+        let upper = select_ranks(&mut buf, n - k, n - k).0;
+        let lower = select_ranks(&mut buf, k - 1, k - 1).0;
+        (upper, lower)
+    };
+    (upper - lower) / (2.0 * z)
 }
 
 /// Round half to even (banker's rounding), matching numpy's `round`.
