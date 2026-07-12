@@ -4984,12 +4984,62 @@ pub fn onenormest(a: &CsrMatrix) -> f64 {
 }
 
 /// Scale a CSR matrix by a scalar: B = alpha * A.
+/// When `true`, [`sparse_scale`] builds its output serially (the ORIG behaviour); default `false`
+/// fans the `v*alpha` data map and the `indices` clone across nnz-chunks. Byte-identical.
+#[doc(hidden)]
+pub static SPARSE_SCALE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn sparse_scale(a: &CsrMatrix, alpha: f64) -> CsrMatrix {
-    let scaled_data: Vec<f64> = a.data().iter().map(|&v| v * alpha).collect();
+    let data = a.data();
+    let indices = a.indices();
+    let nnz = data.len();
+    // The two nnz-length outputs — the `v*alpha` data map (compute+bandwidth) and the verbatim
+    // `indices` copy (bandwidth) — dominate; the `indptr` clone is O(rows+1). Fanning both big
+    // arrays across cores aggregates memory bandwidth. Each output slot is written exactly once,
+    // in ascending flat order, from the matching source slot → BYTE-IDENTICAL to the serial build.
+    let nthreads = if SPARSE_SCALE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nnz < 65_536
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nnz)
+    };
+    let (scaled_data, cloned_indices) = if nthreads <= 1 {
+        (
+            data.iter().map(|&v| v * alpha).collect::<Vec<f64>>(),
+            indices.to_vec(),
+        )
+    } else {
+        let mut sd = vec![0.0f64; nnz];
+        let mut ci = vec![0usize; nnz];
+        let chunk = nnz.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (ci_idx, (dblk, iblk)) in sd
+                .chunks_mut(chunk)
+                .zip(ci.chunks_mut(chunk))
+                .enumerate()
+            {
+                let base = ci_idx * chunk;
+                let src_d = &data[base..base + dblk.len()];
+                let src_i = &indices[base..base + iblk.len()];
+                scope.spawn(move || {
+                    for (slot, &v) in dblk.iter_mut().zip(src_d) {
+                        *slot = v * alpha;
+                    }
+                    iblk.copy_from_slice(src_i);
+                });
+            }
+        });
+        (sd, ci)
+    };
     CsrMatrix::from_components_unchecked(
         a.shape(),
         scaled_data,
-        a.indices().to_vec(),
+        cloned_indices,
         a.indptr().to_vec(),
     )
 }
