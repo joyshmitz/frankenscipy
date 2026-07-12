@@ -11306,14 +11306,33 @@ pub fn clip(input: &NdArray, a_min: f64, a_max: f64) -> NdArray {
     }
 }
 
+/// When `true`, [`abs_array`] runs its element-wise `abs` map serially (the ORIG behaviour); default
+/// `false` fans the map across cores via `fill_pixels_parallel`. Byte-identical.
+#[doc(hidden)]
+pub static NDIMAGE_ABS_ARRAY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Apply element-wise absolute value.
 pub fn abs_array(input: &NdArray) -> NdArray {
-    let data: Vec<f64> = input.data.iter().map(|&v| v.abs()).collect();
-    NdArray {
-        data,
+    // `abs` is a near-free bit op, so this map is pure read+write memory bandwidth. Fanning it
+    // across cores aggregates multi-channel bandwidth (like count_nonzero / the scale-family output
+    // maps). BYTE-IDENTICAL — each output element is `input.data[flat].abs()` in flat order.
+    // `NDIMAGE_ABS_ARRAY_FORCE_SERIAL` restores the serial map (same-binary A/B).
+    if NDIMAGE_ABS_ARRAY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let data: Vec<f64> = input.data.iter().map(|&v| v.abs()).collect();
+        return NdArray {
+            data,
+            shape: input.shape.clone(),
+            strides: input.strides.clone(),
+        };
+    }
+    let mut output = NdArray {
+        data: vec![0.0; input.data.len()],
         shape: input.shape.clone(),
         strides: input.strides.clone(),
-    }
+    };
+    fill_pixels_parallel(&mut output, 1, |flat, _scratch| input.data[flat].abs());
+    output
 }
 
 /// When `true`, [`sqrt_array`] runs its element-wise `sqrt` map serially (the ORIG behaviour); default
