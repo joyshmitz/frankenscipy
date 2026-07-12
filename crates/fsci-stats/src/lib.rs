@@ -51553,6 +51553,14 @@ pub fn ljung_box(data: &[f64], lags: usize) -> (f64, f64) {
 pub static NORMAL_EQ_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`augmented_normal_equations`] builds its transposed design columns SERIALLY (the
+/// ORIG behaviour, a strided gather that was the residual serial pass capping the end-to-end
+/// speedup); default `false` fans the independent columns across cores. Byte-identical (each cell
+/// written once; value is independent of build order). `#[doc(hidden)]` — the A/B knob.
+#[doc(hidden)]
+pub static NORMAL_EQ_TRANSPOSE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn augmented_normal_equations(x: &[Vec<f64>], y: &[f64], p: usize) -> (Vec<Vec<f64>>, Vec<f64>) {
     let n = x.len();
     let p1 = p + 1;
@@ -51584,13 +51592,51 @@ fn augmented_normal_equations(x: &[Vec<f64>], y: &[f64], p: usize) -> (Vec<Vec<f
         return (xtx, xty);
     }
 
-    // Transposed augmented columns: col[0] = ones, col[1+j][i] = x[i][j].
+    // Transposed augmented columns: col[0] = ones, col[1+j][i] = x[i][j]. The `p1` output columns
+    // are independent Vecs (each cell written exactly once, value independent of build order), so
+    // they fan across threads BYTE-IDENTICALLY. The per-column gather `x[i][j]` strides across the
+    // row-major input, so this serial pass is cache-thrashing and — with the dot-fill below already
+    // parallel — is the residual serial cost that caps the end-to-end speedup; parallelising it
+    // recovers that. `NORMAL_EQ_TRANSPOSE_FORCE_SERIAL` restores the serial build for A/B.
     let mut cols = vec![vec![0.0f64; n]; p1];
-    cols[0].iter_mut().for_each(|v| *v = 1.0);
-    for (i, xi) in x.iter().enumerate() {
-        for j in 0..p {
-            cols[j + 1][i] = xi[j];
+    let build_col = |c: usize, col: &mut [f64]| {
+        if c == 0 {
+            col.iter_mut().for_each(|v| *v = 1.0);
+        } else {
+            let j = c - 1;
+            for (i, slot) in col.iter_mut().enumerate() {
+                *slot = x[i][j];
+            }
         }
+    };
+    let t_nthreads = if NORMAL_EQ_TRANSPOSE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || work < 1 << 22
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(p1)
+            .max(1)
+    };
+    if t_nthreads <= 1 {
+        for (c, col) in cols.iter_mut().enumerate() {
+            build_col(c, col);
+        }
+    } else {
+        let chunk = p1.div_ceil(t_nthreads);
+        let build_col = &build_col;
+        std::thread::scope(|scope| {
+            for (ci, block) in cols.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (lc, col) in block.iter_mut().enumerate() {
+                        build_col(base + lc, col);
+                    }
+                });
+            }
+        });
     }
 
     let mut xtx = vec![vec![0.0f64; p1]; p1];
