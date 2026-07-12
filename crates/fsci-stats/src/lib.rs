@@ -25949,6 +25949,12 @@ pub fn gstd(data: &[f64]) -> f64 {
     var_log.sqrt().exp()
 }
 
+/// When `true`, [`hmean`] runs its validity check, zero check and Σ(1/x) as three separate
+/// passes (the ORIG behaviour); default `false` fuses them into one traversal. Byte-identical.
+#[doc(hidden)]
+pub static HMEAN_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the harmonic mean.
 ///
 /// Matches `scipy.stats.hmean`.
@@ -25956,14 +25962,44 @@ pub fn hmean(data: &[f64]) -> f64 {
     if data.is_empty() {
         return f64::NAN;
     }
-    if data.iter().any(|&x| x.is_nan() || x < 0.0) {
+    let n = data.len() as f64;
+    if HMEAN_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if data.iter().any(|&x| x.is_nan() || x < 0.0) {
+            return f64::NAN;
+        }
+        if data.contains(&0.0) {
+            return 0.0;
+        }
+        let inv_sum: f64 = data.iter().map(|&x| 1.0 / x).sum();
+        return if inv_sum == 0.0 {
+            f64::INFINITY
+        } else {
+            n / inv_sum
+        };
+    }
+    // The validity check (`any(nan || x<0)`), the zero check (`contains(0)`) and Σ(1/x) are
+    // three independent traversals; fuse them into ONE. BYTE-IDENTICAL: for valid input (no
+    // NaN/negative/zero) every element takes the `else` arm, so `inv_sum` is the same left-to-
+    // right fold of `1/x` from 0.0 as `iter().map(1/x).sum()`; a NaN/negative returns NaN and a
+    // zero returns 0.0 with the same precedence as the two separate early-return checks.
+    let mut invalid = false;
+    let mut has_zero = false;
+    let mut inv_sum = 0.0f64;
+    for &x in data {
+        if x.is_nan() || x < 0.0 {
+            invalid = true;
+        } else if x == 0.0 {
+            has_zero = true;
+        } else {
+            inv_sum += 1.0 / x;
+        }
+    }
+    if invalid {
         return f64::NAN;
     }
-    if data.contains(&0.0) {
+    if has_zero {
         return 0.0;
     }
-    let n = data.len() as f64;
-    let inv_sum: f64 = data.iter().map(|&x| 1.0 / x).sum();
     if inv_sum == 0.0 {
         return f64::INFINITY;
     }
