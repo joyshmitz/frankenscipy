@@ -3853,6 +3853,12 @@ fn kmeans2_k4_d4(
 /// Whiten observations by dividing by per-feature standard deviation.
 ///
 /// Matches `scipy.cluster.vq.whiten`.
+/// When `true`, [`whiten`] builds its output serially (the ORIG behaviour); default `false` fans
+/// the per-row divide-by-std map across row-chunks. Byte-identical. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static WHITEN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn whiten(data: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, ClusterError> {
     if data.is_empty() {
         return Ok(vec![]);
@@ -3885,16 +3891,52 @@ pub fn whiten(data: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, ClusterError> {
 
     let stds: Vec<f64> = vars.iter().map(|&v| (v / n as f64).sqrt()).collect();
 
-    Ok(data
-        .iter()
-        .map(|point| {
-            point
-                .iter()
-                .zip(stds.iter())
-                .map(|(&v, &s)| if s > 0.0 { v / s } else { v })
-                .collect()
-        })
-        .collect())
+    // The output is a per-ROW map: out[i][j] = data[i][j] / stds[j] (or the raw value when the
+    // feature is constant). Each output row is a pure function of data[i] and the shared stds, so
+    // the rows — and their per-row Vec allocations — fan across cores with no cross-row dependency.
+    // Every element is computed by the identical expression in the identical order → BYTE-IDENTICAL
+    // to the serial map. The mean/variance reductions above stay serial (parallelizing them would
+    // reassociate the per-feature sums). Gated on total element work.
+    let whiten_row = |point: &[f64]| -> Vec<f64> {
+        point
+            .iter()
+            .zip(stds.iter())
+            .map(|(&v, &s)| if s > 0.0 { v / s } else { v })
+            .collect()
+    };
+    let nthreads = if WHITEN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 2
+        || n.saturating_mul(d) < 65_536
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+    if nthreads <= 1 {
+        return Ok(data.iter().map(|point| whiten_row(point)).collect());
+    }
+    let mut out: Vec<Vec<f64>> = vec![Vec::new(); n];
+    let chunk = n.div_ceil(nthreads);
+    let stds_ref = &stds;
+    std::thread::scope(|scope| {
+        for (ci, block) in out.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in block.iter_mut().enumerate() {
+                    let point = &data[base + k];
+                    *slot = point
+                        .iter()
+                        .zip(stds_ref.iter())
+                        .map(|(&v, &s)| if s > 0.0 { v / s } else { v })
+                        .collect();
+                }
+            });
+        }
+    });
+    Ok(out)
 }
 
 // ══════════════════════════════════════════════════════════════════════
