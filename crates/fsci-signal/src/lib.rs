@@ -4725,16 +4725,48 @@ pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64)
     freqs.last().copied().unwrap_or(0.0)
 }
 
+/// When `true`, [`spectral_bandwidth`] runs the ORIG four passes (validity scan, `spectral_centroid`
+/// call, a recomputed total, then the variance); default `false` folds the validity/total/centroid
+/// into ONE pass. Byte-identical.
+#[doc(hidden)]
+pub static SPECTRAL_BANDWIDTH_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Spectral bandwidth: weighted standard deviation of frequencies.
 pub fn spectral_bandwidth(magnitudes: &[f64], freqs: &[f64]) -> f64 {
     if magnitudes.is_empty() || freqs.is_empty() {
         return 0.0;
     }
-    if has_invalid_paired_spectral_bins(magnitudes, freqs) {
-        return f64::NAN;
-    }
-    let centroid = spectral_centroid(magnitudes, freqs);
-    let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
+    // The ORIG scanned the spectrum FOUR times: a validity check, `spectral_centroid` (which itself
+    // scans validity + total + Σ(m·f)), a recomputed `total`, then the variance. Fold the validity
+    // check, `total = Σm` and `wsum = Σ(m·f)` into ONE pass; `centroid = wsum/total` is bit-for-bit
+    // what `spectral_centroid` returns. BYTE-IDENTICAL: every Σ keeps its left-to-right order and
+    // `m * f` expression, and the invalid⇒NaN / zero-total⇒0.0 early-outs are preserved.
+    let (centroid, total) = if SPECTRAL_BANDWIDTH_FUSE_DISABLE
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        if has_invalid_paired_spectral_bins(magnitudes, freqs) {
+            return f64::NAN;
+        }
+        let centroid = spectral_centroid(magnitudes, freqs);
+        let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
+        (centroid, total)
+    } else {
+        let mut total = 0.0f64;
+        let mut wsum = 0.0f64;
+        let mut valid = true;
+        for (&m, &f) in magnitudes.iter().zip(freqs.iter()) {
+            valid &= m.is_finite() && m >= 0.0 && f.is_finite();
+            total += m;
+            wsum += m * f;
+        }
+        if !valid {
+            return f64::NAN;
+        }
+        // Matches spectral_centroid: it returns 0.0 when total == 0, but that path returns 0.0 below
+        // regardless, so `wsum / total` here is only consumed when total != 0.
+        (wsum / total, total)
+    };
     if total == 0.0 {
         return 0.0;
     }
