@@ -44777,10 +44777,16 @@ pub fn probplot_quantiles(n: usize) -> Vec<f64> {
         *probability = (order - 0.3175) / (n as f64 + 0.365);
     }
 
-    probabilities
-        .into_iter()
-        .map(|probability| normal.ppf(probability))
-        .collect()
+    // Independent compute-bound inverse-normal per point; fan across cores (work-gated).
+    // BYTE-IDENTICAL: `par_continuous_map` preserves index order ⇒ same bits as the serial map.
+    if PROBPLOT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        probabilities
+            .iter()
+            .map(|&probability| normal.ppf(probability))
+            .collect()
+    } else {
+        par_continuous_map(&probabilities, |probability| normal.ppf(probability))
+    }
 }
 
 /// Probability-plot correlation coefficient of the transformed data against the
@@ -44999,6 +45005,12 @@ pub struct ProbplotResult {
     pub r: f64,
 }
 
+/// Toggle forcing the probability-plot theoretical-quantile maps (`probplot`,
+/// `probplot_quantiles`) onto the serial path, for A/B measurement. Default
+/// `false` = the per-point `ndtri`/`ppf` evals fan across cores.
+pub static PROBPLOT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Probability plot of sample data against the standard normal distribution,
 /// matching `scipy.stats.probplot(x, dist='norm', fit=True)`.
 ///
@@ -45009,10 +45021,14 @@ pub struct ProbplotResult {
 #[must_use]
 pub fn probplot(x: &[f64]) -> ProbplotResult {
     let probs = uniform_order_medians(x.len());
-    let osm: Vec<f64> = probs
-        .iter()
-        .map(|&p| fsci_special::ndtri_scalar(p))
-        .collect();
+    // Each theoretical quantile is an independent compute-bound `ndtri` (inverse-normal
+    // rational approximation); fan them across cores (work-gated). BYTE-IDENTICAL:
+    // `par_continuous_map` preserves index order ⇒ same bits as the serial map.
+    let osm: Vec<f64> = if PROBPLOT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        probs.iter().map(|&p| fsci_special::ndtri_scalar(p)).collect()
+    } else {
+        par_continuous_map(&probs, |p| fsci_special::ndtri_scalar(p))
+    };
     let mut osr = x.to_vec();
     osr.sort_unstable_by(f64::total_cmp);
     let fit = linregress(&osm, &osr);
