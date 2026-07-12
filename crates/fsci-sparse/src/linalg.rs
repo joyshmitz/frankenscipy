@@ -5733,15 +5733,17 @@ pub fn sparse_sum(a: &CsrMatrix) -> f64 {
 }
 
 /// Compute the row sums of a CSR matrix.
+///
+/// Each `out[i]` is the sum over row `i`'s own disjoint `data[start..end]` slice, folded in the
+/// same left-to-right order regardless of which thread computes it, so fanning the independent rows
+/// across cores is BYTE-IDENTICAL (no cross-row Σ reassociation). Shares the `sparse_par_row_map`
+/// gate/toggle with [`sparse_row_max`]/[`sparse_row_min`].
 pub fn sparse_row_sums(a: &CsrMatrix) -> Vec<f64> {
-    let n = a.shape().rows;
-    (0..n)
-        .map(|i| {
-            let start = a.indptr()[i];
-            let end = a.indptr()[i + 1];
-            a.data()[start..end].iter().sum()
-        })
-        .collect()
+    sparse_par_row_map(a, |i| {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        a.data()[start..end].iter().sum()
+    })
 }
 
 /// Compute the column sums of a CSR matrix.
