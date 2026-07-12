@@ -4480,6 +4480,12 @@ pub fn envelope(x: &[f64]) -> Result<Vec<f64>, SignalError> {
     hilbert_envelope(x)
 }
 
+/// When `true`, [`zero_crossing_rate`] runs its finite-check and crossings-count as two separate
+/// passes (the ORIG behaviour); default `false` folds them into one pass. Byte-identical.
+#[doc(hidden)]
+pub static ZCR_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Zero-crossing rate: fraction of consecutive samples with sign change.
 ///
 /// Useful for audio/speech analysis.
@@ -4487,13 +4493,31 @@ pub fn zero_crossing_rate(x: &[f64]) -> f64 {
     if x.len() < 2 {
         return 0.0;
     }
-    if x.iter().any(|value| !value.is_finite()) {
-        return f64::NAN;
-    }
-    let crossings = x
-        .windows(2)
-        .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
-        .count();
+    // Fold the finite-check scan into the crossings-count pass so x is read once instead of twice.
+    // BYTE-IDENTICAL: the crossing count is an exact integer counted in the same window order, and a
+    // non-finite element still forces the NaN return (the count is discarded on that path, exactly as
+    // the original early-out discarded it).
+    let crossings = if ZCR_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if x.iter().any(|value| !value.is_finite()) {
+            return f64::NAN;
+        }
+        x.windows(2)
+            .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
+            .count()
+    } else {
+        let mut valid = x[0].is_finite();
+        let mut crossings = 0usize;
+        for w in x.windows(2) {
+            valid &= w[1].is_finite();
+            if (w[0] >= 0.0) != (w[1] >= 0.0) {
+                crossings += 1;
+            }
+        }
+        if !valid {
+            return f64::NAN;
+        }
+        crossings
+    };
     crossings as f64 / (x.len() - 1) as f64
 }
 
