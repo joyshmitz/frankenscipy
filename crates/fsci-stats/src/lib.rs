@@ -25686,15 +25686,52 @@ pub fn nanprod(data: &[f64]) -> f64 {
     data.iter().filter(|x| !x.is_nan()).product()
 }
 
+/// When `true`, [`nanmin`]/[`nanmax`] run their NaN-filtered fold serially (the ORIG
+/// behaviour); default `false` fans it across cores above the work gate. Byte-identical.
+#[doc(hidden)]
+pub static NANMINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Parallel `data.iter().filter(!nan).copied().fold(ident, reduce)`. BYTE-IDENTICAL to the
+/// serial fold: `f64::min`/`f64::max` are associative and give a total order over signed
+/// zeros, so the chunk-then-merge result equals the left fold, and NaN is filtered per chunk
+/// identically. Work-gated (the syscall + spawn cost more than the fold below the gate).
+fn par_nan_fold(data: &[f64], ident: f64, reduce: fn(f64, f64) -> f64) -> f64 {
+    let n = data.len();
+    let serial = |d: &[f64]| d.iter().filter(|x| !x.is_nan()).copied().fold(ident, reduce);
+    let nthreads = if NANMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 131_072
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 65_536)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return serial(data);
+    }
+    let chunk = n.div_ceil(nthreads);
+    let serial = &serial;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|c| scope.spawn(move || serial(c)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect()
+    });
+    parts.into_iter().fold(ident, reduce)
+}
+
 /// Compute NaN-aware min.
 ///
 /// Returns the minimum value, ignoring NaN values.
 /// Matches `numpy.nanmin`.
 pub fn nanmin(data: &[f64]) -> f64 {
-    data.iter()
-        .filter(|x| !x.is_nan())
-        .copied()
-        .fold(f64::INFINITY, f64::min)
+    par_nan_fold(data, f64::INFINITY, f64::min)
 }
 
 /// Compute NaN-aware max.
@@ -25702,10 +25739,7 @@ pub fn nanmin(data: &[f64]) -> f64 {
 /// Returns the maximum value, ignoring NaN values.
 /// Matches `numpy.nanmax`.
 pub fn nanmax(data: &[f64]) -> f64 {
-    data.iter()
-        .filter(|x| !x.is_nan())
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max)
+    par_nan_fold(data, f64::NEG_INFINITY, f64::max)
 }
 
 /// Compute median ignoring NaN values.
