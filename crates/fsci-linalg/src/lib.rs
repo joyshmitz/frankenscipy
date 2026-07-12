@@ -18641,18 +18641,71 @@ fn simd_dot4(lhs: &[f64], rhs0: &[f64], rhs1: &[f64], rhs2: &[f64], rhs3: &[f64]
 ///
 /// The full-rank tall `pinv`/`lstsq` routes only need the symmetric Gram
 /// matrix, so this avoids materializing `A^T` and computes each column dot once.
+/// When `true`, [`symmetric_gram_matrix_from_columns`] fills its upper triangle SERIALLY (the ORIG
+/// behaviour); default `false` fans the independent cell-dots across cores. Byte-identical (each
+/// `simd_dot(col_l, col_r)` runs identically, cells written to disjoint slots). `#[doc(hidden)]` — A/B.
+#[doc(hidden)]
+pub static LINALG_GRAM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn symmetric_gram_matrix_from_columns(matrix: &DMatrix<f64>) -> DMatrix<f64> {
     let rows = matrix.nrows();
     let cols = matrix.ncols();
     let data = matrix.as_slice();
     let mut gram = DMatrix::<f64>::zeros(cols, cols);
-    for left in 0..cols {
-        let left_col = &data[left * rows..(left + 1) * rows];
-        for right in left..cols {
-            let right_col = &data[right * rows..(right + 1) * rows];
-            let value = simd_dot(left_col, right_col);
-            gram[(left, right)] = value;
-            gram[(right, left)] = value;
+    // Each upper-triangle cell (l,r) = simd_dot(col_l, col_r) is an INDEPENDENT dot over two
+    // contiguous (nalgebra column-major) columns; symmetric ⇒ mirror. For a tall matrix (rows≫cols)
+    // this O(rows·cols²) Gram build DOMINATES the downstream Cholesky (O(cols³)), so fan the cells
+    // across cores. BYTE-IDENTICAL: each simd_dot runs on the same operands in the same lane order
+    // and writes a disjoint slot; the mirror is an exact copy. `LINALG_GRAM_FORCE_SERIAL` A/B knob.
+    let work = (cols as u64).saturating_mul(cols as u64).saturating_mul(rows as u64);
+    let nthreads = if LINALG_GRAM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || work < (1 << 20)
+        || cols < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        for left in 0..cols {
+            let left_col = &data[left * rows..(left + 1) * rows];
+            for right in left..cols {
+                let right_col = &data[right * rows..(right + 1) * rows];
+                let value = simd_dot(left_col, right_col);
+                gram[(left, right)] = value;
+                gram[(right, left)] = value;
+            }
+        }
+    } else {
+        // Upper-triangle cells as balanced independent units (rows-fan is load-imbalanced for a
+        // triangular fill); compute the dots into a flat Vec in parallel, then scatter+mirror serially.
+        let cells: Vec<(usize, usize)> =
+            (0..cols).flat_map(|l| (l..cols).map(move |r| (l, r))).collect();
+        let nc = cells.len();
+        let mut vals = vec![0.0f64; nc];
+        let nt = nthreads.min(nc).max(1);
+        let chunk = nc.div_ceil(nt);
+        let cells_ref = &cells;
+        std::thread::scope(|scope| {
+            for (ci, block) in vals.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (k, slot) in block.iter_mut().enumerate() {
+                        let (l, r) = cells_ref[base + k];
+                        let lc = &data[l * rows..(l + 1) * rows];
+                        let rc = &data[r * rows..(r + 1) * rows];
+                        *slot = simd_dot(lc, rc);
+                    }
+                });
+            }
+        });
+        for (&(l, r), &v) in cells.iter().zip(&vals) {
+            gram[(l, r)] = v;
+            gram[(r, l)] = v;
         }
     }
     gram
