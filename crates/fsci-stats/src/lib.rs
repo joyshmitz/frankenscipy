@@ -39703,6 +39703,13 @@ fn gaussian_kde_evaluate_window_simd(
 pub static GAUSSIAN_KDE_ND_WHITEN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`GaussianKdeNd::new`] builds its sample covariance serially (the ORIG point-outer
+/// accumulation); default `false` fans the independent per-cell reductions (upper triangle +
+/// mirror) across cores. Byte-identical. `#[doc(hidden)]` — the same-binary A/B knob.
+#[doc(hidden)]
+pub static GAUSSIAN_KDE_ND_COV_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub struct GaussianKdeNd {
     /// Pre-whitened data points: `n` rows of `L⁻¹ xᵢ` (`d` coords each). Whitening
     /// each point ONCE (in `new`) turns a query's Mahalanobis quadratic form
@@ -39759,14 +39766,59 @@ impl GaussianKdeNd {
             *m /= nf;
         }
 
-        // Sample covariance (ddof=1), matching np.cov(bias=False).
+        // Sample covariance (ddof=1), matching np.cov(bias=False). Each cell `cov[a][b] = Σ_p
+        // (p[a]-μₐ)(p[b]-μ_b)` is an independent reduction over the points; summed in ASCENDING point
+        // order it is byte-identical to the serial point-outer accumulation. The matrix is symmetric
+        // and IEEE `·` is commutative, so `cov[b][a]` equals `cov[a][b]` bit-for-bit — compute the
+        // upper triangle in parallel, then mirror. BYTE-IDENTICAL; gated on the O(n·d²) build work.
         let mut cov = vec![vec![0.0f64; d]; d];
-        for p in dataset {
-            for a in 0..d {
-                let da = p[a] - mean[a];
-                for b in 0..d {
-                    cov[a][b] += da * (p[b] - mean[b]);
+        let cell_of = |a: usize, b: usize| -> f64 {
+            let (ma, mb) = (mean[a], mean[b]);
+            let mut s = 0.0f64;
+            for p in dataset {
+                s += (p[a] - ma) * (p[b] - mb);
+            }
+            s
+        };
+        let cov_serial = GAUSSIAN_KDE_ND_COV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+            || n < 2
+            || n.saturating_mul(d.saturating_mul(d)) < (1 << 16);
+        if cov_serial {
+            for p in dataset {
+                for a in 0..d {
+                    let da = p[a] - mean[a];
+                    for b in 0..d {
+                        cov[a][b] += da * (p[b] - mean[b]);
+                    }
                 }
+            }
+        } else {
+            // Upper-triangle cells (a <= b), each an independent point-order reduction.
+            let cells: Vec<(usize, usize)> =
+                (0..d).flat_map(|a| (a..d).map(move |b| (a, b))).collect();
+            let nc = cells.len();
+            let threads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nc);
+            let mut vals = vec![0.0f64; nc];
+            let chunk = nc.div_ceil(threads);
+            let cell_ref = &cell_of;
+            let cells_ref = &cells;
+            std::thread::scope(|scope| {
+                for (ci, block) in vals.chunks_mut(chunk).enumerate() {
+                    let base = ci * chunk;
+                    scope.spawn(move || {
+                        for (k, slot) in block.iter_mut().enumerate() {
+                            let (a, b) = cells_ref[base + k];
+                            *slot = cell_ref(a, b);
+                        }
+                    });
+                }
+            });
+            for (&(a, b), &v) in cells.iter().zip(&vals) {
+                cov[a][b] = v;
+                cov[b][a] = v;
             }
         }
         let factor = nf.powf(-1.0 / (d as f64 + 4.0));
