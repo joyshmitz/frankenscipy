@@ -4524,17 +4524,52 @@ pub fn zero_crossing_rate(x: &[f64]) -> f64 {
 /// Compute the short-time energy of a signal.
 ///
 /// Returns the energy in each frame of length `frame_len` with `hop_len` stride.
+/// When `true`, [`short_time_energy`] reduces its frames serially (the ORIG behaviour); default
+/// `false` fans the independent per-frame Σv² across cores. Byte-identical. `#[doc(hidden)]` — the
+/// same-binary A/B knob.
+#[doc(hidden)]
+pub static SHORT_TIME_ENERGY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn short_time_energy(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<f64> {
-    if frame_len == 0 || hop_len == 0 || x.is_empty() {
+    if frame_len == 0 || hop_len == 0 || x.len() < frame_len {
         return vec![];
     }
-    let mut energies = Vec::new();
-    let mut start = 0;
-    while start + frame_len <= x.len() {
-        let energy: f64 = x[start..start + frame_len].iter().map(|&v| v * v).sum();
-        energies.push(energy);
-        start += hop_len;
+    // Frame `f` (start = f·hop) has energy Σ over its own window of v², folded left-to-right in the
+    // same order regardless of thread, so fanning the independent frames across cores is BYTE-
+    // IDENTICAL (no cross-frame Σ reassociation). Gated on total sample work.
+    let n_frames = (x.len() - frame_len) / hop_len + 1;
+    let energy_of = |f: usize| -> f64 {
+        let start = f * hop_len;
+        x[start..start + frame_len].iter().map(|&v| v * v).sum()
+    };
+    let nthreads = if SHORT_TIME_ENERGY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n_frames < 2
+        || n_frames.saturating_mul(frame_len) < 65_536
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n_frames)
+    };
+    if nthreads <= 1 {
+        return (0..n_frames).map(energy_of).collect();
     }
+    let mut energies = vec![0.0f64; n_frames];
+    let chunk = n_frames.div_ceil(nthreads);
+    let eref = &energy_of;
+    std::thread::scope(|scope| {
+        for (ci, block) in energies.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in block.iter_mut().enumerate() {
+                    *slot = eref(base + k);
+                }
+            });
+        }
+    });
     energies
 }
 
