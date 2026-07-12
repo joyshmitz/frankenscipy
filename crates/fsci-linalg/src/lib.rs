@@ -16961,6 +16961,12 @@ fn scalar_allclose(actual: f64, expected: f64, atol: f64, rtol: f64) -> bool {
     (actual - expected).abs() <= atol + rtol * expected.abs()
 }
 
+/// When `true`, [`mat_norm_1`] folds the max over per-column abs-sums serially (the ORIG behaviour);
+/// default `false` chunks it across columns. Byte-identical.
+#[doc(hidden)]
+pub static LINALG_MAT_NORM_1_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the 1-norm of a matrix (maximum column sum of absolute values).
 pub fn mat_norm_1(a: &[Vec<f64>]) -> f64 {
     if a.is_empty() {
@@ -16970,17 +16976,69 @@ pub fn mat_norm_1(a: &[Vec<f64>]) -> f64 {
     if a.iter().any(|row| row.len() != cols) {
         return f64::NAN;
     }
-    let mut max_col_sum = 0.0f64;
-    for j in 0..cols {
-        let mut col_sum = 0.0_f64;
-        for row in a.iter() {
-            let value = row[j].abs();
-            if !value.is_finite() {
-                return f64::NAN;
+    // Each column's `Σ_row |a[row][j]|` is an INDEPENDENT per-column serial float sum (kept serial,
+    // in row order ⇒ bit-identical), and the outer `max` over columns is associative ⇒ chunk-across-
+    // COLUMNS + merge is BYTE-IDENTICAL. A non-finite element still yields NaN (tracked as a flag,
+    // merged ⇒ NaN — same result as the serial early-out). `LINALG_MAT_NORM_1_FORCE_SERIAL` A/B.
+    let nrows = a.len();
+    let nthreads = if LINALG_MAT_NORM_1_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nrows.saturating_mul(cols) < 65_536
+        || cols < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(cols)
+    };
+    if nthreads <= 1 {
+        let mut max_col_sum = 0.0f64;
+        for j in 0..cols {
+            let mut col_sum = 0.0_f64;
+            for row in a.iter() {
+                let value = row[j].abs();
+                if !value.is_finite() {
+                    return f64::NAN;
+                }
+                col_sum += value;
             }
-            col_sum += value;
+            max_col_sum = max_col_sum.max(col_sum);
         }
-        max_col_sum = max_col_sum.max(col_sum);
+        return max_col_sum;
+    }
+    let chunk = cols.div_ceil(nthreads);
+    let parts: Vec<(f64, bool)> = std::thread::scope(|scope| {
+        (0..cols)
+            .step_by(chunk)
+            .map(|start| {
+                let end = (start + chunk).min(cols);
+                scope.spawn(move || {
+                    let mut max_col_sum = 0.0f64;
+                    let mut bad = false;
+                    for j in start..end {
+                        let mut col_sum = 0.0_f64;
+                        for row in a.iter() {
+                            let value = row[j].abs();
+                            bad |= !value.is_finite();
+                            col_sum += value;
+                        }
+                        max_col_sum = max_col_sum.max(col_sum);
+                    }
+                    (max_col_sum, bad)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("mat_norm_1 chunk panicked"))
+            .collect()
+    });
+    let mut max_col_sum = 0.0f64;
+    for (mx, bad) in parts {
+        if bad {
+            return f64::NAN;
+        }
+        max_col_sum = max_col_sum.max(mx);
     }
     max_col_sum
 }
