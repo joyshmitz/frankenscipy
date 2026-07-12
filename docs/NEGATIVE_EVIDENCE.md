@@ -20354,3 +20354,21 @@ ULP; validation+mean are light/bandwidth-bound). Parallelizing 1-of-3 passes cap
 ship (1.6% margin ≈ gmean_weighted's held 2.5% → not robust). Stashed reject. RULE (reconfirmed twice now:
 yeojohnson_llf, spectral_flatness): a fn with MULTIPLE serial O(N) passes where only ONE is byte-id-parallelizable
 caps at a marginal ~1.2-1.3x — need the heavy pass to DOMINATE, or ≥2 heavy passes both parallelizable (boxcox_llf).
+
+## 2026-07-11 - BlackThrush (cc) - REJECT special::logsumexp byte-exact parallelization: 0.726x REGRESSION (materialization)
+`logsumexp`/`logsumexp_with_b` (convenience.rs, `logsumexp_weighted_unchecked`) do a serial max pass + a serial
+fused `Σ w·exp(x−max)` reduction. HYPOTHESIS (wrong): unlike `softmax` (Vec output, memory-bound, already rejected),
+logsumexp returns a SCALAR, so its compute-bound `exp` reduction should be the entropy/kl class that wins 2-2.6x
+across cores. MEASURED on vmi remote (perf_logsumexp median-null, n=8M, 15 iters, `LOGSUMEXP_FORCE_SERIAL` A/B):
+serial 72.65ms → parallel **105.11ms = 0.726x**, DECIDED **REGRESSION** (below null_lo 0.827); bitmism=0 (serial ==
+parallel == 22.897789819428596, so the transform WAS byte-exact). ROOT CAUSE: byte-exactness forces the sum to stay
+in index order, so the only byte-id parallel form is `par_map_light(exp terms).iter().sum()` — which MATERIALIZES an
+8M-element (64MB) Vec, then reads it back to sum. That write+read memory traffic (~128MB) dwarfs the exp savings; the
+original serial `.map(exp).sum()` STREAMS with zero materialization. entropy/kl/boxcox_llf win because their heavy
+`ln`/transform maps ALSO materialize but feed a much heavier downstream (or the map itself dominates a longer chain);
+logsumexp's exp-then-add is too light to amortize the round-trip. A chunked in-thread reduction (entropy_h_sum-style,
+no materialization) WOULD parallelize but reassociates the fold ⇒ within-ULP only (not byte-exact, unauthorized here).
+VERDICT: byte-exact logsumexp parallelization CANNOT win — reverted to origin, code clean. RULE (generalizes the
+softmax reject): a byte-exact parallel REDUCTION that must materialize its mapped terms only wins when the per-element
+map is HEAVY enough to amortize the 2× memory round-trip (ln/betainc/transform yes; a single `exp`+add no) OR the
+downstream after the sum is heavy. A lone `Σ exp` / `Σ x²` reduction is memory-round-trip-bound ⇒ skip.
