@@ -6416,17 +6416,52 @@ pub fn upsample(x: &[f64], factor: usize) -> Vec<f64> {
     result
 }
 
+/// When `true`, [`snr`] runs a separate finite-check scan before the two Σv² passes (the ORIG
+/// behaviour, reading each array twice); default `false` folds the check into a single Σv² pass
+/// per array. Byte-identical.
+#[doc(hidden)]
+pub static SNR_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the signal-to-noise ratio in dB.
 pub fn snr(signal: &[f64], noise: &[f64]) -> f64 {
-    if signal
-        .iter()
-        .chain(noise.iter())
-        .any(|value| !value.is_finite())
-    {
-        return f64::NAN;
-    }
-    let sig_power: f64 = signal.iter().map(|&v| v * v).sum::<f64>() / signal.len().max(1) as f64;
-    let noise_power: f64 = noise.iter().map(|&v| v * v).sum::<f64>() / noise.len().max(1) as f64;
+    let (sig_sq, noise_sq) = if SNR_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        // ORIG: a chained finite-check scan of BOTH arrays, then a Σv² pass over EACH — so every
+        // element is read twice.
+        if signal
+            .iter()
+            .chain(noise.iter())
+            .any(|value| !value.is_finite())
+        {
+            return f64::NAN;
+        }
+        (
+            signal.iter().map(|&v| v * v).sum::<f64>(),
+            noise.iter().map(|&v| v * v).sum::<f64>(),
+        )
+    } else {
+        // FUSED: one pass per array — accumulate Σv² and the finite guard together, so each
+        // element is read once. BYTE-IDENTICAL: Σ stays the same left-to-right `+= v*v` order as
+        // `map().sum()`, and any non-finite element still forces the NaN return (the accumulated
+        // sums are discarded on that path, exactly as the original early-out discarded them).
+        let mut sig = 0.0f64;
+        let mut all_finite = true;
+        for &v in signal {
+            all_finite &= v.is_finite();
+            sig += v * v;
+        }
+        let mut noise_acc = 0.0f64;
+        for &v in noise {
+            all_finite &= v.is_finite();
+            noise_acc += v * v;
+        }
+        if !all_finite {
+            return f64::NAN;
+        }
+        (sig, noise_acc)
+    };
+    let sig_power: f64 = sig_sq / signal.len().max(1) as f64;
+    let noise_power: f64 = noise_sq / noise.len().max(1) as f64;
     if noise_power == 0.0 {
         return f64::INFINITY;
     }
