@@ -120,6 +120,7 @@ pub use convenience::{
     fresnel_many,
     fresnel_complex,
     fresnel_zeros,
+    FRESNEL_ZEROS_FORCE_SERIAL,
     fresnelc_zeros,
     fresnels_zeros,
     frexp,

@@ -883,10 +883,21 @@ pub fn fresnel_complex(z: Complex64) -> (Complex64, Complex64) {
 
 /// First `nt` complex zeros of the Fresnel integral `C` (`is_c = true`) or `S`
 /// (`is_c = false`) in the first quadrant, ordered by absolute value.
+/// When `true`, the Fresnel-zero finders ([`fresnelc_zeros`]/[`fresnels_zeros`]/[`fresnel_zeros`])
+/// compute their zeros serially (the ORIG behaviour); default `false` fans the independent per-zero
+/// Newton root-finds across index-chunks. Byte-identical. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static FRESNEL_ZEROS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn fresnel_zeros_kind(nt: usize, is_c: bool) -> Vec<Complex64> {
-    let mut out = Vec::with_capacity(nt);
-    for nr in 1..=nt {
-        let nrf = nr as f64;
+    // Each output zero `nr = i+1` is a pure function of its index: a closed-form asymptotic guess,
+    // then a self-contained 60-step Newton refinement whose per-step cost is a `fresnel_complex`
+    // (two complex error functions) plus a complex cos/sin. No dependency on any other zero (no
+    // prev, no shared state, no scatter), so the loop is embarrassingly parallel and each element
+    // is written to its own index slot → BYTE-IDENTICAL to `(0..nt).map(compute).collect()`.
+    let compute = |i: usize| -> Complex64 {
+        let nrf = (i + 1) as f64;
         // C zeros cluster near √(4nr−1), S zeros near √(4nr) (where C'/S' vanish).
         let psq = if is_c { 4.0 * nrf - 1.0 } else { 4.0 * nrf }.sqrt();
         let ln_term = (PI * psq).ln();
@@ -903,9 +914,14 @@ fn fresnel_zeros_kind(nt: usize, is_c: bool) -> Vec<Complex64> {
                 break;
             }
         }
-        out.push(z);
+        z
+    };
+
+    if FRESNEL_ZEROS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return (0..nt).map(&compute).collect();
     }
-    out
+    par_map_indices(nt, |i| Ok::<Complex64, SpecialError>(compute(i)))
+        .expect("fresnel zeros are infallible")
 }
 
 /// First `nt` complex zeros of the Fresnel cosine integral `C`, matching
