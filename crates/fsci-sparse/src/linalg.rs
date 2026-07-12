@@ -5044,18 +5044,20 @@ pub fn sparse_scale(a: &CsrMatrix, alpha: f64) -> CsrMatrix {
     )
 }
 
-/// Add two CSR matrices: C = A + B.
-///
-/// Both matrices must have the same shape.
-pub fn sparse_add(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
-    let n = a.shape().rows;
-    let m = a.shape().cols;
-
-    let mut rows = Vec::new();
-    let mut cols_vec = Vec::new();
+/// Merge rows `[base..end)` of A and B into local `(counts, cols, vals)` buffers via the per-row
+/// BTreeMap accumulate + `|v|>0` filter. Factored out so the serial path and each parallel worker
+/// run byte-identical code over a contiguous row range; `counts[k]` is the surviving nnz of row
+/// `base+k`, and `cols`/`vals` hold those entries in ascending-row, ascending-column order.
+fn sparse_add_row_block(
+    a: &CsrMatrix,
+    b: &CsrMatrix,
+    base: usize,
+    end: usize,
+) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+    let mut counts = Vec::with_capacity(end.saturating_sub(base));
+    let mut cols = Vec::new();
     let mut vals = Vec::new();
-
-    for i in 0..n {
+    for i in base..end {
         let mut row_acc = std::collections::BTreeMap::new();
 
         let a_start = a.indptr()[i];
@@ -5070,18 +5072,79 @@ pub fn sparse_add(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
             *row_acc.entry(b.indices()[idx]).or_insert(0.0) += b.data()[idx];
         }
 
+        let mut c = 0usize;
         for (&j, &v) in &row_acc {
             if v.abs() > 0.0 {
-                rows.push(i);
-                cols_vec.push(j);
+                cols.push(j);
                 vals.push(v);
+                c += 1;
             }
         }
+        counts.push(c);
     }
+    (counts, cols, vals)
+}
 
+/// When `true`, [`sparse_add`] merges rows serially (the ORIG behaviour); default `false` fans the
+/// independent per-row BTreeMap merges across contiguous row-blocks. Byte-identical.
+#[doc(hidden)]
+pub static SPARSE_ADD_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Add two CSR matrices: C = A + B.
+///
+/// Both matrices must have the same shape.
+pub fn sparse_add(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
+    let n = a.shape().rows;
+    let m = a.shape().cols;
+
+    // Each output row is a pure function of the two input rows `i` (BTreeMap accumulate + |v|>0
+    // filter, ascending column order), so the rows are independent. The surviving-entry COUNT is
+    // data-dependent, so use gather-then-concat: each worker merges a contiguous row-block into a
+    // local buffer, then the blocks are concatenated in ascending row order and `indptr` is built
+    // from per-row counts. Concatenating blocks in row order reproduces the exact serial layout →
+    // BYTE-IDENTICAL. Gated on total stored nnz so small sums stay serial.
+    let work = a.data().len() + b.data().len();
+    let nthreads = if SPARSE_ADD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || work < 65_536
+        || n < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+
+    let parts: Vec<(Vec<usize>, Vec<usize>, Vec<f64>)> = if nthreads <= 1 {
+        vec![sparse_add_row_block(a, b, 0, n)]
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .map(|t| {
+                    let base = (t * chunk).min(n);
+                    let end = ((t + 1) * chunk).min(n);
+                    scope.spawn(move || sparse_add_row_block(a, b, base, end))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        })
+    };
+
+    let total: usize = parts.iter().map(|(_, cols, _)| cols.len()).sum();
+    let mut cols_vec = Vec::with_capacity(total);
+    let mut vals = Vec::with_capacity(total);
     let mut indptr = vec![0usize; n + 1];
-    for &r in &rows {
-        indptr[r + 1] += 1;
+    let mut row_i = 0usize;
+    for (counts, cols, vs) in &parts {
+        for &c in counts {
+            indptr[row_i + 1] = c;
+            row_i += 1;
+        }
+        cols_vec.extend_from_slice(cols);
+        vals.extend_from_slice(vs);
     }
     for i in 0..n {
         indptr[i + 1] += indptr[i];

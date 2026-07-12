@@ -125,6 +125,7 @@ pub use linalg::{
     sparse_frobenius_inner,
     sparse_has_explicit_zeros,
     sparse_is_symmetric,
+    SPARSE_ADD_FORCE_SERIAL,
     sparse_map,
     SPARSE_MAP_FORCE_SERIAL,
     sparse_nnz,
