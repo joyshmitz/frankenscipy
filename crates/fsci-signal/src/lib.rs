@@ -4697,6 +4697,12 @@ pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
     wsum / total
 }
 
+/// When `true`, [`spectral_rolloff`] runs its validity scan and total as two separate passes (the
+/// ORIG behaviour); default `false` folds them into one pass. Byte-identical.
+#[doc(hidden)]
+pub static SPECTRAL_ROLLOFF_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the spectral rolloff frequency.
 ///
 /// Returns the frequency below which `rolloff_percent` of the total energy is contained.
@@ -4704,10 +4710,27 @@ pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64)
     if magnitudes.is_empty() || freqs.is_empty() {
         return 0.0;
     }
-    if has_invalid_paired_spectral_bins(magnitudes, freqs) {
-        return f64::NAN;
-    }
-    let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
+    // Fold the paired-bin validity scan and `total = Σm` into ONE pass (the cumulative-sum scan
+    // below needs `threshold = total·pct` first and early-returns, so it stays a separate pass).
+    // BYTE-IDENTICAL: `total` keeps its exact left-to-right `+=` order and an invalid bin still
+    // returns NaN, exactly as the original early-out did.
+    let total: f64 = if SPECTRAL_ROLLOFF_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if has_invalid_paired_spectral_bins(magnitudes, freqs) {
+            return f64::NAN;
+        }
+        magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum()
+    } else {
+        let mut total = 0.0f64;
+        let mut valid = true;
+        for (&m, &f) in magnitudes.iter().zip(freqs.iter()) {
+            valid &= m.is_finite() && m >= 0.0 && f.is_finite();
+            total += m;
+        }
+        if !valid {
+            return f64::NAN;
+        }
+        total
+    };
     if !(rolloff_percent.is_finite() && (0.0..=100.0).contains(&rolloff_percent)) {
         return f64::NAN;
     }
