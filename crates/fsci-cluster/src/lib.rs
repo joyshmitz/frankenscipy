@@ -2121,6 +2121,67 @@ pub fn nystroem(
     })
 }
 
+/// Force-serial toggle for the Nyström RBF `E`-block fill, used only by the A/B perf harness
+/// (`bin/perf_rbf_nystroem`) to compare the parallel row-fill against the original serial
+/// `.iter().map().collect()` inside one binary. Production code leaves it `false`.
+pub static NYSTROEM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Fill the Nyström `E` block `E[i][b] = exp(−γ·‖data[i] − data[landmarks[b]]‖²)` (n×m).
+///
+/// Each output row depends only on its own `data[i]` and the shared immutable `data`/`landmarks`,
+/// so distributing the rows across threads is BYTE-IDENTICAL to the serial
+/// `data.iter().map(row).collect()`: the per-element arithmetic and the intra-row evaluation
+/// order are untouched — only which thread owns a given row changes. Work-gated on the O(n·m·d)
+/// `exp` workload (the `available_parallelism()` syscall plus thread spawns cost more than the
+/// fill for small blocks), matching the `mean_shift` / GMM E-step gate style in this crate. The
+/// `NYSTROEM_FORCE_SERIAL` toggle pins the serial path for the A/B harness.
+fn nystroem_e_block(data: &[Vec<f64>], landmarks: &[usize], gamma: f64) -> Vec<Vec<f64>> {
+    let n = data.len();
+    let m = landmarks.len();
+    let d = data.first().map_or(0, Vec::len);
+    let row = |xi: &[f64]| -> Vec<f64> {
+        landmarks
+            .iter()
+            .map(|&b| {
+                let d2: f64 = xi.iter().zip(&data[b]).map(|(&x, &y)| (x - y) * (x - y)).sum();
+                (-gamma * d2).exp()
+            })
+            .collect()
+    };
+    let serial = NYSTROEM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let nthreads = if serial
+        || (n as u64)
+            .saturating_mul(m as u64)
+            .saturating_mul(d as u64)
+            < (1 << 20)
+        || n < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+    if nthreads <= 1 {
+        return data.iter().map(|xi| row(xi)).collect();
+    }
+    let mut e_mat: Vec<Vec<f64>> = vec![Vec::new(); n];
+    let chunk = n.div_ceil(nthreads);
+    let row = &row;
+    std::thread::scope(|scope| {
+        for (dchunk, echunk) in data.chunks(chunk).zip(e_mat.chunks_mut(chunk)) {
+            scope.spawn(move || {
+                for (xi, slot) in dchunk.iter().zip(echunk.iter_mut()) {
+                    *slot = row(xi);
+                }
+            });
+        }
+    });
+    e_mat
+}
+
 /// Data-based RBF Nyström feature map — `sklearn.kernel_approximation.Nystroem(kernel="rbf")`.
 ///
 /// Unlike [`nystroem`] (which takes a precomputed `n×n` kernel) this works directly from `n×d`
@@ -2190,10 +2251,7 @@ pub fn rbf_nystroem(
         .iter()
         .map(|&a| landmarks.iter().map(|&b| rbf(&data[a], &data[b])).collect())
         .collect();
-    let e_mat: Vec<Vec<f64>> = data
-        .iter()
-        .map(|xi| landmarks.iter().map(|&b| rbf(xi, &data[b])).collect())
-        .collect();
+    let e_mat = nystroem_e_block(data, &landmarks, gamma);
 
     // Z = E · W^{-1/2} (n×m).
     let w_inv_sqrt = sym_inv_sqrt(&w, m)?;
@@ -2385,10 +2443,7 @@ fn nystroem_spectral_embed(
         .iter()
         .map(|&a| landmarks.iter().map(|&b| rbf(&data[a], &data[b])).collect())
         .collect();
-    let e_mat: Vec<Vec<f64>> = data
-        .iter()
-        .map(|xi| landmarks.iter().map(|&b| rbf(xi, &data[b])).collect())
-        .collect();
+    let e_mat = nystroem_e_block(data, &landmarks, gamma);
 
     // Degree d = E·W⁻¹·(Eᵀ1). colsum_b = Σ_i E[i][b]; y = W⁻¹colsum.
     let colsum: Vec<f64> = (0..m).map(|b| e_mat.iter().map(|r| r[b]).sum()).collect();
