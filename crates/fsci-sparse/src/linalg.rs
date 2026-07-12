@@ -5754,15 +5754,67 @@ pub fn closeness_centrality(graph: &CsrMatrix) -> Vec<f64> {
 }
 
 /// Apply an element-wise function to all nonzero entries of a CSR matrix.
+/// When `true`, [`sparse_map`] (and its callers [`sparse_abs`]/[`sparse_power`]) build the output
+/// serially (the ORIG behaviour); default `false` fans the element map and the `indices` clone
+/// across nnz-chunks. Byte-identical.
+#[doc(hidden)]
+pub static SPARSE_MAP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn sparse_map<F>(a: &CsrMatrix, f: F) -> CsrMatrix
 where
-    F: Fn(f64) -> f64,
+    F: Fn(f64) -> f64 + Sync,
 {
-    let mapped_data: Vec<f64> = a.data().iter().map(|&v| f(v)).collect();
+    let data = a.data();
+    let indices = a.indices();
+    let nnz = data.len();
+    // Same shape as `sparse_scale`: the element map `f(v)` and the verbatim `indices` clone are both
+    // nnz-length and dominate (indptr clone is O(rows+1)). Fanning BOTH big arrays across nnz-chunks
+    // aggregates memory bandwidth. Each output slot is written exactly once, in ascending flat order,
+    // from the matching source slot → BYTE-IDENTICAL to the serial `.map(f).collect()` build.
+    let nthreads = if SPARSE_MAP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nnz < 65_536
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nnz)
+    };
+    let (mapped_data, cloned_indices) = if nthreads <= 1 {
+        (
+            data.iter().map(|&v| f(v)).collect::<Vec<f64>>(),
+            indices.to_vec(),
+        )
+    } else {
+        let mut md = vec![0.0f64; nnz];
+        let mut ci = vec![0usize; nnz];
+        let chunk = nnz.div_ceil(nthreads);
+        let fref = &f;
+        std::thread::scope(|scope| {
+            for (k, (dblk, iblk)) in md
+                .chunks_mut(chunk)
+                .zip(ci.chunks_mut(chunk))
+                .enumerate()
+            {
+                let base = k * chunk;
+                let src_d = &data[base..base + dblk.len()];
+                let src_i = &indices[base..base + iblk.len()];
+                scope.spawn(move || {
+                    for (slot, &v) in dblk.iter_mut().zip(src_d) {
+                        *slot = fref(v);
+                    }
+                    iblk.copy_from_slice(src_i);
+                });
+            }
+        });
+        (md, ci)
+    };
     CsrMatrix::from_components_unchecked(
         a.shape(),
         mapped_data,
-        a.indices().to_vec(),
+        cloned_indices,
         a.indptr().to_vec(),
     )
 }

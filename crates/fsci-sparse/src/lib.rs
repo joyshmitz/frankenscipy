@@ -126,6 +126,7 @@ pub use linalg::{
     sparse_has_explicit_zeros,
     sparse_is_symmetric,
     sparse_map,
+    SPARSE_MAP_FORCE_SERIAL,
     sparse_nnz,
     SPARSE_NNZ_FORCE_SERIAL,
     // Sparse matrix operations
