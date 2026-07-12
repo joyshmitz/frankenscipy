@@ -34501,6 +34501,12 @@ pub fn min_max_scale(data: &[f64], feature_range: Option<(f64, f64)>) -> Vec<f64
     }
 }
 
+/// When `true`, [`center`] runs its `x - mean` output map serially (the ORIG behaviour); default
+/// `false` fans it across threads. Byte-identical.
+#[doc(hidden)]
+pub static CENTER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Center data by subtracting the mean.
 ///
 /// Returns data with zero mean.
@@ -34508,8 +34514,15 @@ pub fn center(data: &[f64]) -> Vec<f64> {
     if data.is_empty() {
         return vec![];
     }
+    // `mean` is a float Σ (reassociates ⇒ stays serial for byte-exactness), but the `x - mean`
+    // output map is a per-element pure function of its index — fan it across threads via the
+    // order-preserving `par_continuous_map_min` (BYTE-IDENTICAL to `data.iter().map(..).collect()`).
     let mean_val = data.iter().sum::<f64>() / data.len() as f64;
-    data.iter().map(|&x| x - mean_val).collect()
+    if CENTER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| x - mean_val).collect()
+    } else {
+        par_continuous_map_min(data, 4096, move |x| x - mean_val)
+    }
 }
 
 /// Scale data by dividing by the standard deviation.
