@@ -47338,13 +47338,38 @@ pub fn softmax(x: &[f64]) -> Vec<f64> {
 }
 
 /// Log-softmax function (numerically stable).
+///
+/// Shares [`SOFTMAX_FORCE_SERIAL`]: when `false` (default) the per-element `exp` (materialised for
+/// the log-sum-exp) and the final subtract map fan across cores for large inputs; byte-identical.
 pub fn log_softmax(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
     let max_x = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let log_sum_exp = max_x + x.iter().map(|&xi| (xi - max_x).exp()).sum::<f64>().ln();
-    x.iter().map(|&xi| xi - log_sum_exp).collect()
+    // Same shape as [`softmax`]: the per-element `exp` is the dominant cost. Materialise it with an
+    // order-preserving parallel map, then sum SERIALLY over that Vec in index order — BYTE-IDENTICAL
+    // to the fused `x.iter().map(exp).sum()` (same terms, same summation order). The trailing subtract
+    // is another order-preserving map. `SOFTMAX_FORCE_SERIAL` restores the fully-serial path.
+    const SOFTMAX_MIN_PER_THREAD: usize = 700_000;
+    // Only materialise+parallelise once the input is large enough to actually spawn ≥2 threads;
+    // below that the serial path fuses `map(exp).sum()` with NO intermediate Vec, so parallelising
+    // would only add the exp_x allocation for no gain (unlike softmax, whose serial path also
+    // materialises). `SOFTMAX_FORCE_SERIAL` forces the serial path regardless.
+    let use_parallel = !SOFTMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        && x.len() >= 2 * SOFTMAX_MIN_PER_THREAD;
+    let sum_exp: f64 = if use_parallel {
+        par_continuous_map_min(x, SOFTMAX_MIN_PER_THREAD, |xi| (xi - max_x).exp())
+            .iter()
+            .sum()
+    } else {
+        x.iter().map(|&xi| (xi - max_x).exp()).sum()
+    };
+    let log_sum_exp = max_x + sum_exp.ln();
+    if use_parallel {
+        par_continuous_map_min(x, SOFTMAX_MIN_PER_THREAD, |xi| xi - log_sum_exp)
+    } else {
+        x.iter().map(|&xi| xi - log_sum_exp).collect()
+    }
 }
 
 /// Compute log(sum(exp(x))) in a numerically stable way.
