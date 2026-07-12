@@ -3903,14 +3903,26 @@ pub fn ifht(
 /// where `x± = (μ + 1 ± q)/2`, `q = bias`, and `yₘ = π·m/(n·dln)`. The
 /// Nyquist coefficient is forced real for even `n`. Faithful port of
 /// scipy's `fhtcoeff`.
+/// When `true`, [`fht`]/[`ifht`] compute their FHT coefficient table serially (the ORIG behaviour);
+/// default `false` fans the per-element log-gamma/exp fill across index-chunks. Byte-identical.
+/// `#[doc(hidden)]` — internal, exposed only for the same-binary A/B benchmark.
+#[doc(hidden)]
+pub static FHTCOEFF_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn fhtcoeff(n: usize, dln: f64, mu: f64, offset: f64, bias: f64, inverse: bool) -> Vec<Complex64> {
     use std::f64::consts::{LN_2, PI};
     let (lnkr, q) = (offset, bias);
     let xp = (mu + 1.0 + q) / 2.0;
     let xm = (mu + 1.0 - q) / 2.0;
     let len = n / 2 + 1;
-    let mut u = Vec::with_capacity(len);
-    for m in 0..len {
+
+    // Each coefficient u[m] is a pure function of m: y = π·m/(n·dln), then two complex log-gammas
+    // and a complex exp — an expensive transcendental per element, independent of every other. Fan
+    // the fill across index-chunks; each u[m] is computed by the identical expression, written to a
+    // disjoint slot in ascending order → BYTE-IDENTICAL to the serial fill. (The Nyquist/u[0]
+    // fixups below run serially on the finished array.) Gated on the coefficient count.
+    let coeff = |m: usize| -> Complex64 {
         let y = PI * m as f64 / (n as f64 * dln);
         let lp = complex_ln_gamma((xp, y));
         let lm = complex_ln_gamma((xm, y));
@@ -3918,8 +3930,36 @@ fn fhtcoeff(n: usize, dln: f64, mu: f64, offset: f64, bias: f64, inverse: bool) 
         // branch ambiguity in the log-gamma phases cancels here.
         let re = lp.0 - lm.0 + LN_2 * q;
         let im = lp.1 + lm.1 + 2.0 * (LN_2 - lnkr) * y;
-        u.push(complex_exp((re, im)));
-    }
+        complex_exp((re, im))
+    };
+    let nthreads = if FHTCOEFF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || len < 1024
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(len)
+    };
+    let mut u: Vec<Complex64> = if nthreads <= 1 {
+        (0..len).map(coeff).collect()
+    } else {
+        let mut u = vec![(0.0f64, 0.0f64); len];
+        let chunk = len.div_ceil(nthreads);
+        let coeff_ref = &coeff;
+        std::thread::scope(|scope| {
+            for (ci, block) in u.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (k, slot) in block.iter_mut().enumerate() {
+                        *slot = coeff_ref(base + k);
+                    }
+                });
+            }
+        });
+        u
+    };
     // For even-length transforms the Nyquist coefficient must be real.
     if n.is_multiple_of(2)
         && let Some(last) = u.last_mut()
