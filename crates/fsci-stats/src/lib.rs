@@ -31923,6 +31923,13 @@ pub fn standardized_moment(data: &[f64], k: u32) -> f64 {
 /// * `data` - Input array
 /// * `n` - Order of k-statistic (1, 2, 3, or 4)
 ///
+/// When `true`, [`kstat`] materializes the finite-filtered `Vec` and builds its four power
+/// sums in four separate passes (the ORIG behaviour); default `false` folds all four in one
+/// inline pass with no allocation. Byte-identical. [`kstatvar`] inherits it via `kstat`.
+#[doc(hidden)]
+pub static KSTAT_FORCE_COLLECT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// # Returns
 /// The n-th k-statistic, or NaN for invalid input.
 pub fn kstat(data: &[f64], n: u32) -> f64 {
@@ -31930,17 +31937,36 @@ pub fn kstat(data: &[f64], n: u32) -> f64 {
         return f64::NAN;
     }
 
-    let filtered: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
-    let nn = filtered.len() as f64;
+    // The four power sums S[k]=Σx^k (over the finite elements) were built by a
+    // materialized `Vec` plus FOUR separate passes; fold all four in ONE pass with no
+    // allocation. BYTE-IDENTICAL: each S[k] is the same left-to-right fold from 0.0 over the
+    // same finite elements in data order (independent accumulators — interleaving them
+    // doesn't change any one's fold), and `nn` counts the same finite elements.
+    let (nn, s1, s2, s3, s4) = if KSTAT_FORCE_COLLECT.load(std::sync::atomic::Ordering::Relaxed) {
+        let filtered: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+        (
+            filtered.len() as f64,
+            filtered.iter().sum::<f64>(),
+            filtered.iter().map(|&x| x * x).sum::<f64>(),
+            filtered.iter().map(|&x| x * x * x).sum::<f64>(),
+            filtered.iter().map(|&x| x.powi(4)).sum::<f64>(),
+        )
+    } else {
+        let (mut nn, mut s1, mut s2, mut s3, mut s4) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        for &x in data {
+            if x.is_finite() {
+                nn += 1.0;
+                s1 += x;
+                s2 += x * x;
+                s3 += x * x * x;
+                s4 += x.powi(4);
+            }
+        }
+        (nn, s1, s2, s3, s4)
+    };
     if nn < n as f64 {
         return f64::NAN;
     }
-
-    // Compute power sums S[k] = sum(x^k)
-    let s1: f64 = filtered.iter().sum();
-    let s2: f64 = filtered.iter().map(|&x| x * x).sum();
-    let s3: f64 = filtered.iter().map(|&x| x * x * x).sum();
-    let s4: f64 = filtered.iter().map(|&x| x.powi(4)).sum();
 
     match n {
         1 => s1 / nn,
