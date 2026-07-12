@@ -39696,6 +39696,13 @@ fn gaussian_kde_evaluate_window_simd(
 /// evaluated stably via the Cholesky factor `C = L Lᵀ` (so
 /// `(q-x_i)ᵀ C⁻¹ (q-x_i) = ‖L⁻¹(q-x_i)‖²` and `|C|^(1/2) = Π L_ii`), exactly as
 /// scipy's `gaussian_kde` does with `cho_factor`.
+/// When `true`, [`GaussianKdeNd::new`] whitens its data points serially (the ORIG behaviour);
+/// default `false` fans the independent per-point triangular solves across cores. Byte-identical.
+/// `#[doc(hidden)]` — the same-binary A/B knob.
+#[doc(hidden)]
+pub static GAUSSIAN_KDE_ND_WHITEN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub struct GaussianKdeNd {
     /// Pre-whitened data points: `n` rows of `L⁻¹ xᵢ` (`d` coords each). Whitening
     /// each point ONCE (in `new`) turns a query's Mahalanobis quadratic form
@@ -39795,11 +39802,41 @@ impl GaussianKdeNd {
         }
         let norm = (2.0 * std::f64::consts::PI).powf(-(d as f64) / 2.0) / prod_diag / nf;
 
-        // Whiten every data point once: wᵢ = L⁻¹ xᵢ.
-        let whitened: Vec<Vec<f64>> = dataset
-            .iter()
-            .map(|x| kde_whiten_lower(&chol, x, d))
-            .collect();
+        // Whiten every data point once: wᵢ = L⁻¹ xᵢ. Each whitening is an independent O(d²) forward
+        // triangular solve against the shared (read-only) Cholesky factor — a pure function of its
+        // own point — so fan the map across point-chunks. BYTE-IDENTICAL to the serial map (each
+        // wᵢ is the same solve, written to its own ordered slot). Gated on total O(n·d²) work.
+        let n_pts = dataset.len();
+        let whiten_threads = if GAUSSIAN_KDE_ND_WHITEN_FORCE_SERIAL
+            .load(std::sync::atomic::Ordering::Relaxed)
+            || n_pts < 2
+            || n_pts.saturating_mul(d.saturating_mul(d)) < (1 << 16)
+        {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n_pts)
+        };
+        let whitened: Vec<Vec<f64>> = if whiten_threads <= 1 {
+            dataset.iter().map(|x| kde_whiten_lower(&chol, x, d)).collect()
+        } else {
+            let mut out: Vec<Vec<f64>> = vec![Vec::new(); n_pts];
+            let chunk = n_pts.div_ceil(whiten_threads);
+            let chol_ref = &chol;
+            std::thread::scope(|scope| {
+                for (ci, block) in out.chunks_mut(chunk).enumerate() {
+                    let base = ci * chunk;
+                    scope.spawn(move || {
+                        for (k, slot) in block.iter_mut().enumerate() {
+                            *slot = kde_whiten_lower(chol_ref, &dataset[base + k], d);
+                        }
+                    });
+                }
+            });
+            out
+        };
 
         Some(Self {
             whitened,
