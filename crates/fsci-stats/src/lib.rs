@@ -48607,32 +48607,70 @@ pub fn nonnan_indices(data: &[f64]) -> Vec<usize> {
         .collect()
 }
 
+/// When `true`, [`histogram`] runs its finite-check/min/max as three separate passes (the
+/// ORIG behaviour); when `false` (default) it fuses them into one traversal. Byte-identical
+/// either way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static HISTOGRAM_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute a histogram of data values.
 ///
 /// Returns (counts, bin_edges).
 /// Matches `numpy.histogram`.
 pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
-    if data.is_empty() || bins == 0 || data.iter().any(|v| !v.is_finite()) {
+    if data.is_empty() || bins == 0 {
         return (vec![], vec![]);
     }
 
-    let min_val = data.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.min(b)
+    // The finite check, min and max are three INDEPENDENT reductions over `data`; fuse
+    // them into ONE traversal instead of three (the binning pass below still needs its
+    // own pass). BYTE-IDENTICAL for the all-finite path: the NaN-aware min/max use the
+    // same fold logic and are order-independent; a non-finite element returns empty
+    // exactly as `iter().any(!is_finite)` did (min/max on that data are discarded).
+    let (min_val, max_val) = if HISTOGRAM_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if data.iter().any(|v| !v.is_finite()) {
+            return (vec![], vec![]);
         }
-    });
-    let max_val = data
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+        let min_val = data.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.min(b)
+            }
+        });
+        let max_val = data.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
             if a.is_nan() || b.is_nan() {
                 f64::NAN
             } else {
                 a.max(b)
             }
         });
+        (min_val, max_val)
+    } else {
+        let mut min_val = f64::INFINITY;
+        let mut max_val = f64::NEG_INFINITY;
+        let mut all_finite = true;
+        for &v in data {
+            if !v.is_finite() {
+                all_finite = false;
+            }
+            min_val = if min_val.is_nan() || v.is_nan() {
+                f64::NAN
+            } else {
+                min_val.min(v)
+            };
+            max_val = if max_val.is_nan() || v.is_nan() {
+                f64::NAN
+            } else {
+                max_val.max(v)
+            };
+        }
+        if !all_finite {
+            return (vec![], vec![]);
+        }
+        (min_val, max_val)
+    };
     let range = max_val - min_val;
     let bin_width = if range > 0.0 {
         range / bins as f64
