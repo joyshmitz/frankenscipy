@@ -16550,14 +16550,64 @@ pub fn frobenius_norm(a: &[Vec<f64>]) -> f64 {
         .sqrt()
 }
 
+/// When `true`, [`max_abs`] runs its NaN-aware max-of-abs fold serially (the ORIG behaviour); default
+/// `false` chunks it across rows. Byte-identical.
+#[doc(hidden)]
+pub static LINALG_MAX_ABS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the max absolute value (infinity norm of flattened matrix).
 pub fn max_abs(a: &[Vec<f64>]) -> f64 {
-    a.iter().flat_map(|row| row.iter()).fold(0.0f64, |acc, &v| {
+    // `max(|v|)` is associative + commutative (incl NaN, which propagates from any element), so a
+    // chunk-across-rows-then-merge reduction is BYTE-IDENTICAL to the sequential row-major fold. Fan
+    // it across cores for large matrices. `LINALG_MAX_ABS_FORCE_SERIAL` restores the serial fold.
+    let elem_fold = |acc: f64, v: f64| {
         let v_abs = v.abs();
         if acc.is_nan() || v_abs.is_nan() {
             f64::NAN
         } else {
             acc.max(v_abs)
+        }
+    };
+    let total: usize = a.iter().map(Vec::len).sum();
+    let nthreads = if LINALG_MAX_ABS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || total < 65_536
+        || a.len() < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(a.len())
+    };
+    if nthreads <= 1 {
+        return a
+            .iter()
+            .flat_map(|row| row.iter())
+            .fold(0.0f64, |acc, &v| elem_fold(acc, v));
+    }
+    let chunk = a.len().div_ceil(nthreads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        a.chunks(chunk)
+            .map(|rows| {
+                scope.spawn(move || {
+                    rows.iter()
+                        .flat_map(|row| row.iter())
+                        .fold(0.0f64, |acc, &v| elem_fold(acc, v))
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("max_abs chunk panicked"))
+            .collect()
+    });
+    // Merge per-chunk maxima (each already ≥ 0 or NaN) with the same NaN-propagating `max`.
+    parts.into_iter().fold(0.0f64, |acc, m| {
+        if acc.is_nan() || m.is_nan() {
+            f64::NAN
+        } else {
+            acc.max(m)
         }
     })
 }
