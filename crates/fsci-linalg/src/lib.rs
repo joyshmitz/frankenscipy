@@ -4255,11 +4255,16 @@ pub fn svdvals(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Linal
 }
 
 /// Transpose a row-major matrix.
-fn transpose_rows(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+/// Transpose a row-major matrix (output row `j` is column `j` of the input — a STRIDED gather over
+/// the input rows). The gather is cache-thrashing serially, so fanning the independent output rows
+/// across threads (via `linalg_par_matrix_rows`) is a large win. BYTE-IDENTICAL — each `out[j][i] =
+/// a[i][j]`, rows in ascending index order. `#[doc(hidden) pub]` for the same-binary A/B bin; shares
+/// `LINALG_MAT_ELEMENTWISE_FORCE_SERIAL`.
+#[doc(hidden)]
+pub fn transpose_rows(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let cols = a.first().map_or(0, Vec::len);
-    (0..cols)
-        .map(|j| a.iter().map(|row| row[j]).collect())
-        .collect()
+    let nrows = a.len();
+    linalg_par_matrix_rows(cols, nrows, |j| a.iter().map(|row| row[j]).collect())
 }
 
 /// Row-parallel matmul: splits the rows of `a` into contiguous blocks across
