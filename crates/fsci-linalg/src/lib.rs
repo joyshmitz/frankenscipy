@@ -9912,19 +9912,12 @@ fn dense_from_banded(nlower: usize, nupper: usize, ab: &[Vec<f64>], n: usize) ->
     dense
 }
 
-fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    if a.is_empty() {
-        return Vec::new();
-    }
-    let rows = a.len();
-    let cols = a[0].len();
-    let mut out = vec![vec![0.0; rows]; cols];
-    for (r, row) in a.iter().enumerate().take(rows) {
-        for (c, value) in row.iter().enumerate().take(cols) {
-            out[c][r] = *value;
-        }
-    }
-    out
+/// Matrix transpose used by the transposed-solve paths. Delegates to the parallel [`transpose_rows`]
+/// (identical result — `out[c][r] = a[r][c]` — so BYTE-IDENTICAL to the former serial scatter loop),
+/// which fans the strided gather across cores. `#[doc(hidden)] pub` for the same-binary A/B.
+#[doc(hidden)]
+pub fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    transpose_rows(a)
 }
 
 fn matrix_shape(a: &[Vec<f64>]) -> Result<(usize, usize), LinalgError> {
