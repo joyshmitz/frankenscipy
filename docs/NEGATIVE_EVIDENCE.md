@@ -20408,3 +20408,24 @@ where the removed pass is the cheapest, saves too little to clear the gate. Comp
 in scratchpad. RULE (reconfirmed): a multi-pass fuse only clears the gate when the FUSED passes are a large fraction
 of the total work — fusing 2 light sum-passes when a heavy compute pass (sq_dist/powf) dominates the same fn is
 IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) or where the fused count is ≥3.
+
+## 2026-07-12 - cod - REJECT special `kelvin_zeros` eight-family scoped-thread fan-out (0.245-0.704x)
+
+- Negative-ledger-first selection excluded the existing per-family `kelvin_zeros_of` Illinois-root keep. That keep
+  reduced each family's bracket refinement but explicitly left the coarse scan as the residual; wrapper-level
+  concurrency had no prior keep/reject entry.
+- Profile/baseline seam: `kelvin_zeros(nt)` is exactly eight independent family calls in fixed SciPy order. Strict-
+  remote `vmi1293453` release-perf A/A compared the original wrapper with a literal eight-family serial comparator:
+  `nt=4` 511.94/543.35 us, `nt=10` 1.1405/1.1532 ms, and `nt=32` 3.2062/3.4178 ms (wrapper/comparator estimates).
+  The wrapper is therefore substantial, but the null pair showed no hidden wrapper work.
+- ONE candidate retained the serial path for `nt<4` or fewer than four CPUs and otherwise launched the eight pure
+  family searches with `std::thread::scope`, joining them into the original array order. Each vector's arithmetic,
+  insertion order, and bits were unchanged by construction; only family ownership moved to scoped workers.
+- Same-worker, same-binary remote A/B decisively regressed at every size. Literal serial versus threaded wrapper was
+  `nt=4` **619.70 us -> 2.5320 ms (0.245x)**, `nt=10` **1.2099 -> 3.0627 ms (0.395x)**, and `nt=32`
+  **3.5533 -> 5.0505 ms (0.704x)**. Criterion classified the wrapper changes as regressions with `p=0.00`; even the
+  largest row was 1.42x slower.
+- Decision: **REJECT; production and proof-test code removed.** Keep only the `kelvin_zeros_ab` benchmark seam and
+  this evidence. Do not retry per-call OS-thread fan-out: spawn/scheduling cost dominates these short root searches.
+  The credible Kelvin follow-up remains reducing each family's coarse scan with validated asymptotic seeds, or a
+  persistent executor only if the API/runtime architecture later supplies one without per-call worker creation.

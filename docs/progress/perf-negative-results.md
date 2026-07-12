@@ -9487,3 +9487,19 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - Decision: **SURFACE, not keep/reject**. Candidate code, test, toggle, and A/B instrumentation were removed; only
   this evidence and the open retry bead remain. Retry the identical one-lever patch only when strict-remote capacity
   can complete full stats and focused entropy/reference gates, then repeat the median/tolerance decision.
+
+## 2026-07-12 - cod - REJECT `kelvin_zeros` scoped-thread family fan-out
+
+- Ledger-first scope: the prior Kelvin keep replaced per-family bisection with Illinois refinement and left the
+  coarse scan as the residual. No wrapper-level concurrency attempt was recorded, so this was a distinct lever.
+- Strict-remote `vmi1293453` release-perf baseline compared the original wrapper with a literal serial expansion of
+  its eight family calls: `nt=4` 511.94/543.35 us, `nt=10` 1.1405/1.1532 ms, `nt=32` 3.2062/3.4178 ms
+  (wrapper/comparator estimates). The eight calls are independent and return in a fixed array order.
+- ONE candidate used `std::thread::scope` to launch the eight families for `nt>=4` when at least four CPUs were
+  available. The old path remained for small/single-core cases; per-family arithmetic and output bits were unchanged.
+- Same-worker, same-binary serial/threaded A/B decisively lost: `nt=4` 619.70 us -> 2.5320 ms (**0.245x**), `nt=10`
+  1.2099 -> 3.0627 ms (**0.395x**), and `nt=32` 3.5533 -> 5.0505 ms (**0.704x**); Criterion reported `p=0.00` for
+  the wrapper regressions.
+- **REJECT; candidate removed.** The durable output is the `kelvin_zeros_ab` benchmark seam plus this no-retry
+  boundary. Per-call OS-thread creation costs more than these root searches. Continue only with validated asymptotic
+  coarse-scan seeding, or a persistent executor supplied by a future runtime/API design.

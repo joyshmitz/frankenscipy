@@ -1,10 +1,11 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH, SpecialTensor, beta, ellipe, ellipeinc, ellipk,
-    ellipkinc, erf, erfc, erfinv, gamma, gammainc, gammaln, hyperu, hyperu_scalar, j0, j1,
-    jn_zeros, jnjnp_zeros, jnp_zeros, jv, log_ndtr, log_ndtr_scalar, mathieu_cem, mathieu_sem,
-    ndtri, pbdv, pbdv_many, rgamma, spence_scalar, y0, zeta, zeta_scalar,
+    MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH, SpecialTensor, bei_zeros, beip_zeros, ber_zeros,
+    berp_zeros, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, gamma, gammainc,
+    gammaln, hyperu, hyperu_scalar, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv, kei_zeros,
+    keip_zeros, kelvin_zeros, ker_zeros, kerp_zeros, log_ndtr, log_ndtr_scalar, mathieu_cem,
+    mathieu_sem, ndtri, pbdv, pbdv_many, rgamma, spence_scalar, y0, zeta, zeta_scalar,
 };
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -1152,8 +1153,40 @@ fn bench_mathieu_periodic_cache_gauntlet(c: &mut Criterion) {
     group.finish();
 }
 
+fn kelvin_zeros_serial(nt: u32) -> [Vec<f64>; 8] {
+    [
+        ber_zeros(nt),
+        bei_zeros(nt),
+        ker_zeros(nt),
+        kei_zeros(nt),
+        berp_zeros(nt),
+        beip_zeros(nt),
+        kerp_zeros(nt),
+        keip_zeros(nt),
+    ]
+}
+
+fn bench_kelvin_zeros_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("kelvin_zeros_ab");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+
+    for nt in [4, 10, 32] {
+        group.bench_with_input(BenchmarkId::new("serial_families", nt), &nt, |b, &nt| {
+            b.iter(|| black_box(kelvin_zeros_serial(black_box(nt))));
+        });
+        group.bench_with_input(BenchmarkId::new("wrapper", nt), &nt, |b, &nt| {
+            b.iter(|| black_box(kelvin_zeros(black_box(nt))));
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_kelvin_zeros_ab,
     bench_mathieu_periodic_cache_gauntlet,
     bench_spence_cephes_gauntlet,
     bench_pbdv_integer_gauntlet,
