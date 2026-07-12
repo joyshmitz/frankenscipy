@@ -34741,6 +34741,12 @@ pub fn tstd(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
     tvar(data, limits, inclusive, ddof).sqrt()
 }
 
+/// When `true`, [`tmean`] materializes the in-limit `Vec` then sums it (the ORIG behaviour);
+/// default `false` folds `(sum, count)` inline with no allocation. Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static TMEAN_FORCE_COLLECT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the trimmed mean of an array.
 ///
 /// Values outside the specified limits are excluded before computing mean.
@@ -34755,23 +34761,30 @@ pub fn tstd(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
 /// # Returns
 /// The trimmed mean, or NaN if no values remain after filtering.
 pub fn tmean(data: &[f64], limits: (f64, f64), inclusive: (bool, bool)) -> f64 {
-    let filtered: Vec<f64> = data
-        .iter()
-        .copied()
-        .filter(|&x| {
-            let above_lower = if inclusive.0 {
-                x >= limits.0
-            } else {
-                x > limits.0
-            };
-            let below_upper = if inclusive.1 {
-                x <= limits.1
-            } else {
-                x < limits.1
-            };
-            above_lower && below_upper
-        })
-        .collect();
+    let within = |x: f64| -> bool {
+        let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
+        let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+        above_lower && below_upper
+    };
+    if !TMEAN_FORCE_COLLECT.load(std::sync::atomic::Ordering::Relaxed) {
+        // Fold Σ + count over the in-limit elements in ONE pass, no materialized Vec.
+        // BYTE-IDENTICAL: Σ is the same left-to-right fold from 0.0 over the same in-limit
+        // elements in data order as `filtered.iter().sum()`, and `count == filtered.len()`.
+        let mut sum = 0.0f64;
+        let mut count = 0usize;
+        for &x in data {
+            if within(x) {
+                sum += x;
+                count += 1;
+            }
+        }
+        return if count == 0 {
+            f64::NAN
+        } else {
+            sum / count as f64
+        };
+    }
+    let filtered: Vec<f64> = data.iter().copied().filter(|&x| within(x)).collect();
 
     if filtered.is_empty() {
         return f64::NAN;
