@@ -11296,14 +11296,34 @@ pub fn count_nonzero(input: &NdArray) -> usize {
     parts.into_iter().sum()
 }
 
+/// When `true`, [`clip`]/[`scale_array`] run their element-wise scalar-param map serially (the ORIG
+/// behaviour); default `false` fans it across cores. Byte-identical.
+#[doc(hidden)]
+pub static NDIMAGE_UNARY_MAP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Clip (clamp) array values to [a_min, a_max].
 pub fn clip(input: &NdArray, a_min: f64, a_max: f64) -> NdArray {
-    let data: Vec<f64> = input.data.iter().map(|&v| v.clamp(a_min, a_max)).collect();
-    NdArray {
-        data,
+    // Element-wise `v.clamp(a_min, a_max)` — pure read+write bandwidth; fan across cores (multi-channel
+    // bandwidth aggregates). BYTE-IDENTICAL — each output element is `input.data[flat].clamp(..)` in
+    // flat order. `NDIMAGE_UNARY_MAP_FORCE_SERIAL` restores the serial map (same-binary A/B).
+    if NDIMAGE_UNARY_MAP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let data: Vec<f64> = input.data.iter().map(|&v| v.clamp(a_min, a_max)).collect();
+        return NdArray {
+            data,
+            shape: input.shape.clone(),
+            strides: input.strides.clone(),
+        };
+    }
+    let mut output = NdArray {
+        data: vec![0.0; input.data.len()],
         shape: input.shape.clone(),
         strides: input.strides.clone(),
-    }
+    };
+    fill_pixels_parallel(&mut output, 1, |flat, _scratch| {
+        input.data[flat].clamp(a_min, a_max)
+    });
+    output
 }
 
 /// When `true`, [`abs_array`] runs its element-wise `abs` map serially (the ORIG behaviour); default
@@ -11467,12 +11487,23 @@ pub fn subtract_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError
 
 /// Scale (multiply by scalar) an array.
 pub fn scale_array(input: &NdArray, scalar: f64) -> NdArray {
-    let data: Vec<f64> = input.data.iter().map(|&v| v * scalar).collect();
-    NdArray {
-        data,
+    // Element-wise `v * scalar` — pure read+write bandwidth; fan across cores. BYTE-IDENTICAL — each
+    // output element is `input.data[flat] * scalar` in flat order.
+    if NDIMAGE_UNARY_MAP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let data: Vec<f64> = input.data.iter().map(|&v| v * scalar).collect();
+        return NdArray {
+            data,
+            shape: input.shape.clone(),
+            strides: input.strides.clone(),
+        };
+    }
+    let mut output = NdArray {
+        data: vec![0.0; input.data.len()],
         shape: input.shape.clone(),
         strides: input.strides.clone(),
-    }
+    };
+    fill_pixels_parallel(&mut output, 1, |flat, _scratch| input.data[flat] * scalar);
+    output
 }
 
 /// Apply element-wise natural logarithm (ln).
