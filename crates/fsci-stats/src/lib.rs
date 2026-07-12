@@ -49606,32 +49606,68 @@ fn scipy_frequency_histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>
     (counts, bin_edges)
 }
 
+/// When `true`, [`histogram_bin_edges`] runs its finite-check, min fold and max fold as three
+/// separate passes (the ORIG behaviour); default `false` folds them into one pass. Byte-identical.
+#[doc(hidden)]
+pub static HIST_EDGES_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute histogram bin edges using various strategies.
 ///
 /// Methods: "auto" (Sturges), "sqrt", "sturges", "rice", "scott", "fd" (Freedman-Diaconis).
 pub fn histogram_bin_edges(data: &[f64], method: &str) -> Vec<f64> {
     let n = data.len();
-    if n == 0 || data.iter().any(|v| !v.is_finite()) {
+    if n == 0 {
         return vec![];
     }
-
-    let min_val = data.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.min(b)
+    // The finite-check, the min fold and the max fold are three independent all-light reductions
+    // that ALWAYS run — fold them into ONE pass over data. BYTE-IDENTICAL: each fold replays the exact
+    // NaN-aware min/max sequence (from ∓∞ in index order) and a non-finite element still returns the
+    // empty vec (the min/max discarded on that path, exactly as the original early-out did).
+    let (min_val, max_val) = if HIST_EDGES_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if data.iter().any(|v| !v.is_finite()) {
+            return vec![];
         }
-    });
-    let max_val = data
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+        let min_val = data.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
             if a.is_nan() || b.is_nan() {
                 f64::NAN
             } else {
-                a.max(b)
+                a.min(b)
             }
         });
+        let max_val = data
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
+        (min_val, max_val)
+    } else {
+        let mut valid = true;
+        let mut min_val = f64::INFINITY;
+        let mut max_val = f64::NEG_INFINITY;
+        for &v in data {
+            valid &= v.is_finite();
+            min_val = if min_val.is_nan() || v.is_nan() {
+                f64::NAN
+            } else {
+                min_val.min(v)
+            };
+            max_val = if max_val.is_nan() || v.is_nan() {
+                f64::NAN
+            } else {
+                max_val.max(v)
+            };
+        }
+        if !valid {
+            return vec![];
+        }
+        (min_val, max_val)
+    };
 
     let nbins = match method {
         "sqrt" => (n as f64).sqrt().ceil() as usize,
