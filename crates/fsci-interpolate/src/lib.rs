@@ -3201,6 +3201,13 @@ pub struct RegularGridInterpolator {
 pub static INTERPN_PCHIP_BATCH_FORCE_SCALAR: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`RegularGridInterpolator::eval_many`]'s 3-D nearest-neighbour fast path evaluates
+/// its queries serially (the ORIG behaviour); when `false` (default) the independent per-query
+/// nearest lookups fan across cores via `par_query_try_map`. Byte-identical. Benchmark knob.
+#[doc(hidden)]
+pub static INTERPN_NEAREST3D_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl RegularGridInterpolator {
     pub fn new(
         points: Vec<Vec<f64>>,
@@ -3523,11 +3530,12 @@ impl RegularGridInterpolator {
     }
 
     fn eval_many_nearest_3d(&self, xi: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
-        // Hoist per-axis state out of the query loop so the inner pass touches
-        // only locals. Folding the NaN check, bounds check, and nearest lookup
-        // into a single pass (instead of three separate iterations over each
-        // 3-vector) removes the dominant per-query overhead once interval lookup
-        // is O(1). Behaviour is identical to the prior three-pass form.
+        // Hoist per-axis state so the inner pass touches only locals, and fold the NaN check,
+        // bounds check, and nearest lookup into a single per-query pass. Each query is an
+        // independent read-only nearest lookup over the shared grid, so route it through the same
+        // order-preserving `par_query_try_map` the generic `eval_many` path uses — the 3D-nearest
+        // special case previously stayed serial. BYTE-IDENTICAL: identical per-query body, chunks
+        // concatenated in query order, and the earliest erroring query wins exactly as before.
         let ax = [
             self.points[0].as_slice(),
             self.points[1].as_slice(),
@@ -3540,8 +3548,7 @@ impl RegularGridInterpolator {
             self.uniform_axes[2],
         ];
 
-        let mut results = Vec::with_capacity(xi.len());
-        for point in xi {
+        let per_query = |point: &Vec<f64>| -> Result<f64, InterpError> {
             if point.len() != 3 {
                 return Err(InterpError::InvalidArgument {
                     detail: format!("expected 3D, got {}D", point.len()),
@@ -3549,8 +3556,7 @@ impl RegularGridInterpolator {
             }
             let p = [point[0], point[1], point[2]];
             if p[0].is_nan() || p[1].is_nan() || p[2].is_nan() {
-                results.push(f64::NAN);
-                continue;
+                return Ok(f64::NAN);
             }
 
             let mut out_of_bounds = false;
@@ -3571,16 +3577,19 @@ impl RegularGridInterpolator {
                 }
             }
             if out_of_bounds && let Some(fill) = self.fill_value {
-                results.push(fill);
-                continue;
+                return Ok(fill);
             }
 
             let flat_idx = Self::nearest_index(un[0], ax[0], p[0]) * st[0]
                 + Self::nearest_index(un[1], ax[1], p[1]) * st[1]
                 + Self::nearest_index(un[2], ax[2], p[2]) * st[2];
-            results.push(self.values[flat_idx]);
+            Ok(self.values[flat_idx])
+        };
+
+        if INTERPN_NEAREST3D_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+            return xi.iter().map(&per_query).collect();
         }
-        Ok(results)
+        par_query_try_map(xi, 3, per_query)
     }
 
     fn eval_nearest_3d(&self, xi: &[f64]) -> f64 {
