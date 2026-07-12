@@ -47373,6 +47373,13 @@ pub fn log_softmax(x: &[f64]) -> Vec<f64> {
 }
 
 /// Compute log(sum(exp(x))) in a numerically stable way.
+/// When `true`, [`logsumexp`] sums its `exp` terms with the exact fused serial `map(exp).sum()` (the
+/// ORIG behaviour); default `false` materialises the heavy `exp` via an order-preserving parallel map
+/// for large inputs then sums serially over that Vec in index order. Byte-identical. A/B knob.
+#[doc(hidden)]
+pub static LOGSUMEXP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn logsumexp(x: &[f64]) -> f64 {
     if x.is_empty() {
         return f64::NEG_INFINITY;
@@ -47381,7 +47388,21 @@ pub fn logsumexp(x: &[f64]) -> f64 {
     if !max_x.is_finite() {
         return max_x;
     }
-    max_x + x.iter().map(|&xi| (xi - max_x).exp()).sum::<f64>().ln()
+    // The per-element `exp` is the dominant cost. Materialise it with an order-preserving parallel map
+    // then sum SERIALLY over that Vec in index order — BYTE-IDENTICAL to the fused `map(exp).sum()`
+    // (same terms, same summation order). Only for large inputs (≥2 threads at 700k/thread); below
+    // that the fused serial path avoids the exp_x allocation. `LOGSUMEXP_FORCE_SERIAL` restores it.
+    const SOFTMAX_MIN_PER_THREAD: usize = 700_000;
+    let sum_exp: f64 = if !LOGSUMEXP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        && x.len() >= 2 * SOFTMAX_MIN_PER_THREAD
+    {
+        par_continuous_map_min(x, SOFTMAX_MIN_PER_THREAD, |xi| (xi - max_x).exp())
+            .iter()
+            .sum()
+    } else {
+        x.iter().map(|&xi| (xi - max_x).exp()).sum()
+    };
+    max_x + sum_exp.ln()
 }
 
 /// Compute log(sum(b * exp(a))) with numerical stability.
