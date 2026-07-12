@@ -25642,17 +25642,51 @@ pub fn nanmean(data: &[f64]) -> f64 {
     sum / count as f64
 }
 
+/// When `true`, [`nanvar`] (and thus [`nanstd`]) materializes the NaN-filtered `Vec` then
+/// makes two passes over it (the ORIG behaviour); default `false` re-filters inline in two
+/// passes with no allocation. Byte-identical.
+#[doc(hidden)]
+pub static NANVAR_FORCE_COLLECT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute variance ignoring NaN values.
 ///
 /// Matches `numpy.nanvar`.
 pub fn nanvar(data: &[f64]) -> f64 {
-    let valid: Vec<f64> = data.iter().copied().filter(|x| !x.is_nan()).collect();
-    if valid.len() < 2 {
+    if NANVAR_FORCE_COLLECT.load(std::sync::atomic::Ordering::Relaxed) {
+        let valid: Vec<f64> = data.iter().copied().filter(|x| !x.is_nan()).collect();
+        if valid.len() < 2 {
+            return f64::NAN;
+        }
+        let n = valid.len() as f64;
+        let mean = valid.iter().sum::<f64>() / n;
+        return valid.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+    }
+    // Two inline filter passes, no materialized Vec: pass 1 folds Σ + count (⇒ mean), pass 2
+    // folds Σ(x−mean)². BYTE-IDENTICAL: each pass reduces the SAME non-NaN elements in data
+    // order as `valid`, from 0.0 — count == valid.len(), mean and the SS reduction are the
+    // same left folds. Re-running the cheap `is_nan` predicate is cheaper than the Vec write
+    // + two Vec reads it replaces.
+    let mut sum = 0.0f64;
+    let mut count = 0usize;
+    for &x in data {
+        if !x.is_nan() {
+            sum += x;
+            count += 1;
+        }
+    }
+    if count < 2 {
         return f64::NAN;
     }
-    let n = valid.len() as f64;
-    let mean = valid.iter().sum::<f64>() / n;
-    valid.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n
+    let n = count as f64;
+    let mean = sum / n;
+    let mut ss = 0.0f64;
+    for &x in data {
+        if !x.is_nan() {
+            ss += (x - mean).powi(2);
+        }
+    }
+    ss / n
 }
 
 /// Compute standard deviation ignoring NaN values.
