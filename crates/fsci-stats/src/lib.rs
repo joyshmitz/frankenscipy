@@ -34364,7 +34364,15 @@ pub fn zscore_weighted(data: &[f64], weights: &[f64]) -> Vec<f64> {
     if std_val == 0.0 {
         return vec![f64::NAN; data.len()];
     }
-    data.iter().map(|&x| (x - mean_val) / std_val).collect()
+    // Output map straggler: the weighted mean/var preambles are done, but `(x-mean)/std` stayed serial.
+    // It is a per-element pure function of its index, so fan it across cores via the order-preserving
+    // `par_continuous_map_min` — BYTE-IDENTICAL to `iter().map(..).collect()`. Shares [`ZSCORE_FORCE_SERIAL`].
+    // 800k/thread gate: light map, keep <1.6M serial (avoids small-array thread over-subscription).
+    if ZSCORE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| (x - mean_val) / std_val).collect()
+    } else {
+        par_continuous_map_min(data, 800_000, move |x| (x - mean_val) / std_val)
+    }
 }
 
 /// Compute robust z-scores using median and IQR.
