@@ -7401,18 +7401,45 @@ fn mean_of_values(values: &[f64]) -> f64 {
     }
 }
 
+/// When `true`, [`median_of_values`] fully sorts the copy (the ORIG behaviour); default
+/// `false` quickselects the central rank(s) in O(n). Byte-identical. A/B gate.
+#[doc(hidden)]
+pub static MEDIAN_FORCE_SORT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn median_of_values(values: &[f64]) -> f64 {
     if values.is_empty() {
         return f64::NAN;
     }
 
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let mid = sorted.len() / 2;
-    if sorted.len().is_multiple_of(2) {
-        (sorted[mid - 1] + sorted[mid]) / 2.0
+    let mut buf = values.to_vec();
+    let n = buf.len();
+    let mid = n / 2;
+    if MEDIAN_FORCE_SORT.load(std::sync::atomic::Ordering::Relaxed) {
+        buf.sort_by(|a, b| a.total_cmp(b));
+        return if n.is_multiple_of(2) {
+            (buf[mid - 1] + buf[mid]) / 2.0
+        } else {
+            buf[mid]
+        };
+    }
+    // The median needs only the one or two central order statistics, so quickselect them in
+    // O(n) instead of a full O(n log n) sort. BYTE-IDENTICAL: `select_nth_unstable_by(mid)`
+    // places the mid-th total_cmp order statistic at `mid` with everything <= it to the left,
+    // so `buf[mid]` == a full sort's `sorted[mid]`, and the total_cmp-max of `buf[..mid]` ==
+    // `sorted[mid-1]`. The k-th order statistic is unique, and the `(lo+hi)/2` order is kept.
+    if n.is_multiple_of(2) {
+        buf.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
+        let hi = buf[mid];
+        let lo = buf[..mid]
+            .iter()
+            .copied()
+            .reduce(|a, b| if a.total_cmp(&b).is_lt() { b } else { a })
+            .expect("even median has a non-empty lower half");
+        (lo + hi) / 2.0
     } else {
-        sorted[mid]
+        buf.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
+        buf[mid]
     }
 }
 
