@@ -34525,6 +34525,12 @@ pub fn center(data: &[f64]) -> Vec<f64> {
     }
 }
 
+/// When `true`, [`scale`] runs its `x / std` output map serially (the ORIG behaviour); default
+/// `false` fans it across threads. Byte-identical.
+#[doc(hidden)]
+pub static SCALE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Scale data by dividing by the standard deviation.
 ///
 /// Returns data with unit variance (if ddof=0) or unit sample variance (if ddof=1).
@@ -34534,6 +34540,9 @@ pub fn scale(data: &[f64], ddof: usize) -> Vec<f64> {
     }
 
     let n = data.len() as f64;
+    // `mean` and `var` are float Σ (reassociate ⇒ stay serial), but the `x / std` output map is a
+    // per-element pure function of its index — fan it across threads via the order-preserving
+    // `par_continuous_map_min` (BYTE-IDENTICAL to `data.iter().map(..).collect()`).
     let mean_val = data.iter().sum::<f64>() / n;
     let var: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / (n - ddof as f64);
     let std_val = var.sqrt();
@@ -34542,7 +34551,11 @@ pub fn scale(data: &[f64], ddof: usize) -> Vec<f64> {
         return vec![f64::NAN; data.len()];
     }
 
-    data.iter().map(|&x| x / std_val).collect()
+    if SCALE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| x / std_val).collect()
+    } else {
+        par_continuous_map_min(data, 4096, move |x| x / std_val)
+    }
 }
 
 /// Compute relative z-scores using the mean and variance of `compare`.
