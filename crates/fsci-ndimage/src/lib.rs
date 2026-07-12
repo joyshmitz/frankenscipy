@@ -11316,14 +11316,33 @@ pub fn abs_array(input: &NdArray) -> NdArray {
     }
 }
 
+/// When `true`, [`sqrt_array`] runs its element-wise `sqrt` map serially (the ORIG behaviour); default
+/// `false` fans the map across cores via `fill_pixels_parallel`. Byte-identical.
+#[doc(hidden)]
+pub static NDIMAGE_SQRT_ARRAY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Apply element-wise square root.
 pub fn sqrt_array(input: &NdArray) -> NdArray {
-    let data: Vec<f64> = input.data.iter().map(|&v| v.max(0.0).sqrt()).collect();
-    NdArray {
-        data,
+    // `sqrt` (with a `max(0.0)` clamp) is a moderately heavy per-element op, so this map is
+    // compute-bound at large `n`; fan it across cores. BYTE-IDENTICAL to the serial map — each output
+    // element is `input.data[flat].max(0.0).sqrt()` written in flat order, a pure function of its
+    // index. `NDIMAGE_SQRT_ARRAY_FORCE_SERIAL` restores the serial map (same-binary A/B).
+    if NDIMAGE_SQRT_ARRAY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let data: Vec<f64> = input.data.iter().map(|&v| v.max(0.0).sqrt()).collect();
+        return NdArray {
+            data,
+            shape: input.shape.clone(),
+            strides: input.strides.clone(),
+        };
+    }
+    let mut output = NdArray {
+        data: vec![0.0; input.data.len()],
         shape: input.shape.clone(),
         strides: input.strides.clone(),
-    }
+    };
+    fill_pixels_parallel(&mut output, 4, |flat, _scratch| input.data[flat].max(0.0).sqrt());
+    output
 }
 
 /// Apply element-wise power.
