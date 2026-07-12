@@ -20447,3 +20447,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Decision: **REJECT / IN-FLOOR; production and proof-test code removed.** Keep only the
   `dominant_frequency_ab` benchmark seam and this evidence. Do not retry validation+argmax fusion alone; revisit
   only if a producer can supply the maximum during spectrum construction and remove an entire public-array scan.
+
+## 2026-07-12 - cod - KEEP integrate `validate_tol` lazy audit fingerprint (52.9x vector normal path)
+
+- Negative-ledger-first selection excluded the worked integrate materialization/reduction families. No entry covered
+  validation's audit plumbing: `validate_tol_with_audit` formatted every scalar/vector tolerance into fingerprint
+  bytes before knowing whether the caller supplied an audit ledger. Public `validate_tol` always supplies `None`, so
+  this O(n) debug-format allocation was unused on its normal success and error paths.
+- A strict-remote literal-original/current A/A on `vmi1293453`, 16,384-element vector `atol`, measured centers of
+  **1.0161/0.91213 ms** before the edit. This confirmed the eager whole-vector formatting dominated the validation
+  path while exposing a 1.114x row-order offset for the decisive same-binary comparison.
+- ONE lever changed fingerprint construction to `audit_ledger.map(...)`. No-ledger calls now skip formatting;
+  audit-enabled calls construct the identical context/detail bytes before validation. Ordering, floating-point
+  predicates, clamping, warnings, error precedence, and returned tolerance values are unchanged.
+- Same-worker, same-binary release-perf A/B measured literal original
+  `[1.0269, 1.0782, 1.1636]` ms versus current `[19.682, 20.376, 21.640]` us: a centered **52.9x** speedup.
+  Criterion reported **-97.671%**, `p=0.00`, clearing the baseline row-order offset by a wide margin.
+- Proof/gates: the focused strict-remote test passed 1/1 and now asserts the audit-enabled Blake3 fingerprint is
+  unchanged; `rustfmt --check`, `git diff --check`, and targeted UBS passed. Two `ovh-b` attempts failed closed on a
+  worker-side `num-traits` `SIGILL`; no local Cargo fallback was used. Keep the `validate_tol_audit_fingerprint_ab`
+  seam as the regression witness.

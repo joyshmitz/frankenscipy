@@ -1,6 +1,11 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use fsci_integrate::{SolveIvpOptions, SolverKind, ToleranceValue, solve_ivp, validate_tol};
+use fsci_integrate::{
+    IntegrateValidationError, MIN_RTOL, SolveIvpOptions, SolverKind, ToleranceValue,
+    ToleranceWarning, ValidatedTolerance, solve_ivp, validate_tol,
+};
 use fsci_runtime::RuntimeMode;
+use std::hint::black_box;
+use std::time::Duration;
 
 /// Exponential decay: y' = -y, y(0) = 1.
 fn exponential_decay(_t: f64, y: &[f64]) -> Vec<f64> {
@@ -81,10 +86,103 @@ fn bench_validate_tol(c: &mut Criterion) {
     });
 }
 
+fn tolerance_any_owned(value: ToleranceValue, mut predicate: impl FnMut(f64) -> bool) -> bool {
+    match value {
+        ToleranceValue::Scalar(value) => predicate(value),
+        ToleranceValue::Vector(values) => values.into_iter().any(predicate),
+    }
+}
+
+fn tolerance_map_owned(value: ToleranceValue, mut f: impl FnMut(f64) -> f64) -> ToleranceValue {
+    match value {
+        ToleranceValue::Scalar(value) => ToleranceValue::Scalar(f(value)),
+        ToleranceValue::Vector(values) => {
+            ToleranceValue::Vector(values.into_iter().map(f).collect())
+        }
+    }
+}
+
+fn validate_tol_eager_fingerprint_original(
+    rtol: ToleranceValue,
+    atol: ToleranceValue,
+    n: usize,
+    mode: RuntimeMode,
+) -> Result<ValidatedTolerance, IntegrateValidationError> {
+    let mut warnings = Vec::new();
+    let fingerprint =
+        format!("validate_tol:rtol={rtol:?};atol={atol:?};n={n};mode={mode:?}").into_bytes();
+    black_box(&fingerprint);
+
+    if tolerance_any_owned(rtol.clone(), f64::is_nan) {
+        return Err(IntegrateValidationError::NonFiniteRtol);
+    }
+    if tolerance_any_owned(atol.clone(), f64::is_nan) {
+        return Err(IntegrateValidationError::NonFiniteAtol);
+    }
+    let needs_clamp = tolerance_any_owned(rtol.clone(), |x| x < MIN_RTOL);
+    let rtol = if needs_clamp {
+        warnings.push(ToleranceWarning::RtolClamped { minimum: MIN_RTOL });
+        tolerance_map_owned(rtol, |x| x.max(MIN_RTOL))
+    } else {
+        rtol
+    };
+
+    if let ToleranceValue::Vector(values) = &atol
+        && values.len() != n
+    {
+        return Err(IntegrateValidationError::AtolWrongShape {
+            expected: n,
+            actual: values.len(),
+        });
+    }
+    if tolerance_any_owned(atol.clone(), |x| x < 0.0) {
+        return Err(IntegrateValidationError::AtolMustBePositive);
+    }
+
+    Ok(ValidatedTolerance {
+        rtol,
+        atol,
+        mode,
+        warnings,
+    })
+}
+
+fn bench_validate_tol_audit_fingerprint_ab(c: &mut Criterion) {
+    const N: usize = 16_384;
+    let atol = vec![1e-8; N];
+    let mut group = c.benchmark_group("validate_tol_audit_fingerprint_ab");
+    group.sample_size(12);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+
+    group.bench_function("original", |b| {
+        b.iter(|| {
+            validate_tol_eager_fingerprint_original(
+                ToleranceValue::Scalar(black_box(1e-6)),
+                ToleranceValue::Vector(black_box(atol.clone())),
+                black_box(N),
+                RuntimeMode::Strict,
+            )
+        });
+    });
+    group.bench_function("current", |b| {
+        b.iter(|| {
+            validate_tol(
+                ToleranceValue::Scalar(black_box(1e-6)),
+                ToleranceValue::Vector(black_box(atol.clone())),
+                black_box(N),
+                RuntimeMode::Strict,
+            )
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_solve_ivp_exponential,
     bench_solve_ivp_lorenz,
-    bench_validate_tol
+    bench_validate_tol,
+    bench_validate_tol_audit_fingerprint_ab
 );
 criterion_main!(benches);

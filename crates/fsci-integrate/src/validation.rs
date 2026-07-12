@@ -309,10 +309,13 @@ pub fn validate_tol_with_audit(
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<ValidatedTolerance, IntegrateValidationError> {
     let mut warnings = Vec::new();
-    let fingerprint = audit_fingerprint(
-        "validate_tol",
-        format!("rtol={rtol:?};atol={atol:?};n={n};mode={mode:?}"),
-    );
+    let fingerprint = audit_ledger.map(|_| {
+        audit_fingerprint(
+            "validate_tol",
+            format!("rtol={rtol:?};atol={atol:?};n={n};mode={mode:?}"),
+        )
+    });
+    let fingerprint = fingerprint.as_deref().unwrap_or_default();
     // NaN in rtol or atol falls through every `<` and `<=` predicate
     // silently. Reject up front so Hardened callers see a fail-closed
     // error rather than NaN propagating into the adaptive step controller.
@@ -320,7 +323,7 @@ pub fn validate_tol_with_audit(
     if rtol.clone().any(|x| x.is_nan()) {
         record_fail_closed(
             audit_ledger,
-            &fingerprint,
+            fingerprint,
             "rtol_must_not_be_nan",
             "rejected",
         );
@@ -329,7 +332,7 @@ pub fn validate_tol_with_audit(
     if atol.clone().any(|x| x.is_nan()) {
         record_fail_closed(
             audit_ledger,
-            &fingerprint,
+            fingerprint,
             "atol_must_not_be_nan",
             "rejected",
         );
@@ -341,7 +344,7 @@ pub fn validate_tol_with_audit(
         if mode == RuntimeMode::Hardened {
             record_bounded_recovery(
                 audit_ledger,
-                &fingerprint,
+                fingerprint,
                 "clamp_rtol_to_min",
                 &format!("clamped_rtol_to_{MIN_RTOL:.3e}"),
             );
@@ -354,7 +357,7 @@ pub fn validate_tol_with_audit(
     if let Some(len) = atol.len_if_vector()
         && len != n
     {
-        record_fail_closed(audit_ledger, &fingerprint, "atol_wrong_shape", "rejected");
+        record_fail_closed(audit_ledger, fingerprint, "atol_wrong_shape", "rejected");
         return Err(IntegrateValidationError::AtolWrongShape {
             expected: n,
             actual: len,
@@ -364,7 +367,7 @@ pub fn validate_tol_with_audit(
     if atol.clone().any(|x| x < 0.0) {
         record_fail_closed(
             audit_ledger,
-            &fingerprint,
+            fingerprint,
             "atol_must_be_positive",
             "rejected",
         );
@@ -791,6 +794,15 @@ mod tests {
     #[test]
     fn test_validation_tol_nan_records_fail_closed() {
         let audit_ledger = sync_audit_ledger();
+        let expected_fingerprint = AuditLedger::fingerprint_bytes(&audit_fingerprint(
+            "validate_tol",
+            format!(
+                "rtol={:?};atol={:?};n=1;mode={:?}",
+                ToleranceValue::Scalar(f64::NAN),
+                ToleranceValue::Scalar(1e-6),
+                RuntimeMode::Hardened,
+            ),
+        ));
         let err = validate_tol_with_audit(
             ToleranceValue::Scalar(f64::NAN),
             ToleranceValue::Scalar(1e-6),
@@ -803,6 +815,7 @@ mod tests {
 
         let ledger = audit_ledger.lock().expect("lock");
         assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger.entries()[0].input_fingerprint, expected_fingerprint);
         assert!(matches!(
             ledger.entries()[0].action,
             AuditAction::FailClosed { ref reason } if reason == "rtol_must_not_be_nan"
