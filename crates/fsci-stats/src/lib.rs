@@ -25254,6 +25254,12 @@ pub fn weighted_std(values: &[f64], weights: &[f64]) -> f64 {
     weighted_var(values, weights).sqrt()
 }
 
+/// When `true`, [`neff`] runs its finite-check, `Σw` and `Σw²` as three separate passes (the ORIG
+/// behaviour); default `false` folds all three into one pass over weights. Byte-identical.
+#[doc(hidden)]
+pub static NEFF_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Kish's effective sample size for weighted data.
 ///
 /// Computes the effective sample size when observations have different weights.
@@ -25265,11 +25271,32 @@ pub fn neff(weights: &[f64]) -> f64 {
     if weights.is_empty() {
         return 0.0;
     }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-        return f64::NAN;
-    }
-    let sum_w: f64 = weights.iter().sum();
-    let sum_w2: f64 = weights.iter().map(|&w| w * w).sum();
+    // The finite/non-negative check, `Σw` and `Σw²` are three INDEPENDENT all-light reductions over
+    // `weights` — fold them into ONE pass. BYTE-IDENTICAL: each Σ keeps its exact left-to-right order
+    // and `w * w` expression, and a bad weight still returns NaN (the sums discarded on that path
+    // exactly as the original early-out discarded them).
+    let (sum_w, sum_w2) = if NEFF_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+            return f64::NAN;
+        }
+        (
+            weights.iter().sum::<f64>(),
+            weights.iter().map(|&w| w * w).sum::<f64>(),
+        )
+    } else {
+        let mut sum_w = 0.0f64;
+        let mut sum_w2 = 0.0f64;
+        let mut valid = true;
+        for &w in weights {
+            valid &= w.is_finite() && w >= 0.0;
+            sum_w += w;
+            sum_w2 += w * w;
+        }
+        if !valid {
+            return f64::NAN;
+        }
+        (sum_w, sum_w2)
+    };
     if sum_w2 == 0.0 {
         return 0.0;
     }
