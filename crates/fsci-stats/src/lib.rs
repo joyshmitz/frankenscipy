@@ -34281,6 +34281,12 @@ fn mean_std_ddof(data: &[f64], ddof: usize) -> Option<(f64, f64)> {
     Some((mean, var.sqrt()))
 }
 
+/// When `true`, [`zscore`] runs its `(x - mean)/std` output map serially (the ORIG behaviour);
+/// default `false` fans it across threads. Byte-identical.
+#[doc(hidden)]
+pub static ZSCORE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute z-scores: (x - mean) / std.
 ///
 /// Matches `scipy.stats.zscore(a)`.
@@ -34291,7 +34297,14 @@ pub fn zscore(data: &[f64]) -> Vec<f64> {
     if std_val == 0.0 {
         return vec![f64::NAN; data.len()];
     }
-    data.iter().map(|&x| (x - mean_val) / std_val).collect()
+    // `mean_std_ddof` is float Σ (serial), but the `(x - mean)/std` output map is a per-element pure
+    // function of its index — fan it across threads via the order-preserving `par_continuous_map_min`
+    // (BYTE-IDENTICAL to `data.iter().map(..).collect()`). `ZSCORE_FORCE_SERIAL` restores the serial map.
+    if ZSCORE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| (x - mean_val) / std_val).collect()
+    } else {
+        par_continuous_map_min(data, 4096, move |x| (x - mean_val) / std_val)
+    }
 }
 
 /// When `true`, [`zscore_weighted`] runs its weights finite-check, `Σw` and the weighted-mean sum as
