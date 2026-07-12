@@ -48955,6 +48955,13 @@ pub fn excess_kurtosis(data: &[f64]) -> f64 {
 ///
 /// Each row of `data` is an observation, each column is a variable.
 /// Matches `numpy.cov` (rowvar=False).
+/// When `true`, [`cov_matrix`]'s transposed cross-covariance path fills its rows serially (the ORIG
+/// behaviour for large `d`, and the same code the small-`d`-large-`n` case now uses); default
+/// `false` fans the output rows across cores. Byte-identical. `#[doc(hidden)]` — the A/B knob.
+#[doc(hidden)]
+pub static COV_MATRIX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn cov_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let n = data.len();
     if n < 2 {
@@ -48973,8 +48980,12 @@ pub fn cov_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
         *m /= n as f64;
     }
 
-    // Small d: the textbook rank-1-update accumulation (bit-identical reference).
-    if d < 48 {
+    let work = (d as u64).saturating_mul(d as u64).saturating_mul(n as u64);
+    // Small d AND small work: textbook rank-1-update accumulation (bit-identical reference), no
+    // transpose overhead. For a small d but LARGE n the rank-1 form is O(n·d²) SERIAL, so it falls
+    // through to the transposed cross-covariance below (cache-friendly streamed dots, output rows
+    // fanned across threads) — BYTE-IDENTICAL (same centered products summed in the same obs order).
+    if d < 48 && work < (1 << 22) {
         let mut cov = vec![vec![0.0; d]; d];
         for row in data {
             for i in 0..d {
@@ -49020,8 +49031,9 @@ pub fn cov_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
             out[j] = s / denom;
         }
     };
-    let work = (d as u64).saturating_mul(d as u64).saturating_mul(n as u64);
-    let nthreads = if work < 1 << 22 {
+    let nthreads = if COV_MATRIX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || work < 1 << 22
+    {
         1
     } else {
         std::thread::available_parallelism()

@@ -1,71 +1,79 @@
-//! Timing + bit-identity harness for `cov_matrix` (numpy.cov; corr_matrix
-//! inherits it).
-//!
-//! The naive form scatter-updates the whole d×d matrix once per observation
-//! (memory-bound at large d). cov[i][j] is a dot of two centered variable-series
-//! over observations, so transposing into contiguous columns + parallelising the
-//! independent output rows keeps the exact same products/summation order — the
-//! result is bit-identical. This dumps an FNV digest of the matrix bits (compare
-//! across the stashed naive build) and times the large-d win.
-//! Run: `cargo run --profile release-perf -p fsci-stats --bin perf_cov_matrix`.
-
+//! Median-null-gated A/B for `cov_matrix` on small-d/large-n (now routed through the transposed
+//! cross-covariance path): ORIG serial row fill vs row-fan parallel. BYTE-IDENTICAL (streamed dots
+//! in obs order, symmetric mirror). Toggled by `COV_MATRIX_FORCE_SERIAL`. Args: npts [dims] [iters].
+use fsci_stats::{COV_MATRIX_FORCE_SERIAL, cov_matrix};
 use std::hint::black_box;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use fsci_stats::cov_matrix;
-
-fn lcg(s: &mut u64) -> f64 {
-    *s = s
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
-    (*s >> 11) as f64 / (1u64 << 53) as f64
+fn med(v: &mut [f64]) -> f64 {
+    v.sort_by(f64::total_cmp);
+    v[v.len() / 2]
 }
-
-// n observations × d variables.
-fn data(n: usize, d: usize, seed: u64) -> Vec<Vec<f64>> {
-    let mut s = seed;
-    (0..n)
-        .map(|_| (0..d).map(|_| lcg(&mut s) * 4.0 - 2.0).collect())
-        .collect()
-}
-
-fn digest(c: &[Vec<f64>]) -> u64 {
-    let mut h = 1469598103934665603u64;
-    for row in c {
-        for &v in row {
-            h = (h ^ v.to_bits()).wrapping_mul(1099511628211);
-        }
-    }
-    h
+fn cv(v: &[f64]) -> f64 {
+    let m = v.iter().sum::<f64>() / v.len() as f64;
+    let var = v.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / v.len() as f64;
+    if m > 0.0 { var.sqrt() / m * 100.0 } else { 0.0 }
 }
 
 fn main() {
-    println!("===GOLDEN_PAYLOAD_BEGIN===");
-    for &(n, d) in &[
-        (200usize, 16usize),
-        (200, 47),
-        (200, 48),
-        (300, 128),
-        (256, 300),
-    ] {
-        let x = data(n, d, 7);
-        println!("n={n} d={d} digest={:016x}", digest(&cov_matrix(&x)));
-    }
-    println!("===GOLDEN_PAYLOAD_END===");
+    let args: Vec<String> = std::env::args().collect();
+    let npts: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1_500_000);
+    let dims: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(16);
+    let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
 
-    for &(n, d) in &[(512usize, 256usize), (1024, 512), (2048, 768)] {
-        let x = data(n, d, 7);
-        let reps = 3;
-        let _ = cov_matrix(&x);
-        let t0 = Instant::now();
-        let mut acc = 0.0;
-        for _ in 0..reps {
-            let c = cov_matrix(black_box(&x));
-            acc += c[d / 2][d / 3];
+    let mut s = 0x4c1f_ab77u64;
+    let mut r = || {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        (s >> 11) as f64 / (1u64 << 53) as f64 * 4.0 - 2.0
+    };
+    let data: Vec<Vec<f64>> = (0..npts).map(|_| (0..dims).map(|_| r()).collect()).collect();
+
+    COV_MATRIX_FORCE_SERIAL.store(true, Ordering::Relaxed);
+    let a = cov_matrix(&data);
+    COV_MATRIX_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    let b = cov_matrix(&data);
+    let bitmism: usize = a
+        .iter()
+        .zip(&b)
+        .map(|(ra, rb)| ra.iter().zip(rb).filter(|(x, y)| x.to_bits() != y.to_bits()).count())
+        .sum();
+    println!("# stats::cov_matrix npts={npts} dims={dims} cov[0][1]={} bitmism={bitmism}", a[0][1]);
+
+    let bench = |serial: bool| -> f64 {
+        COV_MATRIX_FORCE_SERIAL.store(serial, Ordering::Relaxed);
+        let _ = black_box(cov_matrix(black_box(&data)));
+        let t = Instant::now();
+        for _ in 0..5 {
+            let _ = black_box(cov_matrix(black_box(&data)));
         }
-        println!(
-            "n={n} d={d}  {:>10.3?}/call (acc={acc:.6})",
-            t0.elapsed() / reps
-        );
+        t.elapsed().as_secs_f64() / 5.0 * 1e3
+    };
+
+    let (mut ov, mut fv, mut nr, mut cr) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..iters {
+        let o = bench(true);
+        let f = bench(false);
+        let o2 = bench(true);
+        nr.push(o / o2);
+        cr.push(o / f);
+        ov.push(o);
+        fv.push(f);
     }
+    COV_MATRIX_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    let cand_med = med(&mut cr.clone());
+    let null_lo = nr.iter().copied().fold(f64::MAX, f64::min);
+    let null_hi = nr.iter().copied().fold(f64::MIN, f64::max);
+    let decidable = cand_med > null_hi || cand_med < null_lo;
+    let ob = ov.iter().copied().fold(f64::MAX, f64::min);
+    let fb = fv.iter().copied().fold(f64::MAX, f64::min);
+    println!(
+        "{} cov_matrix serial {ob:.2}ms (cv {:.1}%) parallel {fb:.2}ms (cv {:.1}%) | \
+         CAND(serial/par) median {cand_med:.3}x | NULL(A/A) range [{null_lo:.3}, {null_hi:.3}] | bitmism={bitmism}",
+        if decidable { "DECIDED " } else { "IN-FLOOR" },
+        cv(&ov),
+        cv(&fv),
+    );
 }
