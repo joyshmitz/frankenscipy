@@ -11262,9 +11262,38 @@ pub fn array_std(input: &NdArray) -> f64 {
     array_variance(input).sqrt()
 }
 
+/// When `true`, [`count_nonzero`] counts serially (the ORIG behaviour); default `false` chunks the
+/// count across threads. Byte-identical.
+#[doc(hidden)]
+pub static COUNT_NONZERO_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Count nonzero elements.
 pub fn count_nonzero(input: &NdArray) -> usize {
-    input.data.iter().filter(|&&v| v != 0.0).count()
+    // Parallel chunk-then-sum. BYTE-IDENTICAL to the serial `filter(|v| v != 0.0).count()`: the count
+    // is an exact integer sum of an order-independent per-element predicate (`v != 0.0`, which counts
+    // NaN and skips ±0.0 identically in any chunk), and integer addition is associative — so summing
+    // the per-chunk counts equals the sequential count exactly. Gated on `n`.
+    let data = input.data.as_slice();
+    let n = data.len();
+    let nthreads = if COUNT_NONZERO_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        1
+    } else {
+        ndimage_filter_thread_count(n, 4)
+    };
+    if nthreads <= 1 {
+        return data.iter().filter(|&&v| v != 0.0).count();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let parts: Vec<usize> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|c| scope.spawn(move || c.iter().filter(|&&v| v != 0.0).count()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("count_nonzero chunk panicked"))
+            .collect()
+    });
+    parts.into_iter().sum()
 }
 
 /// Clip (clamp) array values to [a_min, a_max].
