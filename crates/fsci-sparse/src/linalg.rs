@@ -5218,6 +5218,43 @@ pub fn sparse_is_symmetric(a: &CsrMatrix, tol: f64) -> bool {
 }
 
 /// Extract a submatrix from a CSR matrix (rows[r_start..r_end], cols[c_start..c_end]).
+/// Extract input rows `[base..end)` restricted to columns `[c_start..c_end)` (shifted by `c_start`)
+/// into local `(counts, cols, vals)` buffers, preserving stored order. `counts[k]` is the surviving
+/// nnz of input row `base+k`. Factored so the serial path and each parallel worker run byte-
+/// identical extract code over a contiguous row range.
+fn submatrix_row_block(
+    a: &CsrMatrix,
+    base: usize,
+    end: usize,
+    c_start: usize,
+    c_end: usize,
+) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+    let mut counts = Vec::with_capacity(end.saturating_sub(base));
+    let mut cols = Vec::new();
+    let mut vals = Vec::new();
+    for i in base..end {
+        let start = a.indptr()[i];
+        let row_end = a.indptr()[i + 1];
+        let mut c = 0usize;
+        for idx in start..row_end {
+            let j = a.indices()[idx];
+            if j >= c_start && j < c_end {
+                cols.push(j - c_start);
+                vals.push(a.data()[idx]);
+                c += 1;
+            }
+        }
+        counts.push(c);
+    }
+    (counts, cols, vals)
+}
+
+/// When `true`, [`sparse_submatrix`] extracts rows serially (the ORIG behaviour); default `false`
+/// fans the independent per-row column-range extract across contiguous row-blocks. Byte-identical.
+#[doc(hidden)]
+pub static SPARSE_SUBMATRIX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn sparse_submatrix(
     a: &CsrMatrix,
     r_start: usize,
@@ -5228,28 +5265,54 @@ pub fn sparse_submatrix(
     let new_rows = r_end - r_start;
     let new_cols = c_end - c_start;
 
-    let mut rows = Vec::new();
-    let mut cols_vec = Vec::new();
-    let mut vals = Vec::new();
+    // Each output row `i - r_start` keeps input row `i`'s entries whose column falls in
+    // `[c_start, c_end)` (shifted), in unchanged stored order — a pure function of that row,
+    // independent of the others. The surviving COUNT is data-dependent, so use gather-then-concat:
+    // each worker extracts a contiguous input-row block into a local buffer, then the blocks are
+    // concatenated in ascending output-row order and `indptr` is rebuilt from per-row counts. Rows
+    // past `a.rows` contribute no entries (indptr stays flat). Byte-identical to the serial extract.
+    let eff_end = r_end.min(a.shape().rows);
+    let nrange = eff_end.saturating_sub(r_start);
+    let nthreads = if SPARSE_SUBMATRIX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || a.data().len() < 65_536
+        || nrange < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nrange)
+    };
 
-    for i in r_start..r_end.min(a.shape().rows) {
-        let start = a.indptr()[i];
-        let end = a.indptr()[i + 1];
-        for idx in start..end {
-            let j = a.indices()[idx];
-            if j >= c_start && j < c_end {
-                rows.push(i - r_start);
-                cols_vec.push(j - c_start);
-                vals.push(a.data()[idx]);
-            }
-        }
-    }
+    let parts: Vec<(Vec<usize>, Vec<usize>, Vec<f64>)> = if nthreads <= 1 {
+        vec![submatrix_row_block(a, r_start, eff_end, c_start, c_end)]
+    } else {
+        let chunk = nrange.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .map(|t| {
+                    let base = r_start + (t * chunk).min(nrange);
+                    let end = r_start + ((t + 1) * chunk).min(nrange);
+                    scope.spawn(move || submatrix_row_block(a, base, end, c_start, c_end))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        })
+    };
 
+    let total: usize = parts.iter().map(|(_, cols, _)| cols.len()).sum();
+    let mut cols_vec = Vec::with_capacity(total);
+    let mut vals = Vec::with_capacity(total);
     let mut indptr = vec![0usize; new_rows + 1];
-    for &r in &rows {
-        if r < new_rows {
-            indptr[r + 1] += 1;
+    let mut out_row = 0usize;
+    for (counts, cols, vs) in &parts {
+        for &c in counts {
+            indptr[out_row + 1] = c;
+            out_row += 1;
         }
+        cols_vec.extend_from_slice(cols);
+        vals.extend_from_slice(vs);
     }
     for i in 0..new_rows {
         indptr[i + 1] += indptr[i];

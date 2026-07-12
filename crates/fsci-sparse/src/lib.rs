@@ -141,6 +141,7 @@ pub use linalg::{
     sparse_scale,
     SPARSE_SCALE_FORCE_SERIAL,
     sparse_submatrix,
+    SPARSE_SUBMATRIX_FORCE_SERIAL,
     sparse_sum,
     sparse_trace,
     sparse_transpose,
