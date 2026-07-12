@@ -44792,6 +44792,35 @@ fn normplot_ppcc(transformed: &[f64], osm: &[f64]) -> f64 {
     pearsonr(osm, &zs).statistic
 }
 
+/// Toggle forcing the PPCC / normality-plot shape sweeps (`ppcc_plot`,
+/// `boxcox_normplot`, `yeojohnson_normplot`) onto the serial path, for A/B
+/// measurement. Default `false` = the shapes fan across cores.
+pub static NORMPLOT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Total-work gate for the shape sweeps: below `n_shapes * n_data` element-work the
+/// serial map beats the thread spawn (and we skip the availability syscall).
+const NORMPLOT_SWEEP_MIN_WORK: u64 = 1 << 17;
+
+/// Fan `per_shape` over the `n_shapes` independent grid points of a PPCC /
+/// normality-plot sweep. Each shape runs a full `n_data`-length transcendental
+/// transform + Pearson `r`, so the shapes parallelize cleanly. `par_pair_index_map`
+/// preserves index (= shape) order, making the result BIT-IDENTICAL to the serial
+/// `(0..n_shapes).map(per_shape).collect()`. Work-gated (and toggle-forced) to the
+/// serial path for small sweeps.
+fn normplot_sweep<F>(n_shapes: usize, n_data: usize, per_shape: F) -> Vec<f64>
+where
+    F: Fn(usize) -> f64 + Sync,
+{
+    let work = (n_shapes as u64).saturating_mul(n_data.max(1) as u64);
+    if work < NORMPLOT_SWEEP_MIN_WORK
+        || NORMPLOT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return (0..n_shapes).map(per_shape).collect();
+    }
+    par_pair_index_map(n_shapes, 1, per_shape)
+}
+
 /// Compute the data for a Box-Cox normality plot, matching
 /// `scipy.stats.boxcox_normplot(x, la, lb, N=80)`.
 ///
@@ -44818,11 +44847,24 @@ pub fn boxcox_normplot(
     let lmbdas: Vec<f64> = (0..n)
         .map(|i| la + (lb - la) * i as f64 / (n - 1).max(1) as f64)
         .collect();
-    let mut ppcc = Vec::with_capacity(n);
-    for &lm in &lmbdas {
-        let z = boxcox(x, Some(lm))?.data;
-        ppcc.push(normplot_ppcc(&z, &osm));
-    }
+    let ppcc = normplot_sweep(n, x.len(), |i| {
+        let lm = lmbdas[i];
+        // Serial Box-Cox transform — byte-identical to `boxcox(x, Some(lm)).data`
+        // (its `par_map_inline` is bit-identical to this serial map), inlined here so
+        // the parallel outer sweep does not nest `par_map_inline`'s own thread pool.
+        // Positivity is validated once above, so this can't fail.
+        let z: Vec<f64> = x
+            .iter()
+            .map(|&v| {
+                if lm.abs() < 1e-10 {
+                    v.ln()
+                } else {
+                    (v.powf(lm) - 1.0) / lm
+                }
+            })
+            .collect();
+        normplot_ppcc(&z, &osm)
+    });
     Ok((lmbdas, ppcc))
 }
 
@@ -44845,10 +44887,29 @@ pub fn yeojohnson_normplot(
     let lmbdas: Vec<f64> = (0..n)
         .map(|i| la + (lb - la) * i as f64 / (n - 1).max(1) as f64)
         .collect();
-    let ppcc = lmbdas
-        .iter()
-        .map(|&lm| normplot_ppcc(&yeojohnson(x, lm), &osm))
-        .collect();
+    let ppcc = normplot_sweep(n, x.len(), |i| {
+        let lam = lmbdas[i];
+        // Serial Yeo-Johnson transform — byte-identical to `yeojohnson(x, lam)`
+        // (its `par_elementwise` is bit-identical to this serial map), inlined here so
+        // the parallel outer sweep does not nest `par_elementwise`'s own thread pool.
+        let z: Vec<f64> = x
+            .iter()
+            .map(|&xi| {
+                if xi >= 0.0 {
+                    if lam.abs() < 1e-15 {
+                        (xi + 1.0).ln()
+                    } else {
+                        ((xi + 1.0).powf(lam) - 1.0) / lam
+                    }
+                } else if (lam - 2.0).abs() < 1e-15 {
+                    -((-xi + 1.0).ln())
+                } else {
+                    -((-xi + 1.0).powf(2.0 - lam) - 1.0) / (2.0 - lam)
+                }
+            })
+            .collect();
+        normplot_ppcc(&z, &osm)
+    });
     Ok((lmbdas, ppcc))
 }
 
@@ -44898,10 +44959,7 @@ pub fn ppcc_plot(x: &[f64], a: f64, b: f64, n: usize) -> Result<(Vec<f64>, Vec<f
     let svals: Vec<f64> = (0..n)
         .map(|i| a + (b - a) * i as f64 / (n - 1).max(1) as f64)
         .collect();
-    let ppcc = svals
-        .iter()
-        .map(|&c| tukeylambda_ppcc(&osr, &probs, c))
-        .collect();
+    let ppcc = normplot_sweep(n, x.len(), |i| tukeylambda_ppcc(&osr, &probs, svals[i]));
     Ok((svals, ppcc))
 }
 
