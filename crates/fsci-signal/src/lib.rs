@@ -4833,25 +4833,51 @@ pub fn rms(x: &[f64]) -> f64 {
     (x.iter().map(|&v| v * v).sum::<f64>() / x.len() as f64).sqrt()
 }
 
+/// When `true`, [`peak_to_peak`] computes the max and min in two separate folds (the ORIG behaviour);
+/// default `false` computes both in one pass. Byte-identical.
+#[doc(hidden)]
+pub static PEAK_TO_PEAK_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Peak-to-peak amplitude of a signal.
 pub fn peak_to_peak(x: &[f64]) -> f64 {
     if x.is_empty() {
         return 0.0;
     }
-    let max = x.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
+    // The max and the min are independent, order-independent reductions over the same array —
+    // compute both in ONE pass so x is read once instead of twice. BYTE-IDENTICAL: each fold replays
+    // the exact NaN-aware `max`/`min` sequence (from ∓∞ in index order) of the two separate folds.
+    if PEAK_TO_PEAK_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let max = x.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
+        let min = x.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.min(b)
+            }
+        });
+        return max - min;
+    }
+    let mut max = f64::NEG_INFINITY;
+    let mut min = f64::INFINITY;
+    for &v in x {
+        max = if max.is_nan() || v.is_nan() {
             f64::NAN
         } else {
-            a.max(b)
-        }
-    });
-    let min = x.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
+            max.max(v)
+        };
+        min = if min.is_nan() || v.is_nan() {
             f64::NAN
         } else {
-            a.min(b)
-        }
-    });
+            min.min(v)
+        };
+    }
     max - min
 }
 
