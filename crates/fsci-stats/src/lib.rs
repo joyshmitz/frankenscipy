@@ -44588,12 +44588,27 @@ pub fn yeojohnson_llf(lmb: f64, data: &[f64]) -> f64 {
         return f64::NEG_INFINITY;
     }
 
-    let log_term: f64 = data
-        .iter()
-        .map(|&x| x.signum() * (x.abs() + 1.0).ln())
-        .sum();
+    // Σ signum(x)·ln(|x|+1): a compute-bound `ln` per element, the last serial pass
+    // (yeojohnson's transform already fans across cores; mean/var are cheap). Parallelize
+    // it exactly as boxcox_llf's Σln: `par_continuous_map` (order-preserving) + a serial
+    // index-ordered sum ⇒ BYTE-IDENTICAL to `data.iter().map(..).sum()` (same left fold).
+    // Called repeatedly by yeojohnson_normmax, so this speeds up the whole lambda search.
+    let log_term: f64 = if YEOJOHNSON_LLF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        data.iter().map(|&x| x.signum() * (x.abs() + 1.0).ln()).sum()
+    } else {
+        par_continuous_map(data, |x| x.signum() * (x.abs() + 1.0).ln())
+            .iter()
+            .sum()
+    };
     -nf / 2.0 * var.ln() + (lmb - 1.0) * log_term
 }
+
+/// When `true`, [`yeojohnson_llf`] runs its `Σ signum·ln` pass serially (the ORIG
+/// behaviour). When `false` (default) it fans across cores (byte-identical:
+/// `par_continuous_map` is order-preserving and the sum stays index-ordered). A/B gate.
+#[doc(hidden)]
+pub static YEOJOHNSON_LLF_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Compute the median of a dataset.
 pub fn median(data: &[f64]) -> f64 {
