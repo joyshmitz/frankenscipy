@@ -12688,13 +12688,54 @@ fn golub_kahan_bidiagonal_reduction(
     })
 }
 
+/// When `true`, [`dmatrix_from_rows`] builds the column-major buffer SERIALLY (the ORIG behaviour, a
+/// strided gather over the row-major input); default `false` fills the independent column blocks
+/// across cores. Byte-identical (each `data[col*m + row]` written once, value independent of order).
+/// `#[doc(hidden)]` — the A/B knob.
+#[doc(hidden)]
+pub static DMATRIX_FROM_ROWS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn dmatrix_from_rows(rows: &[Vec<f64>]) -> Result<DMatrix<f64>, LinalgError> {
     let (m, n) = matrix_shape(rows)?;
-    let mut data = Vec::with_capacity(m * n);
-    for col in 0..n {
-        for row in rows {
-            data.push(row[col]);
+    // Column-major buffer: data[col*m + row] = rows[row][col]. The per-column gather strides across
+    // the row-major input (cache-thrashing serially), but the `n` column blocks are independent
+    // (each written once), so fan them across cores — BYTE-IDENTICAL to the serial col-outer fill.
+    let work = (m as u64).saturating_mul(n as u64);
+    let nthreads = if DMATRIX_FROM_ROWS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || work < (1 << 20)
+        || n < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+            .max(1)
+    };
+    let mut data = vec![0.0f64; m * n];
+    if nthreads <= 1 {
+        for (col, block) in data.chunks_mut(m).enumerate() {
+            for (r, row) in rows.iter().enumerate() {
+                block[r] = row[col];
+            }
         }
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (ci, blocks) in data.chunks_mut(chunk * m).enumerate() {
+                let base_col = ci * chunk;
+                scope.spawn(move || {
+                    for (lc, block) in blocks.chunks_mut(m).enumerate() {
+                        let col = base_col + lc;
+                        for (r, row) in rows.iter().enumerate() {
+                            block[r] = row[col];
+                        }
+                    }
+                });
+            }
+        });
     }
     Ok(DMatrix::from_vec(m, n, data))
 }
