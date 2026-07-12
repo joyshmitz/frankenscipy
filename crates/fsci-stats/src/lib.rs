@@ -34665,7 +34665,15 @@ pub fn zmap_weighted(scores: &[f64], compare: &[f64], weights: &[f64]) -> Vec<f6
     if std == 0.0 {
         return vec![f64::NAN; scores.len()];
     }
-    scores.iter().map(|&s| (s - mean) / std).collect()
+    // Output map straggler (like `zscore_weighted`): the weighted mean/var of `compare` are fused, but
+    // the `(s-mean)/std` map over `scores` stayed serial. It is a per-element pure function of its index,
+    // so fan it across cores via the order-preserving `par_continuous_map_min` — BYTE-IDENTICAL to
+    // `iter().map(..).collect()`. Shares [`ZSCORE_FORCE_SERIAL`]; 800k gate (light map) keeps <1.6M serial.
+    if ZSCORE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        scores.iter().map(|&s| (s - mean) / std).collect()
+    } else {
+        par_continuous_map_min(scores, 800_000, move |s| (s - mean) / std)
+    }
 }
 
 /// Compute the geometric z-score for strictly positive data.
