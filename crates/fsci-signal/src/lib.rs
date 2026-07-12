@@ -4855,19 +4855,51 @@ pub fn peak_to_peak(x: &[f64]) -> f64 {
     max - min
 }
 
+/// When `true`, [`crest_factor`] computes the RMS (`Σx²`) and the peak (`max|x|`) in two separate
+/// passes (the ORIG behaviour); default `false` fuses them into one pass. Byte-identical.
+#[doc(hidden)]
+pub static CREST_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Crest factor: peak / RMS ratio.
 pub fn crest_factor(x: &[f64]) -> f64 {
-    let r = rms(x);
+    // crest factor = peak / rms reads x twice: `rms` accumulates `Σx²` and the peak accumulates
+    // `max|x|`. Both are all-light reductions over the same array — accumulate them in ONE pass.
+    // BYTE-IDENTICAL: `ss` keeps the same left-to-right `+= v*v` order as `rms` (so `r =
+    // (ss/n).sqrt()` equals `rms(x)`), and `peak` replays the exact NaN-aware `max` fold from 0.0.
+    if CREST_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let r = rms(x);
+        if r == 0.0 {
+            return 0.0;
+        }
+        let peak = x.iter().map(|&v| v.abs()).fold(0.0f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
+        return peak / r;
+    }
+    if x.is_empty() {
+        // rms([]) == 0.0 ⇒ the original returns 0.0 here.
+        return 0.0;
+    }
+    let mut ss = 0.0f64;
+    let mut peak = 0.0f64;
+    for &v in x {
+        ss += v * v;
+        let a = v.abs();
+        peak = if peak.is_nan() || a.is_nan() {
+            f64::NAN
+        } else {
+            peak.max(a)
+        };
+    }
+    let r = (ss / x.len() as f64).sqrt();
     if r == 0.0 {
         return 0.0;
     }
-    let peak = x.iter().map(|&v| v.abs()).fold(0.0f64, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.max(b)
-        }
-    });
     peak / r
 }
 
