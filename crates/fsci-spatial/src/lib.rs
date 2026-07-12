@@ -554,21 +554,42 @@ pub fn canberra(a: &[f64], b: &[f64]) -> f64 {
     s
 }
 
+/// When `true`, [`braycurtis`] computes its numerator `Σ|a-b|` and denominator `Σ|a+b|` in two
+/// separate passes (the ORIG behaviour); default `false` computes both in one pass. Byte-identical.
+#[doc(hidden)]
+pub static BRAYCURTIS_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Bray-Curtis dissimilarity.
 ///
 /// Matches `scipy.spatial.distance.braycurtis(u, v)`.
 /// d(u,v) = Σ|u_i - v_i| / Σ|u_i + v_i|
 pub fn braycurtis(a: &[f64], b: &[f64]) -> f64 {
-    let num: f64 = a
-        .iter()
-        .zip(b.iter())
-        .map(|(&ai, &bi)| (ai - bi).abs())
-        .sum();
-    let den: f64 = a
-        .iter()
-        .zip(b.iter())
-        .map(|(&ai, &bi)| (ai + bi).abs())
-        .sum();
+    // The numerator `Σ|a-b|` and denominator `Σ|a+b|` are two independent reductions over the same
+    // (a, b) — accumulate both in ONE pass so each vector is read once instead of twice.
+    // BYTE-IDENTICAL: each Σ stays a scalar left-to-right `+=` from 0.0 in the same index order as
+    // the original `iter().map().sum()` (kept scalar so no SIMD reassociation).
+    let (num, den) = if BRAYCURTIS_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let num: f64 = a
+            .iter()
+            .zip(b.iter())
+            .map(|(&ai, &bi)| (ai - bi).abs())
+            .sum();
+        let den: f64 = a
+            .iter()
+            .zip(b.iter())
+            .map(|(&ai, &bi)| (ai + bi).abs())
+            .sum();
+        (num, den)
+    } else {
+        let mut num = 0.0f64;
+        let mut den = 0.0f64;
+        for (&ai, &bi) in a.iter().zip(b.iter()) {
+            num += (ai - bi).abs();
+            den += (ai + bi).abs();
+        }
+        (num, den)
+    };
     if den == 0.0 { 0.0 } else { num / den }
 }
 
