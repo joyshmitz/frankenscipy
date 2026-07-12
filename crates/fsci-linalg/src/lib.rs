@@ -19791,6 +19791,12 @@ fn cholesky_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     Some(y)
 }
 
+/// When `true`, [`matvec`] runs its serial double loop (the ORIG behaviour); default `false` fans the
+/// per-row dot products across threads. Byte-identical.
+#[doc(hidden)]
+pub static LINALG_MATVEC_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Matrix-vector multiplication y = A * x.
 ///
 /// Matches `A @ x`.
@@ -19806,12 +19812,41 @@ pub fn matvec(a: &[Vec<f64>], x: &[f64]) -> Result<Vec<f64>, LinalgError> {
             b_len: x.len(),
         });
     }
+    // Each output `y[i] = Σ_j a[i][j]*x[j]` is an INDEPENDENT per-row float sum (kept serial, in
+    // j-order ⇒ bit-identical) written to a disjoint slot ⇒ fanning across output ROWS is
+    // BYTE-IDENTICAL to the serial double loop. Gated on `m*n` so small products stay serial.
     let mut y = vec![0.0; m];
-    for i in 0..m {
-        for j in 0..n {
-            y[i] += a[i][j] * x[j];
+    let serial = LINALG_MATVEC_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || m.saturating_mul(n) < 65_536
+        || m < 2;
+    if serial {
+        for i in 0..m {
+            for j in 0..n {
+                y[i] += a[i][j] * x[j];
+            }
         }
+        return Ok(y);
     }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(m);
+    let chunk = m.div_ceil(nthreads);
+    std::thread::scope(|scope| {
+        for (ci, block) in y.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in block.iter_mut().enumerate() {
+                    let row = &a[base + k];
+                    let mut acc = 0.0f64;
+                    for j in 0..n {
+                        acc += row[j] * x[j];
+                    }
+                    *slot = acc;
+                }
+            });
+        }
+    });
     Ok(y)
 }
 
