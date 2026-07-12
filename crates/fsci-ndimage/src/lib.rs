@@ -11398,6 +11398,43 @@ pub fn power_array(input: &NdArray, exponent: f64) -> NdArray {
 pub static NDIMAGE_POWER_ARRAY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, the element-wise binary array ops ([`add_arrays`]/[`multiply_arrays`]/
+/// [`subtract_arrays`]) run their `a[i] OP b[i]` map serially (the ORIG behaviour); default `false`
+/// fans it across cores. Byte-identical.
+#[doc(hidden)]
+pub static NDIMAGE_BINOP_ARRAYS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Element-wise `a[flat] OP b[flat]` over two equal-shape arrays, parallelized across cores.
+/// BYTE-IDENTICAL to the serial `a.data.iter().zip(b.data).map(|(&x,&y)| op(x,y)).collect()`: each
+/// output element is a pure function of its flat index, written in flat order (reads two arrays +
+/// writes one ⇒ pure memory bandwidth, which multi-core aggregates). Caller checks shapes first.
+fn ndimage_binop_arrays<F>(a: &NdArray, b: &NdArray, op: F) -> NdArray
+where
+    F: Fn(f64, f64) -> f64 + Sync,
+{
+    if NDIMAGE_BINOP_ARRAYS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        let data: Vec<f64> = a
+            .data
+            .iter()
+            .zip(b.data.iter())
+            .map(|(&x, &y)| op(x, y))
+            .collect();
+        return NdArray {
+            data,
+            shape: a.shape.clone(),
+            strides: a.strides.clone(),
+        };
+    }
+    let mut output = NdArray {
+        data: vec![0.0; a.data.len()],
+        shape: a.shape.clone(),
+        strides: a.strides.clone(),
+    };
+    fill_pixels_parallel(&mut output, 1, |flat, _scratch| op(a.data[flat], b.data[flat]));
+    output
+}
+
 /// Multiply two arrays element-wise.
 pub fn multiply_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
     if a.shape != b.shape {
@@ -11405,17 +11442,7 @@ pub fn multiply_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError
             "shapes must match for element-wise multiply".to_string(),
         ));
     }
-    let data: Vec<f64> = a
-        .data
-        .iter()
-        .zip(b.data.iter())
-        .map(|(&x, &y)| x * y)
-        .collect();
-    Ok(NdArray {
-        data,
-        shape: a.shape.clone(),
-        strides: a.strides.clone(),
-    })
+    Ok(ndimage_binop_arrays(a, b, |x, y| x * y))
 }
 
 /// Add two arrays element-wise.
@@ -11425,17 +11452,7 @@ pub fn add_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
             "shapes must match for element-wise add".to_string(),
         ));
     }
-    let data: Vec<f64> = a
-        .data
-        .iter()
-        .zip(b.data.iter())
-        .map(|(&x, &y)| x + y)
-        .collect();
-    Ok(NdArray {
-        data,
-        shape: a.shape.clone(),
-        strides: a.strides.clone(),
-    })
+    Ok(ndimage_binop_arrays(a, b, |x, y| x + y))
 }
 
 /// Subtract two arrays element-wise.
@@ -11445,17 +11462,7 @@ pub fn subtract_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError
             "shapes must match".to_string(),
         ));
     }
-    let data: Vec<f64> = a
-        .data
-        .iter()
-        .zip(b.data.iter())
-        .map(|(&x, &y)| x - y)
-        .collect();
-    Ok(NdArray {
-        data,
-        shape: a.shape.clone(),
-        strides: a.strides.clone(),
-    })
+    Ok(ndimage_binop_arrays(a, b, |x, y| x - y))
 }
 
 /// Scale (multiply by scalar) an array.
