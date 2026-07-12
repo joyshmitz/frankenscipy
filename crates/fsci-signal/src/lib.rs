@@ -6536,6 +6536,13 @@ pub fn signal_power(x: &[f64]) -> f64 {
     signal_energy(x) / x.len() as f64
 }
 
+/// When `true`, [`xcorr_coefficient`] runs its finite-check, means, covariance and the two standard
+/// deviations as SEPARATE passes (the ORIG behaviour, reading each array 4×); default `false` folds
+/// the finite-check into the mean sums and computes cov/sx/sy in one zip pass. Byte-identical.
+#[doc(hidden)]
+pub static XCORR_COEF_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the cross-correlation coefficient between two signals.
 ///
 /// Returns a value between -1 and 1.
@@ -6543,19 +6550,53 @@ pub fn xcorr_coefficient(x: &[f64], y: &[f64]) -> f64 {
     if x.len() != y.len() || x.is_empty() {
         return 0.0;
     }
-    if x.iter().chain(y.iter()).any(|value| !value.is_finite()) {
-        return f64::NAN;
-    }
     let n = x.len() as f64;
-    let mx: f64 = x.iter().sum::<f64>() / n;
-    let my: f64 = y.iter().sum::<f64>() / n;
-    let cov: f64 = x
-        .iter()
-        .zip(y.iter())
-        .map(|(&a, &b)| (a - mx) * (b - my))
-        .sum();
-    let sx: f64 = x.iter().map(|&a| (a - mx).powi(2)).sum::<f64>().sqrt();
-    let sy: f64 = y.iter().map(|&b| (b - my).powi(2)).sum::<f64>().sqrt();
+    // BYTE-IDENTICAL fusion: every Σ below keeps the exact left-to-right order (and identical
+    // per-element expressions) of the original independent passes; the finite guard is a branchless
+    // `&= is_finite()` folded into the mean sums (non-finite input still returns NaN, the polluted
+    // sums discarded exactly as the original early-out discarded them), and cov/sx/sy are three
+    // independent accumulators over the SAME zip order, so each matches its own former pass bitwise.
+    let (cov, sx, sy) = if XCORR_COEF_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if x.iter().chain(y.iter()).any(|value| !value.is_finite()) {
+            return f64::NAN;
+        }
+        let mx: f64 = x.iter().sum::<f64>() / n;
+        let my: f64 = y.iter().sum::<f64>() / n;
+        let cov: f64 = x
+            .iter()
+            .zip(y.iter())
+            .map(|(&a, &b)| (a - mx) * (b - my))
+            .sum();
+        let sx: f64 = x.iter().map(|&a| (a - mx).powi(2)).sum::<f64>().sqrt();
+        let sy: f64 = y.iter().map(|&b| (b - my).powi(2)).sum::<f64>().sqrt();
+        (cov, sx, sy)
+    } else {
+        let mut sum_x = 0.0f64;
+        let mut all_finite = true;
+        for &a in x {
+            all_finite &= a.is_finite();
+            sum_x += a;
+        }
+        let mut sum_y = 0.0f64;
+        for &b in y {
+            all_finite &= b.is_finite();
+            sum_y += b;
+        }
+        if !all_finite {
+            return f64::NAN;
+        }
+        let mx = sum_x / n;
+        let my = sum_y / n;
+        let mut cov = 0.0f64;
+        let mut sxa = 0.0f64;
+        let mut sya = 0.0f64;
+        for (&a, &b) in x.iter().zip(y.iter()) {
+            cov += (a - mx) * (b - my);
+            sxa += (a - mx).powi(2);
+            sya += (b - my).powi(2);
+        }
+        (cov, sxa.sqrt(), sya.sqrt())
+    };
     if sx * sy == 0.0 {
         return 0.0;
     }
