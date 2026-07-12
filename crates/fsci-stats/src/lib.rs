@@ -32154,6 +32154,13 @@ pub fn moment(data: &[f64], k: u32) -> f64 {
         / n
 }
 
+/// When `true`, [`moment_weighted`] runs its weights finite-check, `Σw` and the weighted-mean sum as
+/// separate passes (the ORIG behaviour); default `false` folds all three into one pass over
+/// (data, weights). Byte-identical.
+#[doc(hidden)]
+pub static MOMENT_W_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the weighted k-th central moment of a data set.
 ///
 /// Matches `scipy.stats.moment` with weights parameter.
@@ -32161,17 +32168,42 @@ pub fn moment_weighted(data: &[f64], k: u32, weights: &[f64]) -> f64 {
     if data.is_empty() || data.len() != weights.len() {
         return f64::NAN;
     }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-        return f64::NAN;
-    }
-    let total_w: f64 = weights.iter().sum();
-    if total_w <= 0.0 {
-        return f64::NAN;
-    }
+    // BYTE-IDENTICAL fusion: the weights finite/non-negative check, `Σw`, and the weighted-mean
+    // numerator `Σw·x` are three INDEPENDENT reductions — fold them into ONE pass. Each Σ keeps its
+    // left-to-right order and `w * x` expression; a bad weight or non-positive `Σw` still returns
+    // NaN (checked BEFORE the `k == 0` short-circuit, preserving the original semantics; `sum_wx` is
+    // computed-but-unused when `k == 0`, which is harmless). The central-moment pass needs the mean.
+    let (total_w, sum_wx) = if MOMENT_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+            return f64::NAN;
+        }
+        let total_w: f64 = weights.iter().sum();
+        if total_w <= 0.0 {
+            return f64::NAN;
+        }
+        let sum_wx: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>();
+        (total_w, sum_wx)
+    } else {
+        let mut total_w = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        let mut valid = true;
+        for (&x, &w) in data.iter().zip(weights) {
+            valid &= w.is_finite() && w >= 0.0;
+            total_w += w;
+            sum_wx += w * x;
+        }
+        if !valid {
+            return f64::NAN;
+        }
+        if total_w <= 0.0 {
+            return f64::NAN;
+        }
+        (total_w, sum_wx)
+    };
     if k == 0 {
         return 1.0;
     }
-    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    let mean_val: f64 = sum_wx / total_w;
     data.iter()
         .zip(weights)
         .map(|(&x, &w)| w * (x - mean_val).powi(k as i32))
