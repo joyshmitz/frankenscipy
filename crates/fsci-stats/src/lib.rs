@@ -49295,6 +49295,32 @@ where
     (count, sum, bmin, bmax, has_nan)
 }
 
+/// When `true`, [`bin_median`] fully sorts each bin (the ORIG behaviour); default `false`
+/// quickselects the central rank(s) in O(bin). Byte-identical. A/B gate for the
+/// `binned_statistic`/`_2d`/`_dd` "median" statistic.
+#[doc(hidden)]
+pub static BINNED_MEDIAN_FORCE_SORT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Per-bin median for `binned_statistic{,_2d,_dd}`. Quickselects the one or two central order
+/// statistics of a copy in O(bin) instead of a full O(bin log bin) sort. BYTE-IDENTICAL:
+/// `median_in_place` reads the same central ranks (even ⇒ mean of ranks n/2-1 and n/2; odd ⇒
+/// rank n/2) that indexing a full total_cmp sort would.
+fn bin_median(bv: &[f64]) -> f64 {
+    let mut buf = bv.to_vec();
+    if BINNED_MEDIAN_FORCE_SORT.load(std::sync::atomic::Ordering::Relaxed) {
+        buf.sort_unstable_by(|a, b| a.total_cmp(b));
+        let n = buf.len();
+        if n.is_multiple_of(2) {
+            (buf[n / 2 - 1] + buf[n / 2]) / 2.0
+        } else {
+            buf[n / 2]
+        }
+    } else {
+        median_in_place(&mut buf)
+    }
+}
+
 pub fn binned_statistic(
     x: &[f64],
     values: &[f64],
@@ -49394,16 +49420,7 @@ pub fn binned_statistic(
                             a.max(b)
                         }
                     }),
-                "median" => {
-                    let mut sorted = bv.clone();
-                    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
-                    let n = sorted.len();
-                    if n.is_multiple_of(2) {
-                        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
-                    } else {
-                        sorted[n / 2]
-                    }
-                }
+                "median" => bin_median(bv),
                 "std" => {
                     let mean = bv.iter().sum::<f64>() / bv.len() as f64;
                     (bv.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / bv.len() as f64).sqrt()
@@ -49559,16 +49576,7 @@ pub fn binned_statistic_2d(
             "mean" => bv.iter().sum::<f64>() / bv.len() as f64,
             "min" => nan_min(bv),
             "max" => nan_max(bv),
-            "median" => {
-                let mut sorted = bv.to_vec();
-                sorted.sort_unstable_by(|a, b| a.total_cmp(b));
-                let n = sorted.len();
-                if n.is_multiple_of(2) {
-                    (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
-                } else {
-                    sorted[n / 2]
-                }
-            }
+            "median" => bin_median(bv),
             "std" => {
                 let mean = bv.iter().sum::<f64>() / bv.len() as f64;
                 (bv.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / bv.len() as f64).sqrt()
@@ -49883,16 +49891,7 @@ pub fn binned_statistic_dd(
             "mean" => bv.iter().sum::<f64>() / bv.len() as f64,
             "min" => nan_min_slice(bv),
             "max" => nan_max_slice(bv),
-            "median" => {
-                let mut sorted = bv.to_vec();
-                sorted.sort_unstable_by(|a, b| a.total_cmp(b));
-                let n = sorted.len();
-                if n.is_multiple_of(2) {
-                    (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
-                } else {
-                    sorted[n / 2]
-                }
-            }
+            "median" => bin_median(bv),
             "std" => {
                 let mean = bv.iter().sum::<f64>() / bv.len() as f64;
                 (bv.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / bv.len() as f64).sqrt()
