@@ -11,8 +11,9 @@ pub use audit::{
 };
 
 pub use construct::{
-    HstackOutput, block_array, block_diag, bmat, diags, diags_array, eye, eye_array,
-    eye_rectangular, hstack, hstack_with_format, identity, kron, kronsum, random, spdiags, vstack,
+    HstackOutput, SPARSE_DIAGS_FORCE_SERIAL, block_array, block_diag, bmat, diags, diags_array, eye,
+    eye_array, eye_rectangular, hstack, hstack_with_format, identity, kron, kronsum, random,
+    spdiags, vstack,
 };
 pub use formats::{
     BsrMatrix, COO_SUM_DUPLICATES_RADIX_DISABLE, CanonicalMeta, ConstructionLogEntry, CooMatrix,

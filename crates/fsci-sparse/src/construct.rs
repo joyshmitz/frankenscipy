@@ -75,6 +75,52 @@ pub fn eye_rectangular(rows: usize, cols: usize, k: isize) -> SparseResult<CsrMa
     coo.to_csr()
 }
 
+/// Emit rows `[base..end)` of a [`diags`] matrix into local `(counts, indices, data)` buffers by
+/// walking the offset-sorted diagonals per row. `counts[k]` is the stored nnz of row `base+k`, and
+/// entries are laid down in ascending-row, ascending-offset (hence ascending-column) order.
+/// Factored so the serial path and each parallel worker run byte-identical emit code.
+fn diags_row_block(
+    diagonal_order: &[(isize, &[f64])],
+    shape: Shape2D,
+    base: usize,
+    end: usize,
+) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+    let mut counts = Vec::with_capacity(end.saturating_sub(base));
+    let mut indices = Vec::new();
+    let mut data = Vec::new();
+    for row in base..end {
+        let mut c = 0usize;
+        for &(offset, diag) in diagonal_order {
+            let entry = if offset >= 0 {
+                let col = row + offset as usize;
+                if col < shape.cols && row < diag.len() {
+                    Some((col, diag[row]))
+                } else {
+                    None
+                }
+            } else {
+                let row_offset = (-offset) as usize;
+                row.checked_sub(row_offset)
+                    .filter(|&k| k < diag.len())
+                    .map(|k| (k, diag[k]))
+            };
+            if let Some((col, value)) = entry {
+                indices.push(col);
+                data.push(value);
+                c += 1;
+            }
+        }
+        counts.push(c);
+    }
+    (counts, indices, data)
+}
+
+/// When `true`, [`diags`] emits its rows serially (the ORIG behaviour); default `false` fans the
+/// independent per-row diagonal emit across contiguous row-blocks. Byte-identical.
+#[doc(hidden)]
+pub static SPARSE_DIAGS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn diags(
     diagonals: &[Vec<f64>],
     offsets: &[isize],
@@ -125,32 +171,56 @@ pub fn diags(
         .collect();
     diagonal_order.sort_unstable_by_key(|&(offset, _)| offset);
 
+    // Each output row is a pure function of `row` and the (shared, read-only) offset-sorted
+    // diagonals — the rows are independent. The stored COUNT per row is data-dependent, so use
+    // gather-then-concat: each worker emits a contiguous row-block into a local buffer, then the
+    // blocks are concatenated in ascending row order and `indptr` is built from per-row counts.
+    // Concatenating in row order reproduces the exact serial emission → BYTE-IDENTICAL. Gated on the
+    // total entry count so small banded matrices stay serial.
+    let n = shape.rows;
+    let nthreads = if SPARSE_DIAGS_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || capacity < 65_536
+        || n < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+
+    let parts: Vec<(Vec<usize>, Vec<usize>, Vec<f64>)> = if nthreads <= 1 {
+        vec![diags_row_block(&diagonal_order, shape, 0, n)]
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let dord = &diagonal_order;
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .map(|t| {
+                    let base = (t * chunk).min(n);
+                    let end = ((t + 1) * chunk).min(n);
+                    scope.spawn(move || diags_row_block(dord, shape, base, end))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        })
+    };
+
     let mut data = Vec::with_capacity(capacity);
     let mut indices = Vec::with_capacity(capacity);
-    let mut indptr = Vec::with_capacity(shape.rows + 1);
-    indptr.push(0usize);
-
-    for row in 0..shape.rows {
-        for &(offset, diag) in &diagonal_order {
-            let entry = if offset >= 0 {
-                let col = row + offset as usize;
-                if col < shape.cols && row < diag.len() {
-                    Some((col, diag[row]))
-                } else {
-                    None
-                }
-            } else {
-                let row_offset = (-offset) as usize;
-                row.checked_sub(row_offset)
-                    .filter(|&k| k < diag.len())
-                    .map(|k| (k, diag[k]))
-            };
-            if let Some((col, value)) = entry {
-                indices.push(col);
-                data.push(value);
-            }
+    let mut indptr = vec![0usize; n + 1];
+    let mut row_i = 0usize;
+    for (counts, idx, dat) in &parts {
+        for &c in counts {
+            indptr[row_i + 1] = c;
+            row_i += 1;
         }
-        indptr.push(data.len());
+        indices.extend_from_slice(idx);
+        data.extend_from_slice(dat);
+    }
+    for i in 0..n {
+        indptr[i + 1] += indptr[i];
     }
 
     CsrMatrix::from_components(shape, data, indices, indptr, true)
