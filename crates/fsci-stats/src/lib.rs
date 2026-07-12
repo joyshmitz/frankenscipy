@@ -28260,6 +28260,13 @@ pub fn bartlett_with_nan_policy(
     Ok(bartlett(groups))
 }
 
+/// When `true`, [`friedmanchisquare`] allocates a fresh per-block scratch `Vec` (the ORIG
+/// behaviour); when `false` (default) it reuses one hoisted buffer. Byte-identical either
+/// way. For the same-binary A/B perf gate.
+#[doc(hidden)]
+pub static FRIEDMAN_ALLOC_IN_LOOP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Friedman test for repeated measures (non-parametric).
 ///
 /// Tests H0: all treatments have the same effect. Non-parametric alternative
@@ -28292,12 +28299,25 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
     // and accumulate Σ(t³-t) over tie groups for scipy's tie correction.
     let mut rank_sums = vec![0.0; k];
     let mut tie_sum = 0.0_f64;
+    // Per-block (value, group) scratch, hoisted out of the block loop and cleared+refilled
+    // each block, so the n blocks share ONE k-element allocation instead of mallocing a
+    // fresh Vec per block (n allocs -> 1). BYTE-IDENTICAL: identical contents, sort and
+    // rank accumulation each block. frankenscipy-26zjo. The FRIEDMAN_ALLOC_IN_LOOP toggle
+    // restores the per-block alloc for the same-binary A/B gate.
+    let alloc_in_loop = FRIEDMAN_ALLOC_IN_LOOP.load(std::sync::atomic::Ordering::Relaxed);
+    let mut scratch: Vec<(f64, usize)> = Vec::with_capacity(k);
     for block in 0..n {
-        let mut vals: Vec<(f64, usize)> = groups
-            .iter()
-            .enumerate()
-            .map(|(j, g)| (g[block], j))
-            .collect();
+        let mut owned;
+        let vals: &mut Vec<(f64, usize)> = if alloc_in_loop {
+            owned = Vec::with_capacity(k);
+            &mut owned
+        } else {
+            scratch.clear();
+            &mut scratch
+        };
+        for (j, g) in groups.iter().enumerate() {
+            vals.push((g[block], j));
+        }
         vals.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         // Average ranks for ties
