@@ -20392,3 +20392,19 @@ fn — inside a routine already dominated by a radix-sort + multiple big allocat
 cached array is bandwidth-noise. (Contrast the wilcoxon lazy-gate win 1.31x: there the skipped sort was on the ONLY
 heavy path and not shadowed by a second internal sort.) Do NOT re-chase mannwhitneyu/kruskal/ansari rank-tie sorts
 unless a profile shows the tie-sort itself dominating.
+
+## 2026-07-12 - BlackThrush (cc) - REJECT calinski_harabasz_score centroid-pass fuse: IN-FLOOR 1.15x
+`cluster::calinski_harabasz_score` scans the N×D data three times: global centroid (Σ points), per-cluster
+centroids+counts (Σ points per cluster), then within-cluster dispersion `wg = Σ sq_dist(point, centroid[label])`.
+The global-centroid and cluster-centroid sums are both plain point-sums, so I fused them into ONE pass
+(`global[j] += v; centroids[c][j] += v;` per element) — byte-identical (each accumulator sums the same points
+in the same index order). MEASURED bitmism=0 but IN-FLOOR: n=1M d=16 k=10, orig 47.72ms vs fused 43.83ms =
+1.154x, well within the A/A null [0.820,1.341]. ROOT CAUSE (the mannwhitneyu/min_max_scale lesson again): the
+fused passes are the LIGHT ones (read + add), while the un-fusable `wg` pass carries the heavy per-point sq_dist
+(D subtractions + squares) AND `validate_cluster_metric_data` scans up front — so removing ONE of ~3-4 traversals,
+where the removed pass is the cheapest, saves too little to clear the gate. Compounded by high timing noise from the
+`Vec<Vec<f64>>` scattered-heap pointer-chase (cv 8.5% → null_hi 1.341). VERDICT: byte-identical but not measurable
+⇒ not shipped; lib.rs reverted to HEAD (stash "calinski centroid-fuse IN-FLOOR revert 2026-07-12"), perf bin parked
+in scratchpad. RULE (reconfirmed): a multi-pass fuse only clears the gate when the FUSED passes are a large fraction
+of the total work — fusing 2 light sum-passes when a heavy compute pass (sq_dist/powf) dominates the same fn is
+IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) or where the fused count is ≥3.
