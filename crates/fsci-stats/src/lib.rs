@@ -25487,6 +25487,13 @@ pub fn corrcoef(x: &[f64], y: &[f64]) -> f64 {
     cov_xy / (var_x * var_y).sqrt()
 }
 
+/// When `true`, [`corrcoef_weighted`] runs its weights finite-check, `Σw` and the two weighted-mean
+/// sums as separate passes (the ORIG behaviour); default `false` folds all four into one pass over
+/// (x, y, weights). Byte-identical.
+#[doc(hidden)]
+pub static CORRCOEF_W_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the weighted Pearson correlation coefficient.
 ///
 /// r_w = cov_w(x, y) / (std_w(x) * std_w(y))
@@ -25494,15 +25501,44 @@ pub fn corrcoef_weighted(x: &[f64], y: &[f64], weights: &[f64]) -> f64 {
     if x.len() != y.len() || x.len() != weights.len() || x.len() < 2 {
         return f64::NAN;
     }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-        return f64::NAN;
-    }
-    let total_w: f64 = weights.iter().sum();
-    if total_w <= 0.0 {
-        return f64::NAN;
-    }
-    let mean_x: f64 = x.iter().zip(weights).map(|(&xi, &w)| w * xi).sum::<f64>() / total_w;
-    let mean_y: f64 = y.iter().zip(weights).map(|(&yi, &w)| w * yi).sum::<f64>() / total_w;
+    // BYTE-IDENTICAL fusion: the weights finite/non-negative check, `Σw`, and the two weighted-mean
+    // numerators `Σw·x` and `Σw·y` are four INDEPENDENT reductions over (x, y, weights) — fold them
+    // into ONE pass (the moment loop below was already fused). Each Σ keeps its exact left-to-right
+    // order and `w * xi` / `w * yi` expressions; a bad weight still returns NaN (polluted sums
+    // discarded exactly as the original early-out discarded them).
+    let (total_w, sum_wx, sum_wy) =
+        if CORRCOEF_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+                return f64::NAN;
+            }
+            let total_w: f64 = weights.iter().sum();
+            if total_w <= 0.0 {
+                return f64::NAN;
+            }
+            let sum_wx: f64 = x.iter().zip(weights).map(|(&xi, &w)| w * xi).sum::<f64>();
+            let sum_wy: f64 = y.iter().zip(weights).map(|(&yi, &w)| w * yi).sum::<f64>();
+            (total_w, sum_wx, sum_wy)
+        } else {
+            let mut total_w = 0.0f64;
+            let mut sum_wx = 0.0f64;
+            let mut sum_wy = 0.0f64;
+            let mut valid = true;
+            for ((&xi, &yi), &w) in x.iter().zip(y).zip(weights) {
+                valid &= w.is_finite() && w >= 0.0;
+                total_w += w;
+                sum_wx += w * xi;
+                sum_wy += w * yi;
+            }
+            if !valid {
+                return f64::NAN;
+            }
+            if total_w <= 0.0 {
+                return f64::NAN;
+            }
+            (total_w, sum_wx, sum_wy)
+        };
+    let mean_x: f64 = sum_wx / total_w;
+    let mean_y: f64 = sum_wy / total_w;
     let mut cov_xy = 0.0;
     let mut var_x = 0.0;
     let mut var_y = 0.0;
