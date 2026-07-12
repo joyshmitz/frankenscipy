@@ -10236,34 +10236,64 @@ pub fn map_coordinates(
     Ok(result)
 }
 
+/// When `true`, [`array_min`]/[`array_max`] run their NaN-aware fold serially (the ORIG behaviour);
+/// default `false` chunks the reduction across threads. Byte-identical.
+#[doc(hidden)]
+pub static NDIMAGE_ARRAY_MINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Parallel NaN-propagating extreme (min or max) over `data`. BYTE-IDENTICAL to the sequential
+/// `data.iter().fold(ident, op)`: `op` (NaN-aware min/max) is associative and commutative — including
+/// signed-zero (`min(-0,+0) = -0`, `max = +0` regardless of order) and NaN (propagates from any
+/// chunk) — so a chunk-then-merge with the same `ident`/`op` yields the same bits. Gated on `n`.
+fn ndimage_par_nan_extreme(data: &[f64], ident: f64, op: fn(f64, f64) -> f64) -> f64 {
+    let n = data.len();
+    let nthreads = if NDIMAGE_ARRAY_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        1
+    } else {
+        ndimage_filter_thread_count(n, 4)
+    };
+    if nthreads <= 1 {
+        return data.iter().copied().fold(ident, op);
+    }
+    let chunk = n.div_ceil(nthreads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|c| scope.spawn(move || c.iter().copied().fold(ident, op)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("array minmax chunk panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(ident, op)
+}
+
+#[inline]
+fn ndimage_nan_max(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+}
+
+#[inline]
+fn ndimage_nan_min(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.min(b)
+    }
+}
+
 /// Compute the maximum of the input array.
 pub fn array_max(input: &NdArray) -> f64 {
-    input
-        .data
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
-        })
+    ndimage_par_nan_extreme(input.data.as_slice(), f64::NEG_INFINITY, ndimage_nan_max)
 }
 
 /// Compute the minimum of the input array.
 pub fn array_min(input: &NdArray) -> f64 {
-    input
-        .data
-        .iter()
-        .cloned()
-        .fold(f64::INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.min(b)
-            }
-        })
+    ndimage_par_nan_extreme(input.data.as_slice(), f64::INFINITY, ndimage_nan_min)
 }
 
 /// Gaussian filter with per-axis sigma.
