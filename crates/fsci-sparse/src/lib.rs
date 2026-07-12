@@ -133,6 +133,7 @@ pub use linalg::{
     sparse_power,
     sparse_row_max,
     sparse_row_min,
+    SPARSE_ROW_MINMAX_FORCE_SERIAL,
     sparse_row_sums,
     sparse_scale,
     sparse_submatrix,

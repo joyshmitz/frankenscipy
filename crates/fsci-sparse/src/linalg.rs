@@ -5763,76 +5763,114 @@ pub fn sparse_col_sums(a: &CsrMatrix) -> Vec<f64> {
 }
 
 /// Compute the row-wise maximum of a CSR matrix.
-pub fn sparse_row_max(a: &CsrMatrix) -> Vec<f64> {
+/// When `true`, [`sparse_row_max`]/[`sparse_row_min`] compute their per-row reduce serially (the ORIG
+/// behaviour); default `false` fans the independent rows across threads. Byte-identical.
+#[doc(hidden)]
+pub static SPARSE_ROW_MINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Fill `out[i] = row_of(i)` for `i in 0..a.shape().rows`, parallelized across row-chunks. BYTE-
+/// IDENTICAL to `(0..n).map(row_of).collect()`: each output element is a pure function of its row
+/// index, written to a disjoint slot in ascending order. Gated on stored-nnz work.
+fn sparse_par_row_map<F>(a: &CsrMatrix, row_of: F) -> Vec<f64>
+where
+    F: Fn(usize) -> f64 + Sync,
+{
     let n = a.shape().rows;
-    let ncols = a.shape().cols;
-    (0..n)
-        .map(|i| {
-            let start = a.indptr()[i];
-            let end = a.indptr()[i + 1];
-            if start == end {
-                0.0 // empty row, implicit zero
-            } else {
-                let row_max =
-                    a.data()[start..end]
-                        .iter()
-                        .cloned()
-                        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-                            if a.is_nan() || b.is_nan() {
-                                f64::NAN
-                            } else {
-                                a.max(b)
-                            }
-                        });
-                // Only fold in an implicit zero when the row actually HAS one
-                // (fewer stored entries than columns). A full row — including one
-                // whose stored entries are an explicit zero — has no implicit zero,
-                // so its max/min is over the stored values alone (matches SciPy).
-                if end - start < ncols {
-                    row_max.max(0.0)
-                } else {
-                    row_max
+    let nthreads = if SPARSE_ROW_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || a.data().len() < 65_536
+        || n < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(&row_of).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let mut out = vec![0.0f64; n];
+    let row_ref = &row_of;
+    std::thread::scope(|scope| {
+        for (ci, block) in out.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in block.iter_mut().enumerate() {
+                    *slot = row_ref(base + k);
                 }
+            });
+        }
+    });
+    out
+}
+
+pub fn sparse_row_max(a: &CsrMatrix) -> Vec<f64> {
+    let ncols = a.shape().cols;
+    sparse_par_row_map(a, |i| {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        if start == end {
+            0.0 // empty row, implicit zero
+        } else {
+            let row_max =
+                a.data()[start..end]
+                    .iter()
+                    .cloned()
+                    .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    });
+            // Only fold in an implicit zero when the row actually HAS one
+            // (fewer stored entries than columns). A full row — including one
+            // whose stored entries are an explicit zero — has no implicit zero,
+            // so its max/min is over the stored values alone (matches SciPy).
+            if end - start < ncols {
+                row_max.max(0.0)
+            } else {
+                row_max
             }
-        })
-        .collect()
+        }
+    })
 }
 
 /// Compute the row-wise minimum of a CSR matrix.
 pub fn sparse_row_min(a: &CsrMatrix) -> Vec<f64> {
-    let n = a.shape().rows;
     let ncols = a.shape().cols;
-    (0..n)
-        .map(|i| {
-            let start = a.indptr()[i];
-            let end = a.indptr()[i + 1];
-            if start == end {
-                0.0
+    sparse_par_row_map(a, |i| {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        if start == end {
+            0.0
+        } else {
+            let row_min =
+                a.data()[start..end]
+                    .iter()
+                    .cloned()
+                    .fold(f64::INFINITY, |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.min(b)
+                        }
+                    });
+            if row_min.is_nan() {
+                f64::NAN
+            } else if end - start < ncols {
+                // Implicit zero present only when the row isn't full (matches
+                // SciPy). A full row — even one storing an explicit zero — has
+                // no implicit zero, so the min is over the stored values alone.
+                row_min.min(0.0)
             } else {
-                let row_min =
-                    a.data()[start..end]
-                        .iter()
-                        .cloned()
-                        .fold(f64::INFINITY, |a: f64, b: f64| {
-                            if a.is_nan() || b.is_nan() {
-                                f64::NAN
-                            } else {
-                                a.min(b)
-                            }
-                        });
-                if row_min.is_nan() {
-                    f64::NAN
-                } else if end - start < ncols {
-                    // Implicit zero present only when the row isn't full (matches
-                    // SciPy). A full row — even one storing an explicit zero — has
-                    // no implicit zero, so the min is over the stored values alone.
-                    row_min.min(0.0)
-                } else {
-                    row_min
-                }
+                row_min
             }
-        })
-        .collect()
+        }
+    })
 }
 
 /// Check if a sparse matrix has any explicit zeros (stored but zero value).
