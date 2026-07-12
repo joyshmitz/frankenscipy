@@ -51547,11 +51547,22 @@ pub fn ljung_box(data: &[f64], lags: usize) -> (f64, f64) {
 /// sample order, so the result is BIT-identical, but the layout is cache-friendly
 /// and the output rows are independent, so they fan out across threads. Returns
 /// the full (mirrored) `X̃ᵀX̃` and `X̃ᵀy`. Small p keeps the textbook path.
+/// When `true`, [`augmented_normal_equations`]'s transposed normal-equation build fills its rows
+/// serially; default `false` fans them across cores. Byte-identical. `#[doc(hidden)]` — the A/B knob.
+#[doc(hidden)]
+pub static NORMAL_EQ_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn augmented_normal_equations(x: &[Vec<f64>], y: &[f64], p: usize) -> (Vec<Vec<f64>>, Vec<f64>) {
     let n = x.len();
     let p1 = p + 1;
 
-    if p1 < 48 {
+    let work = (p1 as u64).saturating_mul(p1 as u64).saturating_mul(n as u64);
+    // Small p AND small work: textbook rank-1 (bit-identical reference), no transpose overhead. For
+    // a small p but LARGE n the rank-1 form is O(n·p1²) SERIAL, so it falls through to the transposed
+    // build below (cache-friendly streamed dots, output rows fanned) — BYTE-IDENTICAL (same products
+    // summed in the same sample order).
+    if p1 < 48 && work < (1 << 22) {
         let mut xtx = vec![vec![0.0; p1]; p1];
         let mut xty = vec![0.0; p1];
         let mut row = vec![1.0; p1]; // row[0] is the intercept, stays 1.0
@@ -51602,10 +51613,9 @@ fn augmented_normal_equations(x: &[Vec<f64>], y: &[f64], p: usize) -> (Vec<Vec<f
         sy
     };
 
-    let work = (p1 as u64)
-        .saturating_mul(p1 as u64)
-        .saturating_mul(n as u64);
-    let nthreads = if work < 1 << 22 {
+    let nthreads = if NORMAL_EQ_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || work < 1 << 22
+    {
         1
     } else {
         std::thread::available_parallelism()
