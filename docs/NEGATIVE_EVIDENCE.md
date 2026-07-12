@@ -20372,3 +20372,23 @@ VERDICT: byte-exact logsumexp parallelization CANNOT win — reverted to origin,
 softmax reject): a byte-exact parallel REDUCTION that must materialize its mapped terms only wins when the per-element
 map is HEAVY enough to amortize the 2× memory round-trip (ln/betainc/transform yes; a single `exp`+add no) OR the
 downstream after the sum is heavy. A lone `Σ exp` / `Σ x²` reduction is memory-round-trip-bound ⇒ skip.
+
+## 2026-07-12 - BlackThrush (cc) - REJECT mannwhitneyu tie-correction sort-elimination: IN-FLOOR 0.999x
+`mannwhitneyu_alternative` ranks the pooled sample via `rankdata_average` (which sorts internally to discover the
+tie groups) and then sorts the ranks a SECOND time (`sorted_ranks.sort_by(partial_cmp)`) purely to tally the tie
+correction `Σ(t³−t)`. HYPOTHESIS: the tie groups are exactly the equal-rank runs the ranking scan already walks, so
+returning `Σ(t³−t)` from that scan (new shared core `rankdata_ties_core` → `rankdata_average_with_tie_correction`)
+eliminates the redundant O(n log n) sort + a 2M-element clone + a pass — byte-identical (equal values ⇒ identical
+averaged ranks; distinct groups' averaged ranks differ by ≥0.5, so value-`==` grouping == the orig `|Δrank|<1e-12`
+grouping, accumulated in the same ascending order). MEASURED bitmism=0 (U and p bit-identical) but IN-FLOOR both data
+shapes: quantized/heavy-ties n=2M 0.998x (null [0.854,1.146]); continuous/all-distinct n=2M 0.999x (null
+[0.829,1.104]). ROOT CAUSE: at n=2M the function is dominated by the radix argsort inside `rankdata_average` plus the
+several large Vec allocations (`combined` of (f64,usize), `values`, `ranks`) — all memory-bandwidth-bound. The second
+sort operates on an ALREADY-HOT 16MB array and is cheap relative to that allocation/streaming traffic, so removing it
+is lost in the noise floor (and with heavy ties pdqsort collapses it toward linear anyway). VERDICT: byte-identical
+but not measurable ⇒ not shipped; lib.rs reverted to HEAD (stash "mwu-tie-fuse IN-FLOOR revert 2026-07-12"), perf bin
+parked in scratchpad. RULE: eliminating a redundant SORT only clears the gate when the sort is a real fraction of the
+fn — inside a routine already dominated by a radix-sort + multiple big allocations, one extra comparison-sort of a
+cached array is bandwidth-noise. (Contrast the wilcoxon lazy-gate win 1.31x: there the skipped sort was on the ONLY
+heavy path and not shadowed by a second internal sort.) Do NOT re-chase mannwhitneyu/kruskal/ansari rank-tie sorts
+unless a profile shows the tie-sort itself dominating.
