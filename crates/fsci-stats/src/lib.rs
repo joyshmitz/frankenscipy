@@ -13308,6 +13308,12 @@ impl ContinuousDistribution for Laplace {
 // Triangular Distribution
 // ══════════════════════════════════════════════════════════════════════
 
+/// When `true`, [`Triangular`]'s `fit` runs its finite-check/min/max/Σ as four separate passes
+/// (the ORIG behaviour); default `false` fuses them into one traversal. Byte-identical.
+#[doc(hidden)]
+pub static TRIANGULAR_FIT_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Triangular distribution on [left, right] with mode `mode`.
 ///
 /// Matches `scipy.stats.triang(c, loc, scale)` where c=(mode-left)/(right-left).
@@ -13442,16 +13448,46 @@ impl ContinuousDistribution for Triangular {
             mode: f64::NAN,
             right: f64::NAN,
         };
-        if data.len() < 3 || data.iter().any(|v| !v.is_finite()) {
+        if data.len() < 3 {
             return nan;
         }
-        let left = data.iter().cloned().fold(f64::INFINITY, f64::min);
-        let right = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        if left >= right {
+        let (left, right, sum, all_finite) = if TRIANGULAR_FIT_FUSE_DISABLE
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            // ORIG: four separate traversals (finite-check, min, max, sum).
+            if data.iter().any(|v| !v.is_finite()) {
+                return nan;
+            }
+            (
+                data.iter().cloned().fold(f64::INFINITY, f64::min),
+                data.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+                data.iter().sum::<f64>(),
+                true,
+            )
+        } else {
+            // FUSED: finite-check + min + max + Σ in ONE pass. BYTE-IDENTICAL — Σ stays a
+            // left-to-right `+=` from 0.0 (== iter().sum()), min/max use the same f64::min/max
+            // (order-independent), and the finite guard is carried as a flag; if it trips we
+            // return `nan` exactly as the original early-out would (partial min/max/Σ discarded).
+            let mut left = f64::INFINITY;
+            let mut right = f64::NEG_INFINITY;
+            let mut sum = 0.0f64;
+            let mut all_finite = true;
+            for &v in data {
+                if !v.is_finite() {
+                    all_finite = false;
+                }
+                left = f64::min(left, v);
+                right = f64::max(right, v);
+                sum += v;
+            }
+            (left, right, sum, all_finite)
+        };
+        if !all_finite || left >= right {
             return nan;
         }
         let n = data.len() as f64;
-        let mean = data.iter().sum::<f64>() / n;
+        let mean = sum / n;
         let mode = 3.0 * mean - left - right;
         let mode = mode.clamp(left, right);
         Self { left, mode, right }
