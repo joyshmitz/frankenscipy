@@ -14049,6 +14049,13 @@ pub fn firwin_2d(
 /// radially over the normalized grid. Note the SciPy shape quirk: the returned
 /// kernel is `hsize.1 × hsize.0` (transposed relative to the separable case),
 /// because SciPy uses `np.meshgrid(..., indexing='xy')`.
+/// When `true`, [`firwin_2d_circular`] fills its radial grid serially (the ORIG behaviour); default
+/// `false` fans the independent per-row fill across cores. Byte-identical. `#[doc(hidden)]` — the
+/// same-binary A/B knob.
+#[doc(hidden)]
+pub static FIRWIN2D_CIRCULAR_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn firwin_2d_circular(
     hsize: (usize, usize),
     cutoff: &[f64],
@@ -14083,14 +14090,47 @@ pub fn firwin_2d_circular(
             -1.0 + 2.0 * idx as f64 / (len - 1) as f64
         }
     };
-    // Output is (h1, h0) per the meshgrid('xy') convention.
+    // Output is (h1, h0) per the meshgrid('xy') convention. Each cell is a pure function of its
+    // (i, j): a radial `sqrt(f1²+f2²)` then a linear-interp lookup into the (shared, read-only)
+    // `win_r`. The rows are mutually independent, so fan the grid fill across row-chunks; every cell
+    // is computed by the identical expression → BYTE-IDENTICAL to the serial fill. Gated on the cell
+    // count so small kernels stay serial.
     let mut out = vec![vec![0.0_f64; h0]; h1];
-    for (i, row) in out.iter_mut().enumerate().take(h1) {
+    let nthreads = if FIRWIN2D_CIRCULAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || h1 < 2
+        || h0.saturating_mul(h1) < 65_536
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(h1)
+    };
+    let fill_row = |i: usize, row: &mut [f64]| {
         let f2 = lin(h1, i);
         for (j, cell) in row.iter_mut().enumerate().take(h0) {
             let f1 = lin(h0, j);
             *cell = interp((f1 * f1 + f2 * f2).sqrt());
         }
+    };
+    if nthreads <= 1 {
+        for (i, row) in out.iter_mut().enumerate().take(h1) {
+            fill_row(i, row);
+        }
+    } else {
+        let chunk = h1.div_ceil(nthreads);
+        let fill_ref = &fill_row;
+        std::thread::scope(|scope| {
+            for (ci, block) in out.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (k, row) in block.iter_mut().enumerate() {
+                        fill_ref(base + k, row);
+                    }
+                });
+            }
+        });
     }
     Ok(out)
 }
