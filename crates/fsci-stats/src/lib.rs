@@ -29514,6 +29514,12 @@ fn wilcoxon_permutation_pvalue(ranks: &[f64], t_plus: f64, alternative: &str) ->
     }
 }
 
+/// When `true`, [`wilcoxon`] computes its `no_ties` sort eagerly (the ORIG behaviour, wasted on
+/// the large-n path); default `false` gates it behind `nr <= 1000`. Byte-identical.
+#[doc(hidden)]
+pub static WILCOXON_FORCE_EAGER_NOTIES: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
     if x.len() != y.len() || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
@@ -29563,12 +29569,23 @@ pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
     // zeros were dropped and the absolute differences have no ties (ranks 1..n);
     // it falls back to the normal approximation otherwise. frankenscipy-78v5y
     let no_zeros = x.len() == nr;
-    let no_ties = {
+    // `no_ties` is only ever consumed by this exact-path condition, and computing it sorts a
+    // clone of abs_diffs (O(n log n)). Gate that work behind the cheap `no_zeros && nr <= 1000`
+    // checks so the large-n / has-zeros paths (which fall through to the normal approximation)
+    // skip the sort entirely. BYTE-IDENTICAL: `&&` short-circuits to the SAME boolean the eager
+    // form produced — when `no_zeros && nr <= 1000` is false the branch was never taken anyway.
+    let no_ties = || {
         let mut s = abs_diffs.clone();
         s.sort_unstable_by(|a, b| a.total_cmp(b));
         s.windows(2).all(|w| w[0] != w[1])
     };
-    if no_zeros && no_ties && nr <= 1000 {
+    let take_exact = if WILCOXON_FORCE_EAGER_NOTIES.load(std::sync::atomic::Ordering::Relaxed) {
+        let nt = no_ties();
+        no_zeros && nt && nr <= 1000
+    } else {
+        no_zeros && nr <= 1000 && no_ties()
+    };
+    if take_exact {
         let (stat, pvalue) = wilcoxon_exact_pvalue(t_plus, t_minus, nr, "two-sided");
         return TtestResult {
             statistic: stat,
