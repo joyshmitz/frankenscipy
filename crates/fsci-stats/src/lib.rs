@@ -29634,12 +29634,23 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
     }
 }
 
+/// When `true`, [`fligner`] builds its per-group median-centered scores serially (the ORIG behaviour);
+/// default `false` fans the sort+median+deviation build across cores over the independent groups.
+/// Byte-identical either way. `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static FLIGNER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Fligner-Killeen test for equal variances.
 ///
 /// A robust non-parametric test that uses the chi-squared distribution
 /// of median-centered rank scores.
 ///
 /// Matches `scipy.stats.fligner(*groups)`.
+///
+/// When [`FLIGNER_FORCE_SERIAL`] is `true`, the per-group median-centered scores are built serially
+/// (the ORIG behaviour); default `false` fans the sort+median+deviation build across cores over the
+/// independent groups. Byte-identical.
 pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
     if groups.len() < 2
         || groups.iter().any(|g| g.len() < 2)
@@ -29650,18 +29661,55 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
 
     let k = groups.len();
 
-    // Compute median-centered scores using normal quantiles
-    let mut all_scores: Vec<f64> = Vec::new();
-    let mut group_sizes: Vec<usize> = Vec::new();
-
-    for group in groups {
+    // Compute median-centered scores (`|x − median(group)|`). Each group's `median` is a
+    // sort-dominated O(n log n) reduction that dominates fligner (the downstream rankdata + ppf are
+    // O(n)/O(n log n) over the flattened scores, done once), and the groups are INDEPENDENT. Build the
+    // per-group deviations across cores (chunked over groups) then flatten in GROUP ORDER. BYTE-IDENTICAL
+    // to the serial extend loop: `all_scores` is the same concatenation, so the downstream ranks/scores
+    // are unchanged. `FLIGNER_FORCE_SERIAL` restores the serial build for A/B.
+    let group_sizes: Vec<usize> = groups.iter().map(|g| g.len()).collect();
+    let build = |group: &[f64]| -> Vec<f64> {
         let mut sorted = group.to_vec();
         sorted.sort_unstable_by(|a, b| a.total_cmp(b));
         let median = quantile_sorted(&sorted, 0.5);
-        let deviations: Vec<f64> = group.iter().map(|&x| (x - median).abs()).collect();
-        all_scores.extend_from_slice(&deviations);
-        group_sizes.push(group.len());
-    }
+        group.iter().map(|&x| (x - median).abs()).collect()
+    };
+    let total: usize = group_sizes.iter().sum();
+    let all_scores: Vec<f64> = if FLIGNER_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || total < (1 << 18)
+        || groups.len() < 2
+    {
+        let mut v = Vec::with_capacity(total);
+        for group in groups {
+            v.extend_from_slice(&build(group));
+        }
+        v
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(groups.len());
+        let chunk = groups.len().div_ceil(nthreads);
+        let build = &build;
+        std::thread::scope(|scope| {
+            groups
+                .chunks(chunk)
+                .map(|gc| {
+                    scope.spawn(move || {
+                        let mut v: Vec<f64> = Vec::new();
+                        for g in gc {
+                            v.extend_from_slice(&build(g));
+                        }
+                        v
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flat_map(|h| h.join().expect("fligner worker panicked"))
+                .collect()
+        })
+    };
 
     let n_total = all_scores.len();
     // Rank all scores using average ranks for ties (matches scipy.stats.rankdata).
