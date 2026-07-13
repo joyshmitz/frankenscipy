@@ -27942,6 +27942,13 @@ pub fn minkowski_distance(u: &[f64], v: &[f64], p: f64) -> f64 {
         .powf(1.0 / p)
 }
 
+/// When `true`, [`canberra_distance`] sums serially (the ORIG exact 1-accumulator fold, byte-
+/// identical to `map(..).sum()`); default `false` fans a 4-way-unrolled chunk sum across cores for
+/// large inputs. WITHIN per-op ULP tolerance (same reordering the parallel `cityblock` sum uses).
+#[doc(hidden)]
+pub static CANBERRA_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the Canberra distance between two vectors.
 ///
 /// d(u, v) = Σ |u_i - v_i| / (|u_i| + |v_i|)
@@ -27952,17 +27959,53 @@ pub fn canberra_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    u.iter()
-        .zip(v)
-        .map(|(&ui, &vi)| {
-            let denom = ui.abs() + vi.abs();
-            if denom == 0.0 {
-                0.0
-            } else {
-                (ui - vi).abs() / denom
-            }
-        })
-        .sum()
+    let n = u.len();
+    let kern = |ui: f64, vi: f64| -> f64 {
+        let denom = ui.abs() + vi.abs();
+        if denom == 0.0 { 0.0 } else { (ui - vi).abs() / denom }
+    };
+    if CANBERRA_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return u.iter().zip(v).map(|(&ui, &vi)| kern(ui, vi)).sum();
+    }
+    let chunk_sum = |us: &[f64], vs: &[f64]| -> f64 {
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= us.len() {
+            a[0] += kern(us[i], vs[i]);
+            a[1] += kern(us[i + 1], vs[i + 1]);
+            a[2] += kern(us[i + 2], vs[i + 2]);
+            a[3] += kern(us[i + 3], vs[i + 3]);
+            i += 4;
+        }
+        let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+        while i < us.len() {
+            s += kern(us[i], vs[i]);
+            i += 1;
+        }
+        s
+    };
+    // Heavier kernel (3 abs + sub + div + branch) is compute-bound → parallel pays
+    // earlier; gate the thread fan-out at 1<<17.
+    if n < (1 << 17) {
+        return chunk_sum(u, v);
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_sum = &chunk_sum;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        u.chunks(chunk)
+            .zip(v.chunks(chunk))
+            .map(|(us, vs)| scope.spawn(move || chunk_sum(us, vs)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("canberra worker panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(0.0f64, |acc, s| acc + s)
 }
 
 // ══════════════════════════════════════════════════════════════════════
