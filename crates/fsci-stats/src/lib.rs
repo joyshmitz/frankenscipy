@@ -32925,14 +32925,45 @@ pub fn kurtosis(data: &[f64]) -> f64 {
     }
     let nf = n as f64;
     let mean_val = data.iter().sum::<f64>() / nf;
-    let mut m2 = 0.0;
-    let mut m4 = 0.0;
-    for &x in data {
-        let d = x - mean_val;
-        let d2 = d * d;
-        m2 += d2;
-        m4 += d2 * d2;
-    }
+    // Central moments m2=Σd², m4=Σd²·d² (d=x−mean) — the dominant O(n) reduction (mean fixed above).
+    // Below the gate (and under MOMENT_PAR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to the
+    // original loop); above 1<<22 fan across cores as per-thread partial pairs, within per-op ULP
+    // tolerance. Same lever as `skew`.
+    let chunk_m = |ds: &[f64]| -> (f64, f64) {
+        let mut m2 = 0.0f64;
+        let mut m4 = 0.0f64;
+        for &x in ds {
+            let d = x - mean_val;
+            let d2 = d * d;
+            m2 += d2;
+            m4 += d2 * d2;
+        }
+        (m2, m4)
+    };
+    let (m2, m4) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < (1 << 22)
+    {
+        chunk_m(data)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 16))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_m = &chunk_m;
+        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || chunk_m(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("kurtosis worker panicked"))
+                .collect()
+        });
+        parts
+            .into_iter()
+            .fold((0.0f64, 0.0f64), |(a2, a4), (c2, c4)| (a2 + c2, a4 + c4))
+    };
     kurtosis_from_moments(nf, m2, m4)
 }
 
