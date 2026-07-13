@@ -27923,6 +27923,13 @@ pub fn chebyshev_distance(u: &[f64], v: &[f64]) -> f64 {
         .fold(0.0f64, |acc, d| acc.max(d))
 }
 
+/// When `true`, [`minkowski_distance`] sums serially (the ORIG exact 1-accumulator fold, byte-
+/// identical to `map(..).sum()`); default `false` fans a 4-way-unrolled chunk sum across cores for
+/// large inputs. WITHIN per-op ULP tolerance (same reordering the parallel `canberra` sum uses).
+#[doc(hidden)]
+pub static MINKOWSKI_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the Minkowski distance between two vectors.
 ///
 /// d(u, v) = (Σ |u_i - v_i|^p)^(1/p)
@@ -27935,11 +27942,56 @@ pub fn minkowski_distance(u: &[f64], v: &[f64], p: f64) -> f64 {
     if p == f64::INFINITY {
         return chebyshev_distance(u, v);
     }
-    u.iter()
-        .zip(v)
-        .map(|(&ui, &vi)| (ui - vi).abs().powf(p))
-        .sum::<f64>()
-        .powf(1.0 / p)
+    let n = u.len();
+    if MINKOWSKI_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return u
+            .iter()
+            .zip(v)
+            .map(|(&ui, &vi)| (ui - vi).abs().powf(p))
+            .sum::<f64>()
+            .powf(1.0 / p);
+    }
+    let chunk_sum = |us: &[f64], vs: &[f64]| -> f64 {
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= us.len() {
+            a[0] += (us[i] - vs[i]).abs().powf(p);
+            a[1] += (us[i + 1] - vs[i + 1]).abs().powf(p);
+            a[2] += (us[i + 2] - vs[i + 2]).abs().powf(p);
+            a[3] += (us[i + 3] - vs[i + 3]).abs().powf(p);
+            i += 4;
+        }
+        let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+        while i < us.len() {
+            s += (us[i] - vs[i]).abs().powf(p);
+            i += 1;
+        }
+        s
+    };
+    // Very heavy kernel (powf per element) is strongly compute-bound → parallel pays
+    // very early; gate the thread fan-out at 1<<16.
+    let total = if n < (1 << 16) {
+        chunk_sum(u, v)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 15))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_sum = &chunk_sum;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            u.chunks(chunk)
+                .zip(v.chunks(chunk))
+                .map(|(us, vs)| scope.spawn(move || chunk_sum(us, vs)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("minkowski worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+    };
+    total.powf(1.0 / p)
 }
 
 /// When `true`, [`canberra_distance`] sums serially (the ORIG exact 1-accumulator fold, byte-
