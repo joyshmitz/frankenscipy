@@ -16654,13 +16654,43 @@ pub fn max_abs(a: &[Vec<f64>]) -> f64 {
 pub static VECTOR_NORM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// `map(|x| x.abs()).fold(seed, op)` for [`vector_norm`]'s ±∞ branches, fanned across cores for large
+/// inputs. BYTE-IDENTICAL to the serial fold: `op` (NaN-propagating max/min) is associative &
+/// commutative and `seed` (0/∞) is idempotent over `|x| ≥ 0`, so any chunk grouping yields the same
+/// bits. The fold already auto-vectorizes serially, so there is NO manual unroll and the serial fold
+/// is kept below the gate (only huge-n amortizes the thread spawn); gate 1<<22. `VECTOR_NORM_FORCE_SERIAL`
+/// forces the serial fold.
+fn vector_norm_abs_fold(v: &[f64], seed: f64, op: impl Fn(f64, f64) -> f64 + Sync + Copy) -> f64 {
+    let serial = |vs: &[f64]| vs.iter().map(|&x| x.abs()).fold(seed, op);
+    let n = v.len();
+    if VECTOR_NORM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+        return serial(v);
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let serial = &serial;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        v.chunks(chunk)
+            .map(|vs| scope.spawn(move || serial(vs)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("vector_norm inf worker panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(seed, op)
+}
+
 /// Compute the 1-norm, infinity-norm, or Frobenius norm of a vector.
 pub fn vector_norm(v: &[f64], ord: f64) -> f64 {
     if v.is_empty() {
         return 0.0;
     }
     if ord == f64::INFINITY {
-        v.iter().map(|&x| x.abs()).fold(0.0f64, |a: f64, b: f64| {
+        vector_norm_abs_fold(v, 0.0f64, |a, b| {
             if a.is_nan() || b.is_nan() {
                 f64::NAN
             } else {
@@ -16668,15 +16698,13 @@ pub fn vector_norm(v: &[f64], ord: f64) -> f64 {
             }
         })
     } else if ord == f64::NEG_INFINITY {
-        v.iter()
-            .map(|&x| x.abs())
-            .fold(f64::INFINITY, |a: f64, b: f64| {
-                if a.is_nan() || b.is_nan() {
-                    f64::NAN
-                } else {
-                    a.min(b)
-                }
-            })
+        vector_norm_abs_fold(v, f64::INFINITY, |a, b| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.min(b)
+            }
+        })
     } else if ord == 0.0 {
         v.iter().filter(|&&x| x != 0.0).count() as f64
     } else if ord == 1.0 {
