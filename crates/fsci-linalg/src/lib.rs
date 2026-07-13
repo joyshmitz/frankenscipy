@@ -16666,8 +16666,53 @@ pub fn vstack(matrices: &[&[Vec<f64>]]) -> Vec<Vec<f64>> {
 }
 
 /// Compute the Frobenius norm of a matrix.
+/// When `true`, [`frobenius_norm`] sums its per-row Σx² serially (the ORIG single-accumulator fold);
+/// default `false` fans the independent per-row Σx² across cores for large matrices. Byte-identical
+/// below the gate. `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static FROBENIUS_NORM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn frobenius_norm(a: &[Vec<f64>]) -> f64 {
-    a.iter().map(|row| simd_dot(row, row)).sum::<f64>().sqrt()
+    // sqrt(Σ simd_dot(row,row)). The per-row Σx² are INDEPENDENT, so for a large matrix fan them across
+    // cores then add the partials — mirroring the already-parallel `norm(_, Fro)` path (this standalone
+    // entry was the serial straggler). BYTE-IDENTICAL below the gate (the serial map-sum is unchanged);
+    // ~1e-15 reassociation above it (simd_dot per row is untouched — only the inter-row sum regroups).
+    let serial = || a.iter().map(|row| simd_dot(row, row)).sum::<f64>();
+    let total: usize = a.iter().map(Vec::len).sum();
+    // Copy/traffic only outruns the thread-spawn cost once the matrix spills LLC — reuse the empirical
+    // 1<<22 gate measured for `norm(_, Fro)` (0.56x @1M cache-resident, 1.9-2.5x @4-16M). Cap workers by
+    // work so each owns >=64k elements.
+    let sumsq = if FROBENIUS_NORM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || total < (1 << 22)
+        || a.len() < 2
+    {
+        serial()
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(a.len())
+            .min(total / (1 << 16))
+            .max(1);
+        if nthreads <= 1 {
+            serial()
+        } else {
+            let chunk = a.len().div_ceil(nthreads);
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                a.chunks(chunk)
+                    .map(|rc| {
+                        scope.spawn(move || rc.iter().map(|row| simd_dot(row, row)).sum::<f64>())
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("frobenius_norm worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().sum()
+        }
+    };
+    sumsq.sqrt()
 }
 
 /// When `true`, [`max_abs`] runs its NaN-aware max-of-abs fold serially (the ORIG behaviour); default
