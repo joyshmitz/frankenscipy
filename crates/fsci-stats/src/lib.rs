@@ -27920,26 +27920,28 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    let nu = u.len() as f64;
-    let nv = v.len() as f64;
-
-    // Sort u and v ONCE and reuse for all three L1-pair-sum terms. The previous
-    // code re-sorted each array a second time (cross_set sorts both u and v, then
-    // each within_set re-sorted its argument — 4 sorts for 2 arrays); at large n
-    // the sort dominates, so this is ~2× on the hot path. Byte-identical: same
-    // total_cmp order feeds the same closed-form sums. The two independent sorts
-    // additionally overlap on separate threads for large inputs (see sort_two_f64_total).
+    // Sort u and v ONCE (overlapping the two independent sorts for large inputs, see
+    // sort_two_f64_total), then evaluate the closed-form L1-pair sums via energy_distance_sorted.
     let (su, sv) = sort_two_f64_total(u, v);
+    energy_distance_sorted(&su, &sv)
+}
 
+/// [`energy_distance`] on inputs already sorted ascending (`total_cmp` order) and NaN-free. Skips the
+/// sort so an all-pairs matrix can sort each sample ONCE up front (the sort is query-independent).
+/// BYTE-IDENTICAL to `energy_distance` on the same finite data: the same sorted arrays feed the same
+/// closed-form L1-pair sums.
+fn energy_distance_sorted(su: &[f64], sv: &[f64]) -> f64 {
+    let nu = su.len() as f64;
+    let nv = sv.len() as f64;
     // E|X-Y|: mean of |u_i - v_j| over all pairs, via the O((N+M)) sweep on the
     // sorted inputs (frankenscipy-ggmrw). For each sorted u_i with c = #{v_j ≤ u_i}
     // and S = Σ_{v_j ≤ u_i} v_j,  Σ_j |u_i − v_j| = (2c − M)·u_i + S_total − 2·S.
-    let e_xy = cross_set_l1_pair_sum_sorted(&su, &sv) / (nu * nv);
+    let e_xy = cross_set_l1_pair_sum_sorted(su, sv) / (nu * nv);
 
     // E|X-X'|: mean of |u_i - u_j| over all pairs (frankenscipy-6nuo5): for sorted
     // s of length n, Σ_{i<j}(s[j]-s[i]) = Σ_i s[i]·(2i − n + 1), O(N) after sort.
-    let e_xx = within_set_l1_pair_sum_sorted(&su) * 2.0 / (nu * nu);
-    let e_yy = within_set_l1_pair_sum_sorted(&sv) * 2.0 / (nv * nv);
+    let e_xx = within_set_l1_pair_sum_sorted(su) * 2.0 / (nu * nu);
+    let e_yy = within_set_l1_pair_sum_sorted(sv) * 2.0 / (nv * nv);
 
     let d_sq = 2.0 * e_xy - e_xx - e_yy;
     if d_sq.is_nan() {
@@ -42839,12 +42841,38 @@ pub fn wasserstein_distance_matrix(samples: &[Vec<f64>]) -> Result<Vec<Vec<f64>>
     all_pairs_symmetric_matrix(samples, wasserstein_distance)
 }
 
+/// When `true`, [`energy_distance_matrix`] re-sorts both samples inside every pair (the ORIG per-pair
+/// path); default `false` sorts each sample ONCE up front and runs the pre-sorted kernel. Byte-identical.
+/// `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static ENERGY_DISTANCE_MATRIX_PRESORT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// All-pairs energy-distance matrix over `samples` (each a 1-D sample of equal length). Returns an
 /// `m × m` symmetric matrix with `out[i][j] == energy_distance(samples[i], samples[j])` (bit-identical
 /// on the upper triangle), zero diagonal. SciPy has NO vectorized all-pairs form — users loop
 /// `scipy.stats.energy_distance` in Python; this runs the O(n log n) per-pair kernel in parallel.
 pub fn energy_distance_matrix(samples: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
-    all_pairs_symmetric_matrix(samples, energy_distance)
+    // `energy_distance(u,v)` sorts BOTH u and v, so the naive all-pairs loop re-sorts every sample
+    // O(m) times. The sort is query-INDEPENDENT: when all samples are finite & non-empty (the common
+    // case), sort each sample ONCE up front and run the all-pairs kernel on the pre-sorted slices via
+    // `energy_distance_sorted` — m sorts instead of ~m². BYTE-IDENTICAL (same sorted arrays feed the
+    // same closed-form sums). Empty/NaN anywhere → fall back to the per-pair path (rare). A/B gate.
+    let has_bad = samples
+        .iter()
+        .any(|s| s.is_empty() || s.iter().any(|v| v.is_nan()));
+    if has_bad || ENERGY_DISTANCE_MATRIX_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return all_pairs_symmetric_matrix(samples, energy_distance);
+    }
+    let sorted: Vec<Vec<f64>> = samples
+        .iter()
+        .map(|s| {
+            let mut v = s.clone();
+            sort_f64_total(&mut v);
+            v
+        })
+        .collect();
+    all_pairs_symmetric_matrix(&sorted, energy_distance_sorted)
 }
 
 /// Parallel all-pairs producing TWO symmetric matrices from a per-pair kernel returning
