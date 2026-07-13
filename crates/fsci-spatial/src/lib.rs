@@ -6552,9 +6552,9 @@ pub fn mahalanobis(x: &[f64], y: &[f64], vi: &[Vec<f64>]) -> f64 {
 /// term reassociates), ~1e-12, far inside distance tolerance; clamped at 0 like
 /// [`mahalanobis`] before the sqrt.
 ///
-/// When `true`, the final `sqrt`-assembly of the output matrix runs serially (the ORIG loop); default
-/// `false` splits its rows across cores. BYTE-IDENTICAL either way (`cdist_fill_rows` reassembles rows
-/// in order). `#[doc(hidden)]` — internal A/B gate.
+/// When `true`, the final `sqrt`-assembly of [`cdist_mahalanobis`]/[`pdist_mahalanobis`] runs serially
+/// (the ORIG loop); default `false` splits its rows across cores writing disjoint output slices.
+/// BYTE-IDENTICAL either way (rows reassembled in order). `#[doc(hidden)]` — internal A/B gate.
 #[doc(hidden)]
 pub static MAHALANOBIS_ASSEMBLY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -6700,14 +6700,62 @@ pub fn pdist_mahalanobis(x: &[Vec<f64>], vi: &[Vec<f64>]) -> Result<Vec<f64>, Sp
     }
     let g = fsci_linalg::matmul(&u, &xt).map_err(map_err)?;
 
-    let mut out = Vec::with_capacity(n * (n.saturating_sub(1)) / 2);
-    for i in 0..n {
-        let qi = q[i];
-        let gi = &g[i];
-        for j in (i + 1)..n {
-            out.push((qi + q[j] - 2.0 * gi[j]).max(0.0).sqrt());
+    // Final condensed assembly `d(i,j) = sqrt(max(q[i]+q[j]−2·G[i][j], 0))` for j>i — O(n²) serial
+    // with a sqrt per cell, a real cost once the GEMMs are parallel. Row i's (n−1−i) outputs occupy the
+    // contiguous span `out[offset(i)..offset(i+1)]`, so split the ROWS across cores and let each thread
+    // write its disjoint output slice (via split_at_mut). BYTE-IDENTICAL — same values at the same
+    // condensed positions. Cheap per-cell → gate high (n²/2 ≥ 1<<22) + ≥64k-cells/worker cap.
+    let total = n * n.saturating_sub(1) / 2;
+    let cells = total as u64;
+    let nthreads = if MAHALANOBIS_ASSEMBLY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || cells < (1 << 22)
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 2)
+            .min((cells / (1 << 16)) as usize)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        let mut out = Vec::with_capacity(total);
+        for i in 0..n {
+            let qi = q[i];
+            let gi = &g[i];
+            for j in (i + 1)..n {
+                out.push((qi + q[j] - 2.0 * gi[j]).max(0.0).sqrt());
+            }
         }
+        return Ok(out);
     }
+    let offset = |i: usize| i * (2 * n - i - 1) / 2;
+    let mut out = vec![0.0f64; total];
+    let chunk_rows = n.div_ceil(nthreads);
+    let (q_ref, g_ref) = (&q, &g);
+    std::thread::scope(|scope| {
+        let mut rest: &mut [f64] = &mut out;
+        let mut i0 = 0usize;
+        while i0 < n {
+            let i1 = (i0 + chunk_rows).min(n);
+            let (head, tail) = rest.split_at_mut(offset(i1) - offset(i0));
+            rest = tail;
+            let base = offset(i0);
+            scope.spawn(move || {
+                for i in i0..i1 {
+                    let qi = q_ref[i];
+                    let gi = &g_ref[i];
+                    let mut k = offset(i) - base;
+                    for j in (i + 1)..n {
+                        head[k] = (qi + q_ref[j] - 2.0 * gi[j]).max(0.0).sqrt();
+                        k += 1;
+                    }
+                }
+            });
+            i0 = i1;
+        }
+    });
     Ok(out)
 }
 
