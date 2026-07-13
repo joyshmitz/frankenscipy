@@ -47381,17 +47381,17 @@ pub fn jaccard_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
+    // Two branchless counters replace the nested if-branches (union when a_pos|b_pos,
+    // intersection when a_pos&b_pos), which mispredict on mixed binary data. Both
+    // vectorize as masked adds. Byte-identical: counts are exact and the same
+    // 1 − intersection/union arithmetic is kept.
     let mut intersection = 0usize;
     let mut union = 0usize;
     for (&a, &b) in u.iter().zip(v.iter()) {
         let a_pos = a > 0.0;
         let b_pos = b > 0.0;
-        if a_pos || b_pos {
-            union += 1;
-            if a_pos && b_pos {
-                intersection += 1;
-            }
-        }
+        union += (a_pos | b_pos) as usize;
+        intersection += (a_pos & b_pos) as usize;
     }
     if union == 0 {
         0.0
