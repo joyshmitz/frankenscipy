@@ -9380,6 +9380,13 @@ pub fn ishermitian(a: &[Vec<f64>], atol: f64, rtol: f64) -> Result<bool, LinalgE
 // Norms and Rank — Public API
 // ══════════════════════════════════════════════════════════════════════
 
+/// When `true`, [`norm`]'s infinity-norm reads the column-major `DMatrix` row-wise (the ORIG path);
+/// default `false` computes the max row sum directly from `a` (row-major, contiguous — no DMatrix
+/// copy) and fans across cores for large matrices. Byte-identical. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static NORM_INF_FORCE_LEGACY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute matrix or vector norm.
 ///
 /// Matches `scipy.linalg.norm(a, ord)`.
@@ -9391,51 +9398,70 @@ pub fn norm(a: &[Vec<f64>], kind: NormKind, options: DecompOptions) -> Result<f6
         return Ok(0.0);
     }
 
-    let matrix = dmatrix_from_rows(a)?;
+    // NaN-propagating max used by the spectral/one/inf reductions.
+    let nan_max = |x: f64, y: f64| -> f64 {
+        if x.is_nan() || y.is_nan() {
+            f64::NAN
+        } else {
+            x.max(y)
+        }
+    };
 
     let result = match kind {
         NormKind::Fro => {
             // Frobenius norm: sqrt(sum of squares)
-            matrix.norm()
+            dmatrix_from_rows(a)?.norm()
         }
         NormKind::Spectral => {
             // Spectral norm: largest singular value
-            let svd_decomp = safe_svd(matrix, false, false)?;
+            let svd_decomp = safe_svd(dmatrix_from_rows(a)?, false, false)?;
             svd_decomp
                 .singular_values
                 .iter()
                 .copied()
-                .fold(0.0_f64, |a: f64, b: f64| {
-                    if a.is_nan() || b.is_nan() {
-                        f64::NAN
-                    } else {
-                        a.max(b)
-                    }
-                })
+                .fold(0.0_f64, nan_max)
         }
         NormKind::One => {
             // 1-norm: max column sum of absolute values
+            let matrix = dmatrix_from_rows(a)?;
             (0..cols)
                 .map(|j| (0..rows).map(|i| matrix[(i, j)].abs()).sum::<f64>())
-                .fold(0.0_f64, |a: f64, b: f64| {
-                    if a.is_nan() || b.is_nan() {
-                        f64::NAN
-                    } else {
-                        a.max(b)
-                    }
-                })
+                .fold(0.0_f64, nan_max)
         }
         NormKind::Inf => {
-            // Infinity norm: max row sum of absolute values
-            (0..rows)
-                .map(|i| (0..cols).map(|j| matrix[(i, j)].abs()).sum::<f64>())
-                .fold(0.0_f64, |a: f64, b: f64| {
-                    if a.is_nan() || b.is_nan() {
-                        f64::NAN
-                    } else {
-                        a.max(b)
+            // Infinity norm: max row sum of absolute values. The ORIG path copied `a` into a
+            // column-major DMatrix then read it ROW-wise (strided, cache-hostile). Rows of `a` are
+            // contiguous and independent, so compute each row's Σ|x| directly from `a` (no copy) and
+            // fan across cores for large matrices. BYTE-IDENTICAL: each row sum is the same
+            // left-to-right Σ|x| and the NaN-propagating max over rows is order-independent.
+            let row_abs_sum = |row: &[f64]| -> f64 { row.iter().map(|&x| x.abs()).sum() };
+            if NORM_INF_FORCE_LEGACY.load(std::sync::atomic::Ordering::Relaxed) {
+                let matrix = dmatrix_from_rows(a)?;
+                (0..rows)
+                    .map(|i| (0..cols).map(|j| matrix[(i, j)].abs()).sum::<f64>())
+                    .fold(0.0_f64, nan_max)
+            } else if rows * cols < (1 << 18) {
+                a.iter().map(|row| row_abs_sum(row)).fold(0.0_f64, nan_max)
+            } else {
+                let nthreads = std::thread::available_parallelism()
+                    .map(std::num::NonZero::get)
+                    .unwrap_or(1)
+                    .min(rows)
+                    .max(1);
+                let chunk = rows.div_ceil(nthreads);
+                let mut sums = vec![0.0f64; rows];
+                let row_abs_sum = &row_abs_sum;
+                std::thread::scope(|scope| {
+                    for (rc, oc) in a.chunks(chunk).zip(sums.chunks_mut(chunk)) {
+                        scope.spawn(move || {
+                            for (row, slot) in rc.iter().zip(oc) {
+                                *slot = row_abs_sum(row);
+                            }
+                        });
                     }
-                })
+                });
+                sums.into_iter().fold(0.0_f64, nan_max)
+            }
         }
     };
 
