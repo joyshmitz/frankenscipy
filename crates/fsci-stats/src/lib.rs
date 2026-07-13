@@ -48301,7 +48301,31 @@ pub fn softmax(x: &[f64]) -> Vec<f64> {
     } else {
         par_continuous_map_min(x, SOFTMAX_MIN_PER_THREAD, |xi| (xi - max_x).exp())
     };
-    let sum_exp: f64 = exp_x.iter().sum();
+    // `Σ exp_x` — a plain reduction over the (necessarily materialised) exp Vec that stayed SERIAL
+    // even on the parallel path. Fan it across cores for large inputs (bandwidth-light → gate 1<<20);
+    // below the gate (and under `SOFTMAX_FORCE_SERIAL`) keep the EXACT serial fold (byte-identical),
+    // above it within per-op ULP tolerance (parallel reorder, propagated through the ÷sum_exp map).
+    let n = exp_x.len();
+    let sum_exp: f64 = if serial || n < (1 << 20) {
+        exp_x.iter().sum()
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 16))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            exp_x
+                .chunks(chunk)
+                .map(|es| scope.spawn(move || es.iter().sum::<f64>()))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("softmax sum worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0f64, |a, b| a + b)
+    };
     if serial {
         exp_x.iter().map(|&e| e / sum_exp).collect()
     } else {
