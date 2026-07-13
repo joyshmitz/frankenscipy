@@ -27237,12 +27237,41 @@ fn sample_mean(data: &[f64]) -> f64 {
     data.iter().sum::<f64>() / data.len() as f64
 }
 
+/// `Σ(xᵢ − mean)²` — the centered second-moment reduction shared by [`sample_variance`], [`sem`] and
+/// [`variation`]. Below the gate (and under `MOMENT_PAR_FORCE_SERIAL`) it is the exact serial
+/// `map((x−mean)²).sum()` fold (BYTE-IDENTICAL to those callers' original loops); above 1<<22 it fans
+/// across cores as per-thread partial sums, within per-op ULP tolerance — mirroring the already-parallel
+/// central-moment loops in `skew`/`kurtosis`/`describe`. Reuses their `MOMENT_PAR_FORCE_SERIAL` flag.
+fn sum_sq_dev(data: &[f64], mean: f64) -> f64 {
+    let chunk_ss = |ds: &[f64]| -> f64 { ds.iter().map(|&x| (x - mean).powi(2)).sum() };
+    let n = data.len();
+    if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+        return chunk_ss(data);
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_ss = &chunk_ss;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|ds| scope.spawn(move || chunk_ss(ds)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("sum_sq_dev worker panicked"))
+            .collect()
+    });
+    parts.into_iter().sum()
+}
+
 fn sample_variance(data: &[f64]) -> f64 {
     if data.len() < 2 {
         return f64::NAN;
     }
     let mean = sample_mean(data);
-    data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (data.len() as f64 - 1.0)
+    sum_sq_dev(data, mean) / (data.len() as f64 - 1.0)
 }
 
 fn sample_median(data: &[f64]) -> f64 {
@@ -33859,7 +33888,9 @@ pub fn sem(data: &[f64]) -> f64 {
     }
     let nf = n as f64;
     let mean_val = data.iter().sum::<f64>() / nf;
-    let var: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / (nf - 1.0);
+    // Σ(x−mean)² via the shared work-gated `sum_sq_dev` (parallel for huge inputs, byte-identical below
+    // the gate) — sem was a serial straggler vs the already-parallel skew/kurtosis/describe moment loops.
+    let var: f64 = sum_sq_dev(data, mean_val) / (nf - 1.0);
     (var / nf).sqrt()
 }
 
@@ -35560,7 +35591,9 @@ pub fn variation(data: &[f64]) -> f64 {
     }
     let n = data.len() as f64;
     let mean_val = data.iter().sum::<f64>() / n;
-    let var: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / n;
+    // Σ(x−mean)² via the shared work-gated `sum_sq_dev` (parallel for huge inputs, byte-identical below
+    // the gate) — variation was a serial straggler vs the parallel skew/kurtosis/describe moment loops.
+    let var: f64 = sum_sq_dev(data, mean_val) / n;
     var.sqrt() / mean_val
 }
 
