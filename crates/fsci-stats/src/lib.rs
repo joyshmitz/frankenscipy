@@ -51903,28 +51903,59 @@ pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
 pub static FREQ_HIST_BIN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`scipy_frequency_histogram`] computes its min and max as two separate serial folds
+/// (the ORIG behaviour); default `false` fuses them into one pass fanned across cores. Byte-identical
+/// either way. `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static FREQ_HIST_MINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn scipy_frequency_histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
     if data.is_empty() || bins <= 1 || data.iter().any(|v| !v.is_finite()) {
         return (vec![], vec![]);
     }
 
-    let min_val = data.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.min(b)
+    // `data` is validated finite above, so the min and max are two INDEPENDENT exact selections. Fuse
+    // them into ONE pass and, for large data, fan across cores with per-thread partials merged by
+    // min/max. BYTE-IDENTICAL: `f64::min`/`max` match the original (never-triggered) NaN-propagating
+    // folds for finite input, and min/max are associative & commutative selections (incl. signed zero),
+    // so any chunk grouping yields the same bits. `FREQ_HIST_MINMAX_FORCE_SERIAL` restores the folds.
+    let chunk_minmax = |c: &[f64]| -> (f64, f64) {
+        let mut mn = f64::INFINITY;
+        let mut mx = f64::NEG_INFINITY;
+        for &v in c {
+            mn = mn.min(v);
+            mx = mx.max(v);
         }
-    });
-    let max_val = data
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
+        (mn, mx)
+    };
+    let (min_val, max_val) = if FREQ_HIST_MINMAX_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || data.len() < (1 << 17)
+    {
+        chunk_minmax(data)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(data.len() / (1 << 16))
+            .max(1);
+        let chunk = data.len().div_ceil(nthreads);
+        let chunk_minmax = &chunk_minmax;
+        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|c| scope.spawn(move || chunk_minmax(c)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("scipy_frequency_histogram minmax worker panicked"))
+                .collect()
         });
+        parts
+            .into_iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(amn, amx), (mn, mx)| {
+                (amn.min(mn), amx.max(mx))
+            })
+    };
 
     let padding = (max_val - min_val) / (2.0 * (bins - 1) as f64);
     let lower = min_val - padding;
