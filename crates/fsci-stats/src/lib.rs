@@ -26620,29 +26620,56 @@ pub fn circstd(data: &[f64]) -> f64 {
 /// `w[i]·x[i].sin()`, same left-fold from 0.0). `CIRC_WEIGHTED_FORCE_SERIAL` restores the fused serial
 /// maps (same-binary A/B).
 fn circular_weighted_sincos_sums(data: &[f64], weights: &[f64]) -> (f64, f64) {
+    // Each element needs BOTH `x.sin()` and `x.cos()` (two heavy transcendentals). Compute the two
+    // weighted sums Σw·sin and Σw·cos in ONE pass. The serial/small path folds both together (its
+    // sin/cos sums are byte-identical to the two separate serial folds — each accumulates only its own
+    // terms in index order); above the gate, fan the (Σw·sin, Σw·cos) pair across cores. This replaces
+    // the previous TWO separate `par_continuous_map` calls (two data passes, two 8·n-byte Vecs, two
+    // thread spawns) with one alloc-free pass. WITHIN per-op ULP tolerance above the gate (parallel
+    // reorder); `CIRC_WEIGHTED_FORCE_SERIAL` keeps the exact two-pass serial fold.
+    let n = data.len();
+    let chunk_sums = |ds: &[f64], ws: &[f64]| -> (f64, f64) {
+        let mut ss = 0.0f64;
+        let mut cs = 0.0f64;
+        for (&x, &w) in ds.iter().zip(ws) {
+            ss += w * x.sin();
+            cs += w * x.cos();
+        }
+        (ss, cs)
+    };
     if CIRC_WEIGHTED_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         let sin_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.sin()).sum();
         let cos_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.cos()).sum();
-        (sin_sum, cos_sum)
-    } else {
-        let sin_sum: f64 = par_continuous_map(data, |x| x.sin())
-            .iter()
-            .zip(weights)
-            .map(|(&s, &w)| w * s)
-            .sum();
-        let cos_sum: f64 = par_continuous_map(data, |x| x.cos())
-            .iter()
-            .zip(weights)
-            .map(|(&c, &w)| w * c)
-            .sum();
-        (sin_sum, cos_sum)
+        return (sin_sum, cos_sum);
     }
+    if n < (1 << 15) {
+        return chunk_sums(data, weights);
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 14))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_sums = &chunk_sums;
+    let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .zip(weights.chunks(chunk))
+            .map(|(ds, ws)| scope.spawn(move || chunk_sums(ds, ws)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("circ weighted worker panicked"))
+            .collect()
+    });
+    parts
+        .into_iter()
+        .fold((0.0f64, 0.0f64), |(as_, ac), (cs, cc)| (as_ + cs, ac + cc))
 }
 
 /// When `true`, [`circmean_weighted`]/[`circvar_weighted`]/[`circstd_weighted`] compute their weighted
-/// `Σsin`/`Σcos` with the fused serial `map(...).sum()` (the ORIG behaviour). When `false` (default),
-/// the compute-bound `sin`/`cos` maps fan across cores via the order-preserving `par_continuous_map`
-/// and the weighted sums stay in index order. Byte-identical either way. For the same-binary A/B gate.
+/// `Σsin`/`Σcos` with the exact two-pass serial `map(...).sum()`. When `false` (default), both weighted
+/// sums are computed in ONE pass over (data, weights) — serial below the gate (byte-identical to the
+/// two-pass fold) and fanned across cores above it (within per-op ULP tolerance). For the A/B gate.
 #[doc(hidden)]
 pub static CIRC_WEIGHTED_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
