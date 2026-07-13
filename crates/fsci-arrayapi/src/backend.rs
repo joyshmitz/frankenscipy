@@ -1294,7 +1294,7 @@ fn basic_getitem(
                     order: MemoryOrder::C,
                 });
             }
-            if array.order == MemoryOrder::C && slices[1].step == 1 {
+            if array.order != MemoryOrder::F && slices[1].step == 1 {
                 let rows = basic_slice_indices(&slices[0], array.shape.dims[0], mode)?;
                 let (col_start, col_end) =
                     basic_unit_slice_bounds(&slices[1], array.shape.dims[1], mode)?;
@@ -1732,7 +1732,7 @@ mod tests {
     }
 
     #[test]
-    fn basic_getitem_c_strided_rows_unit_columns_match_scalar_reference_bits() {
+    fn basic_getitem_row_major_strided_rows_unit_columns_match_scalar_reference_bits() {
         let values = [
             ScalarValue::F64(f64::from_bits(0x7ff8_0000_0000_0042)),
             ScalarValue::F64(-0.0),
@@ -1755,12 +1755,6 @@ mod tests {
             ScalarValue::F64(18.0),
             ScalarValue::F64(19.0),
         ];
-        let array = CoreArray {
-            shape: Shape::new(vec![4, 5]),
-            dtype: DType::Float64,
-            values: values.to_vec(),
-            order: MemoryOrder::C,
-        };
         let all_columns = SliceSpec {
             start: None,
             stop: None,
@@ -1833,62 +1827,73 @@ mod tests {
             ],
         ];
 
-        for slices in cases {
-            let expected = basic_getitem_scalar_reference(&array, &slices, ExecutionMode::Strict)
-                .expect("reference slice");
-            let actual = basic_getitem(&array, &slices, ExecutionMode::Strict)
-                .expect("strided-row unit-column slice");
-            assert_eq!(actual.shape, expected.shape);
-            assert_eq!(actual.dtype, expected.dtype);
-            assert_eq!(actual.order, expected.order);
-            assert_eq!(actual.values.len(), expected.values.len());
-            for (actual, expected) in actual.values.iter().zip(&expected.values) {
-                match (*actual, *expected) {
-                    (ScalarValue::F64(actual), ScalarValue::F64(expected)) => {
-                        assert_eq!(actual.to_bits(), expected.to_bits());
+        for order in [MemoryOrder::C, MemoryOrder::A, MemoryOrder::K] {
+            let array = CoreArray {
+                shape: Shape::new(vec![4, 5]),
+                dtype: DType::Float64,
+                values: values.to_vec(),
+                order,
+            };
+
+            for slices in &cases {
+                let expected =
+                    basic_getitem_scalar_reference(&array, slices, ExecutionMode::Strict)
+                        .expect("reference slice");
+                let actual = basic_getitem(&array, slices, ExecutionMode::Strict)
+                    .expect("strided-row unit-column slice");
+                assert_eq!(actual.shape, expected.shape);
+                assert_eq!(actual.dtype, expected.dtype);
+                assert_eq!(actual.order, MemoryOrder::C);
+                assert_eq!(actual.order, expected.order);
+                assert_eq!(actual.values.len(), expected.values.len());
+                for (actual, expected) in actual.values.iter().zip(&expected.values) {
+                    match (*actual, *expected) {
+                        (ScalarValue::F64(actual), ScalarValue::F64(expected)) => {
+                            assert_eq!(actual.to_bits(), expected.to_bits());
+                        }
+                        _ => assert_eq!(actual, expected),
                     }
-                    _ => assert_eq!(actual, expected),
                 }
             }
+
+            let hardened_error = basic_getitem(
+                &array,
+                &[
+                    SliceSpec {
+                        start: Some(0),
+                        stop: Some(4),
+                        step: 2,
+                    },
+                    SliceSpec {
+                        start: Some(0),
+                        stop: Some(99),
+                        step: 1,
+                    },
+                ],
+                ExecutionMode::Hardened,
+            )
+            .expect_err("hardened column bounds must remain checked");
+            assert_eq!(hardened_error.kind, ArrayApiErrorKind::InvalidIndex);
+
+            let row_error = basic_getitem(
+                &array,
+                &[
+                    SliceSpec {
+                        start: None,
+                        stop: None,
+                        step: 0,
+                    },
+                    SliceSpec {
+                        start: Some(0),
+                        stop: Some(99),
+                        step: 1,
+                    },
+                ],
+                ExecutionMode::Hardened,
+            )
+            .expect_err("row errors must retain precedence over column bounds");
+            assert_eq!(row_error.kind, ArrayApiErrorKind::InvalidStep);
         }
-
-        let hardened_error = basic_getitem(
-            &array,
-            &[
-                SliceSpec {
-                    start: Some(0),
-                    stop: Some(4),
-                    step: 2,
-                },
-                SliceSpec {
-                    start: Some(0),
-                    stop: Some(99),
-                    step: 1,
-                },
-            ],
-            ExecutionMode::Hardened,
-        )
-        .expect_err("hardened column bounds must remain checked");
-        assert_eq!(hardened_error.kind, ArrayApiErrorKind::InvalidIndex);
-
-        let row_error = basic_getitem(
-            &array,
-            &[
-                SliceSpec {
-                    start: None,
-                    stop: None,
-                    step: 0,
-                },
-                SliceSpec {
-                    start: Some(0),
-                    stop: Some(99),
-                    step: 1,
-                },
-            ],
-            ExecutionMode::Hardened,
-        )
-        .expect_err("row errors must retain precedence over column bounds");
-        assert_eq!(row_error.kind, ArrayApiErrorKind::InvalidStep);
     }
 
     #[test]

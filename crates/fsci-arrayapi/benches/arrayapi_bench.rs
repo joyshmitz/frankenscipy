@@ -220,6 +220,25 @@ fn bench_indexing(c: &mut Criterion) {
         });
     });
 
+    let strided_auto_array = make_array(
+        &backend,
+        Shape::new(vec![strided_size, 64]),
+        DType::Float64,
+        MemoryOrder::A,
+    );
+    assert_eq!(strided_auto_array.order(), MemoryOrder::A);
+    group.bench_function("getitem_basic_strided_rows_auto", |b| {
+        b.iter(|| {
+            let out = getitem(
+                &backend,
+                black_box(&strided_auto_array),
+                black_box(&strided_request),
+            )
+            .expect("auto-order strided-row getitem should succeed");
+            black_box(out.size());
+        });
+    });
+
     group.finish();
 }
 

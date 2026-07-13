@@ -20573,3 +20573,22 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   fingerprint. The first proof compile exposed only a missing test-module import; the corrected rerun passed. All
   Cargo commands were strict remote-only with no local fallback. Workspace check and crate-scoped all-target clippy
   passed; workspace clippy was attempted and stopped only on three pre-existing `fsci-opt` lints outside this lane.
+
+## 2026-07-12 - cod - KEEP arrayapi A/K-order strided-row contiguous-column slicing (3.770x)
+
+- Negative-ledger-first selection took the A/K residual explicitly left generic by the two recent C-order slicing
+  keeps. The backend already interprets only exact `F` as column-major; `C`, `A`, and `K` all use row-major offsets,
+  while `array_from_slice` preserves the supplied tag and values without relayout.
+- A distinct Criterion row copies the existing `[10000,64]`, rows `0..10000:2`, columns `1..63` fixture with
+  `MemoryOrder::A` and asserts that tag before timing. Its strict-remote baseline on pinned worker `vmi1293453` was
+  `[2.2247, 2.4214, 2.6261]` ms, confirming the A-order input still used the generic scalar gather.
+- ONE lever widens only the strided-row/unit-column fast-path predicate from exact `C` to non-`F`. It retains the
+  same row-index construction and validation before unit-column normalization, then bulk-copies identical row-major
+  spans for C/A/K. The separate all-unit branch, exact-F indexing, non-unit columns, output C-order, dtype, value
+  order, and error precedence are unchanged.
+- Same-worker release-perf re-benchmark measured `[559.82, 642.17, 721.89]` us: a centered **3.770x** speedup.
+  Criterion reported `[-76.080%, -70.770%]`, `p=0.00`, and improved performance.
+- The focused strict-remote proof passed 1/1. The scalar-reference matrix now runs across C/A/K and preserves
+  positive/negative row strides, strict-clamped and empty ranges, partial/negative/empty unit-column spans, payload
+  NaN and `-0.0` bits, output C-order, hardened column bounds, and row-step error precedence. Exact F remains
+  excluded syntactically. Crate-scoped all-target clippy also passed; no Cargo command used local fallback.
