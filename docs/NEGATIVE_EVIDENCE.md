@@ -20649,3 +20649,16 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   out-of-span fail-closed event retains the exact Blake3 fingerprint and reason. Strict remote Clippy passed for
   the production library and changed benchmark after allowing only two pre-existing integrate lint categories.
   All Cargo benchmark and proof commands were strict remote-only with no local fallback.
+
+## 2026-07-13 - cod - KEEP linalg `frobenius_norm` existing SIMD dot reuse (3.752x at 2048x1024)
+
+- Negative-ledger screening found no prior `frobenius_norm` keep or reject. The public helper still used a scalar
+  iterator multiply-sum even though linalg's hot kernels already provide an eight-lane `simd_dot` implementation.
+- ONE lever replaces each row's scalar sum of squares with `simd_dot(row, row)`, then preserves the original row-order
+  reduction and final square root. Empty/ragged matrices and non-finite propagation are unchanged. Only the within-row
+  floating-point association changes; a focused deterministic proof bounds the result within 16 epsilon-scaled units
+  of the scalar reference and explicitly covers NaN, infinity, and empty rows.
+- The sole strict-remote benchmark invocation ran scalar reference and candidate in one Criterion process on pinned
+  worker `vmi1293453`. At 2048x1024, scalar measured `[1.1526, 1.1724, 1.1977]` ms and SIMD measured
+  `[287.46, 312.50, 337.94]` us: a centered **3.752x** speedup, with a conservative interval ratio above 3.41x.
+- The focused strict-remote unit proof passed 1/1. No benchmark rerun or local Cargo fallback was used.

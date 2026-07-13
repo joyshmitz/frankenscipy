@@ -16582,11 +16582,7 @@ pub fn vstack(matrices: &[&[Vec<f64>]]) -> Vec<Vec<f64>> {
 
 /// Compute the Frobenius norm of a matrix.
 pub fn frobenius_norm(a: &[Vec<f64>]) -> f64 {
-    a.iter()
-        .flat_map(|row| row.iter())
-        .map(|&v| v * v)
-        .sum::<f64>()
-        .sqrt()
+    a.iter().map(|row| simd_dot(row, row)).sum::<f64>().sqrt()
 }
 
 /// When `true`, [`max_abs`] runs its NaN-aware max-of-abs fold serially (the ORIG behaviour); default
@@ -21366,6 +21362,29 @@ mod tests {
             hadamard_product(&m, &b),
             vec![vec![2.0, 0.0], vec![3.0, 12.0]]
         );
+    }
+
+    #[test]
+    fn frobenius_norm_simd_matches_scalar_reference() {
+        let matrix: Vec<Vec<f64>> = (0..37)
+            .map(|row| {
+                (0..(row % 19))
+                    .map(|col| ((row * 31 + col * 17) as f64 - 300.0) / 29.0)
+                    .collect()
+            })
+            .collect();
+        let expected = matrix
+            .iter()
+            .flat_map(|row| row.iter())
+            .map(|&value| value * value)
+            .sum::<f64>()
+            .sqrt();
+        let actual = frobenius_norm(&matrix);
+        assert!((actual - expected).abs() <= 16.0 * f64::EPSILON * expected);
+
+        assert!(frobenius_norm(&[vec![f64::NAN]]).is_nan());
+        assert_eq!(frobenius_norm(&[vec![f64::INFINITY]]), f64::INFINITY);
+        assert_eq!(frobenius_norm(&[Vec::new()]), 0.0);
     }
 
     #[test]

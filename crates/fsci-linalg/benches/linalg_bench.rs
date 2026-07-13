@@ -9,7 +9,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
     DecompOptions, HELMERT_FORCE_SERIAL, InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions,
     MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions, SolveOptions, TriangularSolveOptions,
-    cho_factor, cho_solve, det, dft, eigh, inv, lstsq, lu_factor, lu_solve, matmul,
+    cho_factor, cho_solve, det, dft, eigh, frobenius_norm, inv, lstsq, lu_factor, lu_solve, matmul,
     orthogonal_procrustes, pascal, pinv, randomized_eigh, solve, solve_banded, solve_triangular,
     svd,
 };
@@ -121,6 +121,29 @@ fn make_matmul_matrix(rows: usize, cols: usize, seed: usize) -> Vec<Vec<f64>> {
                 .collect()
         })
         .collect()
+}
+
+fn frobenius_norm_scalar_reference(a: &[Vec<f64>]) -> f64 {
+    a.iter()
+        .flat_map(|row| row.iter())
+        .map(|&value| value * value)
+        .sum::<f64>()
+        .sqrt()
+}
+
+fn bench_frobenius_norm_simd(c: &mut Criterion) {
+    let matrix = make_matmul_matrix(2048, 1024, 0x51ad);
+    let mut group = c.benchmark_group("frobenius_norm_simd");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("scalar_reference_2048x1024", |bencher| {
+        bencher.iter(|| black_box(frobenius_norm_scalar_reference(black_box(&matrix))))
+    });
+    group.bench_function("candidate_2048x1024", |bencher| {
+        bencher.iter(|| black_box(frobenius_norm(black_box(&matrix))))
+    });
+    group.finish();
 }
 
 fn bench_dmatrix_from_rows(rows: &[Vec<f64>]) -> DMatrix<f64> {
@@ -1606,6 +1629,7 @@ criterion_group!(
     bench_lstsq,
     bench_pinv,
     bench_matmul,
+    bench_frobenius_norm_simd,
     bench_eigh_dense,
     bench_randomized_eigh
 );
