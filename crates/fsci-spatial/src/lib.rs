@@ -6551,6 +6551,14 @@ pub fn mahalanobis(x: &[f64], y: &[f64], vi: &[Vec<f64>]) -> f64 {
 /// reduction over the per-pair form. Tolerance-parity with the direct quadratic (the cross
 /// term reassociates), ~1e-12, far inside distance tolerance; clamped at 0 like
 /// [`mahalanobis`] before the sqrt.
+///
+/// When `true`, the final `sqrt`-assembly of the output matrix runs serially (the ORIG loop); default
+/// `false` splits its rows across cores. BYTE-IDENTICAL either way (`cdist_fill_rows` reassembles rows
+/// in order). `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static MAHALANOBIS_ASSEMBLY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn cdist_mahalanobis(
     xa: &[Vec<f64>],
     xb: &[Vec<f64>],
@@ -6604,14 +6612,38 @@ pub fn cdist_mahalanobis(
     }
     let cross = fsci_linalg::matmul(&u, &xbt).map_err(map_err)?;
 
-    let mut out = vec![vec![0.0; nb]; na];
-    for (i, oi) in out.iter_mut().enumerate() {
+    // Final assembly `out[i][j] = sqrt(max(qx[i] + qy[j] − 2·C[i][j], 0))` — O(na·nb) with a `sqrt`
+    // per cell, a real serial cost once the GEMMs above are parallel. Each output ROW is independent,
+    // so split them across cores (BYTE-IDENTICAL — `cdist_fill_rows` reassembles rows in order). Gate
+    // on na·nb work (dim=1, the assembly has no d factor); serial under the toggle.
+    let assemble = |i: usize| -> Vec<f64> {
         let qxi = qx[i];
         let ci = &cross[i];
-        for (j, o) in oi.iter_mut().enumerate() {
-            *o = (qxi + qy[j] - 2.0 * ci[j]).max(0.0).sqrt();
-        }
-    }
+        (0..nb)
+            .map(|j| (qxi + qy[j] - 2.0 * ci[j]).max(0.0).sqrt())
+            .collect()
+    };
+    // The assembly is a CHEAP per-cell op (one sqrt), so it needs a much higher work gate than the
+    // dim-factored distance compute: measured 0.65x @1M cells (64 threads on a ~5ms op) but 2.6x @16M.
+    // Gate na·nb ≥ 1<<22 and cap workers so each owns ≥64k cells.
+    let cells = (na as u64).saturating_mul(nb as u64);
+    let nthreads = if MAHALANOBIS_ASSEMBLY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || cells < (1 << 22)
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(na)
+            .min((cells / (1 << 16)) as usize)
+            .max(1)
+    };
+    let out = if nthreads <= 1 {
+        (0..na).map(assemble).collect()
+    } else {
+        cdist_fill_rows(na, nthreads, assemble)
+    };
     Ok(out)
 }
 
