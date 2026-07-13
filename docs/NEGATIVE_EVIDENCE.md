@@ -20690,3 +20690,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   crate-level `too_many_arguments`/`type_complexity` findings outside this lever; targeted rustfmt likewise found
   only pre-existing drift outside the changed hunks. The mandated UBS wrapper ran its own Cargo probes in a local
   shadow workspace; those wrapper results were excluded from the remote-only proof above.
+
+## 2026-07-13 - cod - REJECT sparse `kron` unchecked canonical construction at 2.30M nnz
+
+- Negative-ledger-first selection followed the 2026-07-02 `kron_canonical_csr` keep, whose remaining-floor note
+  explicitly proposed skipping `from_components(..., true)` validation for its provably canonical generated output.
+  The live path still performed the full `validate_compressed` bounds scan and `detect_canonical` scan after filling
+  2,304,000 output entries.
+- The existing `sparse_kron/400x400d2_120x120d5_nnz3200_720/2304000` row was used unchanged. Its fresh production-
+  original strict-remote interval on `vmi1149989` was `[11.665, 12.195, 13.120]` ms.
+- ONE candidate replaced only the final checked constructor with `from_components_unchecked` and stamped sorted and
+  deduplicated metadata. The generator's checked totals/indptr accumulation and canonical-input emission order prove
+  component lengths, bounds, strictly sorted rows, and uniqueness; the existing exact serial-reference test already
+  covers indptr/indices equality, value bits, and both metadata flags.
+- The same-worker strict-remote candidate interval was `[11.514, 14.436, 16.656]` ms, a centered 1.184x slowdown
+  versus the fresh original. Criterion's broad change interval crossed zero (`p=0.71`) and reported no performance
+  change. The full public operation therefore did not expose a shippable win despite the redundant isolated scans.
+- Decision: **REJECT / IN-FLOOR.** Production source was restored manually before closeout, so no proof gate was
+  needed for retained code. Do not retry unchecked construction alone without a lower-variance same-binary harness
+  that also demonstrates a full-`kron` win. Both Cargo benchmark commands were fail-closed remote-only on
+  `vmi1149989`; no local Cargo fallback was used.
