@@ -27760,9 +27760,19 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
     // overlap them on separate threads for large inputs (see sort_two_f64_total).
     // BIT-IDENTICAL: deterministic sort feeds the unchanged merge sweep.
     let (u_sorted, v_sorted) = sort_two_f64_total(u, v);
+    wasserstein_distance_sorted(&u_sorted, &v_sorted)
+}
 
-    let nu = u.len() as f64;
-    let nv = v.len() as f64;
+/// [`wasserstein_distance`] (1-D) on inputs already sorted ascending (`total_cmp` order) and NaN-free.
+/// Skips the sort so an all-pairs matrix can sort each sample ONCE up front (the sort is
+/// query-independent). BYTE-IDENTICAL to `wasserstein_distance` on the same finite data: the same
+/// sorted arrays feed the same merge sweep.
+fn wasserstein_distance_sorted(u_sorted: &[f64], v_sorted: &[f64]) -> f64 {
+    if u_sorted.is_empty() || v_sorted.is_empty() {
+        return f64::NAN;
+    }
+    let nu = u_sorted.len() as f64;
+    let nv = v_sorted.len() as f64;
 
     // CDF counts: number of u/v values seen so far, ≤ current threshold.
     let mut iu = 0_usize;
@@ -42837,8 +42847,35 @@ pub fn weightedtau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, Stats
 /// samples[i], samples[j])` (bit-identical on the upper triangle), zero diagonal. SciPy has NO
 /// vectorized all-pairs form — users loop `scipy.stats.wasserstein_distance` in Python; this runs the
 /// O(n log n) per-pair kernel in parallel across pairs.
+///
+/// When [`WASSERSTEIN_DISTANCE_MATRIX_PRESORT_DISABLE`] is `true`, both samples are re-sorted inside
+/// every pair (the ORIG per-pair path); default `false` sorts each sample ONCE up front. Byte-identical.
+#[doc(hidden)]
+pub static WASSERSTEIN_DISTANCE_MATRIX_PRESORT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn wasserstein_distance_matrix(samples: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
-    all_pairs_symmetric_matrix(samples, wasserstein_distance)
+    // `wasserstein_distance(u,v)` sorts BOTH u and v, so the naive all-pairs loop re-sorts every sample
+    // O(m) times. The sort is query-INDEPENDENT: when all samples are finite & non-empty (the common
+    // case), sort each sample ONCE up front and run the all-pairs kernel on the pre-sorted slices via
+    // `wasserstein_distance_sorted` — m sorts instead of ~m². BYTE-IDENTICAL (same sorted arrays feed
+    // the same merge sweep). Empty/NaN anywhere → fall back to the per-pair path (rare). A/B gate.
+    let has_bad = samples
+        .iter()
+        .any(|s| s.is_empty() || s.iter().any(|v| v.is_nan()));
+    if has_bad || WASSERSTEIN_DISTANCE_MATRIX_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return all_pairs_symmetric_matrix(samples, wasserstein_distance);
+    }
+    let sorted: Vec<Vec<f64>> = samples
+        .iter()
+        .map(|s| {
+            let mut v = s.clone();
+            sort_f64_total(&mut v);
+            v
+        })
+        .collect();
+    all_pairs_symmetric_matrix(&sorted, wasserstein_distance_sorted)
 }
 
 /// When `true`, [`energy_distance_matrix`] re-sorts both samples inside every pair (the ORIG per-pair
