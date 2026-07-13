@@ -144,10 +144,12 @@ fn validate_t_eval_with_audit(
     tf: f64,
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<(), IntegrateValidationError> {
-    let fingerprint = audit_fingerprint(
-        "validate_t_eval",
-        format!("t_eval={t_eval:?};t0={t0};tf={tf}"),
-    );
+    let fingerprint = audit_ledger.map_or_else(Vec::new, |_| {
+        audit_fingerprint(
+            "validate_t_eval",
+            format!("t_eval={t_eval:?};t0={t0};tf={tf}"),
+        )
+    });
     let t_min = t0.min(tf);
     let t_max = t0.max(tf);
     if t_eval.iter().any(|&te| te < t_min || te > t_max) {
@@ -1087,7 +1089,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fsci_runtime::AuditAction;
+    use fsci_runtime::{AuditAction, AuditLedger};
 
     #[test]
     fn solve_ivp_harmonic_oscillator_system() {
@@ -1255,6 +1257,41 @@ mod tests {
         assert!(matches!(
             ledger.entries()[0].action,
             AuditAction::FailClosed { ref reason } if reason == "empty_y0"
+        ));
+    }
+
+    #[test]
+    fn solve_ivp_with_audit_preserves_t_eval_fingerprint() {
+        let t0 = 0.0;
+        let tf = 1.0;
+        let t_eval = [0.0, 0.5, 2.0];
+        let input_bytes = audit_fingerprint(
+            "validate_t_eval",
+            format!("t_eval={t_eval:?};t0={t0};tf={tf}"),
+        );
+        let expected_fingerprint = AuditLedger::fingerprint_bytes(&input_bytes);
+        let audit_ledger = crate::sync_audit_ledger();
+
+        let err = solve_ivp_with_audit(
+            &mut |_t, y| vec![-y[0]],
+            &SolveIvpOptions {
+                t_span: (t0, tf),
+                y0: &[1.0],
+                t_eval: Some(&t_eval),
+                ..SolveIvpOptions::default()
+            },
+            &audit_ledger,
+        )
+        .expect_err("out-of-span t_eval should fail closed");
+        assert_eq!(err, IntegrateValidationError::TEvalOutOfSpan);
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        let entry = &ledger.entries()[0];
+        assert_eq!(entry.input_fingerprint, expected_fingerprint);
+        assert!(matches!(
+            entry.action,
+            AuditAction::FailClosed { ref reason } if reason == "t_eval_out_of_span"
         ));
     }
 

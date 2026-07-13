@@ -20631,3 +20631,21 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   payload NaN plus both shape words, then verifies the sole invalid-worker fail-closed event retains the exact
   Blake3 fingerprint and still precedes finite-input validation. Crate-scoped all-target clippy passed; no Cargo
   command used local fallback.
+
+## 2026-07-13 - cod - KEEP integrate `t_eval` lazy audit fingerprint (115.85x at n=16,384)
+
+- Negative-ledger-first selection excluded the landed `validate_tol` lazy-fingerprint path and found no prior
+  `validate_t_eval` keep or reject. Public `solve_ivp` supplies no audit ledger, but an invalid `t_eval` still
+  debug-formatted the entire vector into an unused fingerprint before its out-of-span and ordering checks.
+- A focused public-path Criterion row uses 16,384 sorted evaluation points with the final point outside `(0, 1)`.
+  The call rejects before solver construction or RHS evaluation, isolating validation overhead. Its strict-remote
+  baseline on pinned worker `vmi1293453` was `[1.0947, 1.1417, 1.1976]` ms.
+- ONE lever constructs the `validate_t_eval` fingerprint only when an audit ledger exists. Unaudited calls
+  pass an empty slice to a recorder that already returns immediately; audited calls still encode the identical
+  context, vector debug representation, and span before the unchanged span/order validation sequence.
+- Same-worker release-perf re-benchmark measured `[9.4378, 9.8546, 10.259]` us: a centered **115.85x** speedup.
+  Criterion reported `[-99.129%, -99.004%]`, `p=0.00`, and improved performance.
+- The focused strict-remote proof passed 1/1 and independently reconstructs the input bytes, verifying the sole
+  out-of-span fail-closed event retains the exact Blake3 fingerprint and reason. Strict remote Clippy passed for
+  the production library and changed benchmark after allowing only two pre-existing integrate lint categories.
+  All Cargo benchmark and proof commands were strict remote-only with no local fallback.

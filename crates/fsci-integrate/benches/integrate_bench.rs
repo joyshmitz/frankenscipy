@@ -62,6 +62,28 @@ fn bench_solve_ivp_lorenz(c: &mut Criterion) {
     });
 }
 
+fn bench_solve_ivp_t_eval_validation(c: &mut Criterion) {
+    let y0 = [1.0];
+    let mut t_eval = (0..16_384)
+        .map(|idx| idx as f64 / 16_384.0)
+        .collect::<Vec<_>>();
+    *t_eval.last_mut().expect("t_eval should be nonempty") = 2.0;
+    let opts = SolveIvpOptions {
+        t_span: (0.0, 1.0),
+        y0: &y0,
+        method: SolverKind::Rk45,
+        t_eval: Some(&t_eval),
+        ..Default::default()
+    };
+
+    c.bench_function("solve_ivp_t_eval_out_of_span_16384", |b| {
+        b.iter(|| {
+            let mut rhs = exponential_decay;
+            black_box(solve_ivp(&mut rhs, black_box(&opts)))
+        });
+    });
+}
+
 fn bench_validate_tol(c: &mut Criterion) {
     c.bench_function("validate_tol_scalar", |b| {
         b.iter(|| {
@@ -182,6 +204,7 @@ criterion_group!(
     benches,
     bench_solve_ivp_exponential,
     bench_solve_ivp_lorenz,
+    bench_solve_ivp_t_eval_validation,
     bench_validate_tol,
     bench_validate_tol_audit_fingerprint_ab
 );
