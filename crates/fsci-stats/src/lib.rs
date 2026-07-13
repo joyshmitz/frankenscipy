@@ -25516,8 +25516,9 @@ pub fn cov(x: &[f64], y: &[f64]) -> f64 {
         return f64::NAN;
     }
     let n = x.len() as f64;
-    let mean_x: f64 = x.iter().sum::<f64>() / n;
-    let mean_y: f64 = y.iter().sum::<f64>() / n;
+    // Two means fused into ONE work-gated pass (parallel for huge inputs, byte-identical below the
+    // gate) — the ORIG made two separate serial `iter().sum()` traversals before the parallel reduction.
+    let (mean_x, mean_y) = par_two_means(x, y);
     // Centered cross-product Σ(x−mx)(y−my) — the dominant O(n) reduction (means fixed above). Below the
     // gate (and under PEARSONR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to `.map().sum()`);
     // above 1<<22 fan across cores as per-thread partials, within per-op ULP tolerance. Same lever as the
@@ -25624,9 +25625,9 @@ pub fn corrcoef(x: &[f64], y: &[f64]) -> f64 {
     if x.len() != y.len() || x.len() < 2 {
         return f64::NAN;
     }
-    let n = x.len() as f64;
-    let mean_x: f64 = x.iter().sum::<f64>() / n;
-    let mean_y: f64 = y.iter().sum::<f64>() / n;
+    // Two means fused into ONE work-gated pass (parallel for huge inputs, byte-identical below the
+    // gate) — the ORIG made two separate serial `iter().sum()` traversals before the parallel reduction.
+    let (mean_x, mean_y) = par_two_means(x, y);
     // Centered cov/variances (cov_xy=Σdx·dy, var_x=Σdx², var_y=Σdy²) — the dominant O(n) reduction
     // (means fixed above). Below the gate (and under PEARSONR_FORCE_SERIAL) fold the three in ONE serial
     // pass (byte-identical to the original loop); above 1<<22 fan them across cores as per-thread partial
