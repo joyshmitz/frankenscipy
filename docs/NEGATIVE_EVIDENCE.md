@@ -20501,3 +20501,20 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Exact strict-remote proof passed 1/1. The scalar-reference test covers full, partial, negative-endpoint,
   strict-clamp, inverted, and upper-edge-empty slices across all order tags; compares `f64` payloads by bits including
   NaN and `-0.0`; and preserves hardened out-of-range rejection. All Cargo benchmark/test commands were remote-only.
+
+## 2026-07-12 - cod - KEEP arrayapi C-order strided-row contiguous-column slicing (3.626x)
+
+- Negative-ledger-first selection took the non-unit row-step residual explicitly left unchanged by the prior rank-2
+  and rank-1 keeps. No stored benchmark covered strided rows with a unit-step column span, so a distinct fixed-size
+  Criterion row established the acceptance baseline.
+- Strict-remote baseline on pinned worker `vmi1293453`, C-order `[10000,64]`, rows `0..10000:2`, columns `1..63`,
+  was `[2.2620, 2.3323, 2.3927]` ms. The generic path allocated row and column index vectors, then scalar-copied all
+  310,000 selected values even though each selected row's 62-column span is contiguous.
+- ONE fast path retains `basic_slice_indices` for row validation and positive/negative/non-unit ordering, normalizes
+  the unit-step column bounds, and bulk-copies each selected C-order row span. F/A/K order and non-unit column steps
+  remain on the generic path; row errors retain precedence over column-bound errors.
+- Same-worker release-perf re-benchmark measured `[601.27, 643.20, 685.96]` us: a centered **3.626x** speedup.
+  Criterion reported **-71.359%**, `p=0.00`.
+- Exact strict-remote proof passed 1/1. The scalar-reference test covers positive and negative row strides,
+  strict-clamped and empty ranges, unit-column partial/negative/empty spans, NaN and `-0.0` bit identity, hardened
+  invalid bounds, and row-step error precedence. All Cargo benchmark/test commands were remote-only.

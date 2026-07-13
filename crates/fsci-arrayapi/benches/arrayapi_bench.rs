@@ -184,6 +184,42 @@ fn bench_indexing(c: &mut Criterion) {
         });
     }
 
+    let strided_size = 10_000;
+    let strided_array = make_array(
+        &backend,
+        Shape::new(vec![strided_size, 64]),
+        DType::Float64,
+        MemoryOrder::C,
+    );
+    let strided_request = IndexRequest {
+        mode: IndexingMode::Basic,
+        index: IndexExpr::Basic {
+            slices: vec![
+                SliceSpec {
+                    start: Some(0),
+                    stop: Some(strided_size as isize),
+                    step: 2,
+                },
+                SliceSpec {
+                    start: Some(1),
+                    stop: Some(63),
+                    step: 1,
+                },
+            ],
+        },
+    };
+    group.bench_function("getitem_basic_strided_rows", |b| {
+        b.iter(|| {
+            let out = getitem(
+                &backend,
+                black_box(&strided_array),
+                black_box(&strided_request),
+            )
+            .expect("strided-row getitem should succeed");
+            black_box(out.size());
+        });
+    });
+
     group.finish();
 }
 
