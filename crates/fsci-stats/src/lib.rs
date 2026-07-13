@@ -50853,7 +50853,9 @@ pub fn coefficient_of_variation(data: &[f64]) -> f64 {
     if mean == 0.0 {
         return f64::INFINITY;
     }
-    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    // Σ(x−mean)² via the shared work-gated `sum_sq_dev` (parallel for huge inputs, byte-identical below
+    // the gate) — was a serial straggler vs the parallel skew/kurtosis/describe moment loops.
+    let var: f64 = sum_sq_dev(data, mean) / (n - 1.0);
     var.sqrt() / mean.abs()
 }
 
@@ -50864,7 +50866,9 @@ pub fn standard_error_of_mean(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let mean: f64 = data.iter().sum::<f64>() / n;
-    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    // Σ(x−mean)² via the shared work-gated `sum_sq_dev` (parallel for huge inputs, byte-identical below
+    // the gate) — was a serial straggler vs the parallel skew/kurtosis/describe moment loops.
+    let var: f64 = sum_sq_dev(data, mean) / (n - 1.0);
     var.sqrt() / n.sqrt()
 }
 
@@ -50875,8 +50879,46 @@ pub fn excess_kurtosis(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let mean: f64 = data.iter().sum::<f64>() / n;
-    let m2: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
-    let m4: f64 = data.iter().map(|&x| (x - mean).powi(4)).sum::<f64>() / n;
+    // m2=Σd², m4=Σd²·d² (d=x−mean) fused into ONE pass — the ORIG made two separate traversals — and,
+    // for huge inputs, fanned across cores. BYTE-IDENTICAL below the gate: `d2*d2` == `(x−mean).powi(4)`
+    // (both `(x*x)*(x*x)`) and each Σ is the same left-to-right fold; above 1<<22 the per-thread (m2,m4)
+    // partials reorder within per-op ULP tolerance. Mirrors describe's central-moment loop; shares
+    // MOMENT_PAR_FORCE_SERIAL.
+    let chunk_m = |ds: &[f64]| -> (f64, f64) {
+        let mut m2 = 0.0f64;
+        let mut m4 = 0.0f64;
+        for &x in ds {
+            let d2 = (x - mean).powi(2);
+            m2 += d2;
+            m4 += d2 * d2;
+        }
+        (m2, m4)
+    };
+    let nn = data.len();
+    let (s2, s4) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nn < (1 << 22)
+    {
+        chunk_m(data)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nn / (1 << 16))
+            .max(1);
+        let chunk = nn.div_ceil(nthreads);
+        let chunk_m = &chunk_m;
+        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || chunk_m(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("excess_kurtosis worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold((0.0f64, 0.0f64), |(a, b), (u, v)| (a + u, b + v))
+    };
+    let m2 = s2 / n;
+    let m4 = s4 / n;
     if m2 == 0.0 {
         return 0.0;
     }
