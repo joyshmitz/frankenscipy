@@ -35819,6 +35819,13 @@ pub fn trim1(data: &[f64], proportiontocut: f64, tail: &str) -> Vec<f64> {
     }
 }
 
+/// When `true`, [`tvar`] materializes the in-limit `Vec` then reads it for mean and sum-of-squares
+/// (the ORIG behaviour); default `false` computes both passes over `data` behind the in-limit
+/// predicate with NO allocation. Byte-identical. A/B gate (shared by [`tstd`]).
+#[doc(hidden)]
+pub static TVAR_FORCE_COLLECT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the trimmed variance of an array.
 ///
 /// Values outside the specified limits are excluded before computing variance.
@@ -35834,31 +35841,50 @@ pub fn trim1(data: &[f64], proportiontocut: f64, tail: &str) -> Vec<f64> {
 /// # Returns
 /// The trimmed variance, or NaN if fewer than ddof+1 values remain.
 pub fn tvar(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usize) -> f64 {
-    let filtered: Vec<f64> = data
-        .iter()
-        .copied()
-        .filter(|&x| {
-            let above_lower = if inclusive.0 {
-                x >= limits.0
-            } else {
-                x > limits.0
-            };
-            let below_upper = if inclusive.1 {
-                x <= limits.1
-            } else {
-                x < limits.1
-            };
-            above_lower && below_upper
-        })
-        .collect();
-
-    if filtered.len() <= ddof {
+    let within = |x: f64| -> bool {
+        let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
+        let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+        above_lower && below_upper
+    };
+    // The alloc-free two-pass form (below) wins ONLY in the memory-bound regime: at n≥~4M `data`
+    // spills LLC, so dropping the Vec's alloc+write+two-reads for two reads of `data` is 1.53x. When
+    // cache-resident (≤2M) the Vec stays hot and the doubled in-limit predicate eval costs more
+    // (measured 0.88x). Gate at 1<<22 so no size regresses; keep the ORIG collect path below (and
+    // when `TVAR_FORCE_COLLECT`). Both paths are byte-identical.
+    if TVAR_FORCE_COLLECT.load(std::sync::atomic::Ordering::Relaxed) || data.len() < (1 << 22) {
+        let filtered: Vec<f64> = data.iter().copied().filter(|&x| within(x)).collect();
+        if filtered.len() <= ddof {
+            return f64::NAN;
+        }
+        let n = filtered.len() as f64;
+        let mean = filtered.iter().sum::<f64>() / n;
+        let sum_sq: f64 = filtered.iter().map(|&x| (x - mean).powi(2)).sum();
+        return sum_sq / (n - ddof as f64);
+    }
+    // Two-pass variance needs the mean before the squared deviations, but neither pass needs the
+    // in-limit values materialized: apply the predicate inline instead. BYTE-IDENTICAL — `Σx` and
+    // `Σ(x-mean)²` are the same left-to-right folds from 0.0 over the in-limit elements in data
+    // order as over `filtered`, and `count == filtered.len()`. Eliminates the intermediate Vec
+    // (its alloc + write + two reads → two reads of `data` behind a cheap comparison).
+    let mut sum = 0.0f64;
+    let mut count = 0usize;
+    for &x in data {
+        if within(x) {
+            sum += x;
+            count += 1;
+        }
+    }
+    if count <= ddof {
         return f64::NAN;
     }
-
-    let n = filtered.len() as f64;
-    let mean = filtered.iter().sum::<f64>() / n;
-    let sum_sq: f64 = filtered.iter().map(|&x| (x - mean).powi(2)).sum();
+    let n = count as f64;
+    let mean = sum / n;
+    let mut sum_sq = 0.0f64;
+    for &x in data {
+        if within(x) {
+            sum_sq += (x - mean).powi(2);
+        }
+    }
     sum_sq / (n - ddof as f64)
 }
 
