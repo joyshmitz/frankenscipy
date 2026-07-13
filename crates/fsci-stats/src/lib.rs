@@ -38410,7 +38410,14 @@ fn cvm_cdf(x: f64, n: Option<usize>) -> f64 {
 /// One-sample Cramer-von Mises goodness-of-fit test.
 ///
 /// Matches `scipy.stats.cramervonmises(data, cdf)`.
-pub fn cramervonmises(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitResult {
+/// When `true`, [`cramervonmises`] evaluates its CDF terms serially (the ORIG behaviour); default
+/// `false` materialises the per-point CDF via a parallel map for large inputs, then folds the W²
+/// sum serially in index order. Byte-identical. A/B knob.
+#[doc(hidden)]
+pub static CVM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn cramervonmises(data: &[f64], cdf_func: impl Fn(f64) -> f64 + Sync) -> GoodnessOfFitResult {
     let n = data.len();
     if n <= 1 {
         return GoodnessOfFitResult {
@@ -38422,14 +38429,29 @@ pub fn cramervonmises(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOf
     let mut sorted = data.to_vec();
     sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let nf = n as f64;
-    let statistic = sorted
-        .iter()
-        .enumerate()
-        .fold(1.0 / (12.0 * nf), |acc, (i, &x)| {
+    let base = 1.0 / (12.0 * nf);
+    // W² = base + Σ_i (uᵢ - F(x_i))². `F(x_i)` is a heavy independent per-point CDF (erf/gammainc) but
+    // the Σ is a float reduction (can't chunk-merge byte-id), so MATERIALISE the CDF values with a
+    // parallel order-preserving map then fold serially in index order from `base` — BYTE-IDENTICAL to
+    // the fused serial `map(cdf).fold`. Only for n≥4M: the extra cdf_vals Vec adds an alloc + a second
+    // pass that a 2-thread parallel map doesn't offset (measured 0.97x@1M), and the serial `total_cmp`
+    // sort caps the ceiling ~1.3x; below 4M keep the no-alloc fused serial fold. `CVM_FORCE_SERIAL`.
+    const CVM_MIN_PER_THREAD: usize = 400_000;
+    let statistic = if CVM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 4_000_000
+    {
+        sorted.iter().enumerate().fold(base, |acc, (i, &x)| {
             let ui = (2.0 * (i + 1) as f64 - 1.0) / (2.0 * nf);
             let cdf = cdf_func(x);
             acc + (ui - cdf) * (ui - cdf)
-        });
+        })
+    } else {
+        let cdf_vals = par_continuous_map_min(&sorted, CVM_MIN_PER_THREAD, |x| cdf_func(x));
+        cdf_vals.iter().enumerate().fold(base, |acc, (i, &cdf)| {
+            let ui = (2.0 * (i + 1) as f64 - 1.0) / (2.0 * nf);
+            acc + (ui - cdf) * (ui - cdf)
+        })
+    };
     let pvalue = (1.0 - cvm_cdf(statistic, Some(n))).clamp(0.0, 1.0);
 
     GoodnessOfFitResult { statistic, pvalue }
