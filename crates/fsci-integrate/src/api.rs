@@ -979,13 +979,15 @@ where
         return Err(IntegrateValidationError::NonFiniteSpan);
     }
     if options.y0.iter().any(|v| !v.is_finite()) {
-        let fingerprint = audit_fingerprint(
-            "solve_ivp",
-            format!(
-                "reason=non_finite_y0;y0={:?};mode={:?}",
-                options.y0, options.mode
-            ),
-        );
+        let fingerprint = audit_ledger.map_or_else(Vec::new, |_| {
+            audit_fingerprint(
+                "solve_ivp",
+                format!(
+                    "reason=non_finite_y0;y0={:?};mode={:?}",
+                    options.y0, options.mode
+                ),
+            )
+        });
         record_fail_closed(audit_ledger, &fingerprint, "non_finite_y0", "rejected");
         return Err(IntegrateValidationError::NonFiniteY0);
     }
@@ -1292,6 +1294,45 @@ mod tests {
         assert!(matches!(
             entry.action,
             AuditAction::FailClosed { ref reason } if reason == "t_eval_out_of_span"
+        ));
+    }
+
+    #[test]
+    fn solve_ivp_with_audit_preserves_non_finite_y0_fingerprint() {
+        let y0 = [1.0, -0.0, f64::from_bits(0x7ff8_0000_0000_0042)];
+        let mode = RuntimeMode::Strict;
+        let input_bytes = audit_fingerprint(
+            "solve_ivp",
+            format!("reason=non_finite_y0;y0={y0:?};mode={mode:?}"),
+        );
+        let expected_fingerprint = AuditLedger::fingerprint_bytes(&input_bytes);
+        let audit_ledger = crate::sync_audit_ledger();
+        let mut rhs_calls = 0usize;
+
+        let err = solve_ivp_with_audit(
+            &mut |_t, _y| {
+                rhs_calls += 1;
+                Vec::new()
+            },
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &y0,
+                mode,
+                ..SolveIvpOptions::default()
+            },
+            &audit_ledger,
+        )
+        .expect_err("non-finite y0 should fail closed");
+        assert_eq!(err, IntegrateValidationError::NonFiniteY0);
+        assert_eq!(rhs_calls, 0, "y0 validation must precede RHS evaluation");
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        let entry = &ledger.entries()[0];
+        assert_eq!(entry.input_fingerprint, expected_fingerprint);
+        assert!(matches!(
+            entry.action,
+            AuditAction::FailClosed { ref reason } if reason == "non_finite_y0"
         ));
     }
 

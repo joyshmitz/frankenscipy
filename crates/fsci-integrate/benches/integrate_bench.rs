@@ -84,6 +84,54 @@ fn bench_solve_ivp_t_eval_validation(c: &mut Criterion) {
     });
 }
 
+fn solve_ivp_non_finite_y0_eager_original(
+    options: &SolveIvpOptions<'_>,
+) -> Result<(), IntegrateValidationError> {
+    let (t0, tf) = options.t_span;
+    if options.y0.is_empty() {
+        return Err(IntegrateValidationError::EmptyY0);
+    }
+    if !t0.is_finite() || !tf.is_finite() {
+        return Err(IntegrateValidationError::NonFiniteSpan);
+    }
+    if options.y0.iter().any(|value| !value.is_finite()) {
+        let fingerprint = format!(
+            "solve_ivp:reason=non_finite_y0;y0={:?};mode={:?}",
+            options.y0, options.mode
+        )
+        .into_bytes();
+        black_box(&fingerprint);
+        return Err(IntegrateValidationError::NonFiniteY0);
+    }
+    Ok(())
+}
+
+fn bench_solve_ivp_non_finite_y0_validation(c: &mut Criterion) {
+    let mut y0 = vec![1.0; 16_384];
+    *y0.last_mut().expect("y0 should be nonempty") = f64::NAN;
+    let opts = SolveIvpOptions {
+        t_span: (0.0, 1.0),
+        y0: &y0,
+        method: SolverKind::Rk45,
+        ..Default::default()
+    };
+
+    let mut group = c.benchmark_group("solve_ivp_non_finite_y0_audit_fingerprint_ab");
+    group.sample_size(12);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("original_eager/16384", |b| {
+        b.iter(|| solve_ivp_non_finite_y0_eager_original(black_box(&opts)));
+    });
+    group.bench_function("current_lazy/16384", |b| {
+        b.iter(|| {
+            let mut rhs = exponential_decay;
+            black_box(solve_ivp(&mut rhs, black_box(&opts)))
+        });
+    });
+    group.finish();
+}
+
 fn bench_validate_tol(c: &mut Criterion) {
     c.bench_function("validate_tol_scalar", |b| {
         b.iter(|| {
@@ -205,6 +253,7 @@ criterion_group!(
     bench_solve_ivp_exponential,
     bench_solve_ivp_lorenz,
     bench_solve_ivp_t_eval_validation,
+    bench_solve_ivp_non_finite_y0_validation,
     bench_validate_tol,
     bench_validate_tol_audit_fingerprint_ab
 );
