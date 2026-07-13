@@ -20662,3 +20662,31 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   worker `vmi1293453`. At 2048x1024, scalar measured `[1.1526, 1.1724, 1.1977]` ms and SIMD measured
   `[287.46, 312.50, 337.94]` us: a centered **3.752x** speedup, with a conservative interval ratio above 3.41x.
 - The focused strict-remote unit proof passed 1/1. No benchmark rerun or local Cargo fallback was used.
+
+## 2026-07-13 - cod - KEEP integrate non-finite `y0` lazy audit fingerprint (145.52x at n=16,384)
+
+- Negative-ledger-first selection excluded the landed `validate_tol` and `t_eval` lazy-fingerprint branches and
+  found no prior keep or reject for `solve_ivp`'s non-finite initial state. Public `solve_ivp` supplies no audit
+  ledger, yet this error path debug-formatted the entire `y0` into bytes after its finite scan, then passed those
+  unused bytes to a recorder that immediately returns on `None`.
+- A focused public-path Criterion row uses 16,384 values with only the final value set to NaN, so rejection occurs
+  before solver construction or RHS evaluation. Its fresh strict-remote production-original baseline on
+  `vmi1227854` was `[954.07 us, 1.0388 ms, 1.1350 ms]`.
+- ONE lever constructs the non-finite-`y0` fingerprint only when an audit ledger exists. The empty-state and
+  non-finite-span branches, validation/error precedence, finite scan, error variant, RHS call count, solver paths,
+  and all numerical arithmetic are unchanged. Audit-enabled calls still encode the identical context, full `y0`
+  debug representation, and runtime mode before recording the same fail-closed reason.
+- The decisive same-binary release-perf A/B on `vmi1293453` measured eager original
+  `[826.19, 870.16, 940.53]` us versus lazy current `[5.6976, 5.9798, 6.2013]` us: a centered **145.52x** speedup,
+  with a conservative interval ratio above **133x**. A separate cross-worker candidate run was treated only as
+  supporting evidence and did not decide the keep.
+- All five focused `solve_ivp_with_audit` tests passed strict-remote. The new exact witness independently rebuilds
+  the original bytes and verifies `NonFiniteY0`, zero RHS calls, one audit event, its `non_finite_y0` reason, and the
+  unchanged Blake3 fingerprint. The strict-remote library-plus-benchmark `cargo check` also passed on
+  `vmi1152480`. All explicit Cargo benchmark and proof commands were fail-closed remote-only; two initial no-slot
+  refusals and an ignored worker hint were surfaced, and no explicit local Cargo fallback was used.
+- The workspace all-target check was refused before compilation with RCH-E412 because a peer-owned temporary stats
+  binary could not be classified. Focused strict-remote Clippy reached `fsci-integrate` and surfaced four unchanged
+  crate-level `too_many_arguments`/`type_complexity` findings outside this lever; targeted rustfmt likewise found
+  only pre-existing drift outside the changed hunks. The mandated UBS wrapper ran its own Cargo probes in a local
+  shadow workspace; those wrapper results were excluded from the remote-only proof above.
