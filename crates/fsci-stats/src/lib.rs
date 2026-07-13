@@ -31528,6 +31528,33 @@ fn spearmanr_length_two(x: &[f64], y: &[f64]) -> CorrelationResult {
 /// Matches `scipy.stats.spearmanr(a, b)`.
 ///
 /// Uses the Pearson correlation of the rank-transformed data.
+/// When `true`, [`rank_two_average`] ranks its two inputs sequentially (the ORIG behaviour); default
+/// `false` overlaps the two independent rankings on separate threads for large inputs. Bit-identical
+/// either way (rankdata_average is deterministic). `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static RANK_TWO_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// [`rankdata_average`] applied to `a` and `b`, overlapping the two INDEPENDENT rank computations on
+/// separate threads when both inputs are large enough to amortize a thread spawn. Each rankdata is
+/// O(n log n) sort-dominated, so overlapping ~halves the rank phase that dominates `spearmanr` (the
+/// downstream `pearsonr` on ranks is O(n)). BIT-IDENTICAL to two serial `rankdata_average` calls
+/// (deterministic; only the wall-clock overlaps). Mirrors [`sort_two_f64_total`].
+fn rank_two_average(a: &[f64], b: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    if a.len().min(b.len()) >= (1 << 16)
+        && !RANK_TWO_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        std::thread::scope(|scope| {
+            let h = scope.spawn(|| rankdata_average(b));
+            let ra = rankdata_average(a);
+            let rb = h.join().expect("rank_two_average worker panicked");
+            (ra, rb)
+        })
+    } else {
+        (rankdata_average(a), rankdata_average(b))
+    }
+}
+
 pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
     let n = x.len();
     if n < 2 || n != y.len() {
@@ -31540,8 +31567,7 @@ pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
         return spearmanr_length_two(x, y);
     }
 
-    let rank_x = rankdata_average(x);
-    let rank_y = rankdata_average(y);
+    let (rank_x, rank_y) = rank_two_average(x, y);
 
     pearsonr(&rank_x, &rank_y)
 }
@@ -31561,8 +31587,7 @@ pub fn spearmanr_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correla
         return spearmanr_length_two(x, y);
     }
 
-    let rank_x = rankdata_average(x);
-    let rank_y = rankdata_average(y);
+    let (rank_x, rank_y) = rank_two_average(x, y);
     let nf = n as f64;
     let xmean: f64 = rank_x.iter().sum::<f64>() / nf;
     let ymean: f64 = rank_y.iter().sum::<f64>() / nf;
