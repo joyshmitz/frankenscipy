@@ -51772,6 +51772,13 @@ pub fn nonnan_indices(data: &[f64]) -> Vec<usize> {
 pub static HISTOGRAM_FUSE_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`histogram`] fills its bin counts with a single serial pass (the ORIG behaviour);
+/// default `false` fans the binning across cores with privatized per-thread histograms merged at the
+/// end. Bit-identical either way (integer counts). `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static HISTOGRAM_BIN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute a histogram of data values.
 ///
 /// Returns (counts, bin_edges).
@@ -51836,13 +51843,55 @@ pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
         1.0
     };
 
-    let mut counts = vec![0usize; bins];
     let bin_edges: Vec<f64> = (0..=bins).map(|i| min_val + i as f64 * bin_width).collect();
 
-    for &v in data {
-        let bin = ((v - min_val) / bin_width).floor() as usize;
-        counts[bin.min(bins - 1)] += 1;
-    }
+    // Binning is a scatter-accumulate (per element: index by `(v−min)/width` then bump a bin). The
+    // per-thread counts are INDEPENDENT, so for large `data` give each worker a PRIVATE histogram over
+    // its chunk, then sum the partials. BIT-IDENTICAL (not just below a gate): each element maps to the
+    // same bin regardless of the owning core, and the counts are INTEGER sums — associative/commutative
+    // with no float reassociation, so the merged result equals the serial fold exactly.
+    // `HISTOGRAM_BIN_FORCE_SERIAL` restores the serial single-pass fill for A/B.
+    let bin_of = |v: f64| ((v - min_val) / bin_width).floor() as usize;
+    let counts = if HISTOGRAM_BIN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || data.len() < (1 << 18)
+    {
+        let mut counts = vec![0usize; bins];
+        for &v in data {
+            counts[bin_of(v).min(bins - 1)] += 1;
+        }
+        counts
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(data.len() / (1 << 16))
+            .max(1);
+        let chunk = data.len().div_ceil(nthreads);
+        let bin_of = &bin_of;
+        let partials: Vec<Vec<usize>> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|block| {
+                    scope.spawn(move || {
+                        let mut c = vec![0usize; bins];
+                        for &v in block {
+                            c[bin_of(v).min(bins - 1)] += 1;
+                        }
+                        c
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("histogram worker panicked"))
+                .collect()
+        });
+        let mut counts = vec![0usize; bins];
+        for p in &partials {
+            for (c, &pc) in counts.iter_mut().zip(p) {
+                *c += pc;
+            }
+        }
+        counts
+    };
 
     (counts, bin_edges)
 }
