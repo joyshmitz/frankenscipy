@@ -20543,7 +20543,8 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   unused fingerprint buffer; the existing `fft_real/rfft/256` Criterion row exercises the full capped 512 bytes.
 - Fresh strict-remote baseline on pinned worker `vmi1293453` measured `[1.9325, 2.0139, 2.0958]` us. ONE candidate
   made `rfft_impl` construct `real_fingerprint(input)` only when an audit ledger was present; audited bytes and
-  validation order were covered by an exact proof test during evaluation.
+  validation order were encoded in an exact proof test. The source and test were removed after benchmark rejection,
+  before a separate proof-gate run.
 - Same-worker release-perf re-benchmark measured `[2.0280, 2.1504, 2.3159]` us. Criterion reported a wide
   `[-9.5084%, +77.790%]` change interval, `p=0.28`, and **no change in performance detected**; both rows also had
   high-severe outliers.
