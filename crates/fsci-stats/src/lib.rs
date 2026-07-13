@@ -32793,6 +32793,13 @@ pub fn describe(data: &[f64]) -> DescribeResult {
     }
 }
 
+/// When `true`, [`skew`]/[`kurtosis`] fold their central-moment loop serially (the ORIG one-pass loop);
+/// default `false` fan it across cores for large inputs. WITHIN per-op ULP tolerance (parallel reorder).
+/// `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static MOMENT_PAR_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the sample skewness (Fisher's definition, bias=True).
 ///
 /// Matches `scipy.stats.skew(a, bias=True)`.
@@ -32804,14 +32811,45 @@ pub fn skew(data: &[f64]) -> f64 {
     }
     let nf = n as f64;
     let mean_val = data.iter().sum::<f64>() / nf;
-    let mut m2 = 0.0;
-    let mut m3 = 0.0;
-    for &x in data {
-        let d = x - mean_val;
-        let d2 = d * d;
-        m2 += d2;
-        m3 += d2 * d;
-    }
+    // Central moments m2=Σd², m3=Σd²·d (d=x−mean) — the dominant O(n) reduction (mean fixed above).
+    // Below the gate (and under MOMENT_PAR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to the
+    // original loop); above 1<<22 fan across cores as per-thread partial pairs, within per-op ULP
+    // tolerance. Same lever as the pearsonr/cov centered-reduction family.
+    let chunk_m = |ds: &[f64]| -> (f64, f64) {
+        let mut m2 = 0.0f64;
+        let mut m3 = 0.0f64;
+        for &x in ds {
+            let d = x - mean_val;
+            let d2 = d * d;
+            m2 += d2;
+            m3 += d2 * d;
+        }
+        (m2, m3)
+    };
+    let (m2, m3) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < (1 << 22)
+    {
+        chunk_m(data)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 16))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_m = &chunk_m;
+        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || chunk_m(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("skew worker panicked"))
+                .collect()
+        });
+        parts
+            .into_iter()
+            .fold((0.0f64, 0.0f64), |(a2, a3), (c2, c3)| (a2 + c2, a3 + c3))
+    };
     skew_from_moments(nf, m2, m3)
 }
 
