@@ -20518,3 +20518,20 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Exact strict-remote proof passed 1/1. The scalar-reference test covers positive and negative row strides,
   strict-clamped and empty ranges, unit-column partial/negative/empty spans, NaN and `-0.0` bit identity, hardened
   invalid bounds, and row-step error precedence. All Cargo benchmark/test commands were remote-only.
+
+## 2026-07-12 - cod - KEEP FFT complex 1-D lazy audit fingerprint (1.096x at n=16)
+
+- Negative-ledger-first selection excluded the worked FFT kernel families and found no keep/reject for audit
+  fingerprint construction. The existing `fft_forward/fft/16` Criterion row directly times public `fft`, which
+  passes no audit ledger but still allocated and serialized every complex input into an unused fingerprint buffer.
+- Fresh strict-remote baseline on pinned worker `vmi1293453` measured `[511.41, 529.60, 547.61]` ns. The historical
+  approximately 473 ns row was treated only as routing evidence, not an acceptance baseline.
+- ONE lever makes `run_complex_1d` construct `complex_fingerprint(input)` only when an audit ledger is present.
+  Audited FFT/IFFT calls still serialize the same first 32 complex values before the same validations; unaudited
+  calls pass an empty, allocation-free buffer that no consumer observes. Transform arithmetic, normalization,
+  plan-cache behavior, validation/error order, trace emission, real-input FFTs, and N-D paths are unchanged.
+- Same-worker release-perf re-benchmark measured `[469.10, 483.14, 498.48]` ns: a centered **1.096x** speedup with
+  non-overlapping intervals. Criterion reported **-11.833%**, `p=0.00`.
+- Exact strict-remote proof passed 1/1 and independently serializes a nonempty complex input, then verifies the sole
+  audited invalid-worker event retains the exact Blake3 fingerprint, action, and error. The first proof compile
+  surfaced only an ambiguous test literal type; an explicit `Complex64` annotation fixed it before the passing rerun.

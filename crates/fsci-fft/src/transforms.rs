@@ -3932,8 +3932,7 @@ fn fhtcoeff(n: usize, dln: f64, mu: f64, offset: f64, bias: f64, inverse: bool) 
         let im = lp.1 + lm.1 + 2.0 * (LN_2 - lnkr) * y;
         complex_exp((re, im))
     };
-    let nthreads = if FHTCOEFF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || len < 1024
+    let nthreads = if FHTCOEFF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || len < 1024
     {
         1
     } else {
@@ -4081,7 +4080,7 @@ fn run_complex_1d(
     inverse: bool,
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<Complex64>, FftError> {
-    let fingerprint = complex_fingerprint(input);
+    let fingerprint = audit_ledger.map_or_else(Vec::new, |_| complex_fingerprint(input));
     ensure_non_empty_with_audit(input.len(), &fingerprint, audit_ledger)?;
     validate_workers_with_audit(options.workers, &fingerprint, audit_ledger)?;
     validate_finite_complex_with_audit(input, options, &fingerprint, audit_ledger)?;
@@ -5548,7 +5547,7 @@ fn ihfftn_impl(
 
 #[cfg(test)]
 mod tests {
-    use fsci_runtime::{AuditAction, RuntimeMode};
+    use fsci_runtime::{AuditAction, AuditLedger, RuntimeMode};
 
     use super::{
         Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_axis2d, dct_iv,
@@ -6075,6 +6074,32 @@ mod tests {
             &entry.action,
             AuditAction::FailClosed { reason } if reason == "empty_input"
         )));
+    }
+
+    #[test]
+    fn fft_with_audit_preserves_complex_input_fingerprint() {
+        let input: [Complex64; 2] = [(1.25, -0.0), (-3.5, 2.0)];
+        let mut input_bytes = Vec::new();
+        for &(re, im) in &input {
+            input_bytes.extend_from_slice(&re.to_le_bytes());
+            input_bytes.extend_from_slice(&im.to_le_bytes());
+        }
+        let expected_fingerprint = AuditLedger::fingerprint_bytes(&input_bytes);
+        let audit_ledger = sync_audit_ledger();
+        let opts = FftOptions::default().with_workers(WorkerPolicy::Exact(0));
+
+        let err = fft_with_audit(&input, &opts, &audit_ledger)
+            .expect_err("zero workers should be rejected");
+        assert_eq!(err, FftError::InvalidWorkers { requested: 0 });
+
+        let ledger = audit_ledger.lock().expect("audit ledger lock");
+        assert_eq!(ledger.entries().len(), 1);
+        let entry = &ledger.entries()[0];
+        assert!(matches!(
+            &entry.action,
+            AuditAction::FailClosed { reason } if reason == "invalid_workers"
+        ));
+        assert_eq!(entry.input_fingerprint, expected_fingerprint);
     }
 
     #[test]
