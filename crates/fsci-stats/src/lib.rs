@@ -33047,16 +33047,48 @@ pub fn describe(data: &[f64]) -> DescribeResult {
     };
     let mean_val = sum / nf;
 
-    let mut m2 = 0.0;
-    let mut m3 = 0.0;
-    let mut m4 = 0.0;
-    for &x in data {
-        let d = x - mean_val;
-        let d2 = d * d;
-        m2 += d2;
-        m3 += d2 * d;
-        m4 += d2 * d2;
-    }
+    // Central moments m2=Σd², m3=Σd²·d, m4=Σd²·d² (d=x−mean) — the dominant O(n) reduction (mean fixed
+    // above). `describe` folded these serially while its siblings `skew`/`kurtosis` already fan their
+    // central-moment loop across cores — this was the straggler. Mirror them exactly: below the gate (and
+    // under MOMENT_PAR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to the original loop); above
+    // 1<<22 fan across cores as per-thread partial triples, within per-op ULP tolerance.
+    let chunk_m = |ds: &[f64]| -> (f64, f64, f64) {
+        let mut m2 = 0.0f64;
+        let mut m3 = 0.0f64;
+        let mut m4 = 0.0f64;
+        for &x in ds {
+            let d = x - mean_val;
+            let d2 = d * d;
+            m2 += d2;
+            m3 += d2 * d;
+            m4 += d2 * d2;
+        }
+        (m2, m3, m4)
+    };
+    let (m2, m3, m4) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < (1 << 22)
+    {
+        chunk_m(data)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 16))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_m = &chunk_m;
+        let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || chunk_m(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("describe moment worker panicked"))
+                .collect()
+        });
+        parts
+            .into_iter()
+            .fold((0.0f64, 0.0f64, 0.0f64), |(a, b, c), (x, y, z)| (a + x, b + y, c + z))
+    };
 
     let variance_val = m2 / (nf - 1.0);
     let skewness_val = skew_from_moments(nf, m2, m3);
