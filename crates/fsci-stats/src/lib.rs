@@ -48394,11 +48394,43 @@ pub fn log_softmax(x: &[f64]) -> Vec<f64> {
 pub static LOGSUMEXP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`par_max_fold`] runs the `max` reduction serially; default `false` fans it across
+/// cores for large inputs. BYTE-IDENTICAL either way. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static MAXFOLD_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `f64::max` fold over `x` (seed −∞, NaN-ignoring). BYTE-IDENTICAL to the serial fold at every size —
+/// `f64::max` is exactly associative/commutative and ignores NaN, so any chunk grouping yields the same
+/// bits. The fold is cheap/bandwidth-bound, so only huge-n amortizes the thread spawn → gate 1<<22;
+/// the serial fold is kept below the gate and under `MAXFOLD_FORCE_SERIAL`.
+fn par_max_fold(x: &[f64]) -> f64 {
+    let n = x.len();
+    if MAXFOLD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+        return x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        x.chunks(chunk)
+            .map(|xs| scope.spawn(move || xs.iter().copied().fold(f64::NEG_INFINITY, f64::max)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("max fold worker panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(f64::NEG_INFINITY, f64::max)
+}
+
 pub fn logsumexp(x: &[f64]) -> f64 {
     if x.is_empty() {
         return f64::NEG_INFINITY;
     }
-    let max_x = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let max_x = par_max_fold(x);
     if !max_x.is_finite() {
         return max_x;
     }
