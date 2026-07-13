@@ -9394,6 +9394,14 @@ pub static NORM_INF_FORCE_LEGACY: std::sync::atomic::AtomicBool =
 pub static NORM_ONE_FORCE_LEGACY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`norm`]'s Frobenius norm copies `a` into a `DMatrix` and takes nalgebra's norm (the
+/// ORIG path); default `false` sums `Σaᵢⱼ²` directly from `a` (one row-major pass, no copy) fanned
+/// across rows for LARGE matrices only, then `sqrt`. WITHIN per-op ULP tolerance vs the column-major
+/// sum (applied above the gate; small matrices keep nalgebra exactly). `#[doc(hidden)]` — A/B gate.
+#[doc(hidden)]
+pub static NORM_FRO_FORCE_LEGACY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute matrix or vector norm.
 ///
 /// Matches `scipy.linalg.norm(a, ord)`.
@@ -9416,8 +9424,38 @@ pub fn norm(a: &[Vec<f64>], kind: NormKind, options: DecompOptions) -> Result<f6
 
     let result = match kind {
         NormKind::Fro => {
-            // Frobenius norm: sqrt(sum of squares)
-            dmatrix_from_rows(a)?.norm()
+            // Frobenius norm: sqrt(Σ aᵢⱼ²). The ORIG copied `a` into a DMatrix then took nalgebra's
+            // norm. For large matrices sum the squares directly from `a` in one contiguous row-major
+            // pass (no copy; each row's Σx² auto-vectorizes) fanned across rows, then sqrt. WITHIN
+            // per-op ULP tolerance vs nalgebra's column-major sum — applied ONLY above the gate, so
+            // small matrices (and any bit-exact test) keep nalgebra's exact result. Force-legacy A/B.
+            if NORM_FRO_FORCE_LEGACY.load(std::sync::atomic::Ordering::Relaxed)
+                || rows * cols < (1 << 22)
+            {
+                dmatrix_from_rows(a)?.norm()
+            } else {
+                // Copy elimination only outruns the fixed thread-spawn cost once the matrix spills
+                // LLC (measured 0.56x @1M cache-resident, 1.9-2.5x @4-16M) → gate 1<<22. Cap workers
+                // by work so each owns >=64k elements (no over-subscription).
+                let row_sq = |row: &[f64]| -> f64 { row.iter().map(|&x| x * x).sum() };
+                let nthreads = std::thread::available_parallelism()
+                    .map(std::num::NonZero::get)
+                    .unwrap_or(1)
+                    .min(rows)
+                    .min((rows * cols) / (1 << 16))
+                    .max(1);
+                let chunk = rows.div_ceil(nthreads);
+                let row_sq = &row_sq;
+                let parts: Vec<f64> = std::thread::scope(|scope| {
+                    a.chunks(chunk)
+                        .map(|rc| scope.spawn(move || rc.iter().map(|row| row_sq(row)).sum::<f64>()))
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|h| h.join().expect("norm fro worker panicked"))
+                        .collect()
+                });
+                parts.into_iter().sum::<f64>().sqrt()
+            }
         }
         NormKind::Spectral => {
             // Spectral norm: largest singular value
