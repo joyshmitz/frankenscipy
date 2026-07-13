@@ -25974,9 +25974,9 @@ pub fn nanzscore(data: &[f64]) -> Vec<f64> {
     }
 }
 
-/// When `true`, [`nansum`] sums serially (the ORIG exact `filter(!is_nan).sum()`); default `false`
-/// fans the filtered sum across cores for large inputs. WITHIN per-op ULP tolerance (parallel reorder).
-/// `#[doc(hidden)]` — internal A/B gate.
+/// When `true`, [`nansum`]/[`nanprod`] reduce serially (the ORIG exact `filter(!is_nan).sum()`/
+/// `.product()`); default `false` fans the filtered reduction across cores for large inputs. WITHIN
+/// per-op ULP tolerance (parallel reassociation). `#[doc(hidden)]` — internal A/B gate.
 #[doc(hidden)]
 pub static NANSUM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -26018,7 +26018,32 @@ pub fn nansum(data: &[f64]) -> f64 {
 /// Returns the product of values, ignoring NaN values.
 /// Matches `numpy.nanprod`.
 pub fn nanprod(data: &[f64]) -> f64 {
-    data.iter().filter(|x| !x.is_nan()).product()
+    // Bandwidth-light kernel (is_nan check + multiply). Below the gate (and when forced serial) keep
+    // the EXACT `filter(!is_nan).product()` — byte-identical for small inputs and any bit-exact test;
+    // above 1<<20 fan the filtered product across cores (each chunk multiplies its non-NaN, combine),
+    // within per-op ULP tolerance (float multiply reassociation). A 0 anywhere still gives 0 (0 is
+    // absorbing) and an all-NaN chunk contributes the identity 1.0 — the structure is preserved.
+    let n = data.len();
+    if NANSUM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 20) {
+        return data.iter().filter(|x| !x.is_nan()).product();
+    }
+    let chunk_prod = |ds: &[f64]| -> f64 { ds.iter().filter(|x| !x.is_nan()).product() };
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_prod = &chunk_prod;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|ds| scope.spawn(move || chunk_prod(ds)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("nanprod worker panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(1.0f64, |acc, p| acc * p)
 }
 
 /// When `true`, [`nanmin`]/[`nanmax`] run their NaN-filtered fold serially (the ORIG
