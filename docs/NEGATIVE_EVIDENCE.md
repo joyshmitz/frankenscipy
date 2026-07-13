@@ -20485,3 +20485,19 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   empty-row, and empty-column slices; compares copied `f64` payloads by bits including NaN and `-0.0`; and proves a
   hardened invalid column is still checked after an empty row slice. `rustfmt --check`, `git diff --check`, and
   targeted UBS passed. All Cargo benchmark/test commands were strict remote-only.
+
+## 2026-07-12 - cod - KEEP arrayapi rank-1 unit slicing bulk copy (6.685x)
+
+- Negative-ledger-first selection took the rank-1 residual explicitly excluded from the prior rank-2 keep. No stored
+  rank-1 basic-slicing benchmark or result existed, so a distinct Criterion row established the acceptance baseline.
+- Strict-remote baseline on pinned worker `vmi1293453`, C-order length 10,000 with interior slice `1..9999`, was
+  `[19.853, 20.271, 20.640]` us. The generic path allocated and filled an index vector, then scalar-gathered a span
+  already contiguous in every rank-1 memory-order representation.
+- ONE fast path handles rank-1 slices with step exactly one. It reuses the existing strict/hardened bound normalizer,
+  copies `values[start..end]` directly, and preserves the input dtype and C/F/A/K order tag. Zero, negative, and
+  non-unit steps remain on the generic path.
+- Same-worker release-perf re-benchmark measured `[2.9081, 3.0322, 3.2071]` us: a centered **6.685x** speedup.
+  Criterion reported **-84.903%**, `p=0.00`.
+- Exact strict-remote proof passed 1/1. The scalar-reference test covers full, partial, negative-endpoint,
+  strict-clamp, inverted, and upper-edge-empty slices across all order tags; compares `f64` payloads by bits including
+  NaN and `-0.0`; and preserves hardened out-of-range rejection. All Cargo benchmark/test commands were remote-only.

@@ -122,6 +122,35 @@ fn bench_indexing(c: &mut Criterion) {
     let mut group = c.benchmark_group("arrayapi_indexing");
 
     for &size in SIZES {
+        let rank1_array = make_array(
+            &backend,
+            Shape::new(vec![size]),
+            DType::Float64,
+            MemoryOrder::C,
+        );
+        let rank1_request = IndexRequest {
+            mode: IndexingMode::Basic,
+            index: IndexExpr::Basic {
+                slices: vec![SliceSpec {
+                    start: Some(1),
+                    stop: Some(size as isize - 1),
+                    step: 1,
+                }],
+            },
+        };
+
+        group.bench_with_input(
+            BenchmarkId::new("getitem_basic_rank1", size),
+            &size,
+            |b, _| {
+                b.iter(|| {
+                    let out = getitem(&backend, black_box(&rank1_array), black_box(&rank1_request))
+                        .expect("rank-1 getitem should succeed");
+                    black_box(out.size());
+                });
+            },
+        );
+
         let array = make_array(
             &backend,
             Shape::new(vec![size, 4]),
