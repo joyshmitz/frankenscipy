@@ -20535,3 +20535,19 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Exact strict-remote proof passed 1/1 and independently serializes a nonempty complex input, then verifies the sole
   audited invalid-worker event retains the exact Blake3 fingerprint, action, and error. The first proof compile
   surfaced only an ambiguous test literal type; an explicit `Complex64` annotation fixed it before the passing rerun.
+
+## 2026-07-12 - cod - REJECT FFT real 1-D lazy audit fingerprint at n=256
+
+- Negative-ledger-first selection took the real-input residual explicitly left unchanged by the complex 1-D audit
+  fingerprint keep. Public `rfft` passes no audit ledger but still eagerly serializes up to 64 real inputs into an
+  unused fingerprint buffer; the existing `fft_real/rfft/256` Criterion row exercises the full capped 512 bytes.
+- Fresh strict-remote baseline on pinned worker `vmi1293453` measured `[1.9325, 2.0139, 2.0958]` us. ONE candidate
+  made `rfft_impl` construct `real_fingerprint(input)` only when an audit ledger was present; audited bytes and
+  validation order were covered by an exact proof test during evaluation.
+- Same-worker release-perf re-benchmark measured `[2.0280, 2.1504, 2.3159]` us. Criterion reported a wide
+  `[-9.5084%, +77.790%]` change interval, `p=0.28`, and **no change in performance detected**; both rows also had
+  high-severe outliers.
+- Decision: **REJECT / IN-FLOOR; production and proof-test code removed.** The capped real fingerprint is not a
+  measurable cost at n=256 under this row's noise. Do not retry lazy real fingerprint construction alone; revisit
+  only with a broader audit-plumbing lever that removes additional normal-path work. All Cargo commands were strict
+  remote-only; no local fallback was used.
