@@ -33234,6 +33234,13 @@ pub fn compare_medians_ms(group_1: &[f64], group_2: &[f64]) -> f64 {
 pub static RSH_FORCE_QUADRATIC: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`rsh`]'s O(n log n) path evaluates its query points serially (the ORIG behaviour);
+/// default `false` fans the independent per-point binary-search windows across cores for large
+/// `points`. Byte-identical. A/B knob.
+#[doc(hidden)]
+pub static RSH_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[must_use]
 pub fn rsh(data: &[f64], points: Option<&[f64]>) -> Vec<f64> {
     let clean: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
@@ -33262,13 +33269,27 @@ pub fn rsh(data: &[f64], points: Option<&[f64]>) -> Vec<f64> {
     // integer counts (#{x ≤ p+h}, #{x < p−h}) as the linear scans, hence the same density value.
     let mut sorted = clean.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).expect("finite (NaN filtered above)"));
-    pts.iter()
-        .map(|&p| {
-            let nhi = sorted.partition_point(|&x| x <= p + h) as f64;
-            let nlo = sorted.partition_point(|&x| x < p - h) as f64;
+    // Each point's window is TWO independent `partition_point` binary searches into the shared sorted
+    // buffer, so fan the points across cores for large `pts` via the order-preserving
+    // `par_continuous_map_min` — BYTE-IDENTICAL (same integer window counts, same index order).
+    // 200k/thread gate; below 2× that (400k) use the DIRECT serial map (the `par_continuous_map_min`
+    // serial fallback carries ~20% closure/alloc overhead at small `pts`). `RSH_FORCE_SERIAL`.
+    if RSH_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || pts.len() < 400_000 {
+        pts.iter()
+            .map(|&p| {
+                let nhi = sorted.partition_point(|&x| x <= p + h) as f64;
+                let nlo = sorted.partition_point(|&x| x < p - h) as f64;
+                (nhi - nlo) / (2.0 * nf * h)
+            })
+            .collect()
+    } else {
+        let sorted_ref = &sorted;
+        par_continuous_map_min(pts, 200_000, move |p| {
+            let nhi = sorted_ref.partition_point(|&x| x <= p + h) as f64;
+            let nlo = sorted_ref.partition_point(|&x| x < p - h) as f64;
             (nhi - nlo) / (2.0 * nf * h)
         })
-        .collect()
+    }
 }
 
 /// Seasonal Theil-Sen and Kendall slope estimators.
