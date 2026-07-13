@@ -26193,6 +26193,13 @@ pub fn nanpercentile(data: &[f64], q: f64) -> f64 {
     result.first().copied().unwrap_or(f64::NAN)
 }
 
+/// When `true`, [`gmean_weighted`] sums `Σ w·ln(x)` serially (the ORIG exact `map.sum()` fold); default
+/// `false` fans the `ln`-bound sum across cores for large inputs (4-way-unrolled chunks). WITHIN per-op
+/// ULP tolerance (parallel reorder). `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static GMEAN_W_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the weighted geometric mean.
 ///
 /// G_w = exp(Σ(w·ln(x)) / Σw)
@@ -26212,7 +26219,51 @@ pub fn gmean_weighted(data: &[f64], weights: &[f64]) -> f64 {
     if total_w == 0.0 {
         return f64::NAN;
     }
-    let weighted_log_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.ln()).sum();
+    // `Σ w·ln(x)` — the per-element `ln` is a heavy transcendental (compute-bound), mirroring the
+    // unweighted `gmean_log_sum`. Below the gate (and when forced serial) keep the EXACT serial
+    // `map.sum()` fold (byte-identical for small inputs and any bit-exact test); above 1<<16 fan a
+    // 4-way-unrolled chunk sum across cores (within per-op ULP tolerance, parallel reorder).
+    let n = data.len();
+    let weighted_log_sum: f64 = if GMEAN_W_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < (1 << 16)
+    {
+        data.iter().zip(weights).map(|(&x, &w)| w * x.ln()).sum()
+    } else {
+        let chunk_sum = |ds: &[f64], ws: &[f64]| -> f64 {
+            let mut a = [0.0f64; 4];
+            let mut i = 0;
+            while i + 4 <= ds.len() {
+                a[0] += ws[i] * ds[i].ln();
+                a[1] += ws[i + 1] * ds[i + 1].ln();
+                a[2] += ws[i + 2] * ds[i + 2].ln();
+                a[3] += ws[i + 3] * ds[i + 3].ln();
+                i += 4;
+            }
+            let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+            while i < ds.len() {
+                s += ws[i] * ds[i].ln();
+                i += 1;
+            }
+            s
+        };
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 15))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_sum = &chunk_sum;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .zip(weights.chunks(chunk))
+                .map(|(ds, ws)| scope.spawn(move || chunk_sum(ds, ws)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("gmean_weighted worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+    };
     (weighted_log_sum / total_w).exp()
 }
 
