@@ -37217,6 +37217,13 @@ pub fn expectile(data: &[f64], alpha: f64) -> f64 {
 ///
 /// # Returns
 /// Estimated differential entropy, or NaN for insufficient data.
+/// When `true`, [`differential_entropy`] folds its Vasicek spacing-log sum serially (the ORIG
+/// behaviour); default `false` fans the compute-bound `ln` reduction across cores for large inputs.
+/// Byte-identical below the gate. `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static DIFFERENTIAL_ENTROPY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn differential_entropy(
     values: &[f64],
     window_length: Option<usize>,
@@ -37242,18 +37249,56 @@ pub fn differential_entropy(
     let mut sorted = filtered;
     sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
-    // Vasicek spacing estimator
-    let mut sum_log = 0.0;
+    // Vasicek spacing estimator: Σ ln(scale·(sorted[i+m] − sorted[i−m])). Each term is an INDEPENDENT
+    // heavy `ln` (a transcendental) over the already-sorted array, so the loop is compute-bound —
+    // fan the sum across cores (chunked over i, partials merged). BYTE-IDENTICAL below the gate (the
+    // single-chunk fold IS the original loop); above it the finite terms reassociate within per-op ULP
+    // tolerance, and the `spacing<=0` → NEG_INFINITY case is order-independent (any −∞ ⇒ −∞ total).
+    // `DIFFERENTIAL_ENTROPY_FORCE_SERIAL` restores the serial fold for A/B.
     let scale = n as f64 / (2.0 * m as f64);
-
-    for i in m..(n - m) {
-        let spacing = sorted[i + m] - sorted[i - m];
-        if spacing > 0.0 {
-            sum_log += (scale * spacing).ln();
-        } else {
-            sum_log += f64::NEG_INFINITY;
+    let (lo, hi) = (m, n - m);
+    let count = hi - lo;
+    let vasicek_chunk = |i0: usize, i1: usize| -> f64 {
+        let mut s = 0.0f64;
+        for i in i0..i1 {
+            let spacing = sorted[i + m] - sorted[i - m];
+            if spacing > 0.0 {
+                s += (scale * spacing).ln();
+            } else {
+                s += f64::NEG_INFINITY;
+            }
         }
-    }
+        s
+    };
+    let sum_log = if DIFFERENTIAL_ENTROPY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || count < (1 << 16)
+    {
+        vasicek_chunk(lo, hi)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(count / (1 << 14))
+            .max(1);
+        let chunk = count.div_ceil(nthreads);
+        let vasicek_chunk = &vasicek_chunk;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let i0 = lo + t * chunk;
+                    if i0 >= hi {
+                        return None;
+                    }
+                    let i1 = (i0 + chunk).min(hi);
+                    Some(scope.spawn(move || vasicek_chunk(i0, i1)))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("differential_entropy worker panicked"))
+                .collect()
+        });
+        parts.into_iter().sum()
+    };
 
     let h = sum_log / (n - 2 * m) as f64;
 
