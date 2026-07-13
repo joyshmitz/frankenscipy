@@ -33078,6 +33078,14 @@ pub struct DescribeResult {
 pub static DESCRIBE_FUSE_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`describe`] folds its fused Σ/min/max pass serially (the ORIG behaviour); default
+/// `false` fans it across cores for huge inputs. min/max are byte-identical either way (associative
+/// selections); the Σ is byte-identical below the gate and within per-op ULP tolerance above it.
+/// `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static DESCRIBE_REDUCE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute several descriptive statistics of a data set.
 ///
 /// Matches `scipy.stats.describe(a)`.
@@ -33103,6 +33111,26 @@ pub fn describe(data: &[f64]) -> DescribeResult {
     // traversal instead of three (saves two full memory passes at large n). BYTE-IDENTICAL:
     // Σ is the same left-to-right fold from 0.0 as `iter().sum()`, and the NaN-aware min/max
     // are order-independent comparisons — interleaving them per element changes nothing.
+    // Fused NaN-aware (Σ, min, max) reducer over a chunk, plus its associative merge. For huge inputs
+    // the pass fans across cores: min/max are order-independent selections (BYTE-IDENTICAL to the serial
+    // fold), and the Σ reassociates within per-op ULP tolerance above the gate (byte-identical below,
+    // where the single-chunk reduce IS the original fused loop). `DESCRIBE_REDUCE_FORCE_SERIAL` restores.
+    let chunk_reduce = |ds: &[f64]| -> (f64, f64, f64) {
+        let mut sum = 0.0f64;
+        let mut mn = f64::INFINITY;
+        let mut mx = f64::NEG_INFINITY;
+        for &x in ds {
+            sum += x;
+            mn = if mn.is_nan() || x.is_nan() { f64::NAN } else { mn.min(x) };
+            mx = if mx.is_nan() || x.is_nan() { f64::NAN } else { mx.max(x) };
+        }
+        (sum, mn, mx)
+    };
+    let merge = |a: (f64, f64, f64), b: (f64, f64, f64)| -> (f64, f64, f64) {
+        let mn = if a.1.is_nan() || b.1.is_nan() { f64::NAN } else { a.1.min(b.1) };
+        let mx = if a.2.is_nan() || b.2.is_nan() { f64::NAN } else { a.2.max(b.2) };
+        (a.0 + b.0, mn, mx)
+    };
     let (sum, min_val, max_val) = if DESCRIBE_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
     {
         let sum = data.iter().sum::<f64>();
@@ -33121,24 +33149,29 @@ pub fn describe(data: &[f64]) -> DescribeResult {
             }
         });
         (sum, min_val, max_val)
+    } else if DESCRIBE_REDUCE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < (1 << 22)
+    {
+        chunk_reduce(data)
     } else {
-        let mut sum = 0.0f64;
-        let mut min_val = f64::INFINITY;
-        let mut max_val = f64::NEG_INFINITY;
-        for &x in data {
-            sum += x;
-            min_val = if min_val.is_nan() || x.is_nan() {
-                f64::NAN
-            } else {
-                min_val.min(x)
-            };
-            max_val = if max_val.is_nan() || x.is_nan() {
-                f64::NAN
-            } else {
-                max_val.max(x)
-            };
-        }
-        (sum, min_val, max_val)
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 16))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_reduce = &chunk_reduce;
+        let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || chunk_reduce(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("describe reduce worker panicked"))
+                .collect()
+        });
+        parts
+            .into_iter()
+            .fold((0.0f64, f64::INFINITY, f64::NEG_INFINITY), merge)
     };
     let mean_val = sum / nf;
 
