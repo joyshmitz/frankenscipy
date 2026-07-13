@@ -52272,6 +52272,13 @@ where
 pub static BINNED_MEDIAN_FORCE_SORT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`binned_statistic`]'s median/std path computes its per-bin statistics serially (the
+/// ORIG behaviour); default `false` fans the per-bin map across cores over the independent bins.
+/// Byte-identical either way. `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static BINNED_STAT_MAP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Per-bin median for `binned_statistic{,_2d,_dd}`. Quickselects the one or two central order
 /// statistics of a copy in O(bin) instead of a full O(bin log bin) sort. BYTE-IDENTICAL:
 /// `median_in_place` reads the same central ranks (even ⇒ mean of ranks n/2-1 and n/2; odd ⇒
@@ -52363,42 +52370,69 @@ pub fn binned_statistic(
         bin_values[bin.min(bins - 1)].push(vi);
     }
 
-    let stats: Vec<f64> = bin_values
-        .iter()
-        .map(|bv| {
-            if bv.is_empty() {
-                return f64::NAN;
-            }
-            match statistic {
-                "mean" => bv.iter().sum::<f64>() / bv.len() as f64,
-                "sum" => bv.iter().sum(),
-                "count" => bv.len() as f64,
-                "min" => bv.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+    // Per-bin statistic. For the median/std path each bin's value (a quickselect/reduction over its own
+    // list) is INDEPENDENT and dominates the O(n) materialization above, so fan the per-bin map across
+    // cores (chunked over bins, written to ordered slots). BYTE-IDENTICAL: each bin's statistic is
+    // deterministic and slot order is preserved — no cross-bin reassociation.
+    let bin_stat = |bv: &[f64]| -> f64 {
+        if bv.is_empty() {
+            return f64::NAN;
+        }
+        match statistic {
+            "mean" => bv.iter().sum::<f64>() / bv.len() as f64,
+            "sum" => bv.iter().sum(),
+            "count" => bv.len() as f64,
+            "min" => bv.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.min(b)
+                }
+            }),
+            "max" => bv
+                .iter()
+                .cloned()
+                .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
                     if a.is_nan() || b.is_nan() {
                         f64::NAN
                     } else {
-                        a.min(b)
+                        a.max(b)
                     }
                 }),
-                "max" => bv
-                    .iter()
-                    .cloned()
-                    .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-                        if a.is_nan() || b.is_nan() {
-                            f64::NAN
-                        } else {
-                            a.max(b)
-                        }
-                    }),
-                "median" => bin_median(bv),
-                "std" => {
-                    let mean = bv.iter().sum::<f64>() / bv.len() as f64;
-                    (bv.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / bv.len() as f64).sqrt()
-                }
-                _ => bv.iter().sum::<f64>() / bv.len() as f64,
+            "median" => bin_median(bv),
+            "std" => {
+                let mean = bv.iter().sum::<f64>() / bv.len() as f64;
+                (bv.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / bv.len() as f64).sqrt()
             }
-        })
-        .collect();
+            _ => bv.iter().sum::<f64>() / bv.len() as f64,
+        }
+    };
+    let stats: Vec<f64> = if BINNED_STAT_MAP_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || bins < 2
+        || x.len() < (1 << 18)
+    {
+        bin_values.iter().map(|bv| bin_stat(bv)).collect()
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(bins)
+            .max(1);
+        let chunk = bins.div_ceil(nthreads);
+        let bin_stat = &bin_stat;
+        let mut stats = vec![0.0f64; bins];
+        std::thread::scope(|scope| {
+            for (block, bvblock) in stats.chunks_mut(chunk).zip(bin_values.chunks(chunk)) {
+                scope.spawn(move || {
+                    for (slot, bv) in block.iter_mut().zip(bvblock) {
+                        *slot = bin_stat(bv);
+                    }
+                });
+            }
+        });
+        stats
+    };
 
     (stats, bin_edges)
 }
