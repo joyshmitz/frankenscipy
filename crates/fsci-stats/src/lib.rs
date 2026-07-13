@@ -26558,18 +26558,51 @@ fn circular_sincos_sums(data: &[f64]) -> (f64, f64) {
     if CIRC_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         let sin_sum: f64 = data.iter().map(|&x| x.sin()).sum();
         let cos_sum: f64 = data.iter().map(|&x| x.cos()).sum();
-        (sin_sum, cos_sum)
-    } else {
-        let sin_sum: f64 = par_continuous_map(data, |x| x.sin()).iter().sum();
-        let cos_sum: f64 = par_continuous_map(data, |x| x.cos()).iter().sum();
-        (sin_sum, cos_sum)
+        return (sin_sum, cos_sum);
     }
+    // Each element needs BOTH `x.sin()` and `x.cos()`. Compute Σsin and Σcos in ONE pass over `data`
+    // instead of the previous two separate `par_continuous_map` passes (two data reads, two n-length
+    // Vecs, two spawns). Serial below the gate (byte-identical to the two separate serial folds — each
+    // sum accumulates only its own terms in index order); fanned across cores above it (no Vec).
+    // WITHIN per-op ULP tolerance above the gate (parallel reorder).
+    let n = data.len();
+    let chunk_sums = |ds: &[f64]| -> (f64, f64) {
+        let mut ss = 0.0f64;
+        let mut cs = 0.0f64;
+        for &x in ds {
+            ss += x.sin();
+            cs += x.cos();
+        }
+        (ss, cs)
+    };
+    if n < (1 << 15) {
+        return chunk_sums(data);
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 14))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_sums = &chunk_sums;
+    let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|ds| scope.spawn(move || chunk_sums(ds)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("circ sincos worker panicked"))
+            .collect()
+    });
+    parts
+        .into_iter()
+        .fold((0.0f64, 0.0f64), |(as_, ac), (cs, cc)| (as_ + cs, ac + cc))
 }
 
-/// When `true`, [`circmean`]/[`circvar`]/[`circstd`] compute their `Σsin`/`Σcos` with the fused serial
-/// `map(...).sum()` (the ORIG behaviour). When `false` (default), the compute-bound `sin`/`cos` maps
-/// fan across cores via the order-preserving `par_continuous_map` and the sums stay in index order.
-/// Byte-identical either way. For the same-binary A/B perf gate.
+/// When `true`, the circular `Σsin`/`Σcos` reductions ([`circmean`]/[`circvar`]/[`circstd`] and the
+/// shared rayleigh/von-Mises paths) use the exact serial `map(...).sum()` folds. When `false`
+/// (default), [`circmean`]/[`circvar`]/[`circstd`] compute both sums in ONE pass — serial below the
+/// gate (byte-identical) and fanned across cores above it (within per-op ULP tolerance); the
+/// rayleigh/von-Mises paths keep the order-preserving `par_continuous_map` (byte-identical). A/B gate.
 #[doc(hidden)]
 pub static CIRC_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
