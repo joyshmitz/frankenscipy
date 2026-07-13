@@ -38067,7 +38067,14 @@ fn ks_stirling_poly(z: f64) -> f64 {
     acc
 }
 
-pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitResult {
+/// When `true`, [`ks_1samp`] computes its KS statistic serially (the ORIG behaviour); default `false`
+/// fans the independent per-point CDF evaluations + max reduction across cores for large inputs.
+/// Byte-identical. A/B knob.
+#[doc(hidden)]
+pub static KS_1SAMP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64 + Sync) -> GoodnessOfFitResult {
     let n = data.len();
     if n == 0 || data.iter().any(|v| v.is_nan()) {
         return GoodnessOfFitResult {
@@ -38080,18 +38087,58 @@ pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitRes
     let mut sorted = data.to_vec();
     sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
-    // D = max_i { max(|i/n - F(x_i)|, |(i-1)/n - F(x_i)|) }
-    let mut d_stat = 0.0_f64;
-    for (i, &x) in sorted.iter().enumerate() {
+    // D = max_i { max(|i/n - F(x_i)|, |(i-1)/n - F(x_i)|) }. Each point's `F(x_i)` (a potentially heavy
+    // reference CDF, e.g. erf/gammainc) is INDEPENDENT, and the outer `max` is associative/commutative
+    // incl NaN (any-NaN ⇒ NaN, matching the serial guard) with no signed-zero issue (|·| ≥ +0.0), so a
+    // chunk-max-then-merge is BYTE-IDENTICAL to the sequential fold. Fan across cores for large n.
+    let nan_max = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) };
+    let point_max = |i: usize, x: f64| -> f64 {
         let f_x = cdf_func(x);
         let d_plus = ((i + 1) as f64 / nf - f_x).abs();
         let d_minus = (f_x - i as f64 / nf).abs();
-        d_stat = if d_stat.is_nan() || d_plus.is_nan() || d_minus.is_nan() {
-            f64::NAN
-        } else {
-            d_stat.max(d_plus).max(d_minus)
-        };
-    }
+        nan_max(d_plus, d_minus)
+    };
+    const KS_MIN_PER_THREAD: usize = 400_000;
+    let nthreads = if KS_1SAMP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 2 * KS_MIN_PER_THREAD
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / KS_MIN_PER_THREAD)
+            .max(1)
+    };
+    let d_stat = if nthreads <= 1 {
+        sorted
+            .iter()
+            .enumerate()
+            .fold(0.0_f64, |d, (i, &x)| nan_max(d, point_max(i, x)))
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let point_max = &point_max;
+        let nan_max = &nan_max;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            sorted
+                .chunks(chunk)
+                .enumerate()
+                .map(|(c, block)| {
+                    let base = c * chunk;
+                    scope.spawn(move || {
+                        block
+                            .iter()
+                            .enumerate()
+                            .fold(0.0_f64, |d, (li, &x)| nan_max(d, point_max(base + li, x)))
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("ks_1samp worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0_f64, |a, b| nan_max(a, b))
+    };
 
     // scipy's two-sided ks_1samp uses the EXACT KS distribution for n ≤ 10000
     // (method='auto'); only the n>140 Pelz-Good body falls back to the
