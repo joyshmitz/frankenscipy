@@ -47532,18 +47532,21 @@ pub fn kulsinski_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
+    // Kulsinski needs the disagreement count d = c_tf + c_ft and the both-positive
+    // count c_tt. Two branchless counters replace the branch-mispredicting 3-way
+    // match (misprediction-bound on mixed binary data) and vectorize. Byte-identical:
+    // counts are exact in f64 and the same num/denom arithmetic is kept.
     let n = u.len();
-    let (mut c_tt, mut c_tf, mut c_ft) = (0usize, 0usize, 0usize);
+    let mut d = 0usize;
+    let mut c_tt = 0usize;
     for (&a, &b) in u.iter().zip(v.iter()) {
-        match (a > 0.0, b > 0.0) {
-            (true, true) => c_tt += 1,
-            (true, false) => c_tf += 1,
-            (false, true) => c_ft += 1,
-            _ => {}
-        }
+        let ap = a > 0.0;
+        let bp = b > 0.0;
+        d += (ap != bp) as usize;
+        c_tt += (ap & bp) as usize;
     }
-    let num = (c_tf + c_ft) as f64 - c_tt as f64 + n as f64;
-    let denom = (c_tf + c_ft) as f64 + n as f64;
+    let num = d as f64 - c_tt as f64 + n as f64;
+    let denom = d as f64 + n as f64;
     if denom == 0.0 { 0.0 } else { num / denom }
 }
 
