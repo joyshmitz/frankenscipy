@@ -29292,6 +29292,13 @@ pub fn dunnett_alternative(
 /// Levene's test for equal variances using median-centered absolute deviations.
 ///
 /// Matches the robust default behavior of `scipy.stats.levene(*groups)`.
+/// When `true`, [`levene`] builds its per-group `|x − median|` deviation vectors serially (the ORIG
+/// behaviour); default `false` fans the median+deviation construction across cores over the independent
+/// groups. Byte-identical either way. `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static LEVENE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn levene(groups: &[&[f64]]) -> VarianceTestResult {
     if groups.len() < 2
         || groups.iter().any(|group| group.len() < 2)
@@ -29300,13 +29307,39 @@ pub fn levene(groups: &[&[f64]]) -> VarianceTestResult {
         return invalid_variance_test_result();
     }
 
-    let deviations: Vec<Vec<f64>> = groups
-        .iter()
-        .map(|group| {
-            let center = sample_median(group);
-            group.iter().map(|&x| (x - center).abs()).collect()
+    // Each group's deviation vector is `|x − median(group)|`; the per-group `median` is an independent,
+    // sort/select-dominated O(n) reduction that dominates levene (the downstream SS scans are O(n)).
+    // Groups are INDEPENDENT, so build the deviations across cores (chunked over groups, collected in
+    // group order). BYTE-IDENTICAL to the serial map: each group's `center`/`|x−center|` is unchanged;
+    // only the owning core differs. Gated on total work / group count; `LEVENE_FORCE_SERIAL` for A/B.
+    let build = |group: &[f64]| -> Vec<f64> {
+        let center = sample_median(group);
+        group.iter().map(|&x| (x - center).abs()).collect()
+    };
+    let total: usize = groups.iter().map(|g| g.len()).sum();
+    let deviations: Vec<Vec<f64>> = if LEVENE_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || total < (1 << 18)
+        || groups.len() < 2
+    {
+        groups.iter().map(|group| build(group)).collect()
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(groups.len());
+        let chunk = groups.len().div_ceil(nthreads);
+        let build = &build;
+        std::thread::scope(|scope| {
+            groups
+                .chunks(chunk)
+                .map(|gc| scope.spawn(move || gc.iter().map(|g| build(g)).collect::<Vec<Vec<f64>>>()))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flat_map(|h| h.join().expect("levene worker panicked"))
+                .collect()
         })
-        .collect();
+    };
 
     let k = deviations.len() as f64;
     let n_total: usize = deviations.iter().map(Vec::len).sum();
