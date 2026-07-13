@@ -26871,18 +26871,45 @@ pub fn vtest(samples: &[f64], mu: f64) -> (f64, f64) {
     let nf = n as f64;
 
     // Σcos(x−mu) and Σsin(x−mu): two heavy transcendentals/element (the circular sweet spot), everything
-    // else O(1). Parallelize ONLY the maps via the order-preserving `par_continuous_map`, keep the sums in
-    // index order → BYTE-IDENTICAL to the serial `map(cos).sum()`/`map(sin).sum()` (same left-fold from 0.0).
-    // Shares `CIRC_FORCE_SERIAL` with the circmean/rayleightest family (same-binary A/B). The last serial
-    // member of the directional sin/cos-sum family.
+    // else O(1). Compute both sums in ONE pass over `samples` (vs two separate `par_continuous_map`
+    // passes = two data reads, two n-Vecs, two spawns): serial below the gate (BYTE-IDENTICAL to the two
+    // separate serial folds — each sum accumulates only its own terms in index order) and fanned across
+    // cores above 1<<15 (no Vec, within per-op ULP tolerance). Shares `CIRC_FORCE_SERIAL` (exact serial).
+    let chunk_sums = |ss: &[f64]| -> (f64, f64) {
+        let mut sc = 0.0f64;
+        let mut sn = 0.0f64;
+        for &x in ss {
+            sc += (x - mu).cos();
+            sn += (x - mu).sin();
+        }
+        (sc, sn)
+    };
     let (sum_cos, sum_sin) = if CIRC_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         let sum_cos: f64 = samples.iter().map(|&x| (x - mu).cos()).sum();
         let sum_sin: f64 = samples.iter().map(|&x| (x - mu).sin()).sum();
         (sum_cos, sum_sin)
+    } else if n < (1 << 15) {
+        chunk_sums(samples)
     } else {
-        let sum_cos: f64 = par_continuous_map(samples, |x| (x - mu).cos()).iter().sum();
-        let sum_sin: f64 = par_continuous_map(samples, |x| (x - mu).sin()).iter().sum();
-        (sum_cos, sum_sin)
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 14))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_sums = &chunk_sums;
+        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+            samples
+                .chunks(chunk)
+                .map(|ss| scope.spawn(move || chunk_sums(ss)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("vtest worker panicked"))
+                .collect()
+        });
+        parts
+            .into_iter()
+            .fold((0.0f64, 0.0f64), |(ac, an), (cc, cn)| (ac + cc, an + cn))
     };
 
     let r_bar = ((sum_cos * sum_cos + sum_sin * sum_sin) / (nf * nf)).sqrt();
