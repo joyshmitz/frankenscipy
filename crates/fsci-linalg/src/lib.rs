@@ -16647,6 +16647,13 @@ pub fn max_abs(a: &[Vec<f64>]) -> f64 {
     })
 }
 
+/// When `true`, [`vector_norm`]'s general-`ord` branch sums serially (the ORIG exact 1-accumulator
+/// fold); default `false` fans a 4-way-unrolled chunk sum across cores for large inputs. WITHIN
+/// per-op ULP tolerance (parallel reorder). `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static VECTOR_NORM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the 1-norm, infinity-norm, or Frobenius norm of a vector.
 pub fn vector_norm(v: &[f64], ord: f64) -> f64 {
     if v.is_empty() {
@@ -16677,10 +16684,53 @@ pub fn vector_norm(v: &[f64], ord: f64) -> f64 {
     } else if ord == 2.0 {
         vnorm(v)
     } else {
-        v.iter()
-            .map(|&x| x.abs().powf(ord))
-            .sum::<f64>()
-            .powf(1.0 / ord)
+        // `|x|^ord` per element is a `powf` (very heavy transcendental) → strongly compute-bound.
+        // Fan the sum across cores (chunked, 4-way-unrolled) for large inputs, mirroring the stats
+        // `minkowski_distance` parallel sum; gate at 1<<16 (powf pays very early). WITHIN per-op ULP
+        // tolerance. `VECTOR_NORM_FORCE_SERIAL` restores the exact serial fold. The outer `.powf(1/ord)`
+        // is unchanged.
+        let n = v.len();
+        let chunk_sum = |vs: &[f64]| -> f64 {
+            let mut a = [0.0f64; 4];
+            let mut i = 0;
+            while i + 4 <= vs.len() {
+                a[0] += vs[i].abs().powf(ord);
+                a[1] += vs[i + 1].abs().powf(ord);
+                a[2] += vs[i + 2].abs().powf(ord);
+                a[3] += vs[i + 3].abs().powf(ord);
+                i += 4;
+            }
+            let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+            while i < vs.len() {
+                s += vs[i].abs().powf(ord);
+                i += 1;
+            }
+            s
+        };
+        let total = if VECTOR_NORM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+            || n < (1 << 16)
+        {
+            // Exact original serial fold — byte-identical for small inputs (and any bit-exact test).
+            v.iter().map(|&x| x.abs().powf(ord)).sum::<f64>()
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 15))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_sum = &chunk_sum;
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                v.chunks(chunk)
+                    .map(|vs| scope.spawn(move || chunk_sum(vs)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("vector_norm worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+        };
+        total.powf(1.0 / ord)
     }
 }
 
