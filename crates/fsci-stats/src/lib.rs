@@ -27777,9 +27777,19 @@ pub fn cosine_distance(u: &[f64], v: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    let dot: f64 = u.iter().zip(v).map(|(&ui, &vi)| ui * vi).sum();
-    let norm_u: f64 = u.iter().map(|&x| x * x).sum::<f64>().sqrt();
-    let norm_v: f64 = v.iter().map(|&x| x * x).sum::<f64>().sqrt();
+    // Fuse the three independent reductions (dot, Σu², Σv²) into ONE pass so the
+    // two arrays are read once instead of three times (bandwidth-bound for large n).
+    // Byte-identical: each accumulator still sees additions in index order 0..n.
+    let mut dot = 0.0f64;
+    let mut sq_u = 0.0f64;
+    let mut sq_v = 0.0f64;
+    for (&ui, &vi) in u.iter().zip(v) {
+        dot += ui * vi;
+        sq_u += ui * ui;
+        sq_v += vi * vi;
+    }
+    let norm_u = sq_u.sqrt();
+    let norm_v = sq_v.sqrt();
 
     if norm_u == 0.0 || norm_v == 0.0 {
         return f64::NAN;
