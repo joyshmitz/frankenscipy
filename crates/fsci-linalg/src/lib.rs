@@ -20265,7 +20265,50 @@ pub fn vdot(a: &[f64], b: &[f64]) -> f64 {
 
 /// Vector L2 norm.
 pub fn vnorm(v: &[f64]) -> f64 {
-    v.iter().map(|&x| x * x).sum::<f64>().sqrt()
+    // Σx² then sqrt. `vnorm` is `vector_norm`'s 2.0 branch — the serial straggler among its otherwise
+    // parallel branches (L1/±inf/general-ord). The Σx² is bandwidth-light (a multiply), so parallelize
+    // only for large inputs (gate 1<<20, matching the sibling L1 branch), reusing VECTOR_NORM_FORCE_SERIAL.
+    // Below the gate / forced serial, keep the EXACT original `.map(x*x).sum()` fold (BYTE-IDENTICAL);
+    // only the large-n parallel path reorders (~1e-15 ULP, same 4-way-unrolled chunk sum as the L1 path).
+    let n = v.len();
+    let sumsq = if VECTOR_NORM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 20) {
+        v.iter().map(|&x| x * x).sum::<f64>()
+    } else {
+        let chunk_sum = |vs: &[f64]| -> f64 {
+            let mut a = [0.0f64; 4];
+            let mut i = 0;
+            while i + 4 <= vs.len() {
+                a[0] += vs[i] * vs[i];
+                a[1] += vs[i + 1] * vs[i + 1];
+                a[2] += vs[i + 2] * vs[i + 2];
+                a[3] += vs[i + 3] * vs[i + 3];
+                i += 4;
+            }
+            let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+            while i < vs.len() {
+                s += vs[i] * vs[i];
+                i += 1;
+            }
+            s
+        };
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 16))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_sum = &chunk_sum;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            v.chunks(chunk)
+                .map(|vs| scope.spawn(move || chunk_sum(vs)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("vnorm worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+    };
+    sumsq.sqrt()
 }
 
 #[cfg(test)]
