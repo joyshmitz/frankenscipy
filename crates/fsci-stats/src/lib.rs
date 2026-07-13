@@ -48360,19 +48360,40 @@ pub fn logsumexp(x: &[f64]) -> f64 {
     if !max_x.is_finite() {
         return max_x;
     }
-    // The per-element `exp` is the dominant cost. Materialise it with an order-preserving parallel map
-    // then sum SERIALLY over that Vec in index order — BYTE-IDENTICAL to the fused `map(exp).sum()`
-    // (same terms, same summation order). Only for large inputs (≥2 threads at 700k/thread); below
-    // that the fused serial path avoids the exp_x allocation. `LOGSUMEXP_FORCE_SERIAL` restores it.
-    const SOFTMAX_MIN_PER_THREAD: usize = 700_000;
-    let sum_exp: f64 = if !LOGSUMEXP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        && x.len() >= 2 * SOFTMAX_MIN_PER_THREAD
+    // `Σ exp(xᵢ − max_x)` — the per-element `exp` is a heavy transcendental (compute-bound). Sum it in
+    // per-thread partials with NO intermediate Vec (the previous path materialised a full exp Vec then
+    // summed it SERIALLY — an n·8-byte alloc + a serial reduction that dominated at large n). Below the
+    // gate (and under `LOGSUMEXP_FORCE_SERIAL`) keep the EXACT serial `map(exp).sum()` fold (byte-
+    // identical); above 1<<16 fan the sum across cores, within per-op ULP tolerance (parallel reorder).
+    let n = x.len();
+    let chunk_sum = |xs: &[f64]| -> f64 {
+        let mut s = 0.0f64;
+        for &xi in xs {
+            s += (xi - max_x).exp();
+        }
+        s
+    };
+    let sum_exp: f64 = if LOGSUMEXP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < (1 << 16)
     {
-        par_continuous_map_min(x, SOFTMAX_MIN_PER_THREAD, |xi| (xi - max_x).exp())
-            .iter()
-            .sum()
-    } else {
         x.iter().map(|&xi| (xi - max_x).exp()).sum()
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 15))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_sum = &chunk_sum;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            x.chunks(chunk)
+                .map(|xs| scope.spawn(move || chunk_sum(xs)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("logsumexp worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0f64, |a, b| a + b)
     };
     max_x + sum_exp.ln()
 }
