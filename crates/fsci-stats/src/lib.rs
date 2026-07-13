@@ -26400,6 +26400,62 @@ pub fn gstd(data: &[f64]) -> f64 {
 pub static HMEAN_FUSE_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// `Σ(1/xᵢ)` for the harmonic mean, fused with the validity (`NaN`/negative) and zero checks and —
+/// for large inputs — split across threads. Each worker folds its chunk's `1/x` in the same
+/// left-to-right order and OR-combines the two flags; the parts are summed in chunk order. Mirrors
+/// [`gmean_log_sum`]'s work-gated `thread::scope` split (`1/x` is a light-ish division, so cap
+/// workers at >=64k elements each). Returns `(invalid, has_zero, inv_sum)`. ~1e-15 reassociation
+/// vs the serial fold above the gate; BYTE-IDENTICAL at/below it (the single-chunk fold IS the
+/// original fused loop).
+fn hmean_inv_sum(data: &[f64]) -> (bool, bool, f64) {
+    let chunk_fold = |chunk: &[f64]| -> (bool, bool, f64) {
+        let mut invalid = false;
+        let mut has_zero = false;
+        let mut inv_sum = 0.0f64;
+        for &x in chunk {
+            if x.is_nan() || x < 0.0 {
+                invalid = true;
+            } else if x == 0.0 {
+                has_zero = true;
+            } else {
+                inv_sum += 1.0 / x;
+            }
+        }
+        (invalid, has_zero, inv_sum)
+    };
+    let n = data.len();
+    // Short-circuit small inputs BEFORE the `available_parallelism()` syscall — `hmean` is called
+    // once per line by the axis reducer over many short lines, where that per-call `sched_getaffinity`
+    // would dominate the (cheap) division work. The serial fold is what we'd take here anyway.
+    if n < (1 << 16) {
+        return chunk_fold(data);
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let threads = cores.min((n / (1 << 16)).max(1)).min(16);
+    if threads <= 1 {
+        return chunk_fold(data);
+    }
+    let chunk = n.div_ceil(threads);
+    let parts: Vec<(bool, bool, f64)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = data
+            .chunks(chunk)
+            .map(|c| scope.spawn(move || chunk_fold(c)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut invalid = false;
+    let mut has_zero = false;
+    let mut inv_sum = 0.0f64;
+    for (inv, hz, s) in parts {
+        invalid |= inv;
+        has_zero |= hz;
+        inv_sum += s;
+    }
+    (invalid, has_zero, inv_sum)
+}
+
 /// Compute the harmonic mean.
 ///
 /// Matches `scipy.stats.hmean`.
@@ -26423,22 +26479,12 @@ pub fn hmean(data: &[f64]) -> f64 {
         };
     }
     // The validity check (`any(nan || x<0)`), the zero check (`contains(0)`) and Σ(1/x) are
-    // three independent traversals; fuse them into ONE. BYTE-IDENTICAL: for valid input (no
+    // three independent traversals; fuse them into ONE (and, for huge inputs, split across
+    // threads — see `hmean_inv_sum`). BYTE-IDENTICAL below the parallel gate: for valid input (no
     // NaN/negative/zero) every element takes the `else` arm, so `inv_sum` is the same left-to-
     // right fold of `1/x` from 0.0 as `iter().map(1/x).sum()`; a NaN/negative returns NaN and a
     // zero returns 0.0 with the same precedence as the two separate early-return checks.
-    let mut invalid = false;
-    let mut has_zero = false;
-    let mut inv_sum = 0.0f64;
-    for &x in data {
-        if x.is_nan() || x < 0.0 {
-            invalid = true;
-        } else if x == 0.0 {
-            has_zero = true;
-        } else {
-            inv_sum += 1.0 / x;
-        }
-    }
+    let (invalid, has_zero, inv_sum) = hmean_inv_sum(data);
     if invalid {
         return f64::NAN;
     }
