@@ -51298,6 +51298,13 @@ pub fn cross_cov(x: &[Vec<f64>], y: &[Vec<f64>]) -> Vec<Vec<f64>> {
 pub static CONTINGENCY_SCATTER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`contingency_table`] builds its two label sets sequentially (the ORIG behaviour);
+/// default `false` overlaps the two independent sort/dedup passes on separate threads for large inputs.
+/// Bit-identical either way. `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static CONTINGENCY_SORT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the contingency table from two categorical arrays.
 ///
 /// Returns (table, row_labels, col_labels).
@@ -51306,13 +51313,28 @@ pub fn contingency_table(x: &[usize], y: &[usize]) -> (Vec<Vec<usize>>, Vec<usiz
         return (vec![], vec![], vec![]);
     }
 
-    let mut row_labels: Vec<usize> = x.to_vec();
-    row_labels.sort_unstable();
-    row_labels.dedup();
-
-    let mut col_labels: Vec<usize> = y.to_vec();
-    col_labels.sort_unstable();
-    col_labels.dedup();
+    // `row_labels` (from x) and `col_labels` (from y) are two INDEPENDENT sort+dedup passes; with the
+    // scatter now parallel they are the residual serial cost. Overlap them on separate threads for large
+    // inputs. BIT-IDENTICAL: sort_unstable+dedup is deterministic, so only wall-clock overlaps.
+    // `CONTINGENCY_SORT_FORCE_SERIAL` restores the serial order for A/B.
+    let uniq = |v: &[usize]| -> Vec<usize> {
+        let mut u = v.to_vec();
+        u.sort_unstable();
+        u.dedup();
+        u
+    };
+    let (row_labels, col_labels) = if CONTINGENCY_SORT_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || x.len() < (1 << 16)
+    {
+        (uniq(x), uniq(y))
+    } else {
+        std::thread::scope(|scope| {
+            let h = scope.spawn(|| uniq(y));
+            let rl = uniq(x);
+            (rl, h.join().expect("contingency_table sort worker panicked"))
+        })
+    };
 
     let nr = row_labels.len();
     let nc = col_labels.len();
