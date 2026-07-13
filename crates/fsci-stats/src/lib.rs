@@ -47480,18 +47480,18 @@ pub fn sokalmichener_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    let (mut c_tt, mut c_tf, mut c_ft, mut c_ff) = (0usize, 0usize, 0usize, 0usize);
+    // Only the disagreement count d = c_tf + c_ft matters: with n = |u|,
+    // r = 2d and s = c_tt + c_ff = n − d, so r + s = n + d and the result is
+    // 2d/(n+d). A single branchless disagreement counter vectorizes where the
+    // 4-way match does not. Byte-identical: all counts are exact in f64.
+    let n = u.len();
+    let mut d = 0usize;
     for (&a, &b) in u.iter().zip(v.iter()) {
-        match (a > 0.0, b > 0.0) {
-            (true, true) => c_tt += 1,
-            (true, false) => c_tf += 1,
-            (false, true) => c_ft += 1,
-            (false, false) => c_ff += 1,
-        }
+        d += ((a > 0.0) != (b > 0.0)) as usize;
     }
-    let r = 2.0 * (c_tf + c_ft) as f64;
-    let s = (c_tt + c_ff) as f64;
-    if r + s == 0.0 { 0.0 } else { r / (r + s) }
+    let r = 2.0 * d as f64;
+    let denom = (n + d) as f64;
+    if denom == 0.0 { 0.0 } else { r / denom }
 }
 
 /// Russell-Rao dissimilarity for binary data.
