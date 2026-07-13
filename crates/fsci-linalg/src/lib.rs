@@ -9387,6 +9387,13 @@ pub fn ishermitian(a: &[Vec<f64>], atol: f64, rtol: f64) -> Result<bool, LinalgE
 pub static NORM_INF_FORCE_LEGACY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`norm`]'s 1-norm copies `a` into a `DMatrix` then sums each column (the ORIG path);
+/// default `false` accumulates the column sums in ONE contiguous row-major pass over `a` (no copy).
+/// Byte-identical. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static NORM_ONE_FORCE_LEGACY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute matrix or vector norm.
 ///
 /// Matches `scipy.linalg.norm(a, ord)`.
@@ -9422,11 +9429,25 @@ pub fn norm(a: &[Vec<f64>], kind: NormKind, options: DecompOptions) -> Result<f6
                 .fold(0.0_f64, nan_max)
         }
         NormKind::One => {
-            // 1-norm: max column sum of absolute values
-            let matrix = dmatrix_from_rows(a)?;
-            (0..cols)
-                .map(|j| (0..rows).map(|i| matrix[(i, j)].abs()).sum::<f64>())
-                .fold(0.0_f64, nan_max)
+            // 1-norm: max column sum of absolute values. The ORIG path copied `a` into a DMatrix and
+            // summed each column. Instead accumulate all column sums in ONE contiguous row-major pass
+            // over `a` (no copy; the inner `col_sums += |row|` axpy vectorizes). BYTE-IDENTICAL: each
+            // `col_sums[j]` accumulates i=0..rows in the same order as the per-column serial sum (a NaN
+            // in column j makes `col_sums[j]` NaN, and the NaN-propagating max returns NaN — as before).
+            if NORM_ONE_FORCE_LEGACY.load(std::sync::atomic::Ordering::Relaxed) {
+                let matrix = dmatrix_from_rows(a)?;
+                (0..cols)
+                    .map(|j| (0..rows).map(|i| matrix[(i, j)].abs()).sum::<f64>())
+                    .fold(0.0_f64, nan_max)
+            } else {
+                let mut col_sums = vec![0.0f64; cols];
+                for row in a {
+                    for (cs, &x) in col_sums.iter_mut().zip(row.iter()) {
+                        *cs += x.abs();
+                    }
+                }
+                col_sums.into_iter().fold(0.0_f64, nan_max)
+            }
         }
         NormKind::Inf => {
             // Infinity norm: max row sum of absolute values. The ORIG path copied `a` into a
