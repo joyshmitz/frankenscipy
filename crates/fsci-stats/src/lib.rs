@@ -25405,6 +25405,13 @@ fn gmean_log_sum(data: &[f64]) -> f64 {
     parts.iter().sum()
 }
 
+/// When `true`, [`mean_weighted`] runs its weights finite-check, `Σw` and the weighted-mean numerator
+/// `Σw·x` as three separate passes (the ORIG behaviour); default `false` folds all three into ONE pass
+/// over (data, weights). Byte-identical. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static MEAN_W_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Weighted arithmetic mean.
 ///
 /// Computes the weighted mean: Σ(w·x) / Σw
@@ -25412,14 +25419,34 @@ pub fn mean_weighted(data: &[f64], weights: &[f64]) -> f64 {
     if data.is_empty() || data.len() != weights.len() {
         return f64::NAN;
     }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+    if MEAN_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+            return f64::NAN;
+        }
+        let total_w: f64 = weights.iter().sum();
+        if total_w <= 0.0 {
+            return f64::NAN;
+        }
+        return data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    }
+    // Fuse the weights-validity check, `Σw`, and the numerator `Σw·x` into ONE pass. BYTE-IDENTICAL:
+    // `total_w` and `sum_wx` are the same left-to-right folds from 0.0 over (data,weights) in order,
+    // and a bad weight still returns NaN before the polluted sums are used (same as the early-out).
+    let mut total_w = 0.0f64;
+    let mut sum_wx = 0.0f64;
+    let mut valid = true;
+    for (&x, &w) in data.iter().zip(weights) {
+        valid &= w.is_finite() && w >= 0.0;
+        total_w += w;
+        sum_wx += w * x;
+    }
+    if !valid {
         return f64::NAN;
     }
-    let total_w: f64 = weights.iter().sum();
     if total_w <= 0.0 {
         return f64::NAN;
     }
-    data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w
+    sum_wx / total_w
 }
 
 /// When `true`, [`var_weighted`] runs its weights finite-check, `Σw` and the weighted-mean sum as
