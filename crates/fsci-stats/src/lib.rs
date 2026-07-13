@@ -26360,6 +26360,13 @@ pub fn hmean(data: &[f64]) -> f64 {
     n / inv_sum
 }
 
+/// When `true`, [`hmean_weighted`] runs its five separate traversals (data-validity, weights-validity,
+/// `Σw`, the `x==0 && w>0` zero-check, and `Σ(w/x)`); default `false` folds all five into ONE pass.
+/// Byte-identical. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static HMEAN_W_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the weighted harmonic mean.
 ///
 /// H_w = (Σw) / Σ(w/x)
@@ -26369,22 +26376,52 @@ pub fn hmean_weighted(data: &[f64], weights: &[f64]) -> f64 {
     if data.is_empty() || data.len() != weights.len() {
         return f64::NAN;
     }
-    if data.iter().any(|&x| x.is_nan() || x < 0.0) {
-        return f64::NAN;
-    }
-    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-        return f64::NAN;
-    }
-    let total_w: f64 = weights.iter().sum();
-    if total_w == 0.0 {
-        return f64::NAN;
-    }
-    for (&x, &w) in data.iter().zip(weights) {
-        if x == 0.0 && w > 0.0 {
-            return 0.0;
+    if HMEAN_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        if data.iter().any(|&x| x.is_nan() || x < 0.0) {
+            return f64::NAN;
         }
+        if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+            return f64::NAN;
+        }
+        let total_w: f64 = weights.iter().sum();
+        if total_w == 0.0 {
+            return f64::NAN;
+        }
+        for (&x, &w) in data.iter().zip(weights) {
+            if x == 0.0 && w > 0.0 {
+                return 0.0;
+            }
+        }
+        let weighted_inv_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w / x).sum();
+        return if weighted_inv_sum == 0.0 {
+            f64::INFINITY
+        } else {
+            total_w / weighted_inv_sum
+        };
     }
-    let weighted_inv_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w / x).sum();
+    // Fuse the five independent traversals into ONE pass. BYTE-IDENTICAL: `total_w` and
+    // `weighted_inv_sum` are the same left-to-right folds from 0.0 over (data,weights) in order, and
+    // the flags trigger the same early-returns in the same precedence (data-invalid > weights-invalid
+    // > Σw==0 > x==0&&w>0). A `w/x` from an invalid/zero element poisons `weighted_inv_sum`, but it is
+    // only used once no flag has fired (all x>0), exactly as the original's ordering guaranteed.
+    let mut data_invalid = false;
+    let mut weights_invalid = false;
+    let mut has_zero = false;
+    let mut total_w = 0.0f64;
+    let mut weighted_inv_sum = 0.0f64;
+    for (&x, &w) in data.iter().zip(weights) {
+        data_invalid |= x.is_nan() || x < 0.0;
+        weights_invalid |= !w.is_finite() || w < 0.0;
+        total_w += w;
+        has_zero |= x == 0.0 && w > 0.0;
+        weighted_inv_sum += w / x;
+    }
+    if data_invalid || weights_invalid || total_w == 0.0 {
+        return f64::NAN;
+    }
+    if has_zero {
+        return 0.0;
+    }
     if weighted_inv_sum == 0.0 {
         return f64::INFINITY;
     }
