@@ -51291,6 +51291,13 @@ pub fn cross_cov(x: &[Vec<f64>], y: &[Vec<f64>]) -> Vec<Vec<f64>> {
     cov
 }
 
+/// When `true`, [`contingency_table`] scatters its `(x,y)` pairs into the table with a single serial
+/// pass (the ORIG behaviour); default `false` fans the scatter across cores with privatized per-thread
+/// tables. Bit-identical either way (integer counts). `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static CONTINGENCY_SCATTER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the contingency table from two categorical arrays.
 ///
 /// Returns (table, row_labels, col_labels).
@@ -51309,15 +51316,54 @@ pub fn contingency_table(x: &[usize], y: &[usize]) -> (Vec<Vec<usize>>, Vec<usiz
 
     let nr = row_labels.len();
     let nc = col_labels.len();
-    let mut table = vec![vec![0usize; nc]; nr];
 
-    for (&xi, &yi) in x.iter().zip(y.iter()) {
-        if let Ok(ri) = row_labels.binary_search(&xi)
-            && let Ok(ci) = col_labels.binary_search(&yi)
-        {
-            table[ri][ci] += 1;
+    // Scatter each (x,y) pair into its cell (two binary-search lookups then bump) — this
+    // lookup-per-element scatter dominates. Cells are INTEGER counts, so for large inputs give each
+    // worker a PRIVATE table over its chunk (reading the shared immutable label sets), then sum the
+    // partials. BIT-IDENTICAL (not merely below a gate): each pair maps to the same cell regardless of
+    // owning core, and integer sums are associative/commutative. `CONTINGENCY_SCATTER_FORCE_SERIAL` A/B.
+    let scatter_chunk = |xc: &[usize], yc: &[usize]| -> Vec<Vec<usize>> {
+        let mut t = vec![vec![0usize; nc]; nr];
+        for (&xi, &yi) in xc.iter().zip(yc.iter()) {
+            if let Ok(ri) = row_labels.binary_search(&xi)
+                && let Ok(ci) = col_labels.binary_search(&yi)
+            {
+                t[ri][ci] += 1;
+            }
         }
-    }
+        t
+    };
+    let table = if CONTINGENCY_SCATTER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || x.len() < (1 << 18)
+    {
+        scatter_chunk(x, y)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(x.len() / (1 << 16))
+            .max(1);
+        let chunk = x.len().div_ceil(nthreads);
+        let scatter_chunk = &scatter_chunk;
+        let partials: Vec<Vec<Vec<usize>>> = std::thread::scope(|scope| {
+            x.chunks(chunk)
+                .zip(y.chunks(chunk))
+                .map(|(xc, yc)| scope.spawn(move || scatter_chunk(xc, yc)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("contingency_table worker panicked"))
+                .collect()
+        });
+        let mut table = vec![vec![0usize; nc]; nr];
+        for part in &partials {
+            for (trow, prow) in table.iter_mut().zip(part) {
+                for (t, &p) in trow.iter_mut().zip(prow) {
+                    *t += p;
+                }
+            }
+        }
+        table
+    };
 
     // Return the marginal totals (row sums, col sums) — the standard contingency-table margins —
     // rather than the (internal) unique labels. (Bug fix: previously returned row_labels/col_labels.)
