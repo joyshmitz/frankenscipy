@@ -33262,18 +33262,54 @@ pub fn standardized_moment(data: &[f64], k: u32) -> f64 {
     let n = data.len() as f64;
     let mean_val = data.iter().sum::<f64>() / n;
 
-    let m2: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / n;
+    // m2=Σd² and mk=Σd^k (d=x−mean) both depend only on the mean → FUSE the two passes into one and,
+    // for large inputs, fan it across cores as per-thread (m2, mk) partials. BYTE-IDENTICAL below the
+    // gate: each sum accumulates its own terms in index order (same as the two separate `.map().sum()`),
+    // and the `m2<=0` guard still returns NaN before `mk` is used (mk is computed but discarded on that
+    // path). Above 1<<22 within per-op ULP tolerance. Shares MOMENT_PAR_FORCE_SERIAL.
+    let ki = k as i32;
+    let nn = data.len();
+    let chunk_m = |ds: &[f64]| -> (f64, f64) {
+        let mut s2 = 0.0f64;
+        let mut sk = 0.0f64;
+        for &x in ds {
+            let d = x - mean_val;
+            s2 += d.powi(2);
+            sk += d.powi(ki);
+        }
+        (s2, sk)
+    };
+    let (sum2, sumk) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nn < (1 << 22)
+    {
+        chunk_m(data)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nn / (1 << 16))
+            .max(1);
+        let chunk = nn.div_ceil(nthreads);
+        let chunk_m = &chunk_m;
+        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || chunk_m(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("standardized_moment worker panicked"))
+                .collect()
+        });
+        parts
+            .into_iter()
+            .fold((0.0f64, 0.0f64), |(a2, ak), (c2, ck)| (a2 + c2, ak + ck))
+    };
+    let m2 = sum2 / n;
     if m2 <= 0.0 {
         return f64::NAN;
     }
     let std = m2.sqrt();
-
-    let mk: f64 = data
-        .iter()
-        .map(|&x| (x - mean_val).powi(k as i32))
-        .sum::<f64>()
-        / n;
-    mk / std.powi(k as i32)
+    let mk = sumk / n;
+    mk / std.powi(ki)
 }
 
 /// Compute the n-th k-statistic (unbiased cumulant estimator).
