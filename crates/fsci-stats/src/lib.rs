@@ -27743,6 +27743,63 @@ pub fn bhattacharyya_distance(p: &[f64], q: &[f64]) -> f64 {
     if bc <= 0.0 { f64::INFINITY } else { -bc.ln() }
 }
 
+/// When `true`, [`sqeuclidean_sum`] sums serially (the ORIG exact 1-accumulator fold, byte-
+/// identical to `map(..).sum()`); default `false` fans a 4-way-unrolled chunk sum across cores for
+/// large inputs. WITHIN per-op ULP tolerance (same reordering the parallel `bhattacharyya` sum uses).
+#[doc(hidden)]
+pub static SQEUCLIDEAN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `Σ (uᵢ − vᵢ)²` — the squared-Euclidean sum shared by [`euclidean_distance`] and
+/// [`sqeuclidean_distance`]. Per element is compute-light (one sub + one square), so this is
+/// bandwidth-bound; fan the sum across cores (chunked, 4-way-unrolled) for large inputs.
+/// WITHIN per-op ULP tolerance (mirrors the shipped parallel `bhattacharyya_coefficient` reorder).
+fn sqeuclidean_sum(u: &[f64], v: &[f64]) -> f64 {
+    let n = u.len();
+    if SQEUCLIDEAN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return u.iter().zip(v).map(|(&ui, &vi)| (ui - vi).powi(2)).sum();
+    }
+    let chunk_sum = |us: &[f64], vs: &[f64]| -> f64 {
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= us.len() {
+            a[0] += (us[i] - vs[i]).powi(2);
+            a[1] += (us[i + 1] - vs[i + 1]).powi(2);
+            a[2] += (us[i + 2] - vs[i + 2]).powi(2);
+            a[3] += (us[i + 3] - vs[i + 3]).powi(2);
+            i += 4;
+        }
+        let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+        while i < us.len() {
+            s += (us[i] - vs[i]).powi(2);
+            i += 1;
+        }
+        s
+    };
+    // Bandwidth-light kernel: parallel only pays past ~1M (thread-spawn overhead loses
+    // at 200k, 0.68x; wins 2.2-2.4x at 8-16M). Gate at 1<<20 so no measured size regresses.
+    if n < (1 << 20) {
+        return chunk_sum(u, v);
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_sum = &chunk_sum;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        u.chunks(chunk)
+            .zip(v.chunks(chunk))
+            .map(|(us, vs)| scope.spawn(move || chunk_sum(us, vs)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("sqeuclidean worker panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+}
+
 /// Compute the Euclidean distance between two vectors.
 ///
 /// d(u, v) = sqrt(Σ (u_i - v_i)²)
@@ -27750,11 +27807,7 @@ pub fn euclidean_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    u.iter()
-        .zip(v)
-        .map(|(&ui, &vi)| (ui - vi).powi(2))
-        .sum::<f64>()
-        .sqrt()
+    sqeuclidean_sum(u, v).sqrt()
 }
 
 /// Compute the squared Euclidean distance between two vectors.
@@ -27764,7 +27817,7 @@ pub fn sqeuclidean_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    u.iter().zip(v).map(|(&ui, &vi)| (ui - vi).powi(2)).sum()
+    sqeuclidean_sum(u, v)
 }
 
 /// Compute the cosine distance between two vectors.
