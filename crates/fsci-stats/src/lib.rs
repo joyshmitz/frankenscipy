@@ -44390,6 +44390,13 @@ pub struct Chi2ContingencyResult {
 pub static CROSSTAB_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`crosstab`] scatters its `(a,b)` pairs into the count table with a single serial pass
+/// (the ORIG behaviour); default `false` fans the scatter across cores with privatized per-thread count
+/// tables. Bit-identical either way (integer counts). `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static CROSSTAB_SCATTER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn crosstab(a: &[f64], b: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<Vec<u64>>) {
     if a.is_empty() || a.len() != b.len() {
         return (vec![], vec![], vec![]);
@@ -44423,12 +44430,56 @@ pub fn crosstab(a: &[f64], b: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<Vec<u64>>) {
             .expect("value must be present in its own level set")
     };
 
-    let mut count = vec![vec![0u64; levels_b.len()]; levels_a.len()];
-    for (&ai, &bi) in a.iter().zip(b.iter()) {
-        let i = index_of(&levels_a, ai);
-        let j = index_of(&levels_b, bi);
-        count[i][j] += 1;
-    }
+    // Scatter each (a,b) pair into its cell (two binary-search `index_of` lookups, then bump). This
+    // lookup-per-element scatter dominates crosstab, and the cells are INTEGER counts, so for large
+    // inputs give each worker a PRIVATE count table over its chunk (reading the shared immutable level
+    // sets), then sum the partials. BIT-IDENTICAL (not merely below a gate): each pair maps to the same
+    // cell regardless of the owning core, and integer sums are associative/commutative — no float
+    // reassociation. `CROSSTAB_SCATTER_FORCE_SERIAL` restores the serial scatter for A/B.
+    let (ra, rc) = (levels_a.len(), levels_b.len());
+    let count = if CROSSTAB_SCATTER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || a.len() < (1 << 18)
+    {
+        let mut count = vec![vec![0u64; rc]; ra];
+        for (&ai, &bi) in a.iter().zip(b.iter()) {
+            count[index_of(&levels_a, ai)][index_of(&levels_b, bi)] += 1;
+        }
+        count
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(a.len() / (1 << 16))
+            .max(1);
+        let chunk = a.len().div_ceil(nthreads);
+        let (la, lb, io) = (&levels_a, &levels_b, &index_of);
+        let partials: Vec<Vec<Vec<u64>>> = std::thread::scope(|scope| {
+            a.chunks(chunk)
+                .zip(b.chunks(chunk))
+                .map(|(ac, bc)| {
+                    scope.spawn(move || {
+                        let mut c = vec![vec![0u64; rc]; ra];
+                        for (&ai, &bi) in ac.iter().zip(bc.iter()) {
+                            c[io(la, ai)][io(lb, bi)] += 1;
+                        }
+                        c
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("crosstab scatter worker panicked"))
+                .collect()
+        });
+        let mut count = vec![vec![0u64; rc]; ra];
+        for part in &partials {
+            for (crow, prow) in count.iter_mut().zip(part) {
+                for (c, &p) in crow.iter_mut().zip(prow) {
+                    *c += p;
+                }
+            }
+        }
+        count
+    };
 
     (levels_a, levels_b, count)
 }
