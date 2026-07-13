@@ -35394,16 +35394,48 @@ pub fn percentileofscore(data: &[f64], score: f64, kind: Option<&str>) -> f64 {
             data.iter().filter(|&&x| x <= score).count() as f64,
         )
     } else {
-        let mut l = 0usize;
-        let mut r = 0usize;
-        for &x in data {
-            if x <= score {
-                r += 1;
-                if x < score {
-                    l += 1;
+        // The fused (left, right) count is a byte-identical integer reduction — the counts are
+        // order-independent and partials sum exactly — so fan it across cores for large inputs (each
+        // chunk counts its own (l, r)). The nested-branch count is very cheap and only becomes
+        // memory-bandwidth-bound (i.e. worth spreading across cores) at huge n: measured 0.65x @4M
+        // (thread overhead dominates a cache-resident count) vs 2.64x @16M → gate 1<<23. The serial
+        // nested-branch path (its short-circuit does ~1.5 compares/element) is kept below the gate.
+        let count_chunk = |ds: &[f64]| -> (usize, usize) {
+            let mut l = 0usize;
+            let mut r = 0usize;
+            for &x in ds {
+                if x <= score {
+                    r += 1;
+                    if x < score {
+                        l += 1;
+                    }
                 }
             }
-        }
+            (l, r)
+        };
+        let (l, r) = if data.len() < (1 << 23) {
+            count_chunk(data)
+        } else {
+            let n_len = data.len();
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n_len / (1 << 16))
+                .max(1);
+            let chunk = n_len.div_ceil(nthreads);
+            let count_chunk = &count_chunk;
+            let parts: Vec<(usize, usize)> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || count_chunk(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("percentileofscore worker panicked"))
+                    .collect()
+            });
+            parts
+                .into_iter()
+                .fold((0usize, 0usize), |(al, ar), (cl, cr)| (al + cl, ar + cr))
+        };
         (l as f64, r as f64)
     };
     let plus1: f64 = if left < right { 1.0 } else { 0.0 };
