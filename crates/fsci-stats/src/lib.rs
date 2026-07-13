@@ -25518,11 +25518,42 @@ pub fn cov(x: &[f64], y: &[f64]) -> f64 {
     let n = x.len() as f64;
     let mean_x: f64 = x.iter().sum::<f64>() / n;
     let mean_y: f64 = y.iter().sum::<f64>() / n;
-    x.iter()
-        .zip(y)
-        .map(|(&xi, &yi)| (xi - mean_x) * (yi - mean_y))
-        .sum::<f64>()
-        / (n - 1.0)
+    // Centered cross-product Σ(x−mx)(y−my) — the dominant O(n) reduction (means fixed above). Below the
+    // gate (and under PEARSONR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to `.map().sum()`);
+    // above 1<<22 fan across cores as per-thread partials, within per-op ULP tolerance. Same lever as the
+    // pearsonr/linregress/corrcoef family.
+    let nn = x.len();
+    let chunk_sum = |xs: &[f64], ys: &[f64]| -> f64 {
+        let mut s = 0.0f64;
+        for (&xi, &yi) in xs.iter().zip(ys) {
+            s += (xi - mean_x) * (yi - mean_y);
+        }
+        s
+    };
+    let ssxym = if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nn < (1 << 22)
+    {
+        chunk_sum(x, y)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nn / (1 << 16))
+            .max(1);
+        let chunk = nn.div_ceil(nthreads);
+        let chunk_sum = &chunk_sum;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            x.chunks(chunk)
+                .zip(y.chunks(chunk))
+                .map(|(xs, ys)| scope.spawn(move || chunk_sum(xs, ys)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("cov worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+    };
+    ssxym / (n - 1.0)
 }
 
 /// When `true`, [`cov_weighted`] runs its weights finite-check and the two weighted-mean sums as
