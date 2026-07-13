@@ -9232,6 +9232,13 @@ impl ContinuousDistribution for VonMises {
 // Poisson Distribution (discrete, but commonly needed)
 // ══════════════════════════════════════════════════════════════════════
 
+/// When `true`, the discrete `ppf_many` methods (e.g. [`Poisson::ppf_many`]) evaluate their query
+/// quantiles serially (the ORIG behaviour); default `false` fans the independent per-quantile
+/// CDF-table binary searches across cores for large query sets. Byte-identical. A/B knob.
+#[doc(hidden)]
+pub static DISCRETE_PPF_MANY_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Poisson distribution with rate parameter `mu`.
 ///
 /// Matches `scipy.stats.poisson(mu)`.
@@ -9388,18 +9395,30 @@ impl Poisson {
             acc += pmf[j];
             cdf[j] = acc.min(1.0);
         }
-        qs.iter()
-            .map(|&q| {
-                if q <= 0.0 {
-                    -1.0
-                } else if q >= 1.0 {
-                    f64::INFINITY
-                } else {
-                    let idx = cdf.partition_point(|&c| c < q);
-                    if idx <= k_hi { idx as f64 } else { self.ppf(q) }
-                }
-            })
-            .collect()
+        // Each quantile is an INDEPENDENT `partition_point` binary search into the shared CDF table
+        // (tail overflow falls back to the scalar `ppf`), so fan the query points across cores for
+        // large `qs` via the order-preserving `par_continuous_map_min` — BYTE-IDENTICAL (same integer
+        // index per quantile, same order). Below 800k use the direct serial map (helper fallback has
+        // ~20% overhead at small sizes). `DISCRETE_PPF_MANY_FORCE_SERIAL`.
+        let cdf_ref = &cdf;
+        let this = self;
+        let eval = move |q: f64| -> f64 {
+            if q <= 0.0 {
+                -1.0
+            } else if q >= 1.0 {
+                f64::INFINITY
+            } else {
+                let idx = cdf_ref.partition_point(|&c| c < q);
+                if idx <= k_hi { idx as f64 } else { this.ppf(q) }
+            }
+        };
+        if DISCRETE_PPF_MANY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+            || qs.len() < 800_000
+        {
+            qs.iter().map(|&q| eval(q)).collect()
+        } else {
+            par_continuous_map_min(qs, 400_000, eval)
+        }
     }
 
     /// Probability mass function.
