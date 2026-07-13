@@ -27541,26 +27541,82 @@ fn within_set_l1_pair_sum_sorted(sorted: &[f64]) -> f64 {
 ///
 /// # Returns
 /// Jensen-Shannon divergence value in [0, log(2)] for base e.
+///
+/// When [`JENSENSHANNON_FORCE_SERIAL`] is `true`, the term loop runs serially (the ORIG behaviour);
+/// default `false` materialises the heavy `ln` terms in parallel for large inputs. Byte-identical.
+#[doc(hidden)]
+pub static JENSENSHANNON_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn jensenshannon(p: &[f64], q: &[f64], base: Option<f64>) -> f64 {
     if p.len() != q.len() || p.is_empty() {
         return f64::NAN;
     }
 
     let base = base.unwrap_or(std::f64::consts::E);
+    let n = p.len();
 
-    let m: Vec<f64> = p.iter().zip(q).map(|(&pi, &qi)| (pi + qi) / 2.0).collect();
-
-    let mut d_pm = 0.0;
-    let mut d_qm = 0.0;
-
-    for ((&pi, &qi), &mi) in p.iter().zip(q).zip(&m) {
-        if pi > 0.0 && mi > 0.0 {
-            d_pm += pi * (pi / mi).ln();
+    // d_pm = Σ pᵢ·ln(pᵢ/mᵢ), d_qm = Σ qᵢ·ln(qᵢ/mᵢ), mᵢ = (pᵢ+qᵢ)/2 (computed inline — no `m` Vec).
+    // Each term is a heavy independent `ln`; the two Σ are float reductions (can't chunk-merge byte-id),
+    // so for large n MATERIALISE the two term arrays with an order-preserving parallel map then fold
+    // each serially in index order — BYTE-IDENTICAL to the fused serial loop (each term is 0 for the
+    // pᵢ≤0/mᵢ≤0 skip, and `+0.0` is a no-op in the left fold). `JENSENSHANNON_FORCE_SERIAL`.
+    const JS_MIN_PER_THREAD: usize = 200_000;
+    let (d_pm, d_qm) = if JENSENSHANNON_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < 2 * JS_MIN_PER_THREAD
+    {
+        let mut d_pm = 0.0;
+        let mut d_qm = 0.0;
+        for (&pi, &qi) in p.iter().zip(q) {
+            let mi = (pi + qi) / 2.0;
+            if pi > 0.0 && mi > 0.0 {
+                d_pm += pi * (pi / mi).ln();
+            }
+            if qi > 0.0 && mi > 0.0 {
+                d_qm += qi * (qi / mi).ln();
+            }
         }
-        if qi > 0.0 && mi > 0.0 {
-            d_qm += qi * (qi / mi).ln();
-        }
-    }
+        (d_pm, d_qm)
+    } else {
+        let mut term_pm = vec![0.0f64; n];
+        let mut term_qm = vec![0.0f64; n];
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / JS_MIN_PER_THREAD)
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (((pm_b, qm_b), p_b), q_b) in term_pm
+                .chunks_mut(chunk)
+                .zip(term_qm.chunks_mut(chunk))
+                .zip(p.chunks(chunk))
+                .zip(q.chunks(chunk))
+            {
+                scope.spawn(move || {
+                    for (((pm, qm), &pi), &qi) in pm_b
+                        .iter_mut()
+                        .zip(qm_b.iter_mut())
+                        .zip(p_b.iter())
+                        .zip(q_b.iter())
+                    {
+                        let mi = (pi + qi) / 2.0;
+                        *pm = if pi > 0.0 && mi > 0.0 {
+                            pi * (pi / mi).ln()
+                        } else {
+                            0.0
+                        };
+                        *qm = if qi > 0.0 && mi > 0.0 {
+                            qi * (qi / mi).ln()
+                        } else {
+                            0.0
+                        };
+                    }
+                });
+            }
+        });
+        (term_pm.iter().sum(), term_qm.iter().sum())
+    };
 
     let js = (d_pm + d_qm) / 2.0;
     if base == std::f64::consts::E {
