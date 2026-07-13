@@ -35662,7 +35662,10 @@ fn mean_std_ddof(data: &[f64], ddof: usize) -> Option<(f64, f64)> {
         return None;
     }
     let mean = data.iter().sum::<f64>() / n as f64;
-    let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - ddof) as f64;
+    // Σ(x−mean)² via the shared work-gated `sum_sq_dev` (parallel for huge inputs, byte-identical below
+    // the gate). This std reduction fed the whole zscore family (zscore/zscore_ddof/gzscore) serially
+    // while their `(x−mean)/std` OUTPUT map was already parallel — it was the remaining straggler.
+    let var = sum_sq_dev(data, mean) / (n - ddof) as f64;
     Some((mean, var.sqrt()))
 }
 
