@@ -47433,26 +47433,25 @@ pub fn dice_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
+    // Dice needs only the disagreement count d = c_tf + c_ft and the both-positive
+    // count c_tt (denom = 2·c_tt + d). Two branchless counters replace the branch-
+    // mispredicting 3-way match (misprediction-bound on mixed binary data) and
+    // vectorize. Byte-identical: counts are exact integers in f64 (2·c_tt + d ==
+    // 2·c_tt + c_tf + c_ft exactly).
+    let mut d = 0usize;
     let mut c_tt = 0usize;
-    let mut c_tf = 0usize;
-    let mut c_ft = 0usize;
-
     for (&a, &b) in u.iter().zip(v.iter()) {
         let a_pos = a > 0.0;
         let b_pos = b > 0.0;
-        match (a_pos, b_pos) {
-            (true, true) => c_tt += 1,
-            (true, false) => c_tf += 1,
-            (false, true) => c_ft += 1,
-            _ => {}
-        }
+        d += (a_pos != b_pos) as usize;
+        c_tt += (a_pos & b_pos) as usize;
     }
 
-    let denom = 2.0 * c_tt as f64 + c_tf as f64 + c_ft as f64;
+    let denom = 2.0 * c_tt as f64 + d as f64;
     if denom == 0.0 {
         0.0
     } else {
-        (c_tf + c_ft) as f64 / denom
+        d as f64 / denom
     }
 }
 
