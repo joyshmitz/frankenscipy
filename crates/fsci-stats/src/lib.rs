@@ -11755,21 +11755,22 @@ impl Hypergeometric {
         let g_m1 = ln_gamma(m + 1.0);
         let g_bign1 = ln_gamma(big_n + 1.0);
         let g_mbign1 = ln_gamma(m - big_n + 1.0);
-        ks.iter()
-            .map(|&k| {
-                let kf = k as f64;
-                if kf < k_min || kf > k_max {
-                    return 0.0;
-                }
-                let ln_pmf = g_n1 - ln_gamma(kf + 1.0) - ln_gamma(n - kf + 1.0) + g_mn1
-                    - ln_gamma(big_n - kf + 1.0)
-                    - ln_gamma(m - n - big_n + kf + 1.0)
-                    - g_m1
-                    + g_bign1
-                    + g_mbign1;
-                ln_pmf.exp()
-            })
-            .collect()
+        // General regime (k_min != 0): each in-range k is an INDEPENDENT 5-`ln_gamma` log-pmf, so fan
+        // the query points across cores via the order-preserving `par_discrete_map` (the same helper
+        // the sibling discrete pmf/logpmf use) — BYTE-IDENTICAL to `ks.iter().map(..).collect()`.
+        par_discrete_map(ks, |k| {
+            let kf = k as f64;
+            if kf < k_min || kf > k_max {
+                return 0.0;
+            }
+            let ln_pmf = g_n1 - ln_gamma(kf + 1.0) - ln_gamma(n - kf + 1.0) + g_mn1
+                - ln_gamma(big_n - kf + 1.0)
+                - ln_gamma(m - n - big_n + kf + 1.0)
+                - g_m1
+                + g_bign1
+                + g_mbign1;
+            ln_pmf.exp()
+        })
     }
 
     /// pmf(0) = C(M-n, N)/C(M,N) built as a product of N ratios (no large-lgamma cancellation).
@@ -33985,6 +33986,12 @@ where
 /// Discrete-index sibling of `par_continuous_map` for `pmf_many(&[u64])`: same WORK-gated chunked
 /// parallel map (>=2048 elems/thread; small arrays stay serial) for costly per-point pmf kernels
 /// (ln_gamma/ln_beta). Order-preserving -> byte-identical to `ks.iter().map(f).collect()`.
+/// When `true`, [`par_discrete_map`] runs serially (the same-binary A/B knob for its discrete
+/// pmf/logpmf callers); default `false` keeps the work-gated parallel map. Byte-identical.
+#[doc(hidden)]
+pub static PAR_DISCRETE_MAP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn par_discrete_map<F>(ks: &[u64], f: F) -> Vec<f64>
 where
     F: Fn(u64) -> f64 + Sync,
@@ -33995,7 +34002,7 @@ where
     // 2048 gate, n=4096 spawned 2 threads and ran ~2.1x SLOWER than serial (measured,
     // Binomial); break-even is ~16k — so stay serial below that (also skips the
     // ~tens-of-µs available_parallelism() syscall). Byte-identical (order-preserving).
-    if n < 2 * 8192 {
+    if PAR_DISCRETE_MAP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < 2 * 8192 {
         return ks.iter().map(|&k| f(k)).collect();
     }
     let avail = std::thread::available_parallelism()
