@@ -33281,7 +33281,7 @@ pub fn skew(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let nf = n as f64;
-    let mean_val = data.iter().sum::<f64>() / nf;
+    let mean_val = par_sum(data) / nf;
     // Central moments m2=Σd², m3=Σd²·d (d=x−mean) — the dominant O(n) reduction (mean fixed above).
     // Below the gate (and under MOMENT_PAR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to the
     // original loop); above 1<<22 fan across cores as per-thread partial pairs, within per-op ULP
@@ -33395,7 +33395,7 @@ pub fn kurtosis(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let nf = n as f64;
-    let mean_val = data.iter().sum::<f64>() / nf;
+    let mean_val = par_sum(data) / nf;
     // Central moments m2=Σd², m4=Σd²·d² (d=x−mean) — the dominant O(n) reduction (mean fixed above).
     // Below the gate (and under MOMENT_PAR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to the
     // original loop); above 1<<22 fan across cores as per-thread partial pairs, within per-op ULP
