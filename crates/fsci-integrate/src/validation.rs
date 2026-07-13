@@ -85,10 +85,10 @@ impl ToleranceValue {
         }
     }
 
-    fn any(self, mut predicate: impl FnMut(f64) -> bool) -> bool {
+    fn any(&self, mut predicate: impl FnMut(f64) -> bool) -> bool {
         match self {
-            Self::Scalar(value) => predicate(value),
-            Self::Vector(values) => values.into_iter().any(predicate),
+            Self::Scalar(value) => predicate(*value),
+            Self::Vector(values) => values.iter().copied().any(predicate),
         }
     }
 
@@ -320,7 +320,7 @@ pub fn validate_tol_with_audit(
     // silently. Reject up front so Hardened callers see a fail-closed
     // error rather than NaN propagating into the adaptive step controller.
     // Per frankenscipy-i9vw.
-    if rtol.clone().any(|x| x.is_nan()) {
+    if rtol.any(|x| x.is_nan()) {
         record_fail_closed(
             audit_ledger,
             fingerprint,
@@ -329,7 +329,7 @@ pub fn validate_tol_with_audit(
         );
         return Err(IntegrateValidationError::NonFiniteRtol);
     }
-    if atol.clone().any(|x| x.is_nan()) {
+    if atol.any(|x| x.is_nan()) {
         record_fail_closed(
             audit_ledger,
             fingerprint,
@@ -338,7 +338,7 @@ pub fn validate_tol_with_audit(
         );
         return Err(IntegrateValidationError::NonFiniteAtol);
     }
-    let needs_clamp = rtol.clone().any(|x| x < MIN_RTOL);
+    let needs_clamp = rtol.any(|x| x < MIN_RTOL);
     let rtol = if needs_clamp {
         warnings.push(ToleranceWarning::RtolClamped { minimum: MIN_RTOL });
         if mode == RuntimeMode::Hardened {
@@ -364,7 +364,7 @@ pub fn validate_tol_with_audit(
         });
     }
 
-    if atol.clone().any(|x| x < 0.0) {
+    if atol.any(|x| x < 0.0) {
         record_fail_closed(
             audit_ledger,
             fingerprint,
@@ -481,6 +481,41 @@ mod tests {
         )
         .expect("matching vector atol should succeed");
         assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validation_tol_borrowed_vector_scans_preserve_bits() {
+        let rtol = vec![1e-3, MIN_RTOL, f64::INFINITY, 1e-6];
+        let atol = vec![0.0, -0.0, 1e-9, f64::INFINITY];
+        let expected_rtol_bits = rtol.iter().map(|value| value.to_bits()).collect::<Vec<_>>();
+        let expected_atol_bits = atol.iter().map(|value| value.to_bits()).collect::<Vec<_>>();
+
+        let report = validate_tol(
+            ToleranceValue::Vector(rtol),
+            ToleranceValue::Vector(atol),
+            4,
+            RuntimeMode::Strict,
+        )
+        .expect("valid vector tolerances should remain unchanged");
+
+        assert_eq!(report.mode, RuntimeMode::Strict);
+        assert!(report.warnings.is_empty());
+        assert!(matches!(
+            &report.rtol,
+            ToleranceValue::Vector(actual_rtol)
+                if actual_rtol
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .eq(expected_rtol_bits.iter().copied())
+        ));
+        assert!(matches!(
+            &report.atol,
+            ToleranceValue::Vector(actual_atol)
+                if actual_atol
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .eq(expected_atol_bits.iter().copied())
+        ));
     }
 
     // 6. wrong dimension -> AtolWrongShape error

@@ -172,17 +172,13 @@ fn tolerance_map_owned(value: ToleranceValue, mut f: impl FnMut(f64) -> f64) -> 
     }
 }
 
-fn validate_tol_eager_fingerprint_original(
+fn validate_tol_clone_scans_original(
     rtol: ToleranceValue,
     atol: ToleranceValue,
     n: usize,
     mode: RuntimeMode,
 ) -> Result<ValidatedTolerance, IntegrateValidationError> {
     let mut warnings = Vec::new();
-    let fingerprint =
-        format!("validate_tol:rtol={rtol:?};atol={atol:?};n={n};mode={mode:?}").into_bytes();
-    black_box(&fingerprint);
-
     if tolerance_any_owned(rtol.clone(), f64::is_nan) {
         return Err(IntegrateValidationError::NonFiniteRtol);
     }
@@ -217,6 +213,18 @@ fn validate_tol_eager_fingerprint_original(
     })
 }
 
+fn validate_tol_eager_fingerprint_original(
+    rtol: ToleranceValue,
+    atol: ToleranceValue,
+    n: usize,
+    mode: RuntimeMode,
+) -> Result<ValidatedTolerance, IntegrateValidationError> {
+    let fingerprint =
+        format!("validate_tol:rtol={rtol:?};atol={atol:?};n={n};mode={mode:?}").into_bytes();
+    black_box(&fingerprint);
+    validate_tol_clone_scans_original(rtol, atol, n, mode)
+}
+
 fn bench_validate_tol_audit_fingerprint_ab(c: &mut Criterion) {
     const N: usize = 16_384;
     let atol = vec![1e-8; N];
@@ -248,6 +256,39 @@ fn bench_validate_tol_audit_fingerprint_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_validate_tol_clone_scan_ab(c: &mut Criterion) {
+    const N: usize = 16_384;
+    let atol = vec![1e-8; N];
+    let mut group = c.benchmark_group("validate_tol_clone_scan_ab");
+    group.sample_size(12);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+
+    // This bench-local source model is a calibration witness only. Cross-crate
+    // optimization makes the public `current` row the acceptance comparator.
+    group.bench_function("owned_scan_source_model", |b| {
+        b.iter(|| {
+            black_box(validate_tol_clone_scans_original(
+                ToleranceValue::Scalar(black_box(1e-6)),
+                ToleranceValue::Vector(black_box(atol.clone())),
+                black_box(N),
+                RuntimeMode::Strict,
+            ))
+        });
+    });
+    group.bench_function("current", |b| {
+        b.iter(|| {
+            black_box(validate_tol(
+                ToleranceValue::Scalar(black_box(1e-6)),
+                ToleranceValue::Vector(black_box(atol.clone())),
+                black_box(N),
+                RuntimeMode::Strict,
+            ))
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_solve_ivp_exponential,
@@ -255,6 +296,7 @@ criterion_group!(
     bench_solve_ivp_t_eval_validation,
     bench_solve_ivp_non_finite_y0_validation,
     bench_validate_tol,
-    bench_validate_tol_audit_fingerprint_ab
+    bench_validate_tol_audit_fingerprint_ab,
+    bench_validate_tol_clone_scan_ab
 );
 criterion_main!(benches);

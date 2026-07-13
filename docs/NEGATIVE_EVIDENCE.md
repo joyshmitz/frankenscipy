@@ -20710,3 +20710,31 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   needed for retained code. Do not retry unchecked construction alone without a lower-variance same-binary harness
   that also demonstrates a full-`kron` win. Both Cargo benchmark commands were fail-closed remote-only on
   `vmi1149989`; no local Cargo fallback was used.
+
+## 2026-07-13 - cod - KEEP integrate borrowed tolerance predicate scans (1.203x at n=16,384)
+
+- Negative-ledger-first selection excluded the landed lazy audit-fingerprint keep. The remaining public
+  `validate_tol` path cloned owned tolerance vectors for each NaN, minimum-rtol, and negative-atol predicate scan;
+  no prior keep or reject covered borrowing those scans.
+- ONE lever changes the private `ToleranceValue::any` helper from consuming `self` to borrowing it and removes the
+  four call-site clones. The realistic scalar-rtol/vector-atol row therefore avoids two full 16,384-element vector
+  clones; vector/vector calls avoid four. Predicate order, early exits, error precedence, clamping, output ownership,
+  audit bytes, and every floating-point operation are unchanged.
+- The unchanged public-path `current` Criterion row was measured before and after on pinned worker `vmi1293453`.
+  Its production-original interval was `[20.781, 21.945, 24.128]` us and the candidate interval was
+  `[17.746, 18.238, 18.814]` us: a centered **1.203x** speedup (**-16.9% time**) with non-overlapping intervals and
+  a conservative interval speedup above **1.104x**. Criterion reported `[-34.697%, -25.535%, -15.978%]`, `p=0.00`,
+  and improved performance.
+- The bench-local clone-consuming source model was explicitly rejected as an acceptance comparator after the A/A
+  calibration exposed cross-crate optimizer skew: before the production edit it measured
+  `[47.874, 49.671, 51.206]` us while the actual public path measured `[20.781, 21.945, 24.128]` us. Only the
+  identical public row's same-worker before/after result decided this keep.
+- The focused strict-remote tolerance suite passed **22/22**, and the final exact-source proof passed **1/1** after
+  UBS-driven test cleanup. It preserves vector order and every value via `to_bits()`, including signed zero and
+  infinities, plus strict mode and warning state. Changed-file rustfmt/diff checks passed; UBS reported zero critical
+  findings. Its wrapper-internal Cargo checks ran in a local shadow workspace and were excluded from proof.
+- The first strict-remote Clippy attempt was refused before Cargo with RCH-E412 because a peer-owned live stats
+  scratch binary changed during dependency preflight; fail-closed held. Once that scratch path stabilized, the exact
+  staged library-plus-benchmark retry passed after allowing only the two documented pre-existing integrate lint
+  categories. Every authoritative Cargo benchmark, test, and lint command used `RCH_REQUIRE_REMOTE=1` through
+  `rch exec`; no local Cargo fallback informed this keep.
