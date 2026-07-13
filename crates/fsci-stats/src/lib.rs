@@ -33089,10 +33089,42 @@ pub fn moment(data: &[f64], k: u32) -> f64 {
     }
     let n = data.len() as f64;
     let mean_val = data.iter().sum::<f64>() / n;
-    data.iter()
-        .map(|&x| (x - mean_val).powi(k as i32))
-        .sum::<f64>()
-        / n
+    // Σ(x−mean)^k — the dominant O(n) reduction (mean fixed above); `powi(k)` per element. Below the
+    // gate (and under MOMENT_PAR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to
+    // `.map(powi).sum()`); above 1<<22 fan across cores as per-thread partials, within per-op ULP
+    // tolerance. Same lever as skew/kurtosis.
+    let ki = k as i32;
+    let nn = data.len();
+    let chunk_sum = |ds: &[f64]| -> f64 {
+        let mut s = 0.0f64;
+        for &x in ds {
+            s += (x - mean_val).powi(ki);
+        }
+        s
+    };
+    let total = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nn < (1 << 22)
+    {
+        chunk_sum(data)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nn / (1 << 16))
+            .max(1);
+        let chunk = nn.div_ceil(nthreads);
+        let chunk_sum = &chunk_sum;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || chunk_sum(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("moment worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+    };
+    total / n
 }
 
 /// When `true`, [`moment_weighted`] runs its weights finite-check, `Σw` and the weighted-mean sum as
@@ -33179,10 +33211,42 @@ pub fn central_moment(data: &[f64], k: u32) -> f64 {
     }
     let n = data.len() as f64;
     let mean_val = data.iter().sum::<f64>() / n;
-    data.iter()
-        .map(|&x| (x - mean_val).powi(k as i32))
-        .sum::<f64>()
-        / n
+    // Σ(x−mean)^k — the dominant O(n) reduction (mean fixed above); `powi(k)` per element. Below the
+    // gate (and under MOMENT_PAR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to
+    // `.map(powi).sum()`); above 1<<22 fan across cores as per-thread partials, within per-op ULP
+    // tolerance. Same lever as skew/kurtosis.
+    let ki = k as i32;
+    let nn = data.len();
+    let chunk_sum = |ds: &[f64]| -> f64 {
+        let mut s = 0.0f64;
+        for &x in ds {
+            s += (x - mean_val).powi(ki);
+        }
+        s
+    };
+    let total = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nn < (1 << 22)
+    {
+        chunk_sum(data)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nn / (1 << 16))
+            .max(1);
+        let chunk = nn.div_ceil(nthreads);
+        let chunk_sum = &chunk_sum;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || chunk_sum(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("moment worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+    };
+    total / n
 }
 
 /// Compute the k-th standardized moment of a data set.
