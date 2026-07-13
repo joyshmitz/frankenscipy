@@ -28632,6 +28632,13 @@ pub fn ss_within(groups: &[&[f64]]) -> f64 {
 ///
 /// Tests H0: all group means are equal.
 /// Assumes normality and equal variances within groups.
+/// When `true`, [`f_oneway`] recomputes each group's mean inside BOTH the between- and within-group
+/// sums of squares (the ORIG behaviour, one redundant full pass over the data); default `false` hoists
+/// the per-group means and reuses them. Byte-identical. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static F_ONEWAY_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
     if groups.len() < 2
         || groups.iter().any(|g| g.is_empty())
@@ -28660,23 +28667,46 @@ pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
     let grand_sum: f64 = groups.iter().flat_map(|g| g.iter()).sum();
     let grand_mean = grand_sum / nf;
 
-    // Between-group sum of squares
-    let ss_between: f64 = groups
-        .iter()
-        .map(|g| {
-            let gi_mean: f64 = g.iter().sum::<f64>() / g.len() as f64;
-            g.len() as f64 * (gi_mean - grand_mean).powi(2)
-        })
-        .sum();
-
-    // Within-group sum of squares
-    let ss_within: f64 = groups
-        .iter()
-        .map(|g| {
-            let gi_mean: f64 = g.iter().sum::<f64>() / g.len() as f64;
-            g.iter().map(|&x| (x - gi_mean).powi(2)).sum::<f64>()
-        })
-        .sum();
+    // Between- and within-group sums of squares. The ORIG recomputed each group's mean `Σg/len`
+    // TWICE — once inside ss_between and again inside ss_within — an extra full traversal of the
+    // data. Hoist the per-group means ONCE and reuse: ss_between then needs no data traversal at all,
+    // and ss_within reuses the cached mean. BYTE-IDENTICAL: `gi_mean` is the same deterministic
+    // `Σg/len` feeding the same two closed forms. `F_ONEWAY_FUSE_DISABLE` restores the twice-computed
+    // ORIG for the same-binary A/B gate.
+    let (ss_between, ss_within): (f64, f64) =
+        if F_ONEWAY_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            let ssb = groups
+                .iter()
+                .map(|g| {
+                    let gi_mean: f64 = g.iter().sum::<f64>() / g.len() as f64;
+                    g.len() as f64 * (gi_mean - grand_mean).powi(2)
+                })
+                .sum();
+            let ssw = groups
+                .iter()
+                .map(|g| {
+                    let gi_mean: f64 = g.iter().sum::<f64>() / g.len() as f64;
+                    g.iter().map(|&x| (x - gi_mean).powi(2)).sum::<f64>()
+                })
+                .sum();
+            (ssb, ssw)
+        } else {
+            let group_means: Vec<f64> = groups
+                .iter()
+                .map(|g| g.iter().sum::<f64>() / g.len() as f64)
+                .collect();
+            let ssb = groups
+                .iter()
+                .zip(&group_means)
+                .map(|(g, &gi_mean)| g.len() as f64 * (gi_mean - grand_mean).powi(2))
+                .sum();
+            let ssw = groups
+                .iter()
+                .zip(&group_means)
+                .map(|(g, &gi_mean)| g.iter().map(|&x| (x - gi_mean).powi(2)).sum::<f64>())
+                .sum();
+            (ssb, ssw)
+        };
 
     let df_between = k - 1.0;
     let df_within = nf - k;
