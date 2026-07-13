@@ -25596,16 +25596,49 @@ pub fn corrcoef(x: &[f64], y: &[f64]) -> f64 {
     let n = x.len() as f64;
     let mean_x: f64 = x.iter().sum::<f64>() / n;
     let mean_y: f64 = y.iter().sum::<f64>() / n;
-    let mut cov_xy = 0.0;
-    let mut var_x = 0.0;
-    let mut var_y = 0.0;
-    for (&xi, &yi) in x.iter().zip(y) {
-        let dx = xi - mean_x;
-        let dy = yi - mean_y;
-        cov_xy += dx * dy;
-        var_x += dx * dx;
-        var_y += dy * dy;
-    }
+    // Centered cov/variances (cov_xy=Σdx·dy, var_x=Σdx², var_y=Σdy²) — the dominant O(n) reduction
+    // (means fixed above). Below the gate (and under PEARSONR_FORCE_SERIAL) fold the three in ONE serial
+    // pass (byte-identical to the original loop); above 1<<22 fan them across cores as per-thread partial
+    // triples, within per-op ULP tolerance. Same lever as `pearsonr`/`linregress`.
+    let nn = x.len();
+    let chunk_ss = |xs: &[f64], ys: &[f64]| -> (f64, f64, f64) {
+        let mut cov = 0.0f64;
+        let mut vx = 0.0f64;
+        let mut vy = 0.0f64;
+        for (&xi, &yi) in xs.iter().zip(ys) {
+            let dx = xi - mean_x;
+            let dy = yi - mean_y;
+            cov += dx * dy;
+            vx += dx * dx;
+            vy += dy * dy;
+        }
+        (cov, vx, vy)
+    };
+    let (cov_xy, var_x, var_y) = if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nn < (1 << 22)
+    {
+        chunk_ss(x, y)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nn / (1 << 16))
+            .max(1);
+        let chunk = nn.div_ceil(nthreads);
+        let chunk_ss = &chunk_ss;
+        let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
+            x.chunks(chunk)
+                .zip(y.chunks(chunk))
+                .map(|(xs, ys)| scope.spawn(move || chunk_ss(xs, ys)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("corrcoef worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold((0.0f64, 0.0f64, 0.0f64), |(am, bm, cm), (a, b, c)| {
+            (am + a, bm + b, cm + c)
+        })
+    };
     if var_x == 0.0 || var_y == 0.0 {
         return f64::NAN;
     }
