@@ -27897,11 +27897,9 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
     // code re-sorted each array a second time (cross_set sorts both u and v, then
     // each within_set re-sorted its argument — 4 sorts for 2 arrays); at large n
     // the sort dominates, so this is ~2× on the hot path. Byte-identical: same
-    // total_cmp order feeds the same closed-form sums.
-    let mut su: Vec<f64> = u.to_vec();
-    sort_f64_total(&mut su);
-    let mut sv: Vec<f64> = v.to_vec();
-    sort_f64_total(&mut sv);
+    // total_cmp order feeds the same closed-form sums. The two independent sorts
+    // additionally overlap on separate threads for large inputs (see sort_two_f64_total).
+    let (su, sv) = sort_two_f64_total(u, v);
 
     // E|X-Y|: mean of |u_i - v_j| over all pairs, via the O((N+M)) sweep on the
     // sorted inputs (frankenscipy-ggmrw). For each sorted u_i with c = #{v_j ≤ u_i}
@@ -32453,6 +32451,36 @@ fn sort_f64_total(data: &mut [f64]) {
     } else {
         data.sort_unstable_by(|a, b| a.total_cmp(b));
     }
+}
+
+/// When `true`, [`sort_two_f64_total`] sorts its two inputs sequentially (the ORIG behaviour); default
+/// `false` overlaps the two independent sorts on separate threads for large inputs. Byte-identical
+/// either way (deterministic sort). `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static SORT_TWO_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Copy `a` and `b` and sort both ascending by `total_cmp`. The two sorts are INDEPENDENT, so when
+/// both inputs are large enough to amortize a thread spawn they run concurrently on separate threads
+/// (`energy_distance`/`wasserstein_distance` sort two samples up front, and the O(n log n) sort
+/// dominates the O(n) sweeps that follow — overlapping them ~halves the sort phase). BYTE-IDENTICAL to
+/// two serial `sort_f64_total` calls: `sort_f64_total` is deterministic, only the wall-clock overlaps.
+fn sort_two_f64_total(a: &[f64], b: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let mut sa = a.to_vec();
+    let mut sb = b.to_vec();
+    if a.len().min(b.len()) >= (1 << 16)
+        && !SORT_TWO_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        std::thread::scope(|scope| {
+            let h = scope.spawn(|| sort_f64_total(&mut sb));
+            sort_f64_total(&mut sa);
+            h.join().unwrap();
+        });
+    } else {
+        sort_f64_total(&mut sa);
+        sort_f64_total(&mut sb);
+    }
+    (sa, sb)
 }
 
 /// Compute ranks with average tie-breaking.
