@@ -31232,8 +31232,9 @@ pub fn linregress(x: &[f64], y: &[f64]) -> LinregressResult {
         };
     }
 
-    let xmean: f64 = x.iter().sum::<f64>() / n;
-    let ymean: f64 = y.iter().sum::<f64>() / n;
+    // Two means fused into ONE work-gated pass (parallel for huge inputs, byte-identical below the
+    // gate) — the ORIG made two separate serial `iter().sum()` traversals before the parallel triple.
+    let (xmean, ymean) = par_two_means(x, y);
 
     // Centered sums-of-squares/cross-products (ssxm=Σdx², ssym=Σdy², ssxym=Σdx·dy) — the dominant O(n)
     // reduction (means fixed above). Below the gate (and under PEARSONR_FORCE_SERIAL) fold the three in
@@ -31477,6 +31478,56 @@ pub enum SomersDInput<'a> {
 pub static PEARSONR_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`pearsonr`]/[`linregress`] compute their two means (Σx/n, Σy/n) as two separate
+/// serial passes (the ORIG behaviour); default `false` computes both in ONE work-gated pass, fanned
+/// across cores for huge inputs. Byte-identical below the gate. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static PEARSONR_MEAN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `(Σx/n, Σy/n)` for equal-length `x`, `y` computed in ONE fused pass. The ORIG made two separate
+/// `iter().sum()` traversals before the (already-parallel) centered triple — this fuses them and, for
+/// huge inputs, fans across cores. BYTE-IDENTICAL below the gate: `sx`/`sy` are the same left-to-right
+/// folds from 0.0 in index order as the two separate sums; above 1<<22 the per-thread (Σx,Σy) partials
+/// reorder within per-op ULP tolerance (the centered triple downstream is ULP-gated the same way).
+fn par_two_means(x: &[f64], y: &[f64]) -> (f64, f64) {
+    let n = x.len();
+    let nf = n as f64;
+    let chunk_sums = |xs: &[f64], ys: &[f64]| -> (f64, f64) {
+        let mut sx = 0.0f64;
+        let mut sy = 0.0f64;
+        for (&xi, &yi) in xs.iter().zip(ys) {
+            sx += xi;
+            sy += yi;
+        }
+        (sx, sy)
+    };
+    let (sx, sy) = if PEARSONR_MEAN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || n < (1 << 22)
+    {
+        chunk_sums(x, y)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 16))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_sums = &chunk_sums;
+        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+            x.chunks(chunk)
+                .zip(y.chunks(chunk))
+                .map(|(xs, ys)| scope.spawn(move || chunk_sums(xs, ys)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("par_two_means worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold((0.0f64, 0.0f64), |(a, b), (u, v)| (a + u, b + v))
+    };
+    (sx / nf, sy / nf)
+}
+
 /// Calculate the Pearson correlation coefficient and p-value.
 ///
 /// Matches `scipy.stats.pearsonr(x, y)`.
@@ -31492,8 +31543,9 @@ pub fn pearsonr(x: &[f64], y: &[f64]) -> CorrelationResult {
     }
     let nf = n as f64;
 
-    let xmean: f64 = x.iter().sum::<f64>() / nf;
-    let ymean: f64 = y.iter().sum::<f64>() / nf;
+    // Two means fused into ONE work-gated pass (parallel for huge inputs, byte-identical below the
+    // gate) — the ORIG made two separate serial `iter().sum()` traversals before the parallel triple.
+    let (xmean, ymean) = par_two_means(x, y);
 
     // Centered sums-of-squares/cross-products (ssxm=Σdx², ssym=Σdy², ssxym=Σdx·dy) — the dominant O(n)
     // reduction (means are fixed above). Below the gate (and under PEARSONR_FORCE_SERIAL) fold the three
@@ -31587,8 +31639,9 @@ pub fn pearsonr_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correlat
     }
     let nf = n as f64;
 
-    let xmean: f64 = x.iter().sum::<f64>() / nf;
-    let ymean: f64 = y.iter().sum::<f64>() / nf;
+    // Two means fused into ONE work-gated pass (parallel for huge inputs, byte-identical below the
+    // gate) — the ORIG made two separate serial `iter().sum()` traversals before the parallel triple.
+    let (xmean, ymean) = par_two_means(x, y);
 
     // scipy-style normalize-first dot product: scale by max-abs first,
     // then take the sqrt of the squared-sum, then dot product on the
