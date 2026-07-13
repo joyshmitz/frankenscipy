@@ -37146,6 +37146,13 @@ pub fn differential_entropy(
     h
 }
 
+/// When `true`, [`obrientransform`] runs its per-group transform serially (the ORIG behaviour);
+/// default `false` fans it across cores over the independent groups. Byte-identical either way.
+/// `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static OBRIENTRANSFORM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Apply O'Brien's transform to test for homogeneity of variance.
 ///
 /// The O'Brien transform converts data for use in a one-way ANOVA to test
@@ -37161,32 +37168,56 @@ pub fn differential_entropy(
 ///
 /// # Returns
 /// Vector of transformed groups, or empty if any group has fewer than 3 elements.
+///
+/// When [`OBRIENTRANSFORM_FORCE_SERIAL`] is `true`, the per-group transform runs serially (the ORIG
+/// behaviour); default `false` fans it across cores over the independent groups. Byte-identical.
 pub fn obrientransform(groups: &[&[f64]]) -> Vec<Vec<f64>> {
-    let mut result = Vec::with_capacity(groups.len());
-
-    for &group in groups {
-        let n = group.len();
-        if n < 3 {
-            return vec![];
-        }
-
-        let n_f = n as f64;
-        let mean = group.iter().sum::<f64>() / n_f;
-        let var = group.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n_f - 1.0);
-
-        let mut transformed = Vec::with_capacity(n);
-        let denom = (n_f - 1.0) * (n_f - 2.0);
-
-        for &x in group {
-            let diff_sq = (x - mean).powi(2);
-            let r = ((n_f - 1.5) * n_f * diff_sq - 0.5 * var * (n_f - 1.0)) / denom;
-            transformed.push(r);
-        }
-
-        result.push(transformed);
+    // scipy returns empty if ANY group has < 3 elements; check up front so the
+    // per-group transform below is unconditional (the ORIG returned mid-loop).
+    if groups.iter().any(|g| g.len() < 3) {
+        return vec![];
     }
 
-    result
+    // Each group is transformed independently: `r = ((n-1.5)·n·(x-mean)² − 0.5·var·(n-1)) / denom`,
+    // three O(n) arithmetic passes (mean, var, transform). Groups are INDEPENDENT, so build the
+    // transformed groups across cores (chunked over groups, collected in group order). BYTE-IDENTICAL to
+    // the serial loop: each group's mean/var/transform is unchanged and the outer order is preserved —
+    // only the owning core differs. `OBRIENTRANSFORM_FORCE_SERIAL` restores the serial build for A/B.
+    let transform_group = |group: &[f64]| -> Vec<f64> {
+        let n_f = group.len() as f64;
+        let mean = group.iter().sum::<f64>() / n_f;
+        let var = group.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n_f - 1.0);
+        let denom = (n_f - 1.0) * (n_f - 2.0);
+        group
+            .iter()
+            .map(|&x| {
+                let diff_sq = (x - mean).powi(2);
+                ((n_f - 1.5) * n_f * diff_sq - 0.5 * var * (n_f - 1.0)) / denom
+            })
+            .collect()
+    };
+    let total: usize = groups.iter().map(|g| g.len()).sum();
+    if OBRIENTRANSFORM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || total < (1 << 18)
+        || groups.len() < 2
+    {
+        return groups.iter().map(|g| transform_group(g)).collect();
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(groups.len());
+    let chunk = groups.len().div_ceil(nthreads);
+    let transform_group = &transform_group;
+    std::thread::scope(|scope| {
+        groups
+            .chunks(chunk)
+            .map(|gc| scope.spawn(move || gc.iter().map(|g| transform_group(g)).collect::<Vec<Vec<f64>>>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flat_map(|h| h.join().expect("obrientransform worker panicked"))
+            .collect()
+    })
 }
 
 /// Result of Page's trend test.
