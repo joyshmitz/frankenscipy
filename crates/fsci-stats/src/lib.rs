@@ -50781,15 +50781,37 @@ pub fn medcouple(data: &[f64]) -> f64 {
 ///
 /// # Returns
 /// Biweight midcorrelation in [-1, 1].
+///
+/// When [`BIWEIGHT_FORCE_SERIAL`] is `true`, the x- and y-side median/MAD are computed sequentially
+/// (the ORIG behaviour); default `false` overlaps them on separate threads for large inputs.
+/// Bit-identical either way.
+#[doc(hidden)]
+pub static BIWEIGHT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn biweight_midcorrelation(x: &[f64], y: &[f64], c: f64) -> f64 {
     if x.len() != y.len() || x.len() < 3 {
         return f64::NAN;
     }
 
-    let med_x = median(x);
-    let med_y = median(y);
-    let mad_x = mad(x, 1.0);
-    let mad_y = mad(y, 1.0);
+    // The x-side robust stats (med_x, mad_x) depend only on x, the y-side only on y — two INDEPENDENT
+    // select/sort-dominated computations (mad itself is two medians), and they dominate the O(n) biweight
+    // loop below. Overlap them on separate threads for large inputs. BIT-IDENTICAL: median/mad are
+    // deterministic, so only the wall-clock overlaps. `BIWEIGHT_FORCE_SERIAL` restores the serial order.
+    let (med_x, mad_x, med_y, mad_y) = if BIWEIGHT_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || x.len() < (1 << 16)
+    {
+        (median(x), mad(x, 1.0), median(y), mad(y, 1.0))
+    } else {
+        std::thread::scope(|scope| {
+            let h = scope.spawn(|| (median(y), mad(y, 1.0)));
+            let mx = median(x);
+            let madx = mad(x, 1.0);
+            let (my, mady) = h.join().expect("biweight_midcorrelation worker panicked");
+            (mx, madx, my, mady)
+        })
+    };
 
     if mad_x == 0.0 || mad_y == 0.0 {
         return f64::NAN;
