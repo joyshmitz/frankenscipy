@@ -42571,12 +42571,49 @@ pub fn kendalltau_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsE
 /// rankdata(b))`, each variable is ranked ONCE up front (vs re-ranking O(m) times inside a naive
 /// all-pairs loop), then the cheap O(n) Pearson-of-ranks runs in parallel across pairs — bit-identical
 /// to looping `spearmanr` for `n ≥ 3`. Tiny samples (`n ≤ 2`) keep SciPy's special length-2 path.
+///
+/// When [`SPEARMANR_MATRIX_FORCE_SERIAL`] is `true`, the per-variable ranking runs serially (the ORIG
+/// behaviour); default `false` fans it across cores over the independent variables. Byte-identical.
+#[doc(hidden)]
+pub static SPEARMANR_MATRIX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn spearmanr_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
     let n = variables.first().map_or(0, Vec::len);
     if n <= 2 {
         return all_pairs_symmetric_matrix(variables, |a, b| spearmanr(a, b).statistic);
     }
-    let ranked: Vec<Vec<f64>> = variables.iter().map(|v| rankdata_average(v)).collect();
+    // Rank each variable (`rankdata_average` = an independent, sort-dominated O(n log n) reduction).
+    // The downstream all-pairs Pearson is already parallel, so this serial per-variable map was the
+    // straggler. Fan it across cores (chunked over variables, collected in variable order).
+    // BIT-IDENTICAL: rankdata_average is deterministic and the order is preserved, so `ranked` — and
+    // thus the correlation matrix — is unchanged. `SPEARMANR_MATRIX_FORCE_SERIAL` restores the serial
+    // map for A/B.
+    let total: usize = variables.iter().map(Vec::len).sum();
+    let ranked: Vec<Vec<f64>> = if SPEARMANR_MATRIX_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || total < (1 << 18)
+        || variables.len() < 2
+    {
+        variables.iter().map(|v| rankdata_average(v)).collect()
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(variables.len());
+        let chunk = variables.len().div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            variables
+                .chunks(chunk)
+                .map(|vc| {
+                    scope.spawn(move || vc.iter().map(|v| rankdata_average(v)).collect::<Vec<Vec<f64>>>())
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flat_map(|h| h.join().expect("spearmanr_matrix rank worker panicked"))
+                .collect()
+        })
+    };
     // Stat-only Pearson correlation, replicating `pearsonr`'s statistic bit-for-bit
     // (same means, same accumulation order, same denom-zero → NaN and clamp) but
     // WITHOUT its per-pair p-value (a betainc call), which `spearmanr_matrix` never
