@@ -51896,6 +51896,13 @@ pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
     (counts, bin_edges)
 }
 
+/// When `true`, [`scipy_frequency_histogram`] (behind `relfreq`/`cumfreq`) fills its bin counts with a
+/// single serial pass (the ORIG behaviour); default `false` fans the binning across cores with
+/// privatized per-thread histograms. Bit-identical either way (integer counts). `#[doc(hidden)]` — A/B.
+#[doc(hidden)]
+pub static FREQ_HIST_BIN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn scipy_frequency_histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
     if data.is_empty() || bins <= 1 || data.iter().any(|v| !v.is_finite()) {
         return (vec![], vec![]);
@@ -51931,18 +51938,64 @@ fn scipy_frequency_histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>
     };
     let bin_width = (hist_upper - hist_lower) / bins as f64;
 
-    let mut counts = vec![0usize; bins];
-    for &v in data {
+    // Binning is a scatter-accumulate (range-check, then bump a bin). Give each worker a PRIVATE
+    // histogram over its chunk for large `data`, then sum the partials — the same privatized lever as
+    // [`histogram`], shared here by `relfreq`/`cumfreq`. BIT-IDENTICAL (not merely below a gate): each
+    // element maps to the same bin (or is skipped) regardless of the owning core, and the counts are
+    // INTEGER sums — no float reassociation. `FREQ_HIST_BIN_FORCE_SERIAL` restores the serial fill.
+    let bin_of = |v: f64| -> Option<usize> {
         if v < hist_lower || v > hist_upper {
-            continue;
-        }
-        let bin = if v == hist_upper {
-            bins - 1
+            None
+        } else if v == hist_upper {
+            Some(bins - 1)
         } else {
-            (((v - hist_lower) / bin_width).floor() as usize).min(bins - 1)
-        };
-        counts[bin] += 1;
-    }
+            Some((((v - hist_lower) / bin_width).floor() as usize).min(bins - 1))
+        }
+    };
+    let counts = if FREQ_HIST_BIN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || data.len() < (1 << 18)
+    {
+        let mut counts = vec![0usize; bins];
+        for &v in data {
+            if let Some(b) = bin_of(v) {
+                counts[b] += 1;
+            }
+        }
+        counts
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(data.len() / (1 << 16))
+            .max(1);
+        let chunk = data.len().div_ceil(nthreads);
+        let bin_of = &bin_of;
+        let partials: Vec<Vec<usize>> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|block| {
+                    scope.spawn(move || {
+                        let mut c = vec![0usize; bins];
+                        for &v in block {
+                            if let Some(b) = bin_of(v) {
+                                c[b] += 1;
+                            }
+                        }
+                        c
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("scipy_frequency_histogram worker panicked"))
+                .collect()
+        });
+        let mut counts = vec![0usize; bins];
+        for p in &partials {
+            for (c, &pc) in counts.iter_mut().zip(p) {
+                *c += pc;
+            }
+        }
+        counts
+    };
 
     let bin_edges = (0..=bins).map(|i| lower + i as f64 * bin_width).collect();
     (counts, bin_edges)
