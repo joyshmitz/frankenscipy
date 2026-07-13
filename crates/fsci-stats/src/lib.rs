@@ -27646,6 +27646,60 @@ pub fn jensenshannon_distance(p: &[f64], q: &[f64]) -> f64 {
     }
 }
 
+/// When `true`, [`bhattacharyya_coefficient`] sums serially (the ORIG exact 1-accumulator fold, byte-
+/// identical to `map(sqrt).sum()`); default `false` fans a 4-way-unrolled chunk sum across cores for
+/// large inputs. WITHIN per-op ULP tolerance (same reordering the parallel `entropy`/`kl_divergence` use).
+#[doc(hidden)]
+pub static BHATTACHARYYA_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `BC(p, q) = Σ √(pᵢ·qᵢ)` — the Bhattacharyya coefficient shared by [`hellinger_distance`] and
+/// [`bhattacharyya_distance`]. `√(p·q)` per element is compute-bound; fan the sum across cores
+/// (chunked, 4-way-unrolled). WITHIN per-op ULP tolerance (mirrors the shipped `entropy`/`kl` reorder).
+fn bhattacharyya_coefficient(p: &[f64], q: &[f64]) -> f64 {
+    let n = p.len();
+    if BHATTACHARYYA_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return p.iter().zip(q).map(|(&pi, &qi)| (pi * qi).sqrt()).sum();
+    }
+    let chunk_sum = |ps: &[f64], qs: &[f64]| -> f64 {
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= ps.len() {
+            a[0] += (ps[i] * qs[i]).sqrt();
+            a[1] += (ps[i + 1] * qs[i + 1]).sqrt();
+            a[2] += (ps[i + 2] * qs[i + 2]).sqrt();
+            a[3] += (ps[i + 3] * qs[i + 3]).sqrt();
+            i += 4;
+        }
+        let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+        while i < ps.len() {
+            s += (ps[i] * qs[i]).sqrt();
+            i += 1;
+        }
+        s
+    };
+    if n < (1 << 17) {
+        return chunk_sum(p, q);
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_sum = &chunk_sum;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        p.chunks(chunk)
+            .zip(q.chunks(chunk))
+            .map(|(ps, qs)| scope.spawn(move || chunk_sum(ps, qs)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("bhattacharyya worker panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+}
+
 /// Hellinger distance between two probability distributions.
 ///
 /// The Hellinger distance is defined as:
@@ -27663,7 +27717,7 @@ pub fn hellinger_distance(p: &[f64], q: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    let bc: f64 = p.iter().zip(q).map(|(&pi, &qi)| (pi * qi).sqrt()).sum();
+    let bc = bhattacharyya_coefficient(p, q);
 
     (1.0 - bc.min(1.0)).max(0.0).sqrt()
 }
@@ -27684,7 +27738,7 @@ pub fn bhattacharyya_distance(p: &[f64], q: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    let bc: f64 = p.iter().zip(q).map(|(&pi, &qi)| (pi * qi).sqrt()).sum();
+    let bc = bhattacharyya_coefficient(p, q);
 
     if bc <= 0.0 { f64::INFINITY } else { -bc.ln() }
 }
