@@ -40145,6 +40145,21 @@ pub fn ks_2samp(data1: &[f64], data2: &[f64]) -> GoodnessOfFitResult {
     let mut sorted2 = data2.to_vec();
     sort_f64_total(&mut sorted1);
     sort_f64_total(&mut sorted2);
+    ks_2samp_sorted(&sorted1, &sorted2)
+}
+
+/// [`ks_2samp`] on inputs already sorted ascending (`total_cmp` order) and NaN-free. Skips the
+/// per-call NaN check + sort so an all-pairs matrix can sort each sample ONCE up front (the sort is
+/// query-independent). BYTE-IDENTICAL to `ks_2samp` on the same finite data: same sorted arrays feed
+/// the same merge sweep and p-value.
+fn ks_2samp_sorted(sorted1: &[f64], sorted2: &[f64]) -> GoodnessOfFitResult {
+    let (n1, n2) = (sorted1.len(), sorted2.len());
+    if n1 == 0 || n2 == 0 {
+        return GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
 
     // Walk both sorted arrays, computing max |F1(x) - F2(x)|
     let n1f = n1 as f64;
@@ -42904,14 +42919,42 @@ where
     Ok((stat, pval))
 }
 
+/// When `true`, [`ks_2samp_matrix`] re-sorts both samples inside every pair (the ORIG per-pair path);
+/// default `false` sorts each sample ONCE up front and runs the pre-sorted kernel. Byte-identical.
+/// `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static KS_2SAMP_MATRIX_PRESORT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// All-pairs two-sample Kolmogorov–Smirnov test over `samples`. Returns `(statistic, pvalue)` matrices,
 /// both `m × m` symmetric, with `out.0[i][j] == ks_2samp(samples[i], samples[j]).statistic` and
 /// `out.1[i][j] ==` its p-value (bit-identical on the upper triangle). SciPy has NO vectorized all-pairs
 /// form — pairwise distribution comparison (a common multiple-comparison workflow) means looping
 /// `scipy.stats.ks_2samp` in Python; this runs the O(n log n) per-pair kernel in parallel across pairs.
 pub fn ks_2samp_matrix(samples: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
-    all_pairs_two_symmetric_matrices(samples, |a, b| {
-        let r = ks_2samp(a, b);
+    // Each `ks_2samp(a,b)` sorts BOTH a and b, so the naive all-pairs loop re-sorts every sample
+    // O(m) times. The sort is query-INDEPENDENT, so (when all samples are finite — the common case)
+    // sort each sample ONCE up front and run the all-pairs kernel on the pre-sorted slices via
+    // `ks_2samp_sorted`. BYTE-IDENTICAL to the per-pair path (same sorted arrays feed the same
+    // statistic/p-value); m sorts instead of ~m². NaN present anywhere → fall back to the per-pair
+    // path (rare; ks_2samp then reports NaN per pair as before). `KS_2SAMP_MATRIX_PRESORT_DISABLE` A/B.
+    let any_nan = samples.iter().any(|s| s.iter().any(|v| v.is_nan()));
+    if any_nan || KS_2SAMP_MATRIX_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return all_pairs_two_symmetric_matrices(samples, |a, b| {
+            let r = ks_2samp(a, b);
+            (r.statistic, r.pvalue)
+        });
+    }
+    let sorted: Vec<Vec<f64>> = samples
+        .iter()
+        .map(|s| {
+            let mut v = s.clone();
+            sort_f64_total(&mut v);
+            v
+        })
+        .collect();
+    all_pairs_two_symmetric_matrices(&sorted, |s1, s2| {
+        let r = ks_2samp_sorted(s1, s2);
         (r.statistic, r.pvalue)
     })
 }
