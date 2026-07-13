@@ -9394,6 +9394,14 @@ pub static NORM_INF_FORCE_LEGACY: std::sync::atomic::AtomicBool =
 pub static NORM_ONE_FORCE_LEGACY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`norm`]'s 1-norm accumulates its column sums in a single serial contiguous pass (the
+/// pre-parallel default); when `false` (default), large matrices fan the pass across rows with
+/// privatized per-thread column accumulators merged at the end. Byte-identical below the gate.
+/// `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static NORM_ONE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// When `true`, [`norm`]'s Frobenius norm copies `a` into a `DMatrix` and takes nalgebra's norm (the
 /// ORIG path); default `false` sums `Σaᵢⱼ²` directly from `a` (one row-major pass, no copy) fanned
 /// across rows for LARGE matrices only, then `sqrt`. WITHIN per-op ULP tolerance vs the column-major
@@ -9472,16 +9480,58 @@ pub fn norm(a: &[Vec<f64>], kind: NormKind, options: DecompOptions) -> Result<f6
             // over `a` (no copy; the inner `col_sums += |row|` axpy vectorizes). BYTE-IDENTICAL: each
             // `col_sums[j]` accumulates i=0..rows in the same order as the per-column serial sum (a NaN
             // in column j makes `col_sums[j]` NaN, and the NaN-propagating max returns NaN — as before).
+            let serial_col_sums = || {
+                let mut col_sums = vec![0.0f64; cols];
+                for row in a {
+                    for (cs, &x) in col_sums.iter_mut().zip(row.iter()) {
+                        *cs += x.abs();
+                    }
+                }
+                col_sums
+            };
             if NORM_ONE_FORCE_LEGACY.load(std::sync::atomic::Ordering::Relaxed) {
                 let matrix = dmatrix_from_rows(a)?;
                 (0..cols)
                     .map(|j| (0..rows).map(|i| matrix[(i, j)].abs()).sum::<f64>())
                     .fold(0.0_f64, nan_max)
+            } else if NORM_ONE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+                || rows * cols < (1 << 18)
+            {
+                serial_col_sums().into_iter().fold(0.0_f64, nan_max)
             } else {
+                // Every row contributes to every column sum, so give each worker a PRIVATE `col_sums`
+                // over its row chunk, then merge the partials. Gate/idiom mirror the Inf sibling above.
+                // BYTE-IDENTICAL below the gate (serial pass); above it each column's Σ|x| regroups by
+                // chunk (~1e-15 ULP; a NaN in a column still propagates to that column's merged sum and
+                // through the NaN-max, as before).
+                let nthreads = std::thread::available_parallelism()
+                    .map(std::num::NonZero::get)
+                    .unwrap_or(1)
+                    .min(rows)
+                    .max(1);
+                let chunk = rows.div_ceil(nthreads);
+                let partials: Vec<Vec<f64>> = std::thread::scope(|scope| {
+                    a.chunks(chunk)
+                        .map(|rc| {
+                            scope.spawn(move || {
+                                let mut cs = vec![0.0f64; cols];
+                                for row in rc {
+                                    for (c, &x) in cs.iter_mut().zip(row.iter()) {
+                                        *c += x.abs();
+                                    }
+                                }
+                                cs
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|h| h.join().expect("norm one worker panicked"))
+                        .collect()
+                });
                 let mut col_sums = vec![0.0f64; cols];
-                for row in a {
-                    for (cs, &x) in col_sums.iter_mut().zip(row.iter()) {
-                        *cs += x.abs();
+                for part in &partials {
+                    for (cs, &p) in col_sums.iter_mut().zip(part.iter()) {
+                        *cs += p;
                     }
                 }
                 col_sums.into_iter().fold(0.0_f64, nan_max)
