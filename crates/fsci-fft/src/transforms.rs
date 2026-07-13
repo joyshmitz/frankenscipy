@@ -4121,7 +4121,8 @@ fn run_complex_nd(
     inverse: bool,
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<Complex64>, FftError> {
-    let fingerprint = complex_shape_fingerprint(input, shape);
+    let fingerprint =
+        audit_ledger.map_or_else(Vec::new, |_| complex_shape_fingerprint(input, shape));
     validate_shape_with_audit(shape, &fingerprint, audit_ledger)?;
     let expected_len = checked_product(shape).ok_or_else(|| {
         record_fail_closed(
@@ -5552,10 +5553,10 @@ mod tests {
     use super::{
         Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_axis2d, dct_iv,
         dctn, dst, dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_axis2d, fft_with_audit,
-        fft2, fftn, fwht, hfft, hfft2, hfftn, idct, idct_axis2d, idctn, idstn, ifft, ifft2, ifftn,
-        ihfft, ihfft2, ihfftn, irfft, irfft_with_audit, irfft2, irfftn, is_fast_len, next_fast_len,
-        prev_fast_len, rfft, rfft_axis2d, rfft_with_audit, rfft2, rfftn, sync_audit_ledger,
-        take_transform_traces,
+        fft2, fft2_with_audit, fftn, fwht, hfft, hfft2, hfftn, idct, idct_axis2d, idctn, idstn,
+        ifft, ifft2, ifftn, ihfft, ihfft2, ihfftn, irfft, irfft_with_audit, irfft2, irfftn,
+        is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_axis2d, rfft_with_audit, rfft2,
+        rfftn, sync_audit_ledger, take_transform_traces,
     };
     use super::{
         cooley_tukey_radix2_inplace, cooley_tukey_radix4_inplace_with_twiddles,
@@ -6091,6 +6092,43 @@ mod tests {
 
         let err = fft_with_audit(&input, &opts, &audit_ledger)
             .expect_err("zero workers should be rejected");
+        assert_eq!(err, FftError::InvalidWorkers { requested: 0 });
+
+        let ledger = audit_ledger.lock().expect("audit ledger lock");
+        assert_eq!(ledger.entries().len(), 1);
+        let entry = &ledger.entries()[0];
+        assert!(matches!(
+            &entry.action,
+            AuditAction::FailClosed { reason } if reason == "invalid_workers"
+        ));
+        assert_eq!(entry.input_fingerprint, expected_fingerprint);
+    }
+
+    #[test]
+    fn fft2_with_audit_preserves_complex_shape_fingerprint() {
+        let input: [Complex64; 4] = [
+            (1.25, -0.0),
+            (f64::from_bits(0x7ff8_0000_0000_0042), 3.5),
+            (-2.0, 4.25),
+            (7.0, -8.5),
+        ];
+        let shape = (2usize, 2usize);
+        let mut input_bytes = Vec::new();
+        for &(re, im) in &input {
+            input_bytes.extend_from_slice(&re.to_le_bytes());
+            input_bytes.extend_from_slice(&im.to_le_bytes());
+        }
+        for dim in [shape.0, shape.1] {
+            input_bytes.extend_from_slice(&dim.to_le_bytes());
+        }
+        let expected_fingerprint = AuditLedger::fingerprint_bytes(&input_bytes);
+        let audit_ledger = sync_audit_ledger();
+        let opts = FftOptions::default()
+            .with_workers(WorkerPolicy::Exact(0))
+            .with_check_finite(true);
+
+        let err = fft2_with_audit(&input, shape, &opts, &audit_ledger)
+            .expect_err("zero workers should be rejected before the finite-input check");
         assert_eq!(err, FftError::InvalidWorkers { requested: 0 });
 
         let ledger = audit_ledger.lock().expect("audit ledger lock");

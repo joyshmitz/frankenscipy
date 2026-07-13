@@ -20611,3 +20611,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   negative-endpoint, clamped, inverted, and empty row ranges, negative column endpoints, C-order output, hardened
   invalid bounds, row-step error precedence, and explicit multi-column/non-unit fallthrough cases. No Cargo
   command used local fallback. Crate-scoped all-target clippy also passed.
+
+## 2026-07-12 - cod - KEEP FFT complex N-D lazy audit fingerprint (1.105x at 8x8)
+
+- Negative-ledger-first selection excluded the landed 1-D complex/irfft lazy-fingerprint paths and the rejected
+  real-forward n=256 attempt. Their evidence explicitly left N-D transforms unchanged, and current history contains
+  no `complex_shape_fingerprint` optimization.
+- The existing `fft_2d/fft2/8x8` Criterion row constructs its 64-complex input and shape outside timing. A fresh
+  strict-remote production-original baseline on pinned worker `vmi1293453` measured
+  `[1.2111, 1.2470, 1.2813]` us.
+- ONE lever makes `run_complex_nd` construct the complex-plus-shape fingerprint only when an audit ledger exists.
+  Unaudited recorders already return before hashing and observe no bytes; audited calls still serialize the same
+  first 32 complex values followed by the same shape words before the unchanged shape/product/length/worker/finite
+  validation sequence. Transform arithmetic, normalization, plan caching, trace emission, and real-N-D paths are
+  unchanged.
+- Same-worker release-perf re-benchmark measured `[1.0704, 1.1280, 1.1758]` us: a centered **1.105x** speedup with
+  non-overlapping intervals. Criterion reported `[-15.905%, -7.7744%]`, `p=0.00`, and improved performance.
+- The focused strict-remote proof passed 1/1. It independently encodes complex values containing `-0.0` and a
+  payload NaN plus both shape words, then verifies the sole invalid-worker fail-closed event retains the exact
+  Blake3 fingerprint and still precedes finite-input validation. Crate-scoped all-target clippy passed; no Cargo
+  command used local fallback.
