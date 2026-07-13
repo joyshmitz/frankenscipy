@@ -16680,7 +16680,47 @@ pub fn vector_norm(v: &[f64], ord: f64) -> f64 {
     } else if ord == 0.0 {
         v.iter().filter(|&&x| x != 0.0).count() as f64
     } else if ord == 1.0 {
-        v.iter().map(|&x| x.abs()).sum()
+        // L1 norm Σ|x|: bandwidth-light kernel (abs), so parallelize the sum only for large inputs
+        // (gate 1<<20, like the stats cityblock). Below the gate / when forced serial, keep the EXACT
+        // original .map().sum() fold (byte-identical); only the large-n parallel path reorders (ULP).
+        let n = v.len();
+        if VECTOR_NORM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 20) {
+            v.iter().map(|&x| x.abs()).sum()
+        } else {
+            let chunk_sum = |vs: &[f64]| -> f64 {
+                let mut a = [0.0f64; 4];
+                let mut i = 0;
+                while i + 4 <= vs.len() {
+                    a[0] += vs[i].abs();
+                    a[1] += vs[i + 1].abs();
+                    a[2] += vs[i + 2].abs();
+                    a[3] += vs[i + 3].abs();
+                    i += 4;
+                }
+                let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+                while i < vs.len() {
+                    s += vs[i].abs();
+                    i += 1;
+                }
+                s
+            };
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 16))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_sum = &chunk_sum;
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                v.chunks(chunk)
+                    .map(|vs| scope.spawn(move || chunk_sum(vs)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("vector_norm L1 worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+        }
     } else if ord == 2.0 {
         vnorm(v)
     } else {
