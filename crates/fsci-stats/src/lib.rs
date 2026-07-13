@@ -25974,12 +25974,43 @@ pub fn nanzscore(data: &[f64]) -> Vec<f64> {
     }
 }
 
+/// When `true`, [`nansum`] sums serially (the ORIG exact `filter(!is_nan).sum()`); default `false`
+/// fans the filtered sum across cores for large inputs. WITHIN per-op ULP tolerance (parallel reorder).
+/// `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static NANSUM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute NaN-aware sum.
 ///
 /// Returns the sum of values, ignoring NaN values.
 /// Matches `numpy.nansum`.
 pub fn nansum(data: &[f64]) -> f64 {
-    data.iter().filter(|x| !x.is_nan()).sum()
+    // Bandwidth-light kernel (is_nan check + add). Below the gate (and when forced serial) keep the
+    // EXACT `filter(!is_nan).sum()` — byte-identical for small inputs and any bit-exact test; above
+    // 1<<20 fan the filtered sum across cores (each chunk sums its non-NaN, combine), within per-op
+    // ULP tolerance (parallel reorder).
+    let n = data.len();
+    if NANSUM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 20) {
+        return data.iter().filter(|x| !x.is_nan()).sum();
+    }
+    let chunk_sum = |ds: &[f64]| -> f64 { ds.iter().filter(|x| !x.is_nan()).sum() };
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_sum = &chunk_sum;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|ds| scope.spawn(move || chunk_sum(ds)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("nansum worker panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(0.0f64, |acc, s| acc + s)
 }
 
 /// Compute NaN-aware product.
