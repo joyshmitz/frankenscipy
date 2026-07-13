@@ -27238,6 +27238,38 @@ fn sample_mean(data: &[f64]) -> f64 {
     data.iter().sum::<f64>() / data.len() as f64
 }
 
+/// When `true`, [`par_sum`] folds serially (the ORIG `iter().sum()`); default `false` fans the sum
+/// across cores for huge inputs. Byte-identical below the gate. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static PAR_SUM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `Σ data` — a work-gated parallel sum for the mean pass of reductions whose SS/variance pass is
+/// already parallel (so the serial mean sum has become the residual). Below the gate (and under
+/// `PAR_SUM_FORCE_SERIAL`) it is the exact serial left-fold `data.iter().sum()` (BYTE-IDENTICAL); above
+/// 1<<22 it fans across cores as per-thread partial sums, within per-op ULP tolerance.
+fn par_sum(data: &[f64]) -> f64 {
+    let n = data.len();
+    if PAR_SUM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+        return data.iter().sum();
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        data.chunks(chunk)
+            .map(|c| scope.spawn(move || c.iter().sum::<f64>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("par_sum worker panicked"))
+            .collect()
+    });
+    parts.into_iter().sum()
+}
+
 /// `Σ(xᵢ − mean)²` — the centered second-moment reduction shared by [`sample_variance`], [`sem`] and
 /// [`variation`]. Below the gate (and under `MOMENT_PAR_FORCE_SERIAL`) it is the exact serial
 /// `map((x−mean)²).sum()` fold (BYTE-IDENTICAL to those callers' original loops); above 1<<22 it fans
@@ -35760,10 +35792,11 @@ fn mean_std_ddof(data: &[f64], ddof: usize) -> Option<(f64, f64)> {
     if n == 0 || n <= ddof {
         return None;
     }
-    let mean = data.iter().sum::<f64>() / n as f64;
-    // Σ(x−mean)² via the shared work-gated `sum_sq_dev` (parallel for huge inputs, byte-identical below
-    // the gate). This std reduction fed the whole zscore family (zscore/zscore_ddof/gzscore) serially
-    // while their `(x−mean)/std` OUTPUT map was already parallel — it was the remaining straggler.
+    // Mean via `par_sum` and Σ(x−mean)² via `sum_sq_dev` — both work-gated parallel (byte-identical
+    // below the gate). This primitive feeds the whole zscore family (zscore/zscore_ddof/gzscore); with
+    // the SS reduction and the `(x−mean)/std` output map already parallel, the serial mean sum was the
+    // remaining residual pass — now parallel too.
+    let mean = par_sum(data) / n as f64;
     let var = sum_sq_dev(data, mean) / (n - ddof) as f64;
     Some((mean, var.sqrt()))
 }
