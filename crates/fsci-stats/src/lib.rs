@@ -29641,6 +29641,13 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
 pub static FLIGNER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`fligner`] maps its rank→normal-quantile scores serially (the ORIG behaviour);
+/// default `false` fans the compute-bound `standard_normal_ppf` map across cores via the
+/// order-preserving `par_continuous_map`. Byte-identical either way. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static FLIGNER_PPF_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Fligner-Killeen test for equal variances.
 ///
 /// A robust non-parametric test that uses the chi-squared distribution
@@ -29715,12 +29722,20 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
     // Rank all scores using average ranks for ties (matches scipy.stats.rankdata).
     let ranks = rankdata_average(&all_scores);
 
-    // Transform ranks to normal quantile scores
+    // Transform ranks to normal quantile scores. `standard_normal_ppf` (inverse normal CDF) is a heavy
+    // per-element transcendental → COMPUTE-bound, and each output is a pure function of its index. Fan
+    // the map across cores via the order-preserving `par_continuous_map` — BYTE-IDENTICAL to the serial
+    // `map(ppf).collect()` (same values in index order). `FLIGNER_PPF_FORCE_SERIAL` restores the serial
+    // map for the same-binary A/B gate.
     let nf = n_total as f64;
-    let scores: Vec<f64> = ranks
-        .iter()
-        .map(|&r| standard_normal_ppf((1.0 + r / (nf + 1.0)) / 2.0))
-        .collect();
+    let scores: Vec<f64> = if FLIGNER_PPF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        ranks
+            .iter()
+            .map(|&r| standard_normal_ppf((1.0 + r / (nf + 1.0)) / 2.0))
+            .collect()
+    } else {
+        par_continuous_map(&ranks, |r| standard_normal_ppf((1.0 + r / (nf + 1.0)) / 2.0))
+    };
 
     // Compute group means of scores
     let grand_mean = scores.iter().sum::<f64>() / nf;
