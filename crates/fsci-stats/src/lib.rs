@@ -51442,6 +51442,12 @@ pub fn ks_distance(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> f64 {
 /// Compute the empirical CDF at given points.
 ///
 /// Returns the proportion of data ≤ each value in `x_eval`.
+/// When `true`, [`ecdf`] evaluates its query points serially (the ORIG behaviour); default `false`
+/// fans the independent per-point binary searches across cores for large `x_eval`. Byte-identical.
+#[doc(hidden)]
+pub static ECDF_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn ecdf(data: &[f64], x_eval: &[f64]) -> Vec<f64> {
     let n = data.len() as f64;
     if n == 0.0 {
@@ -51450,13 +51456,21 @@ pub fn ecdf(data: &[f64], x_eval: &[f64]) -> Vec<f64> {
     let mut sorted = data.to_vec();
     sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
-    x_eval
-        .iter()
-        .map(|&x| {
-            let count = sorted.partition_point(|&v| v <= x);
-            count as f64 / n
+    // Each query point is an INDEPENDENT `partition_point` (O(log n) binary search) into the shared
+    // sorted array, so fan the points across cores for large `x_eval` via the order-preserving
+    // `par_continuous_map_min` — BYTE-IDENTICAL to the serial map (same integer count per point, same
+    // index order). 200k/thread gate (moderate ~log n binary-search kernel). `ECDF_FORCE_SERIAL`.
+    let sorted_ref = &sorted;
+    if ECDF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        x_eval
+            .iter()
+            .map(|&x| sorted_ref.partition_point(|&v| v <= x) as f64 / n)
+            .collect()
+    } else {
+        par_continuous_map_min(x_eval, 200_000, move |x| {
+            sorted_ref.partition_point(|&v| v <= x) as f64 / n
         })
-        .collect()
+    }
 }
 
 /// Compute the Mann-Kendall trend test.
