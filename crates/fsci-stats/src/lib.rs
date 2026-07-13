@@ -25849,9 +25849,10 @@ pub fn nanmean(data: &[f64]) -> f64 {
     sum / count as f64
 }
 
-/// When `true`, [`nanvar`] (and thus [`nanstd`]) materializes the NaN-filtered `Vec` then
-/// makes two passes over it (the ORIG behaviour); default `false` re-filters inline in two
-/// passes with no allocation. Byte-identical.
+/// When `true`, [`nanvar`] (and thus [`nanstd`]) and [`nanzscore`]'s mean/variance setup materialize
+/// the NaN-filtered `Vec` then make two passes over it (the ORIG behaviour); default `false` re-filters
+/// inline in two passes with no allocation. Byte-identical. (`nanvar` re-filters always; `nanzscore`
+/// gates the inline path to the memory-bound regime, keeping the collect path for small inputs.)
 #[doc(hidden)]
 pub static NANVAR_FORCE_COLLECT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -25909,14 +25910,45 @@ pub fn nanstd(data: &[f64]) -> f64 {
 ///
 /// Like `scipy.stats.zscore` with nan_policy='omit'.
 pub fn nanzscore(data: &[f64]) -> Vec<f64> {
-    let valid: Vec<f64> = data.iter().copied().filter(|x| !x.is_nan()).collect();
-    if valid.len() < 2 {
-        return vec![f64::NAN; data.len()];
-    }
-
-    let n = valid.len() as f64;
-    let mean = valid.iter().sum::<f64>() / n;
-    let var = valid.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+    // mean + population variance over the non-NaN elements. Same alloc-free lever as tvar/nanvar:
+    // above 1<<22 (data spills LLC) compute both in two inline filter passes over `data` instead of
+    // materializing the NaN-filtered `valid` Vec (its alloc + write + two reads → two reads of `data`);
+    // below the gate (and under NANVAR_FORCE_COLLECT) keep the collect path. BYTE-IDENTICAL: Σ, count
+    // and Σ(x-mean)² are the same left-to-right folds over the non-NaN elements in data order as over
+    // `valid`, so `mean`/`var` (and the output map) are unchanged.
+    let (mean, var) = if NANVAR_FORCE_COLLECT.load(std::sync::atomic::Ordering::Relaxed)
+        || data.len() < (1 << 22)
+    {
+        let valid: Vec<f64> = data.iter().copied().filter(|x| !x.is_nan()).collect();
+        if valid.len() < 2 {
+            return vec![f64::NAN; data.len()];
+        }
+        let n = valid.len() as f64;
+        let mean = valid.iter().sum::<f64>() / n;
+        let var = valid.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+        (mean, var)
+    } else {
+        let mut sum = 0.0f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_nan() {
+                sum += x;
+                count += 1;
+            }
+        }
+        if count < 2 {
+            return vec![f64::NAN; data.len()];
+        }
+        let n = count as f64;
+        let mean = sum / n;
+        let mut ss = 0.0f64;
+        for &x in data {
+            if !x.is_nan() {
+                ss += (x - mean).powi(2);
+            }
+        }
+        (mean, ss / n)
+    };
     let std = var.sqrt();
 
     if std == 0.0 {
