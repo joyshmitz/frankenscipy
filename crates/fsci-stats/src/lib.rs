@@ -44383,6 +44383,13 @@ pub struct Chi2ContingencyResult {
 /// Matches `scipy.stats.contingency.crosstab(a, b)` for the common two-input
 /// case (scipy's variadic form returns the same `elements`/`count`). Returns
 /// empty results if the inputs differ in length or are empty.
+/// When `true`, [`crosstab`] builds its two per-input level sets sequentially (the ORIG behaviour);
+/// default `false` overlaps the two independent sort/dedup passes on separate threads for large inputs.
+/// Bit-identical either way. `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static CROSSTAB_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn crosstab(a: &[f64], b: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<Vec<u64>>) {
     if a.is_empty() || a.len() != b.len() {
         return (vec![], vec![], vec![]);
@@ -44394,8 +44401,20 @@ pub fn crosstab(a: &[f64], b: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<Vec<u64>>) {
         v.dedup_by(|x, y| x.total_cmp(y) == std::cmp::Ordering::Equal);
         v
     };
-    let levels_a = sorted_unique(a);
-    let levels_b = sorted_unique(b);
+    // `levels_a` (from a) and `levels_b` (from b) are two INDEPENDENT sort-dominated dedup passes that
+    // dominate crosstab. Overlap them on separate threads for large inputs. BIT-IDENTICAL: `sorted_unique`
+    // is deterministic, so only the wall-clock overlaps. `CROSSTAB_FORCE_SERIAL` restores the serial order.
+    let (levels_a, levels_b) = if CROSSTAB_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || a.len() < (1 << 16)
+    {
+        (sorted_unique(a), sorted_unique(b))
+    } else {
+        std::thread::scope(|scope| {
+            let h = scope.spawn(|| sorted_unique(b));
+            let la = sorted_unique(a);
+            (la, h.join().expect("crosstab worker panicked"))
+        })
+    };
 
     // Index of a value within its sorted-unique level vector (total_cmp order).
     let index_of = |levels: &[f64], value: f64| -> usize {
