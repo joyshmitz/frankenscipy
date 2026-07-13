@@ -27851,6 +27851,13 @@ pub fn cosine_distance(u: &[f64], v: &[f64]) -> f64 {
     1.0 - dot / (norm_u * norm_v)
 }
 
+/// When `true`, [`cityblock_distance`] sums serially (the ORIG exact 1-accumulator fold, byte-
+/// identical to `map(..).sum()`); default `false` fans a 4-way-unrolled chunk sum across cores for
+/// large inputs. WITHIN per-op ULP tolerance (same reordering the parallel `sqeuclidean` sum uses).
+#[doc(hidden)]
+pub static CITYBLOCK_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the Manhattan (city block) distance between two vectors.
 ///
 /// d(u, v) = Σ |u_i - v_i|
@@ -27858,7 +27865,49 @@ pub fn cityblock_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    u.iter().zip(v).map(|(&ui, &vi)| (ui - vi).abs()).sum()
+    let n = u.len();
+    if CITYBLOCK_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return u.iter().zip(v).map(|(&ui, &vi)| (ui - vi).abs()).sum();
+    }
+    let chunk_sum = |us: &[f64], vs: &[f64]| -> f64 {
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= us.len() {
+            a[0] += (us[i] - vs[i]).abs();
+            a[1] += (us[i + 1] - vs[i + 1]).abs();
+            a[2] += (us[i + 2] - vs[i + 2]).abs();
+            a[3] += (us[i + 3] - vs[i + 3]).abs();
+            i += 4;
+        }
+        let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+        while i < us.len() {
+            s += (us[i] - vs[i]).abs();
+            i += 1;
+        }
+        s
+    };
+    // Bandwidth-light kernel (sub + abs): parallel only pays past ~1M, gate at 1<<20
+    // like sqeuclidean so no small size regresses.
+    if n < (1 << 20) {
+        return chunk_sum(u, v);
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_sum = &chunk_sum;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        u.chunks(chunk)
+            .zip(v.chunks(chunk))
+            .map(|(us, vs)| scope.spawn(move || chunk_sum(us, vs)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("cityblock worker panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(0.0f64, |acc, s| acc + s)
 }
 
 /// Compute the Chebyshev distance between two vectors.
