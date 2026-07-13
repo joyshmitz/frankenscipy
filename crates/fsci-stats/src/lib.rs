@@ -10046,28 +10046,38 @@ impl Binomial {
             acc += pmf[k];
             cdf[k] = acc.min(1.0);
         }
-        qs.iter()
-            .map(|&q| {
-                if q <= 0.0 {
-                    return -1.0;
+        // Independent per-quantile `partition_point` + boundary refinement into the shared CDF table,
+        // so fan across cores for large `qs` via the order-preserving `par_continuous_map_min` —
+        // BYTE-IDENTICAL (same index per quantile, same order). Below 800k use the direct serial map.
+        let cdf_ref = &cdf;
+        let this = self;
+        let eval = move |q: f64| -> f64 {
+            if q <= 0.0 {
+                return -1.0;
+            }
+            if q >= 1.0 {
+                return nf;
+            }
+            let idx = cdf_ref.partition_point(|&c| c < q).min(nn);
+            let mut k = idx;
+            let near = (k > 0 && q - cdf_ref[k - 1] < 1e-11) || (cdf_ref[k] - q < 1e-11);
+            if near {
+                while k > 0 && this.cdf((k - 1) as u64) >= q {
+                    k -= 1;
                 }
-                if q >= 1.0 {
-                    return nf;
+                while (k as u64) < n && this.cdf(k as u64) < q {
+                    k += 1;
                 }
-                let idx = cdf.partition_point(|&c| c < q).min(nn);
-                let mut k = idx;
-                let near = (k > 0 && q - cdf[k - 1] < 1e-11) || (cdf[k] - q < 1e-11);
-                if near {
-                    while k > 0 && self.cdf((k - 1) as u64) >= q {
-                        k -= 1;
-                    }
-                    while (k as u64) < n && self.cdf(k as u64) < q {
-                        k += 1;
-                    }
-                }
-                k as f64
-            })
-            .collect()
+            }
+            k as f64
+        };
+        if DISCRETE_PPF_MANY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+            || qs.len() < 800_000
+        {
+            qs.iter().map(|&q| eval(q)).collect()
+        } else {
+            par_continuous_map_min(qs, 400_000, eval)
+        }
     }
 }
 
@@ -11501,31 +11511,42 @@ impl NegBinomial {
             acc += pmf[k];
             cdf[k] = acc.min(1.0);
         }
-        qs.iter()
-            .map(|&q| {
-                if q <= 0.0 {
-                    return -1.0;
+        // Independent per-quantile `partition_point` + boundary refinement into the shared CDF table,
+        // so fan across cores for large `qs` via the order-preserving `par_continuous_map_min` —
+        // BYTE-IDENTICAL (same index per quantile, tail overflow → scalar `ppf`, same order). Below
+        // 800k use the direct serial map. Shares `DISCRETE_PPF_MANY_FORCE_SERIAL`.
+        let cdf_ref = &cdf;
+        let this = self;
+        let eval = move |q: f64| -> f64 {
+            if q <= 0.0 {
+                return -1.0;
+            }
+            if q >= 1.0 {
+                return f64::INFINITY;
+            }
+            let idx = cdf_ref.partition_point(|&c| c < q);
+            if idx > k_hi {
+                return this.ppf(q);
+            }
+            let mut k = idx;
+            let near = (k > 0 && q - cdf_ref[k - 1] < 1e-11) || (cdf_ref[k] - q < 1e-11);
+            if near {
+                while k > 0 && this.cdf((k - 1) as u64) >= q {
+                    k -= 1;
                 }
-                if q >= 1.0 {
-                    return f64::INFINITY;
+                while k < k_hi && this.cdf(k as u64) < q {
+                    k += 1;
                 }
-                let idx = cdf.partition_point(|&c| c < q);
-                if idx > k_hi {
-                    return self.ppf(q);
-                }
-                let mut k = idx;
-                let near = (k > 0 && q - cdf[k - 1] < 1e-11) || (cdf[k] - q < 1e-11);
-                if near {
-                    while k > 0 && self.cdf((k - 1) as u64) >= q {
-                        k -= 1;
-                    }
-                    while k < k_hi && self.cdf(k as u64) < q {
-                        k += 1;
-                    }
-                }
-                k as f64
-            })
-            .collect()
+            }
+            k as f64
+        };
+        if DISCRETE_PPF_MANY_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+            || qs.len() < 800_000
+        {
+            qs.iter().map(|&q| eval(q)).collect()
+        } else {
+            par_continuous_map_min(qs, 400_000, eval)
+        }
     }
 }
 
