@@ -48285,7 +48285,7 @@ pub fn softmax(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
-    let max_x = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let max_x = par_max_fold(x);
     // The per-element `exp` is the dominant cost and is an order-preserving map (each output
     // independent), so fan it across cores for large inputs — BYTE-IDENTICAL to the serial map (same
     // `(xi-max_x).exp()` per index, same order). The Σ stays serial (float reassociation) and the
@@ -48341,7 +48341,7 @@ pub fn log_softmax(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
-    let max_x = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let max_x = par_max_fold(x);
     const SOFTMAX_MIN_PER_THREAD: usize = 700_000;
     let n = x.len();
     let force_serial = SOFTMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
