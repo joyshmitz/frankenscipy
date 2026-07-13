@@ -48318,26 +48318,44 @@ pub fn log_softmax(x: &[f64]) -> Vec<f64> {
         return vec![];
     }
     let max_x = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    // Same shape as [`softmax`]: the per-element `exp` is the dominant cost. Materialise it with an
-    // order-preserving parallel map, then sum SERIALLY over that Vec in index order — BYTE-IDENTICAL
-    // to the fused `x.iter().map(exp).sum()` (same terms, same summation order). The trailing subtract
-    // is another order-preserving map. `SOFTMAX_FORCE_SERIAL` restores the fully-serial path.
     const SOFTMAX_MIN_PER_THREAD: usize = 700_000;
-    // Only materialise+parallelise once the input is large enough to actually spawn ≥2 threads;
-    // below that the serial path fuses `map(exp).sum()` with NO intermediate Vec, so parallelising
-    // would only add the exp_x allocation for no gain (unlike softmax, whose serial path also
-    // materialises). `SOFTMAX_FORCE_SERIAL` forces the serial path regardless.
-    let use_parallel = !SOFTMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        && x.len() >= 2 * SOFTMAX_MIN_PER_THREAD;
-    let sum_exp: f64 = if use_parallel {
-        par_continuous_map_min(x, SOFTMAX_MIN_PER_THREAD, |xi| (xi - max_x).exp())
-            .iter()
-            .sum()
-    } else {
+    let n = x.len();
+    let force_serial = SOFTMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    // `Σexp(xᵢ−max)` for the log-sum-exp: log_softmax (unlike softmax) does NOT need the exp values for
+    // its output (`xᵢ − log_sum_exp`), so sum them in per-thread partials with NO intermediate Vec (the
+    // prior path materialised a full exp Vec via par_continuous_map only to sum it serially). Below the
+    // gate (and under `SOFTMAX_FORCE_SERIAL`) keep the EXACT serial `map(exp).sum()` fold (byte-
+    // identical); above 1<<16 fan the sum across cores, within per-op ULP tolerance (parallel reorder).
+    let sum_exp: f64 = if force_serial || n < (1 << 16) {
         x.iter().map(|&xi| (xi - max_x).exp()).sum()
+    } else {
+        let chunk_sum = |xs: &[f64]| -> f64 {
+            let mut s = 0.0f64;
+            for &xi in xs {
+                s += (xi - max_x).exp();
+            }
+            s
+        };
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 15))
+            .max(1);
+        let chunk = n.div_ceil(nthreads);
+        let chunk_sum = &chunk_sum;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            x.chunks(chunk)
+                .map(|xs| scope.spawn(move || chunk_sum(xs)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("log_softmax worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold(0.0f64, |a, b| a + b)
     };
     let log_sum_exp = max_x + sum_exp.ln();
-    if use_parallel {
+    // The trailing subtract `xᵢ − log_sum_exp` is an order-preserving map (byte-identical serial/parallel).
+    if !force_serial && n >= 2 * SOFTMAX_MIN_PER_THREAD {
         par_continuous_map_min(x, SOFTMAX_MIN_PER_THREAD, |xi| xi - log_sum_exp)
     } else {
         x.iter().map(|&xi| xi - log_sum_exp).collect()
