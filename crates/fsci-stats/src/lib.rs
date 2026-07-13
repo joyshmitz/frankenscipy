@@ -34018,9 +34018,9 @@ pub fn sem(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let nf = n as f64;
-    let mean_val = data.iter().sum::<f64>() / nf;
-    // Σ(x−mean)² via the shared work-gated `sum_sq_dev` (parallel for huge inputs, byte-identical below
-    // the gate) — sem was a serial straggler vs the already-parallel skew/kurtosis/describe moment loops.
+    // Mean via `par_sum` + Σ(x−mean)² via `sum_sq_dev` — both work-gated parallel (byte-identical below
+    // the gate). sem was a serial straggler vs the already-parallel skew/kurtosis/describe moment loops.
+    let mean_val = par_sum(data) / nf;
     let var: f64 = sum_sq_dev(data, mean_val) / (nf - 1.0);
     (var / nf).sqrt()
 }
@@ -35721,9 +35721,9 @@ pub fn variation(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let n = data.len() as f64;
-    let mean_val = data.iter().sum::<f64>() / n;
-    // Σ(x−mean)² via the shared work-gated `sum_sq_dev` (parallel for huge inputs, byte-identical below
-    // the gate) — variation was a serial straggler vs the parallel skew/kurtosis/describe moment loops.
+    // Mean via `par_sum` + Σ(x−mean)² via `sum_sq_dev` — both work-gated parallel (byte-identical below
+    // the gate). variation was a serial straggler vs the parallel skew/kurtosis/describe moment loops.
+    let mean_val = par_sum(data) / n;
     let var: f64 = sum_sq_dev(data, mean_val) / n;
     var.sqrt() / mean_val
 }
@@ -51138,7 +51138,7 @@ pub fn coefficient_of_variation(data: &[f64]) -> f64 {
     if n < 2.0 {
         return f64::NAN;
     }
-    let mean: f64 = data.iter().sum::<f64>() / n;
+    let mean: f64 = par_sum(data) / n;
     if mean == 0.0 {
         return f64::INFINITY;
     }
@@ -51154,9 +51154,9 @@ pub fn standard_error_of_mean(data: &[f64]) -> f64 {
     if n < 2.0 {
         return f64::NAN;
     }
-    let mean: f64 = data.iter().sum::<f64>() / n;
-    // Σ(x−mean)² via the shared work-gated `sum_sq_dev` (parallel for huge inputs, byte-identical below
-    // the gate) — was a serial straggler vs the parallel skew/kurtosis/describe moment loops.
+    // Mean via `par_sum` + Σ(x−mean)² via `sum_sq_dev` — both work-gated parallel (byte-identical below
+    // the gate); was a serial straggler vs the parallel skew/kurtosis/describe moment loops.
+    let mean: f64 = par_sum(data) / n;
     let var: f64 = sum_sq_dev(data, mean) / (n - 1.0);
     var.sqrt() / n.sqrt()
 }
