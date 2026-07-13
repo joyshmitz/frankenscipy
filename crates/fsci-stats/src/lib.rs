@@ -26504,6 +26504,69 @@ pub fn hmean(data: &[f64]) -> f64 {
 pub static HMEAN_W_FUSE_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// The weighted harmonic mean's fused five-in-one traversal (`Σw`, `Σ(w/x)`, and the three flags),
+/// split across threads for large inputs. Each worker folds its aligned (data,weights) chunk in
+/// index order and OR-combines the flags; the two sums are added in chunk order. Mirrors
+/// [`hmean_inv_sum`]/[`gmean_log_sum`]'s work-gated `thread::scope` split (`w/x` is a light-ish
+/// division, so cap workers at >=64k elements each). Returns
+/// `(data_invalid, weights_invalid, has_zero, total_w, weighted_inv_sum)`. ~1e-15 reassociation vs
+/// the serial fold above the gate; BYTE-IDENTICAL at/below it (the single-chunk fold IS the
+/// original fused loop).
+fn hmean_weighted_reduce(data: &[f64], weights: &[f64]) -> (bool, bool, bool, f64, f64) {
+    let chunk_fold = |xs: &[f64], ws: &[f64]| -> (bool, bool, bool, f64, f64) {
+        let mut data_invalid = false;
+        let mut weights_invalid = false;
+        let mut has_zero = false;
+        let mut total_w = 0.0f64;
+        let mut weighted_inv_sum = 0.0f64;
+        for (&x, &w) in xs.iter().zip(ws) {
+            data_invalid |= x.is_nan() || x < 0.0;
+            weights_invalid |= !w.is_finite() || w < 0.0;
+            total_w += w;
+            has_zero |= x == 0.0 && w > 0.0;
+            weighted_inv_sum += w / x;
+        }
+        (data_invalid, weights_invalid, has_zero, total_w, weighted_inv_sum)
+    };
+    let n = data.len();
+    // Short-circuit small inputs BEFORE the `available_parallelism()` syscall — the per-line axis
+    // reducer calls this over many short lines, where that `sched_getaffinity` would dominate the
+    // (cheap) division work. The serial fold is what we'd take here anyway.
+    if n < (1 << 16) {
+        return chunk_fold(data, weights);
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let threads = cores.min((n / (1 << 16)).max(1)).min(16);
+    if threads <= 1 {
+        return chunk_fold(data, weights);
+    }
+    let chunk = n.div_ceil(threads);
+    // `data` and `weights` have equal length, so `chunks(chunk)` splits them at aligned boundaries.
+    let parts: Vec<(bool, bool, bool, f64, f64)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = data
+            .chunks(chunk)
+            .zip(weights.chunks(chunk))
+            .map(|(xs, ws)| scope.spawn(move || chunk_fold(xs, ws)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut data_invalid = false;
+    let mut weights_invalid = false;
+    let mut has_zero = false;
+    let mut total_w = 0.0f64;
+    let mut weighted_inv_sum = 0.0f64;
+    for (di, wi, hz, tw, wis) in parts {
+        data_invalid |= di;
+        weights_invalid |= wi;
+        has_zero |= hz;
+        total_w += tw;
+        weighted_inv_sum += wis;
+    }
+    (data_invalid, weights_invalid, has_zero, total_w, weighted_inv_sum)
+}
+
 /// Compute the weighted harmonic mean.
 ///
 /// H_w = (Σw) / Σ(w/x)
@@ -26536,23 +26599,14 @@ pub fn hmean_weighted(data: &[f64], weights: &[f64]) -> f64 {
             total_w / weighted_inv_sum
         };
     }
-    // Fuse the five independent traversals into ONE pass. BYTE-IDENTICAL: `total_w` and
+    // Fuse the five independent traversals into ONE pass (and, for huge inputs, split it across
+    // threads — see `hmean_weighted_reduce`). BYTE-IDENTICAL below the parallel gate: `total_w` and
     // `weighted_inv_sum` are the same left-to-right folds from 0.0 over (data,weights) in order, and
     // the flags trigger the same early-returns in the same precedence (data-invalid > weights-invalid
     // > Σw==0 > x==0&&w>0). A `w/x` from an invalid/zero element poisons `weighted_inv_sum`, but it is
     // only used once no flag has fired (all x>0), exactly as the original's ordering guaranteed.
-    let mut data_invalid = false;
-    let mut weights_invalid = false;
-    let mut has_zero = false;
-    let mut total_w = 0.0f64;
-    let mut weighted_inv_sum = 0.0f64;
-    for (&x, &w) in data.iter().zip(weights) {
-        data_invalid |= x.is_nan() || x < 0.0;
-        weights_invalid |= !w.is_finite() || w < 0.0;
-        total_w += w;
-        has_zero |= x == 0.0 && w > 0.0;
-        weighted_inv_sum += w / x;
-    }
+    let (data_invalid, weights_invalid, has_zero, total_w, weighted_inv_sum) =
+        hmean_weighted_reduce(data, weights);
     if data_invalid || weights_invalid || total_w == 0.0 {
         return f64::NAN;
     }
