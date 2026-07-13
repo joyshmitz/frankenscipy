@@ -27473,12 +27473,12 @@ pub fn ttest_ind(a: &[f64], b: &[f64]) -> TtestResult {
     let mean1: f64 = a.iter().sum::<f64>() / n1;
     let mean2: f64 = b.iter().sum::<f64>() / n2;
     let var1: f64 = if a.len() > 1 {
-        a.iter().map(|&x| (x - mean1).powi(2)).sum::<f64>() / (n1 - 1.0)
+        sum_sq_dev(a, mean1) / (n1 - 1.0)
     } else {
         0.0
     };
     let var2: f64 = if b.len() > 1 {
-        b.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0)
+        sum_sq_dev(b, mean2) / (n2 - 1.0)
     } else {
         0.0
     };
@@ -27539,12 +27539,12 @@ pub fn ttest_ind_alternative(a: &[f64], b: &[f64], alternative: &str) -> TtestRe
     let mean1: f64 = a.iter().sum::<f64>() / n1;
     let mean2: f64 = b.iter().sum::<f64>() / n2;
     let var1: f64 = if a.len() > 1 {
-        a.iter().map(|&x| (x - mean1).powi(2)).sum::<f64>() / (n1 - 1.0)
+        sum_sq_dev(a, mean1) / (n1 - 1.0)
     } else {
         0.0
     };
     let var2: f64 = if b.len() > 1 {
-        b.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0)
+        sum_sq_dev(b, mean2) / (n2 - 1.0)
     } else {
         0.0
     };
@@ -27601,8 +27601,8 @@ pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
     let n2 = b.len() as f64;
     let mean1: f64 = a.iter().sum::<f64>() / n1;
     let mean2: f64 = b.iter().sum::<f64>() / n2;
-    let var1: f64 = a.iter().map(|&x| (x - mean1).powi(2)).sum::<f64>() / (n1 - 1.0);
-    let var2: f64 = b.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0);
+    let var1: f64 = sum_sq_dev(a, mean1) / (n1 - 1.0);
+    let var2: f64 = sum_sq_dev(b, mean2) / (n2 - 1.0);
 
     let se = (var1 / n1 + var2 / n2).sqrt();
 
