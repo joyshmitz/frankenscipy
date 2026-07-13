@@ -27726,10 +27726,10 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
     // previous version sorted+deduped a third Vec and called
     // partition_point (O(log N)) per step, totaling O((N+M)·log(N+M)).
     // The two-pointer variant runs in O(N + M).
-    let mut u_sorted = u.to_vec();
-    let mut v_sorted = v.to_vec();
-    sort_f64_total(&mut u_sorted);
-    sort_f64_total(&mut v_sorted);
+    // The two O(N log N) sorts dominate this O(N+M) sweep and are independent, so
+    // overlap them on separate threads for large inputs (see sort_two_f64_total).
+    // BIT-IDENTICAL: deterministic sort feeds the unchanged merge sweep.
+    let (u_sorted, v_sorted) = sort_two_f64_total(u, v);
 
     let nu = u.len() as f64;
     let nv = v.len() as f64;
