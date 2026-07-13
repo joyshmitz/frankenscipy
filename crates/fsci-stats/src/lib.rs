@@ -27910,6 +27910,14 @@ pub fn cityblock_distance(u: &[f64], v: &[f64]) -> f64 {
     parts.into_iter().fold(0.0f64, |acc, s| acc + s)
 }
 
+/// When `true`, [`chebyshev_distance`] folds serially (the ORIG single-accumulator `fold(max)`);
+/// default `false` fans a 4-way-unrolled chunk max across cores for large inputs. BYTE-IDENTICAL
+/// either way — `f64::max` is exactly associative/commutative and ignores NaN, so any grouping of
+/// the reduction yields the same bits (unlike the ULP-reordered parallel SUM siblings).
+#[doc(hidden)]
+pub static CHEBYSHEV_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the Chebyshev distance between two vectors.
 ///
 /// d(u, v) = max_i |u_i - v_i|
@@ -27917,10 +27925,56 @@ pub fn chebyshev_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    u.iter()
-        .zip(v)
-        .map(|(&ui, &vi)| (ui - vi).abs())
-        .fold(0.0f64, |acc, d| acc.max(d))
+    let n = u.len();
+    // Serial = the ORIGINAL naive fold; LLVM already auto-vectorizes a max-reduction (maxpd),
+    // so a manual unroll doesn't help below the gate — keep the naive fold there unchanged.
+    let serial = || {
+        u.iter()
+            .zip(v)
+            .map(|(&ui, &vi)| (ui - vi).abs())
+            .fold(0.0f64, |acc, d| acc.max(d))
+    };
+    // Cheap kernel (sub + abs + max): the fixed thread-spawn cost only amortizes at large n
+    // (measured 0.90x @2M loss, 2.0-2.2x @8-16M). Gate at 1<<22 so no measured size regresses.
+    // BYTE-IDENTICAL at every size — f64::max is exactly associative/commutative and ignores NaN,
+    // so the parallel per-chunk max + max-combine yields the same bits as the serial fold.
+    if CHEBYSHEV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+        return serial();
+    }
+    let chunk_max = |us: &[f64], vs: &[f64]| -> f64 {
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= us.len() {
+            a[0] = a[0].max((us[i] - vs[i]).abs());
+            a[1] = a[1].max((us[i + 1] - vs[i + 1]).abs());
+            a[2] = a[2].max((us[i + 2] - vs[i + 2]).abs());
+            a[3] = a[3].max((us[i + 3] - vs[i + 3]).abs());
+            i += 4;
+        }
+        let mut m = a[0].max(a[1]).max(a[2]).max(a[3]);
+        while i < us.len() {
+            m = m.max((us[i] - vs[i]).abs());
+            i += 1;
+        }
+        m
+    };
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n / (1 << 16))
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let chunk_max = &chunk_max;
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        u.chunks(chunk)
+            .zip(v.chunks(chunk))
+            .map(|(us, vs)| scope.spawn(move || chunk_max(us, vs)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("chebyshev worker panicked"))
+            .collect()
+    });
+    parts.into_iter().fold(0.0f64, |acc, m| acc.max(m))
 }
 
 /// When `true`, [`minkowski_distance`] sums serially (the ORIG exact 1-accumulator fold, byte-
