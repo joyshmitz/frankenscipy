@@ -30918,17 +30918,49 @@ pub fn linregress(x: &[f64], y: &[f64]) -> LinregressResult {
     let xmean: f64 = x.iter().sum::<f64>() / n;
     let ymean: f64 = y.iter().sum::<f64>() / n;
 
-    // Sums of squares and cross-products
-    let mut ssxm = 0.0; // Σ(x - xmean)²
-    let mut ssym = 0.0; // Σ(y - ymean)²
-    let mut ssxym = 0.0; // Σ(x - xmean)(y - ymean)
-    for (&xi, &yi) in x.iter().zip(y.iter()) {
-        let dx = xi - xmean;
-        let dy = yi - ymean;
-        ssxm += dx * dx;
-        ssym += dy * dy;
-        ssxym += dx * dy;
-    }
+    // Centered sums-of-squares/cross-products (ssxm=Σdx², ssym=Σdy², ssxym=Σdx·dy) — the dominant O(n)
+    // reduction (means fixed above). Below the gate (and under PEARSONR_FORCE_SERIAL) fold the three in
+    // ONE serial pass (byte-identical to the original loop); above 1<<22 fan them across cores as
+    // per-thread partial triples, within per-op ULP tolerance (parallel reorder). Same as `pearsonr`.
+    let nn = x.len();
+    let chunk_ss = |xs: &[f64], ys: &[f64]| -> (f64, f64, f64) {
+        let mut sxm = 0.0f64;
+        let mut sym = 0.0f64;
+        let mut sxym = 0.0f64;
+        for (&xi, &yi) in xs.iter().zip(ys) {
+            let dx = xi - xmean;
+            let dy = yi - ymean;
+            sxm += dx * dx;
+            sym += dy * dy;
+            sxym += dx * dy;
+        }
+        (sxm, sym, sxym)
+    };
+    let (ssxm, ssym, ssxym) = if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || nn < (1 << 22)
+    {
+        chunk_ss(x, y)
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(nn / (1 << 16))
+            .max(1);
+        let chunk = nn.div_ceil(nthreads);
+        let chunk_ss = &chunk_ss;
+        let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
+            x.chunks(chunk)
+                .zip(y.chunks(chunk))
+                .map(|(xs, ys)| scope.spawn(move || chunk_ss(xs, ys)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("linregress worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold((0.0f64, 0.0f64, 0.0f64), |(am, bm, cm), (a, b, c)| {
+            (am + a, bm + b, cm + c)
+        })
+    };
 
     if ssxm == 0.0 {
         // All x values identical — slope undefined
@@ -31121,9 +31153,9 @@ pub enum SomersDInput<'a> {
     Table(&'a [Vec<f64>]),
 }
 
-/// When `true`, [`pearsonr`] folds its centered sums-of-squares serially (the ORIG one-pass loop);
-/// default `false` fans them across cores for large inputs. WITHIN per-op ULP tolerance (parallel
-/// reorder). `#[doc(hidden)]` — internal A/B gate.
+/// When `true`, [`pearsonr`]/[`linregress`] fold their centered sums-of-squares serially (the ORIG
+/// one-pass loop); default `false` fan them across cores for large inputs. WITHIN per-op ULP tolerance
+/// (parallel reorder). `#[doc(hidden)]` — internal A/B gate.
 #[doc(hidden)]
 pub static PEARSONR_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
