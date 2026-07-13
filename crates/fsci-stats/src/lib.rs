@@ -47355,12 +47355,15 @@ pub fn braycurtis_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    let num: f64 = u.iter().zip(v.iter()).map(|(&a, &b)| (a - b).abs()).sum();
-    let den: f64 = u
-        .iter()
-        .zip(v.iter())
-        .map(|(&a, &b)| a.abs() + b.abs())
-        .sum();
+    // Fuse the two independent reductions (Σ|a−b| and Σ(|a|+|b|)) into ONE pass so
+    // the arrays are read once instead of twice. Byte-identical: each accumulator
+    // still sums in index order 0..n.
+    let mut num = 0.0f64;
+    let mut den = 0.0f64;
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        num += (a - b).abs();
+        den += a.abs() + b.abs();
+    }
     if den == 0.0 { 0.0 } else { num / den }
 }
 
