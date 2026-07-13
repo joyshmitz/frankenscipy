@@ -4416,12 +4416,19 @@ pub fn randomized_svd(
 /// forming the dense s×m matrix S and paying O(sketch_size·m·n). The bucket hash and signs
 /// come from a deterministic SplitMix64 stream seeded by `seed`, so the sketch is
 /// reproducible.
+/// When `true`, [`clarkson_woodruff_transform`] scatters its rows into sketch buckets with a single
+/// serial pass (the ORIG behaviour); default `false` fans the scatter across cores with privatized
+/// per-thread sketches merged at the end. Byte-identical below the gate. `#[doc(hidden)]` — A/B gate.
+#[doc(hidden)]
+pub static CWT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn clarkson_woodruff_transform(
     input_matrix: &[Vec<f64>],
     sketch_size: usize,
     seed: u64,
 ) -> Result<Vec<Vec<f64>>, LinalgError> {
-    let (_m, n) = matrix_shape(input_matrix)?;
+    let (m, n) = matrix_shape(input_matrix)?;
     if sketch_size == 0 {
         return Err(LinalgError::InvalidArgument {
             detail: "sketch_size must be positive".to_string(),
@@ -4440,11 +4447,70 @@ pub fn clarkson_woodruff_transform(
         z ^ (z >> 31)
     };
     let ss = sketch_size as u64;
-    for row in input_matrix {
-        let bucket = (next() % ss) as usize;
-        let sign = if next() & 1 == 0 { 1.0 } else { -1.0 };
-        for (o, &v) in out[bucket].iter_mut().zip(row.iter()) {
-            *o += sign * v;
+    // Precompute each row's (bucket, sign) via the SEQUENTIAL RNG — a cheap O(m) pass that touches no
+    // matrix data, so it stays serial (splitting the RNG stream would risk the seeded reproducibility).
+    // The expensive part is the O(m·n) scatter `out[bucket] += sign·row`.
+    let plans: Vec<(usize, f64)> = input_matrix
+        .iter()
+        .map(|_| {
+            let bucket = (next() % ss) as usize;
+            let sign = if next() & 1 == 0 { 1.0 } else { -1.0 };
+            (bucket, sign)
+        })
+        .collect();
+
+    // Scatter the rows into their buckets. Sibling `srht_transform` is already parallel; this scatter
+    // was the serial straggler. For large `m·n` give each worker a PRIVATE sketch over its row chunk,
+    // then sum the partials. BYTE-IDENTICAL below the gate (single-thread path IS the original scatter,
+    // and buckets/signs are unchanged); above it the per-bucket float accumulation reassociates in the
+    // merge → within per-op ULP tolerance. `CWT_FORCE_SERIAL` restores the serial scatter for A/B.
+    let work = (m as u64).saturating_mul(n as u64);
+    let nthreads = if CWT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || work < (1 << 22)
+        || m < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(m / (1 << 15))
+            .max(1)
+    };
+    if nthreads <= 1 {
+        for (row, &(bucket, sign)) in input_matrix.iter().zip(&plans) {
+            for (o, &v) in out[bucket].iter_mut().zip(row.iter()) {
+                *o += sign * v;
+            }
+        }
+        return Ok(out);
+    }
+    let chunk = m.div_ceil(nthreads);
+    let partials: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {
+        input_matrix
+            .chunks(chunk)
+            .zip(plans.chunks(chunk))
+            .map(|(rows, plns)| {
+                scope.spawn(move || {
+                    let mut o = vec![vec![0.0f64; n]; sketch_size];
+                    for (row, &(bucket, sign)) in rows.iter().zip(plns) {
+                        for (slot, &v) in o[bucket].iter_mut().zip(row.iter()) {
+                            *slot += sign * v;
+                        }
+                    }
+                    o
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("clarkson_woodruff worker panicked"))
+            .collect()
+    });
+    for part in &partials {
+        for (bucket_out, bucket_part) in out.iter_mut().zip(part) {
+            for (o, &p) in bucket_out.iter_mut().zip(bucket_part) {
+                *o += p;
+            }
         }
     }
     Ok(out)
