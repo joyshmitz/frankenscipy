@@ -35819,9 +35819,9 @@ pub fn trim1(data: &[f64], proportiontocut: f64, tail: &str) -> Vec<f64> {
     }
 }
 
-/// When `true`, [`tvar`] materializes the in-limit `Vec` then reads it for mean and sum-of-squares
-/// (the ORIG behaviour); default `false` computes both passes over `data` behind the in-limit
-/// predicate with NO allocation. Byte-identical. A/B gate (shared by [`tstd`]).
+/// When `true`, [`tvar`]/[`tsem`] materialize the in-limit `Vec` then read it for mean and sum-of-
+/// squares (the ORIG behaviour); default `false` computes both passes over `data` behind the in-limit
+/// predicate with NO allocation. Byte-identical. A/B gate (shared by [`tstd`], [`tsem`]).
 #[doc(hidden)]
 pub static TVAR_FORCE_COLLECT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -35973,31 +35973,48 @@ pub fn tmean(data: &[f64], limits: (f64, f64), inclusive: (bool, bool)) -> f64 {
 /// # Returns
 /// The trimmed SEM, or NaN if fewer than ddof+1 values remain.
 pub fn tsem(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usize) -> f64 {
-    let filtered: Vec<f64> = data
-        .iter()
-        .copied()
-        .filter(|&x| {
-            let above_lower = if inclusive.0 {
-                x >= limits.0
-            } else {
-                x > limits.0
-            };
-            let below_upper = if inclusive.1 {
-                x <= limits.1
-            } else {
-                x < limits.1
-            };
-            above_lower && below_upper
-        })
-        .collect();
-
-    if filtered.len() <= ddof {
-        return f64::NAN;
-    }
-
-    let n = filtered.len() as f64;
-    let mean = filtered.iter().sum::<f64>() / n;
-    let sum_sq: f64 = filtered.iter().map(|&x| (x - mean).powi(2)).sum();
+    let within = |x: f64| -> bool {
+        let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
+        let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+        above_lower && below_upper
+    };
+    // Same alloc-free lever as [`tvar`]: the intermediate in-limit Vec only pays for itself when
+    // cache-resident, so above 1<<22 (data spills LLC) skip it and apply the predicate inline over
+    // `data` for the mean and Σ(x-mean)² passes. Byte-identical; keep the collect path below and when
+    // TVAR_FORCE_COLLECT. The trailing `(var/n).sqrt()` is unchanged.
+    let (n, sum_sq) = if TVAR_FORCE_COLLECT.load(std::sync::atomic::Ordering::Relaxed)
+        || data.len() < (1 << 22)
+    {
+        let filtered: Vec<f64> = data.iter().copied().filter(|&x| within(x)).collect();
+        if filtered.len() <= ddof {
+            return f64::NAN;
+        }
+        let n = filtered.len() as f64;
+        let mean = filtered.iter().sum::<f64>() / n;
+        let sum_sq: f64 = filtered.iter().map(|&x| (x - mean).powi(2)).sum();
+        (n, sum_sq)
+    } else {
+        let mut sum = 0.0f64;
+        let mut count = 0usize;
+        for &x in data {
+            if within(x) {
+                sum += x;
+                count += 1;
+            }
+        }
+        if count <= ddof {
+            return f64::NAN;
+        }
+        let n = count as f64;
+        let mean = sum / n;
+        let mut sum_sq = 0.0f64;
+        for &x in data {
+            if within(x) {
+                sum_sq += (x - mean).powi(2);
+            }
+        }
+        (n, sum_sq)
+    };
     let var = sum_sq / (n - ddof as f64);
     (var / n).sqrt()
 }
