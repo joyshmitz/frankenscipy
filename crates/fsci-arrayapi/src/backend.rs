@@ -1294,6 +1294,22 @@ fn basic_getitem(
                     order: MemoryOrder::C,
                 });
             }
+            if array.order == MemoryOrder::F && slices[0].step == 1 && slices[1].step == 1 {
+                let (row_start, row_end) =
+                    basic_unit_slice_bounds(&slices[0], array.shape.dims[0], mode)?;
+                let (col_start, col_end) =
+                    basic_unit_slice_bounds(&slices[1], array.shape.dims[1], mode)?;
+                if col_end - col_start == 1 {
+                    let row_count = row_end - row_start;
+                    let start = col_start * array.shape.dims[0] + row_start;
+                    return Ok(CoreArray {
+                        shape: Shape::new(vec![row_count, 1]),
+                        dtype: array.dtype,
+                        values: array.values[start..start + row_count].to_vec(),
+                        order: MemoryOrder::C,
+                    });
+                }
+            }
             if array.order != MemoryOrder::F && slices[1].step == 1 {
                 let rows = basic_slice_indices(&slices[0], array.shape.dims[0], mode)?;
                 let (col_start, col_end) =
@@ -1408,11 +1424,18 @@ mod tests {
     ) -> ArrayApiResult<CoreArray> {
         let rows = basic_slice_indices(&slices[0], array.shape.dims[0], mode)?;
         let cols = basic_slice_indices(&slices[1], array.shape.dims[1], mode)?;
+        let nrows = array.shape.dims[0];
         let ncols = array.shape.dims[1];
+        let is_f_order = array.order == MemoryOrder::F;
         let mut values = Vec::with_capacity(rows.len().saturating_mul(cols.len()));
         for row in &rows {
             for col in &cols {
-                values.push(array.values[row * ncols + col]);
+                let idx = if is_f_order {
+                    col * nrows + row
+                } else {
+                    row * ncols + col
+                };
+                values.push(array.values[idx]);
             }
         }
         Ok(CoreArray {
@@ -1729,6 +1752,178 @@ mod tests {
         )
         .expect_err("column bounds must be checked after an empty row slice");
         assert_eq!(hardened_error.kind, ArrayApiErrorKind::InvalidIndex);
+    }
+
+    #[test]
+    fn basic_getitem_f_single_column_unit_rows_match_scalar_reference_bits() {
+        let array = CoreArray {
+            shape: Shape::new(vec![4, 3]),
+            dtype: DType::Float64,
+            values: vec![
+                ScalarValue::F64(f64::from_bits(0x7ff8_0000_0000_0042)),
+                ScalarValue::F64(-0.0),
+                ScalarValue::F64(2.0),
+                ScalarValue::F64(3.0),
+                ScalarValue::F64(4.0),
+                ScalarValue::F64(5.0),
+                ScalarValue::F64(6.0),
+                ScalarValue::F64(7.0),
+                ScalarValue::F64(8.0),
+                ScalarValue::F64(9.0),
+                ScalarValue::F64(10.0),
+                ScalarValue::F64(11.0),
+            ],
+            order: MemoryOrder::F,
+        };
+        let all = SliceSpec {
+            start: None,
+            stop: None,
+            step: 1,
+        };
+        let cases = [
+            [
+                all,
+                SliceSpec {
+                    start: Some(1),
+                    stop: Some(2),
+                    step: 1,
+                },
+            ],
+            [
+                SliceSpec {
+                    start: Some(1),
+                    stop: Some(4),
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(-1),
+                    stop: None,
+                    step: 1,
+                },
+            ],
+            [
+                SliceSpec {
+                    start: Some(-3),
+                    stop: Some(-1),
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(0),
+                    stop: Some(1),
+                    step: 1,
+                },
+            ],
+            [
+                SliceSpec {
+                    start: Some(-99),
+                    stop: Some(99),
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(-2),
+                    stop: Some(-1),
+                    step: 1,
+                },
+            ],
+            [
+                SliceSpec {
+                    start: Some(3),
+                    stop: Some(1),
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(2),
+                    stop: Some(3),
+                    step: 1,
+                },
+            ],
+            [all, all],
+            [
+                all,
+                SliceSpec {
+                    start: Some(2),
+                    stop: Some(1),
+                    step: 1,
+                },
+            ],
+            [
+                SliceSpec {
+                    start: None,
+                    stop: None,
+                    step: -1,
+                },
+                SliceSpec {
+                    start: Some(1),
+                    stop: Some(2),
+                    step: 1,
+                },
+            ],
+            [
+                all,
+                SliceSpec {
+                    start: Some(0),
+                    stop: Some(3),
+                    step: 2,
+                },
+            ],
+        ];
+
+        for slices in cases {
+            let expected = basic_getitem_scalar_reference(&array, &slices, ExecutionMode::Strict)
+                .expect("reference slice");
+            let actual = basic_getitem(&array, &slices, ExecutionMode::Strict)
+                .expect("F-order single-column slice");
+            assert_eq!(actual.shape, expected.shape);
+            assert_eq!(actual.dtype, expected.dtype);
+            assert_eq!(actual.order, MemoryOrder::C);
+            assert_eq!(actual.values.len(), expected.values.len());
+            for (actual, expected) in actual.values.iter().zip(&expected.values) {
+                match (*actual, *expected) {
+                    (ScalarValue::F64(actual), ScalarValue::F64(expected)) => {
+                        assert_eq!(actual.to_bits(), expected.to_bits());
+                    }
+                    _ => assert_eq!(actual, expected),
+                }
+            }
+        }
+
+        let hardened_error = basic_getitem(
+            &array,
+            &[
+                SliceSpec {
+                    start: Some(0),
+                    stop: Some(0),
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(0),
+                    stop: Some(99),
+                    step: 1,
+                },
+            ],
+            ExecutionMode::Hardened,
+        )
+        .expect_err("column bounds must remain checked after an empty row slice");
+        assert_eq!(hardened_error.kind, ArrayApiErrorKind::InvalidIndex);
+
+        let row_error = basic_getitem(
+            &array,
+            &[
+                SliceSpec {
+                    start: None,
+                    stop: None,
+                    step: 0,
+                },
+                SliceSpec {
+                    start: Some(0),
+                    stop: Some(99),
+                    step: 1,
+                },
+            ],
+            ExecutionMode::Hardened,
+        )
+        .expect_err("row errors must retain precedence over column bounds");
+        assert_eq!(row_error.kind, ArrayApiErrorKind::InvalidStep);
     }
 
     #[test]

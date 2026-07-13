@@ -20592,3 +20592,22 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   positive/negative row strides, strict-clamped and empty ranges, partial/negative/empty unit-column spans, payload
   NaN and `-0.0` bits, output C-order, hardened column bounds, and row-step error precedence. Exact F remains
   excluded syntactically. Crate-scoped all-target clippy also passed; no Cargo command used local fallback.
+
+## 2026-07-12 - cod - KEEP arrayapi F-order single-column contiguous slicing (10.781x)
+
+- Negative-ledger-first selection took the exact-F residual explicitly excluded by the preceding C/A/K slicing
+  keeps. In F storage, a unit-step row range selecting exactly one normalized column is one contiguous physical
+  span even though the rank-2 slice result remains C-order.
+- A dedicated Criterion row constructs an exact-F `[10000,64]` array outside timing, then slices rows `1..9999`
+  and column `31..32`. Its strict-remote production-original baseline on pinned worker `vmi1293453` was
+  `[28.414, 29.267, 30.363]` us.
+- ONE lever normalizes row bounds before column bounds and, only when both steps are one and the normalized column
+  width is exactly one, clones `col * nrows + row_start .. + row_count`. Multi-column, empty-column, and non-unit
+  F slices retain the generic gather; dtype, values, output shape/order, strict clamping, and hardened error order
+  are unchanged.
+- Same-worker release-perf re-benchmark measured `[2.6704, 2.7147, 2.7914]` us: a centered **10.781x** speedup.
+  Criterion reported `[-92.370%, -90.887%]`, `p=0.00`, and improved performance.
+- The focused strict-remote scalar-reference proof passed 1/1. It covers payload NaN and `-0.0` bits, partial,
+  negative-endpoint, clamped, inverted, and empty row ranges, negative column endpoints, C-order output, hardened
+  invalid bounds, row-step error precedence, and explicit multi-column/non-unit fallthrough cases. No Cargo
+  command used local fallback. Crate-scoped all-target clippy also passed.

@@ -239,6 +239,41 @@ fn bench_indexing(c: &mut Criterion) {
         });
     });
 
+    let fortran_single_column_array = make_array(
+        &backend,
+        Shape::new(vec![strided_size, 64]),
+        DType::Float64,
+        MemoryOrder::F,
+    );
+    let fortran_single_column_request = IndexRequest {
+        mode: IndexingMode::Basic,
+        index: IndexExpr::Basic {
+            slices: vec![
+                SliceSpec {
+                    start: Some(1),
+                    stop: Some(strided_size as isize - 1),
+                    step: 1,
+                },
+                SliceSpec {
+                    start: Some(31),
+                    stop: Some(32),
+                    step: 1,
+                },
+            ],
+        },
+    };
+    group.bench_function("getitem_basic_fortran_single_column", |b| {
+        b.iter(|| {
+            let out = getitem(
+                &backend,
+                black_box(&fortran_single_column_array),
+                black_box(&fortran_single_column_request),
+            )
+            .expect("F-order single-column getitem should succeed");
+            black_box(out.size());
+        });
+    });
+
     group.finish();
 }
 
