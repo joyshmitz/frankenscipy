@@ -515,13 +515,12 @@ pub fn sub_csc(lhs: &CscMatrix, rhs: &CscMatrix) -> SparseResult<CscMatrix> {
 pub fn scale_csc(matrix: &CscMatrix, alpha: f64) -> SparseResult<CscMatrix> {
     validate_scale_factor(alpha)?;
     let data: Vec<f64> = matrix.data().iter().map(|v| v * alpha).collect();
-    let mut scaled = CscMatrix::from_components(
+    let mut scaled = CscMatrix::from_components_unchecked(
         matrix.shape(),
         data,
         matrix.indices().to_vec(),
         matrix.indptr().to_vec(),
-        false,
-    )?;
+    );
     scaled.canonical = matrix.canonical;
     Ok(scaled)
 }
@@ -1739,6 +1738,58 @@ mod tests {
                 scale_coo(&coo, alpha),
                 Err(SparseError::InvalidArgument { .. })
             ));
+        }
+    }
+
+    #[test]
+    fn scale_csc_preserves_structure_bits_and_metadata() {
+        let canonical = CscMatrix::from_components(
+            Shape2D::new(4, 3),
+            vec![1.25, -0.0, 0.0, -3.5],
+            vec![0, 3, 1, 2],
+            vec![0, 2, 3, 4],
+            false,
+        )
+        .expect("canonical csc");
+        let noncanonical = CscMatrix::from_components(
+            Shape2D::new(4, 3),
+            vec![1.25, -0.0, 2.0, 0.0, -3.5],
+            vec![2, 0, 2, 1, 1],
+            vec![0, 3, 5, 5],
+            false,
+        )
+        .expect("noncanonical csc");
+
+        assert_eq!(
+            canonical.canonical_meta(),
+            CanonicalMeta {
+                sorted_indices: true,
+                deduplicated: true,
+            }
+        );
+        assert_eq!(
+            noncanonical.canonical_meta(),
+            CanonicalMeta {
+                sorted_indices: false,
+                deduplicated: false,
+            }
+        );
+
+        for matrix in [&canonical, &noncanonical] {
+            for alpha in [-2.5, 0.0] {
+                let scaled = scale_csc(matrix, alpha).expect("scale csc");
+                assert_eq!(scaled.shape(), matrix.shape());
+                assert_eq!(scaled.indices(), matrix.indices());
+                assert_eq!(scaled.indptr(), matrix.indptr());
+                assert_eq!(scaled.canonical_meta(), matrix.canonical_meta());
+                assert!(
+                    scaled
+                        .data()
+                        .iter()
+                        .zip(matrix.data())
+                        .all(|(got, value)| got.to_bits() == (value * alpha).to_bits())
+                );
+            }
         }
     }
 

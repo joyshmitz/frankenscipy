@@ -20738,3 +20738,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   staged library-plus-benchmark retry passed after allowing only the two documented pre-existing integrate lint
   categories. Every authoritative Cargo benchmark, test, and lint command used `RCH_REQUIRE_REMOTE=1` through
   `rch exec`; no local Cargo fallback informed this keep.
+
+## 2026-07-13 - cod - KEEP sparse `scale_csc` structure reuse (3.499x at 100,000 nnz)
+
+- Negative-ledger-first selection followed the proven 5.50x CSR scale keep, whose evidence explicitly left CSC for
+  a separate target. The live public `scale_csc` path still passed structure cloned from an already-valid matrix
+  through `validate_compressed`, then overwrote the detected canonical metadata with the source metadata.
+- ONE lever replaces only that checked constructor with `from_components_unchecked` and restores the source
+  metadata exactly as before. The finite-factor guard, data multiplication order, shape, indices, indptr, explicit
+  zeros, duplicates, unsorted columns, error precedence, and every floating-point operation are unchanged.
+- The new public Criterion row's strict-remote production-original baseline on `vmi1149989` was
+  `[137.71, 143.50, 150.64]` us. A first candidate run on `vmi1227854` measured
+  `[36.489, 37.016, 37.858]` us but was treated only as supporting routing evidence because RCH ignored the requested
+  worker hint.
+- The decisive same-binary A/B on `vmi1149989` measured the conservative checked-constructor reference at
+  `[120.84, 125.10, 130.85]` us and optimized public `scale_csc` at `[35.363, 35.752, 36.443]` us: a centered
+  **3.499x** speedup and a conservative interval speedup above **3.31x**. The identical public row also reported a
+  `[-75.789%, -74.655%, -73.381%]` change interval, `p=0.00`, versus its same-worker production-original baseline.
+- The focused strict-remote scale suite passed **3/3**. Its exact proof covers canonical and unsorted/duplicate CSC,
+  explicit `0.0` and `-0.0`, negative and zero factors, shape/indices/indptr equality, canonical metadata equality,
+  output data bits, and the existing non-finite-factor rejection contract. All authoritative Cargo commands were
+  fail-closed through `rch exec`; no local Cargo fallback informed the keep. The exact library-plus-benchmark
+  Clippy gate passed after allowing only four pre-existing `needless_range_loop` findings in unchanged `linalg.rs`.
+  UBS exited zero with no critical findings; its shadow-workspace probes were excluded from remote-only proof.
