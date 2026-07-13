@@ -47460,15 +47460,22 @@ pub fn yule_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    let (mut c_tt, mut c_tf, mut c_ft, mut c_ff) = (0usize, 0usize, 0usize, 0usize);
+    // Yule needs all four counts, but the branch-mispredicting 4-way match (which
+    // is misprediction-bound on mixed binary data) can be replaced with three
+    // branchless counters plus the exact identity c_ff = n − c_tt − c_tf − c_ft.
+    // Byte-identical: counts are exact integers, so r and s are unchanged.
+    let n = u.len();
+    let mut c_tt = 0usize;
+    let mut c_tf = 0usize;
+    let mut c_ft = 0usize;
     for (&a, &b) in u.iter().zip(v.iter()) {
-        match (a > 0.0, b > 0.0) {
-            (true, true) => c_tt += 1,
-            (true, false) => c_tf += 1,
-            (false, true) => c_ft += 1,
-            (false, false) => c_ff += 1,
-        }
+        let ap = a > 0.0;
+        let bp = b > 0.0;
+        c_tt += (ap & bp) as usize;
+        c_tf += (ap & !bp) as usize;
+        c_ft += (!ap & bp) as usize;
     }
+    let c_ff = n - c_tt - c_tf - c_ft;
     let r = (c_tf * c_ft) as f64;
     let s = (c_tt * c_ff) as f64;
     if r + s == 0.0 { 0.0 } else { 2.0 * r / (r + s) }
