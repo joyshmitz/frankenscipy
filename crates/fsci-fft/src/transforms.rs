@@ -2318,7 +2318,7 @@ fn irfft_impl(
     options: &FftOptions,
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<f64>, FftError> {
-    let fingerprint = complex_fingerprint(input);
+    let fingerprint = audit_ledger.map_or_else(Vec::new, |_| complex_fingerprint(input));
     ensure_non_empty_with_audit(input.len(), &fingerprint, audit_ledger)?;
     validate_workers_with_audit(options.workers, &fingerprint, audit_ledger)?;
     validate_finite_complex_with_audit(input, options, &fingerprint, audit_ledger)?;
@@ -5553,8 +5553,9 @@ mod tests {
         Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_axis2d, dct_iv,
         dctn, dst, dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_axis2d, fft_with_audit,
         fft2, fftn, fwht, hfft, hfft2, hfftn, idct, idct_axis2d, idctn, idstn, ifft, ifft2, ifftn,
-        ihfft, ihfft2, ihfftn, irfft, irfft2, irfftn, is_fast_len, next_fast_len, prev_fast_len,
-        rfft, rfft_axis2d, rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
+        ihfft, ihfft2, ihfftn, irfft, irfft_with_audit, irfft2, irfftn, is_fast_len, next_fast_len,
+        prev_fast_len, rfft, rfft_axis2d, rfft_with_audit, rfft2, rfftn, sync_audit_ledger,
+        take_transform_traces,
     };
     use super::{
         cooley_tukey_radix2_inplace, cooley_tukey_radix4_inplace_with_twiddles,
@@ -6098,6 +6099,36 @@ mod tests {
         assert!(matches!(
             &entry.action,
             AuditAction::FailClosed { reason } if reason == "invalid_workers"
+        ));
+        assert_eq!(entry.input_fingerprint, expected_fingerprint);
+    }
+
+    #[test]
+    fn irfft_with_audit_preserves_complex_fingerprint_on_invalid_output_len() {
+        let input: [Complex64; 2] = [(1.25, -0.0), (f64::from_bits(0x7ff8_0000_0000_0042), 3.5)];
+        let mut input_bytes = Vec::new();
+        for (re, im) in input {
+            input_bytes.extend_from_slice(&re.to_le_bytes());
+            input_bytes.extend_from_slice(&im.to_le_bytes());
+        }
+        let expected_fingerprint = AuditLedger::fingerprint_bytes(&input_bytes);
+        let audit_ledger = sync_audit_ledger();
+
+        let err = irfft_with_audit(&input, Some(0), &FftOptions::default(), &audit_ledger)
+            .expect_err("zero output length should be rejected");
+        assert_eq!(
+            err,
+            FftError::InvalidShape {
+                detail: "output_len cannot be zero",
+            }
+        );
+
+        let ledger = audit_ledger.lock().expect("audit ledger lock");
+        assert_eq!(ledger.entries().len(), 1);
+        let entry = &ledger.entries()[0];
+        assert!(matches!(
+            &entry.action,
+            AuditAction::FailClosed { reason } if reason == "invalid_output_len"
         ));
         assert_eq!(entry.input_fingerprint, expected_fingerprint);
     }

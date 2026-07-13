@@ -20552,3 +20552,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   measurable cost at n=256 under this row's noise. Do not retry lazy real fingerprint construction alone; revisit
   only with a broader audit-plumbing lever that removes additional normal-path work. All Cargo commands were strict
   remote-only; no local fallback was used.
+
+## 2026-07-12 - cod - KEEP FFT inverse-real 1-D lazy audit fingerprint (1.074x at n=16)
+
+- Negative-ledger-first selection excluded the rejected real-forward n=256 fingerprint and the landed complex
+  FFT/IFFT shared path. `irfft_impl` remained distinct and untouched: public `irfft` supplied no audit ledger but
+  still allocated and serialized its complex half-spectrum into an unused fingerprint buffer.
+- The existing `fft_irfft/irfft/16` row constructs its nine-bin spectrum outside the timed closure. A fresh strict-
+  remote baseline on pinned worker `vmi1293453` measured `[546.16, 569.73, 587.84]` ns, directly timing public
+  `irfft` with the 144-byte fingerprint allocation and serialization.
+- ONE lever makes `irfft_impl` construct `complex_fingerprint(input)` only when an audit ledger is present.
+  Audit-enabled calls still serialize the identical first 32 complex values before the same empty-input, worker,
+  finite, output-length, and spectrum-length validations. Transform arithmetic, normalization, plan caching, trace
+  emission, other real/Hermitian transforms, and N-D paths are unchanged.
+- Same-worker release-perf re-benchmark measured `[505.58, 530.32, 553.53]` ns: a centered **1.074x** speedup.
+  Criterion reported an entirely negative `[-13.080%, -4.0932%]` change interval, `p=0.00`, and improved
+  performance.
+- The focused strict-remote proof passed 1/1. It independently serializes complex values containing `-0.0` and a
+  payload NaN, then verifies invalid output length retains the sole fail-closed event, reason, and exact Blake3
+  fingerprint. The first proof compile exposed only a missing test-module import; the corrected rerun passed. All
+  Cargo commands were strict remote-only with no local fallback. Workspace check and crate-scoped all-target clippy
+  passed; workspace clippy was attempted and stopped only on three pre-existing `fsci-opt` lints outside this lane.
