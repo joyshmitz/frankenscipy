@@ -21237,3 +21237,21 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `[1.2315, 1.3203, 1.4351]` ms for scalar: **1.660x** centered and **1.399x** conservative, with no interval overlap.
 - The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
   `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes were untouched.
+
+## 2026-07-14 - cod - KEEP fused `barycentric_eval` node scan (1.382x at n=2,097,152)
+
+- Negative-ledger-first selection found no prior fused-scan optimization or rejection for the direct
+  `barycentric_eval` function. Prior interpolation work covered parallel or hoisted batch evaluation, GCV storage,
+  and polynomial arithmetic; this independent scalar entry point still scanned all nodes twice for every non-hit
+  query. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever moves the exact-node check into the existing weighted-reduction loop and reuses its `x - nodes[i]`
+  difference. Weighted terms retain their original index and arithmetic order, exact hits still return immediately,
+  and all validation and zero-denominator behavior are unchanged. A regression fixture compares output bits with the
+  literal former two-pass implementation for normal, exact-hit, near-hit, invalid-length, non-finite, and empty cases.
+- The one and only benchmark invocation compared the fused production path with the literal two-pass reference in
+  the same binary on strict-remote worker `vmi1149989`. Fused scan measured `[2.7259, 3.0136, 3.2986]` ms versus
+  `[3.7004, 4.1655, 4.8109]` ms for the former path: **1.382x** centered and **1.122x** conservative, with no interval
+  overlap.
+- The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`; its
+  setup assertion also proved the large benchmark row bit-identical before timing. `git diff --check` passed. No
+  second benchmark or local Cargo fallback was used, and stashes were untouched.

@@ -3,9 +3,9 @@ use fsci_interpolate::{
     BarycentricInterpolator, CloughTocher2DInterpolator, CubicSplineStandalone, GriddataMethod,
     Interp1d, Interp1dOptions, InterpKind, LinearNDInterpolator, PchipInterpolator,
     RbfInterpolator, RbfKernel, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod,
-    SmoothBivariateSpline, SmoothBivariateSplineOptions, SplineBc, bisplrep, griddata,
-    interp1d_linear, lagrange, make_interp_spline, make_smoothing_spline, polyadd, polyder,
-    polyint_definite, polymul, polyroots, polysub, polyval_der,
+    SmoothBivariateSpline, SmoothBivariateSplineOptions, SplineBc, barycentric_eval, bisplrep,
+    griddata, interp1d_linear, lagrange, make_interp_spline, make_smoothing_spline, polyadd,
+    polyder, polyint_definite, polymul, polyroots, polysub, polyval_der,
 };
 use fsci_runtime::RuntimeMode;
 use std::hint::black_box;
@@ -27,6 +27,30 @@ fn query_1d(n: usize) -> Vec<f64> {
             0.001 + 0.998 * t
         })
         .collect()
+}
+
+fn barycentric_eval_two_pass(nodes: &[f64], values: &[f64], weights: &[f64], x: f64) -> f64 {
+    let n = nodes.len();
+    if n == 0 || values.len() != n || weights.len() != n || !x.is_finite() {
+        return f64::NAN;
+    }
+    for (i, &xi) in nodes.iter().enumerate() {
+        if (x - xi).abs() < 1e-15 {
+            return values[i];
+        }
+    }
+
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for i in 0..nodes.len() {
+        let t = weights[i] / (x - nodes[i]);
+        num += t * values[i];
+        den += t;
+    }
+    if den == 0.0 {
+        return f64::NAN;
+    }
+    num / den
 }
 
 fn query_1d_unsorted(n: usize) -> Vec<f64> {
@@ -153,10 +177,39 @@ fn bench_polynomial(c: &mut Criterion) {
     let sub_a = values_1d(&grid_1d(1_000_000));
     let sub_b = values_1d(&grid_1d(1_000_000));
     let roots_coeffs = vec![1.0, -2.5, 1.1, -0.25, 0.03];
+    let bary_n = 2_097_152;
+    let bary_nodes: Vec<f64> = (0..bary_n).map(|i| i as f64 / bary_n as f64).collect();
+    let bary_values: Vec<f64> = (0..bary_n).map(|i| (i as f64 * 0.001).sin()).collect();
+    let bary_weights: Vec<f64> = (0..bary_n).map(|i| 1.0 + (i % 17) as f64 * 0.001).collect();
+    let bary_x = 1.125;
+    assert_eq!(
+        barycentric_eval(&bary_nodes, &bary_values, &bary_weights, bary_x).to_bits(),
+        barycentric_eval_two_pass(&bary_nodes, &bary_values, &bary_weights, bary_x).to_bits()
+    );
 
     let mut group = c.benchmark_group("polynomial");
     group.bench_function("barycentric_eval_many/128x2048", |b| {
         b.iter(|| bary.eval_many(&x_new))
+    });
+    group.bench_function("barycentric_eval_fused/2097152/candidate", |bench| {
+        bench.iter(|| {
+            black_box(barycentric_eval(
+                black_box(&bary_nodes),
+                black_box(&bary_values),
+                black_box(&bary_weights),
+                black_box(bary_x),
+            ))
+        })
+    });
+    group.bench_function("barycentric_eval_fused/2097152/original", |bench| {
+        bench.iter(|| {
+            black_box(barycentric_eval_two_pass(
+                black_box(&bary_nodes),
+                black_box(&bary_values),
+                black_box(&bary_weights),
+                black_box(bary_x),
+            ))
+        })
     });
     group.bench_function("lagrange_construct/128", |b| {
         b.iter(|| lagrange(&x, &y).expect("lagrange"))

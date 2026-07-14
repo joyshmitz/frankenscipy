@@ -8580,17 +8580,14 @@ pub fn barycentric_eval(nodes: &[f64], values: &[f64], weights: &[f64], x: f64) 
     if n == 0 || values.len() != n || weights.len() != n || !x.is_finite() {
         return f64::NAN;
     }
-    // Check if x is exactly a node
-    for (i, &xi) in nodes.iter().enumerate() {
-        if (x - xi).abs() < 1e-15 {
-            return values[i];
-        }
-    }
-
     let mut num = 0.0;
     let mut den = 0.0;
     for i in 0..nodes.len() {
-        let t = weights[i] / (x - nodes[i]);
+        let diff = x - nodes[i];
+        if diff.abs() < 1e-15 {
+            return values[i];
+        }
+        let t = weights[i] / diff;
         num += t * values[i];
         den += t;
     }
@@ -13627,6 +13624,65 @@ mod tests {
         assert!((barycentric_eval(&nodes, &values, &w, 1.5) - 2.25).abs() < 1e-12, "x=1.5");
         assert!((barycentric_eval(&nodes, &values, &w, 0.5) - 0.25).abs() < 1e-12, "x=0.5");
         assert!((barycentric_eval(&nodes, &values, &w, 2.0) - 4.0).abs() < 1e-12, "at node");
+    }
+
+    #[test]
+    fn barycentric_eval_fused_scan_matches_two_pass_bits() {
+        fn two_pass(nodes: &[f64], values: &[f64], weights: &[f64], x: f64) -> f64 {
+            let n = nodes.len();
+            if n == 0 || values.len() != n || weights.len() != n || !x.is_finite() {
+                return f64::NAN;
+            }
+            for (i, &xi) in nodes.iter().enumerate() {
+                if (x - xi).abs() < 1e-15 {
+                    return values[i];
+                }
+            }
+
+            let mut num = 0.0;
+            let mut den = 0.0;
+            for i in 0..nodes.len() {
+                let t = weights[i] / (x - nodes[i]);
+                num += t * values[i];
+                den += t;
+            }
+            if den == 0.0 {
+                return f64::NAN;
+            }
+            num / den
+        }
+
+        let cases: &[(&[f64], &[f64], &[f64], f64)] = &[
+            (
+                &[-2.0, -0.5, 1.0, 3.0],
+                &[4.0, -0.0, 1.0, 9.0],
+                &[0.5, -1.5, 2.0, -0.25],
+                0.25,
+            ),
+            (
+                &[-2.0, -0.5, 1.0, 3.0],
+                &[4.0, -0.0, 1.0, 9.0],
+                &[0.5, -1.5, 2.0, -0.25],
+                1.0,
+            ),
+            (
+                &[-2.0, -0.5, 1.0, 3.0],
+                &[4.0, -0.0, 1.0, 9.0],
+                &[0.5, -1.5, 2.0, -0.25],
+                1.0 + 5.0e-16,
+            ),
+            (&[0.0, 1.0], &[f64::INFINITY, 2.0], &[1.0, 1.0], 0.5),
+            (&[0.0, f64::NAN, 2.0], &[1.0, 2.0, 3.0], &[1.0, 1.0, 1.0], 0.5),
+            (&[0.0, 1.0], &[1.0], &[1.0, 1.0], 0.5),
+            (&[0.0, 1.0], &[1.0, 2.0], &[1.0, 1.0], f64::NAN),
+            (&[], &[], &[], 0.5),
+        ];
+        for &(nodes, values, weights, x) in cases {
+            assert_eq!(
+                barycentric_eval(nodes, values, weights, x).to_bits(),
+                two_pass(nodes, values, weights, x).to_bits()
+            );
+        }
     }
 
     #[test]
