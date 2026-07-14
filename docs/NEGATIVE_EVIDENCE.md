@@ -21369,3 +21369,21 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   **2.5563x** centered, **2.2041x** conservative, and **60.88%** lower centered time with no interval overlap.
   Strict-remote all-target clippy, direct rustfmt, and `git diff --check` passed. No `release-perf` build, second
   benchmark, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-63kc7`.
+
+## 2026-07-14 - cod - KEEP constant-time solver-evidence rollover (65.97x at capacity 1,024)
+
+- Negative-ledger-first reconciliation excluded the recently harvested integrate and ODR families and found no
+  prior keep or rejection for `SolverPortfolio::record_evidence` in the fresh `fsci-runtime` subsystem. Direct
+  source attribution showed that every full-ledger observation called `Vec::remove(0)`, shifting all surviving
+  `SolverEvidenceEntry` values: theta(capacity) data movement on a per-solve audit path. Opportunity score: 25.0
+  (impact 5 x confidence 5 / effort 1).
+- ONE lever changes the private bounded FIFO representation to a preallocated `VecDeque`, replacing front removal
+  plus tail push with `pop_front` plus `push_back`. Evidence contents, capacity clamping, calibrator updates, FIFO
+  iteration, JSONL order, and every numerical decision path are unchanged. A focused strict-remote test proved that
+  capacity-three rollover retains the exact ordered entries `(2,2), (3,3), (4,4)` after five records.
+- The one and only benchmark invocation compared production deque rollover with the literal former `Vec::remove(0)`
+  path in the same `--profile release` binary on strict-remote worker `vmi1152480`, at capacity 1,024. Deque measured
+  `[24.423, 25.434, 26.612]` ns versus `[1.4312, 1.6778, 2.0466]` us for the former path: **65.9668x** centered,
+  **53.7802x** conservative, and **98.48%** lower centered time with no interval overlap.
+- No `release-perf` build, second benchmark, local Cargo fallback, or stash mutation was used. Bead:
+  `frankenscipy-kcmm1`.

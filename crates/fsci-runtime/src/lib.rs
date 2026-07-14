@@ -131,7 +131,7 @@ pub struct SolverEvidenceEntry {
 pub struct SolverPortfolio {
     mode: RuntimeMode,
     loss_matrix: [[f64; 4]; 5],
-    evidence: Vec<SolverEvidenceEntry>,
+    evidence: VecDeque<SolverEvidenceEntry>,
     evidence_capacity: usize,
     calibrator: ConformalCalibrator,
 }
@@ -139,11 +139,12 @@ pub struct SolverPortfolio {
 impl SolverPortfolio {
     #[must_use]
     pub fn new(mode: RuntimeMode, evidence_capacity: usize) -> Self {
+        let evidence_capacity = evidence_capacity.max(1);
         Self {
             mode,
             loss_matrix: Self::default_loss_matrix(),
-            evidence: Vec::new(),
-            evidence_capacity: evidence_capacity.max(1),
+            evidence: VecDeque::with_capacity(evidence_capacity),
+            evidence_capacity,
             calibrator: ConformalCalibrator::new(0.05, 200),
         }
     }
@@ -225,9 +226,9 @@ impl SolverPortfolio {
             self.calibrator.observe(err);
         }
         if self.evidence.len() >= self.evidence_capacity {
-            self.evidence.remove(0);
+            let _ = self.evidence.pop_front();
         }
-        self.evidence.push(entry);
+        self.evidence.push_back(entry);
     }
 
     /// Update conformal calibrator with observed backward error.
@@ -667,10 +668,10 @@ mod tests {
     #[test]
     fn casp_evidence_is_bounded() {
         let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 3);
-        for _ in 0..5 {
+        for index in 0..5 {
             portfolio.record_evidence(SolverEvidenceEntry {
                 component: "test",
-                matrix_shape: (2, 2),
+                matrix_shape: (index, index),
                 rcond_estimate: 0.5,
                 chosen_action: SolverAction::DirectLU,
                 posterior: vec![1.0, 0.0, 0.0, 0.0],
@@ -681,6 +682,14 @@ mod tests {
             });
         }
         assert_eq!(portfolio.evidence_len(), 3);
+        assert_eq!(
+            portfolio
+                .evidence
+                .iter()
+                .map(|entry| entry.matrix_shape)
+                .collect::<Vec<_>>(),
+            [(2, 2), (3, 3), (4, 4)]
+        );
     }
 
     #[test]

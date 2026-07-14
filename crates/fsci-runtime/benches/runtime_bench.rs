@@ -1,8 +1,9 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_runtime::{
     ConformalCalibrator, DecisionSignals, MatrixConditionState, PolicyController, RuntimeMode,
-    SolverPortfolio,
+    SolverAction, SolverEvidenceEntry, SolverPortfolio,
 };
+use std::hint::black_box;
 
 fn bench_policy_decide(c: &mut Criterion) {
     let signals = DecisionSignals::new(5.0, 0.3, 0.2);
@@ -46,10 +47,56 @@ fn bench_calibrator_observe(c: &mut Criterion) {
     });
 }
 
+fn solver_evidence(sequence: usize) -> SolverEvidenceEntry {
+    SolverEvidenceEntry {
+        component: "runtime_bench",
+        matrix_shape: (sequence, 32),
+        rcond_estimate: 1e-6,
+        chosen_action: SolverAction::PivotedQR,
+        posterior: vec![0.0, 1.0, 0.0, 0.0],
+        expected_losses: vec![5.0, 1.0, 10.0, 0.0, 0.0],
+        chosen_expected_loss: 1.0,
+        fallback_active: false,
+        backward_error: None,
+    }
+}
+
+fn bench_solver_evidence_rollover(c: &mut Criterion) {
+    const CAPACITY: usize = 1_024;
+    let mut group = c.benchmark_group("solver_evidence_rollover");
+
+    group.bench_function("deque", |b| {
+        let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, CAPACITY);
+        for sequence in 0..CAPACITY {
+            portfolio.record_evidence(solver_evidence(sequence));
+        }
+        let mut sequence = CAPACITY;
+        b.iter(|| {
+            portfolio.record_evidence(solver_evidence(sequence));
+            sequence = sequence.wrapping_add(1);
+            black_box(portfolio.evidence_len());
+        });
+    });
+
+    group.bench_function("vec_remove_zero_baseline", |b| {
+        let mut evidence = (0..CAPACITY).map(solver_evidence).collect::<Vec<_>>();
+        let mut sequence = CAPACITY;
+        b.iter(|| {
+            let _ = evidence.remove(0);
+            evidence.push(solver_evidence(sequence));
+            sequence = sequence.wrapping_add(1);
+            black_box(evidence.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_policy_decide,
     bench_solver_select_action,
-    bench_calibrator_observe
+    bench_calibrator_observe,
+    bench_solver_evidence_rollover
 );
 criterion_main!(benches);
