@@ -809,6 +809,87 @@ mod tests {
     }
 
     #[test]
+    fn sparse_find_move_elision_matches_previous_behavior_bit_exactly() {
+        fn previous_find<T: FormatConvertible>(
+            matrix: &T,
+        ) -> SparseResult<(Vec<usize>, Vec<usize>, Vec<f64>)> {
+            let coo = matrix.to_coo()?;
+            let canonical = CooMatrix::from_triplets(
+                coo.shape(),
+                coo.data().to_vec(),
+                coo.row_indices().to_vec(),
+                coo.col_indices().to_vec(),
+                true,
+            )?;
+
+            let mut rows = Vec::with_capacity(canonical.nnz());
+            let mut cols = Vec::with_capacity(canonical.nnz());
+            let mut data = Vec::with_capacity(canonical.nnz());
+            for idx in 0..canonical.nnz() {
+                let value = canonical.data()[idx];
+                if value != 0.0 {
+                    rows.push(canonical.row_indices()[idx]);
+                    cols.push(canonical.col_indices()[idx]);
+                    data.push(value);
+                }
+            }
+            Ok((rows, cols, data))
+        }
+
+        fn assert_matches<T: FormatConvertible>(matrix: &T) {
+            let expected = previous_find(matrix).expect("previous find");
+            let actual = find(matrix).expect("find");
+            assert_eq!(actual.0, expected.0);
+            assert_eq!(actual.1, expected.1);
+            assert_eq!(
+                actual.2.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                expected
+                    .2
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(4, 5),
+            vec![
+                f64::from_bits(0x7ff8_0000_0000_0042),
+                2.75,
+                -5.0,
+                -0.0,
+                f64::INFINITY,
+                1.25,
+                5.0,
+                f64::NEG_INFINITY,
+            ],
+            vec![3, 0, 1, 2, 2, 0, 1, 3],
+            vec![4, 3, 1, 0, 2, 3, 1, 0],
+            false,
+        )
+        .expect("coo");
+        let csr = coo.to_csr().expect("csr");
+        let csc = coo.to_csc().expect("csc");
+        let empty = CooMatrix::from_triplets(
+            Shape2D::new(4, 5),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+        )
+        .expect("empty coo");
+        let empty_csr = empty.to_csr().expect("empty csr");
+        let empty_csc = empty.to_csc().expect("empty csc");
+
+        assert_matches(&coo);
+        assert_matches(&csr);
+        assert_matches(&csc);
+        assert_matches(&empty);
+        assert_matches(&empty_csr);
+        assert_matches(&empty_csc);
+    }
+
+    #[test]
     fn sparse_tril_preserves_explicit_zeros_in_lower_triangle() {
         let coo = CooMatrix::from_triplets(
             Shape2D::new(2, 2),

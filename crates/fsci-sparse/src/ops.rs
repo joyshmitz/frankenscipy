@@ -313,12 +313,17 @@ pub fn csc_to_csr_with_mode(
 /// Matches `scipy.sparse.find` by canonicalizing duplicate coordinates and
 /// dropping explicit zeros from the returned triplets.
 pub fn find<T: FormatConvertible>(matrix: &T) -> SparseResult<(Vec<usize>, Vec<usize>, Vec<f64>)> {
-    let coo = matrix.to_coo()?;
+    let CooMatrix {
+        shape,
+        data,
+        row_indices,
+        col_indices,
+    } = matrix.to_coo()?;
     let canonical = CooMatrix::from_triplets(
-        coo.shape(),
-        coo.data().to_vec(),
-        coo.row_indices().to_vec(),
-        coo.col_indices().to_vec(),
+        shape,
+        data,
+        row_indices,
+        col_indices,
         true,
     )?;
 

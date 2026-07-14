@@ -2,8 +2,8 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
     BMAT_FORCE_GENERIC, DIAGS_VALIDATE, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions,
-    VSTACK_FORCE_GENERIC, add_csr, block_diag, bmat, diags, eye, eye_array, kron, random, scale_coo,
-    scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril, vstack,
+    VSTACK_FORCE_GENERIC, add_csr, block_diag, bmat, diags, eye, eye_array, find, kron, random,
+    scale_coo, scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril, vstack,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -208,6 +208,17 @@ fn bench_arithmetic(c: &mut Criterion) {
                 b_iter.iter(|| {
                     let sum = add_csr(black_box(a), black_box(b)).expect("add");
                     black_box(sum.nnz());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("{label}_find"), n),
+            &a,
+            |b_iter, a| {
+                b_iter.iter(|| {
+                    let found = find(black_box(a)).expect("find");
+                    black_box(found);
                 });
             },
         );
