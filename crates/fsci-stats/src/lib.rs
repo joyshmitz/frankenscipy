@@ -46759,11 +46759,14 @@ pub fn cohens_d(group1: &[f64], group2: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    let mean1: f64 = group1.iter().sum::<f64>() / n1;
-    let mean2: f64 = group2.iter().sum::<f64>() / n2;
+    // Means via `par_sum` + each group's Σ(x−mean)² via `sum_sq_dev` — both work-gated parallel
+    // (byte-identical below the 1<<22 gate; the variance is m2-insensitive to the mean, so par_sum is
+    // byte-safe there too). Both means and both SS were serial `.sum()` stragglers.
+    let mean1: f64 = par_sum(group1) / n1;
+    let mean2: f64 = par_sum(group2) / n2;
 
-    let var1: f64 = group1.iter().map(|&x| (x - mean1).powi(2)).sum::<f64>() / (n1 - 1.0);
-    let var2: f64 = group2.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0);
+    let var1: f64 = sum_sq_dev(group1, mean1) / (n1 - 1.0);
+    let var2: f64 = sum_sq_dev(group2, mean2) / (n2 - 1.0);
 
     let pooled_std = (((n1 - 1.0) * var1 + (n2 - 1.0) * var2) / (n1 + n2 - 2.0)).sqrt();
 
@@ -55820,6 +55823,32 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cohens_d_par_reductions_match_serial_below_gate() {
+        use std::sync::atomic::Ordering;
+        let pairs: &[(&[f64], &[f64])] = &[
+            (&[1.0, 2.0, 3.0, 4.0, 5.0], &[2.0, 3.0, 4.0, 5.0, 6.0, 7.0]),
+            (
+                &[-3.0, 0.5, 2.0, -1.25, 7.0],
+                &[4.0, -2.5, 9.0, 3.0, -6.0, 1.5],
+            ),
+            (&[5.0, 5.0, 5.0], &[5.0, 5.0, 5.0]), // pooled_std==0, means equal
+            (&[5.0, 5.0, 5.0], &[9.0, 9.0, 9.0]), // pooled_std==0, means differ (±inf)
+            (&[1e6, -1e6, 3.5, -2.5], &[100.0, -50.0, 0.0, 7.0]),
+        ];
+        for &(a, b) in pairs {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = cohens_d(a, b);
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = cohens_d(a, b);
+            assert_eq!(serial.to_bits(), parallel.to_bits(), "cohens_d mismatch");
+        }
+        PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn ttest_ind_par_mean_matches_serial_below_gate() {

@@ -3,7 +3,8 @@ use fsci_stats::{
     BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, BIWEIGHT_MAD_HOIST_DISABLE, HaltonSampler,
     SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
-    bayes_mvs, excess_kurtosis, histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mad,
+    bayes_mvs, cohens_d, excess_kurtosis, histogram, kendalltau, kruskal, ks_2samp,
+    l2_star_discrepancy, mad,
     mannkendall, mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf, psd_welch,
     rand_index,
     siegelslopes, somersd, theilslopes, ttest_1samp, ttest_ind, wasserstein_distance,
@@ -833,6 +834,32 @@ fn bench_biweight_midcorrelation_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_cohens_d_par_reductions_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("cohens_d_par_reductions_ab");
+    group.sample_size(10);
+    // Both means and both group SS were serial; toggle both reduction gates for the A/B.
+    let a = deterministic_data(16_000_000);
+    let b: Vec<f64> = a.iter().map(|&v| v * 0.9 + 0.5).collect();
+    group.bench_function("current_parallel", |bn| {
+        bn.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            black_box(cohens_d(black_box(&a), black_box(&b)))
+        });
+    });
+    group.bench_function("orig_serial", |bn| {
+        bn.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            black_box(cohens_d(black_box(&a), black_box(&b)))
+        });
+    });
+    PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_ttest_ind_par_mean_ab(c: &mut Criterion) {
     use std::sync::atomic::Ordering;
     let mut group = c.benchmark_group("ttest_ind_par_mean_ab");
@@ -978,6 +1005,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_cohens_d_par_reductions_ab,
     bench_ttest_ind_par_mean_ab,
     bench_bayes_mvs_par_reductions_ab,
     bench_ttest_1samp_par_reductions_ab,
