@@ -21055,3 +21055,33 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   implementation, proof, or benchmark hunks. Direct rustfmt checking still exposes broad historical drift elsewhere
   in both files but no diff in the owned hunks; `git diff --check` passed. Staged UBS exited zero with **0 critical**
   findings; its shadow-workspace Cargo probes are supplementary and not part of the remote-only proof.
+
+## 2026-07-14 - cod - KEEP spatial fused `is_valid_dm` NaN/symmetry scan (1.166x at 4096x4096)
+
+- Negative-ledger-first selection found no prior `is_valid_dm` optimization or rejection. Existing `squareform`
+  entries cover matrix conversion, not validation. The opportunity score was 20.0 (impact 4 x confidence 5 / effort
+  1): a valid dense matrix took one full n-squared pass solely for NaNs, then another n-squared read traversal for the
+  diagonal and paired symmetry checks.
+- ONE lever retains the row-length preflight, then folds explicit NaN rejection into the diagonal/upper-pair loop so
+  every matrix element is loaded once rather than twice. Each off-diagonal pair still performs the same subtraction,
+  absolute value, and tolerance comparison. Checking the operands themselves for NaN preserves the former behavior
+  for infinities, NaN tolerances, negative tolerances, signed zero, and `infinity - infinity`; the function exposes
+  only a boolean, so failure-order changes within a fully shaped invalid matrix are unobservable.
+- The retained public fast-profile row first measured production-original on `vmi1152480` at
+  `[45.987, 50.014, 54.928]` ms. A candidate-only retry routed to `vmi1149989` and measured
+  `[38.723, 40.367, 42.310]` ms; that cross-worker delta is routing evidence only and did not decide the keep.
+- The decisive same-worker, same-binary A/B on `vmi1152480` measured the literal original at
+  `[51.455, 54.748, 58.138]` ms and the fused public path at `[44.608, 46.956, 49.847]` ms. The centered speedup is
+  **1.166x** (14.23% less time), the conservative endpoint speedup is **1.032x**, and the intervals do not overlap.
+  The A/B-only original comparator was removed; the production `distance_validation/is_valid_dm/4096x4096` row
+  remains as the regression guard.
+- The focused strict-remote proof passed **1/1** on `vmi1149989`, comparing the fused implementation to a literal copy
+  of the former function over 15 matrices x 6 tolerances = 90 cases. Coverage includes empty and ragged shapes,
+  asymmetry, non-zero diagonals, upper/lower/diagonal payload NaNs, signed zero, both infinity orientations, finite,
+  infinite, NaN, and negative tolerances.
+- Final strict-remote `cargo check -p fsci-spatial --all-targets` passed on `vmi1152480`. Strict-remote no-deps Clippy
+  reached `fsci-spatial` and stopped on four pre-existing unchanged findings at lines 5221, 5593, 6231, and 6749;
+  none intersects an owned hunk. Direct rustfmt checking exposed broad pre-existing drift elsewhere in `lib.rs`; the
+  owned implementation, proof, and benchmark hunks match rustfmt. `git diff --check` passed. Every authoritative Cargo
+  command ran fail-closed through direct `rch exec`; no local Cargo fallback informed this keep. Staged UBS exited 0
+  with zero critical findings; its shadow-workspace Cargo probes are supplementary, not remote-only proof.

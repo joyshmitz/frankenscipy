@@ -36,6 +36,29 @@ fn bench_transform_batch(c: &mut Criterion) {
     group.finish();
 }
 
+/// Validation of a large, valid dense distance matrix. This isolates the
+/// full-input success path where every element must be inspected.
+fn bench_distance_validation(c: &mut Criterion) {
+    use fsci_spatial::is_valid_dm;
+    use std::hint::black_box;
+
+    let n = 4096usize;
+    let mut matrix = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let value = ((i * 131 + j * 17) as f64 * 0.013).sin().abs();
+            matrix[i][j] = value;
+            matrix[j][i] = value;
+        }
+    }
+
+    let mut group = c.benchmark_group("distance_validation");
+    group.bench_function(BenchmarkId::new("is_valid_dm", "4096x4096"), |b| {
+        b.iter(|| black_box(is_valid_dm(black_box(&matrix), black_box(0.0))))
+    });
+    group.finish();
+}
+
 /// All-pairs distance matrix — the dominant O(n²·d) spatial workload. Cosine/
 /// Correlation exercise the per-vector precompute path; Euclidean the SIMD
 /// partial-distance path. Both are parallel above a work threshold.
@@ -327,6 +350,7 @@ fn bench_spherical_voronoi(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_transform_batch,
+    bench_distance_validation,
     bench_pdist,
     bench_cdist_small_metrics,
     bench_cdist_boolean_metrics,

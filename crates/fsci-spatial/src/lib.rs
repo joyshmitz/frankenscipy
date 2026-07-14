@@ -1435,16 +1435,15 @@ pub fn is_valid_dm(matrix: &[Vec<f64>], tol: f64) -> bool {
         if row.len() != n {
             return false;
         }
-        if row.iter().any(|v| v.is_nan()) {
-            return false;
-        }
     }
     for (i, row) in matrix.iter().enumerate() {
-        if row[i].abs() > tol {
+        if row[i].is_nan() || row[i].abs() > tol {
             return false;
         }
         for j in (i + 1)..n {
-            if (row[j] - matrix[j][i]).abs() > tol {
+            let upper = row[j];
+            let lower = matrix[j][i];
+            if upper.is_nan() || lower.is_nan() || (upper - lower).abs() > tol {
                 return false;
             }
         }
@@ -10485,6 +10484,65 @@ mod tests {
             0.0
         ));
         assert!(!is_valid_dm(&[], 0.0));
+    }
+
+    #[test]
+    fn is_valid_dm_fused_nan_scan_matches_previous_behavior() {
+        fn previous(matrix: &[Vec<f64>], tol: f64) -> bool {
+            let n = matrix.len();
+            if n == 0 {
+                return false;
+            }
+            for row in matrix {
+                if row.len() != n {
+                    return false;
+                }
+                if row.iter().any(|value| value.is_nan()) {
+                    return false;
+                }
+            }
+            for (i, row) in matrix.iter().enumerate() {
+                if row[i].abs() > tol {
+                    return false;
+                }
+                for j in (i + 1)..n {
+                    if (row[j] - matrix[j][i]).abs() > tol {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+
+        let payload_nan = f64::from_bits(0x7ff8_0000_0000_0042);
+        let matrices = [
+            vec![],
+            vec![vec![0.0]],
+            vec![vec![]],
+            vec![vec![0.0, 1.0], vec![1.0, 0.0]],
+            vec![vec![0.0, 1.0], vec![2.0, 0.0]],
+            vec![vec![1.0, 2.0], vec![2.0, 0.0]],
+            vec![vec![0.0, payload_nan], vec![payload_nan, 0.0]],
+            vec![vec![0.0, payload_nan], vec![1.0, 0.0]],
+            vec![vec![0.0, 1.0], vec![payload_nan, 0.0]],
+            vec![vec![payload_nan, 1.0], vec![1.0, 0.0]],
+            vec![vec![-0.0, 0.0], vec![-0.0, 0.0]],
+            vec![vec![0.0, f64::INFINITY], vec![f64::INFINITY, 0.0]],
+            vec![vec![0.0, f64::INFINITY], vec![f64::NEG_INFINITY, 0.0]],
+            vec![vec![0.0, 1.0], vec![1.0]],
+            vec![vec![0.0, 1.0], vec![1.0, 0.0, 2.0]],
+        ];
+        let tolerances = [0.0, 0.5, 1.5, f64::INFINITY, f64::NAN, -0.5];
+
+        for (case, matrix) in matrices.iter().enumerate() {
+            for &tol in &tolerances {
+                assert_eq!(
+                    is_valid_dm(matrix, tol),
+                    previous(matrix, tol),
+                    "case {case}, tol {tol:?}"
+                );
+            }
+        }
     }
 
     #[test]
