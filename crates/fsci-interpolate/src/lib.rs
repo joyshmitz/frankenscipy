@@ -8310,14 +8310,24 @@ pub fn polymul(a: &[f64], b: &[f64]) -> Vec<f64> {
 /// Matches `numpy.polyadd`.
 pub fn polyadd(a: &[f64], b: &[f64]) -> Vec<f64> {
     let n = a.len().max(b.len());
-    let mut result = vec![0.0; n];
-    let offset_a = n - a.len();
-    let offset_b = n - b.len();
-    for (i, &v) in a.iter().enumerate() {
-        result[offset_a + i] += v;
-    }
-    for (i, &v) in b.iter().enumerate() {
-        result[offset_b + i] += v;
+    let mut result = Vec::with_capacity(n);
+    if a.len() >= b.len() {
+        let prefix = a.len() - b.len();
+        result.extend(a[..prefix].iter().map(|&value| 0.0 + value));
+        result.extend(
+            a[prefix..]
+                .iter()
+                .zip(b)
+                .map(|(&a_value, &b_value)| (0.0 + a_value) + b_value),
+        );
+    } else {
+        let prefix = b.len() - a.len();
+        result.extend(b[..prefix].iter().map(|&value| 0.0 + value));
+        result.extend(
+            a.iter()
+                .zip(&b[prefix..])
+                .map(|(&a_value, &b_value)| (0.0 + a_value) + b_value),
+        );
     }
     result
 }
@@ -13494,6 +13504,47 @@ mod tests {
                 (got - want).abs() < 1e-10,
                 "polyadd[{i}] got {got}, expected {want}"
             );
+        }
+    }
+
+    #[test]
+    fn polyadd_direct_emission_preserves_old_operation_bits() {
+        fn old_polyadd(a: &[f64], b: &[f64]) -> Vec<f64> {
+            let n = a.len().max(b.len());
+            let mut result = vec![0.0; n];
+            let offset_a = n - a.len();
+            let offset_b = n - b.len();
+            for (i, &value) in a.iter().enumerate() {
+                result[offset_a + i] += value;
+            }
+            for (i, &value) in b.iter().enumerate() {
+                result[offset_b + i] += value;
+            }
+            result
+        }
+
+        let nan_a = f64::from_bits(0x7ff8_0000_0000_1234);
+        let nan_b = f64::from_bits(0xfff8_0000_0000_5678);
+        let cases = [
+            (vec![], vec![]),
+            (vec![-0.0, f64::INFINITY, nan_a], vec![]),
+            (vec![], vec![-0.0, f64::NEG_INFINITY, nan_b]),
+            (vec![1.0, -0.0], vec![-1.0, 0.0]),
+            (
+                vec![-0.0, f64::INFINITY, nan_a, 3.0],
+                vec![0.0, f64::NEG_INFINITY],
+            ),
+            (
+                vec![0.0, f64::NEG_INFINITY],
+                vec![-0.0, f64::INFINITY, nan_b, -3.0],
+            ),
+        ];
+
+        for (a, b) in cases {
+            let expected_bits: Vec<u64> =
+                old_polyadd(&a, &b).into_iter().map(f64::to_bits).collect();
+            let actual_bits: Vec<u64> = polyadd(&a, &b).into_iter().map(f64::to_bits).collect();
+            assert_eq!(actual_bits, expected_bits, "a={a:?}, b={b:?}");
         }
     }
 

@@ -4,7 +4,7 @@ use fsci_interpolate::{
     Interp1d, Interp1dOptions, InterpKind, LinearNDInterpolator, PchipInterpolator,
     RbfInterpolator, RbfKernel, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod,
     SmoothBivariateSpline, SmoothBivariateSplineOptions, SplineBc, bisplrep, griddata,
-    interp1d_linear, lagrange, make_interp_spline, make_smoothing_spline, polyder,
+    interp1d_linear, lagrange, make_interp_spline, make_smoothing_spline, polyadd, polyder,
     polyint_definite, polymul, polyroots, polysub, polyval_der,
 };
 use fsci_runtime::RuntimeMode;
@@ -162,6 +162,9 @@ fn bench_polynomial(c: &mut Criterion) {
         b.iter(|| lagrange(&x, &y).expect("lagrange"))
     });
     group.bench_function("polymul/512x512", |bench| bench.iter(|| polymul(&a, &b)));
+    group.bench_function("polyadd/1000000x1000000", |bench| {
+        bench.iter(|| polyadd(black_box(&sub_a), black_box(&sub_b)))
+    });
     group.bench_function("polysub/1000000x1000000", |bench| {
         bench.iter(|| polysub(black_box(&sub_a), black_box(&sub_b)))
     });

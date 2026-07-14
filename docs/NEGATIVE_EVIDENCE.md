@@ -21030,3 +21030,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   spline, and older library code; none pointed at either owned hunk. Direct `rustfmt --check` exposed the crate's broad
   pre-existing format drift, with no diff at the owned source or benchmark hunks; `git diff --check` passed. Staged UBS
   exited 0 with zero critical findings; its shadow-workspace Cargo probes are supplementary, not remote-only proof.
+
+## 2026-07-14 - cod - KEEP interpolate direct-emission `polyadd` (1.315x at 1,000,000 coefficients)
+
+- Negative-ledger-first selection distinguished this from the adjacent direct-`polysub` keep: that lever removed a
+  negated-RHS allocation before calling `polyadd`, while `polyadd` itself still zero-filled its output and then updated
+  it in separate aligned A and B passes. No prior entry tested direct `polyadd` emission. The opportunity score was
+  20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever reserves the exact output capacity and emits each coefficient once. A longer unmatched prefix retains
+  `0.0 + value`; an overlap retains `(0.0 + a) + b`. Those expressions preserve the former A-then-B arithmetic,
+  including signed-zero, infinity, and NaN behavior, while eliminating the output zero-fill and intermediate A write.
+- The new public fast-profile Criterion row measured production-original at `[1.0120, 1.0503, 1.1094]` ms and the
+  candidate at `[633.14, 798.43, 1016.0]` us on pinned worker `vmi1149989`. The centered speedup is **1.315x**.
+  Criterion reported `[-42.752%, -32.043%, -18.588%]`, `p=0.00`, and improved performance. One high-severe candidate
+  outlier widened its raw upper estimate enough that the conservative endpoint ratio was 0.996x; the paired change
+  interval remained wholly improved, and the same public row, worker, profile, and arguments were used before/after.
+- The focused strict-remote suite passed **2/2** on `vmi1293453`. Its exact-source guard compares every output bit to
+  the literal former implementation across empty and unequal inputs, signed zeros, infinities, payload NaNs, and
+  cancellation. Both the proof and benchmark ran fail-closed through direct `rch exec` Cargo argv; no local Cargo
+  fallback informed this keep.
+- Final strict-remote `cargo check -p fsci-interpolate --all-targets` passed on `vmi1149989`. Clippy first stopped in
+  the unchanged `fsci-linalg` dependency at its known line-9431 range-loop finding; a strict-remote `--no-deps` retry
+  reached `fsci-interpolate` and stopped on the same **86 pre-existing** crate-wide findings, with none in the owned
+  implementation, proof, or benchmark hunks. Direct rustfmt checking still exposes broad historical drift elsewhere
+  in both files but no diff in the owned hunks; `git diff --check` passed. Staged UBS exited zero with **0 critical**
+  findings; its shadow-workspace Cargo probes are supplementary and not part of the remote-only proof.
