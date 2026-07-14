@@ -21207,3 +21207,18 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `[1.1692, 1.3319, 1.6564]` ms for scalar: **3.478x** centered and **2.348x** conservative, with no interval overlap.
 - The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
   `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes were untouched.
+
+## 2026-07-14 - cod - KEEP SIMD linalg `vdot` reduction (1.710x at n=2,097,152)
+
+- Negative-ledger-first selection found no prior `vdot` optimization or rejection. Existing vector-norm paths are
+  already threaded or unrolled, while this live public dot-product primitive remained a scalar zipped reduction.
+  Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever applies the existing 8-wide `simd_dot` helper to `min(a.len(), b.len())`, preserving `zip`'s mismatched-
+  length truncation and empty-input result. A regression fixture bounds finite reassociation error by 64 epsilon
+  times the absolute-product sum and covers both mismatch orientations, payload NaN, infinity, and empty input. The
+  fixture was added but not separately executed under the one-benchmark turn constraint.
+- The one and only benchmark invocation compared production SIMD with the literal scalar zipped reduction in the
+  same binary on strict-remote worker `vmi1152480`. SIMD measured `[873.01, 912.27, 962.88]` us versus
+  `[1.2774, 1.5602, 1.7838]` ms for scalar: **1.710x** centered and **1.327x** conservative, with no interval overlap.
+- The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
+  `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes were untouched.

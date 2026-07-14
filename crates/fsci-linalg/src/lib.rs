@@ -20489,7 +20489,46 @@ pub fn outer(a: &[f64], b: &[f64]) -> Vec<Vec<f64>> {
 
 /// Vector dot product.
 pub fn vdot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(&ai, &bi)| ai * bi).sum()
+    let len = a.len().min(b.len());
+    simd_dot(&a[..len], &b[..len])
+}
+
+#[cfg(test)]
+mod vdot_simd_tests {
+    use super::vdot;
+
+    fn scalar_reference(a: &[f64], b: &[f64]) -> f64 {
+        a.iter().zip(b).map(|(&left, &right)| left * right).sum()
+    }
+
+    fn assert_matches_scalar(a: &[f64], b: &[f64]) {
+        let expected = scalar_reference(a, b);
+        let actual = vdot(a, b);
+        let scale: f64 = a
+            .iter()
+            .zip(b)
+            .map(|(&left, &right)| (left * right).abs())
+            .sum();
+        assert!((actual - expected).abs() <= 64.0 * f64::EPSILON * scale.max(1.0));
+    }
+
+    #[test]
+    fn matches_scalar_zip_reference() {
+        let len = 4_099usize;
+        let left: Vec<f64> = (0..len)
+            .map(|idx| ((idx % 257) as f64 - 128.0) / 17.0)
+            .collect();
+        let right: Vec<f64> = (0..len)
+            .map(|idx| ((idx % 251) as f64 - 125.0) / 19.0)
+            .collect();
+        assert_matches_scalar(&left, &right);
+        assert_matches_scalar(&left[..len - 7], &right);
+        assert_matches_scalar(&left, &right[..len - 11]);
+
+        assert!(vdot(&[f64::from_bits(0x7ff8_0000_0000_0042)], &[1.0]).is_nan());
+        assert_eq!(vdot(&[f64::INFINITY], &[2.0]), f64::INFINITY);
+        assert_eq!(vdot(&[], &[1.0]).to_bits(), 0.0f64.to_bits());
+    }
 }
 
 /// Vector L2 norm.

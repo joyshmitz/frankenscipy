@@ -11,7 +11,7 @@ use fsci_linalg::{
     KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions,
     SolveOptions, TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, frobenius_norm,
     inv, is_diagonal, lstsq, lu_factor, lu_solve, matmul, orthogonal_procrustes, pascal, pinv,
-    randomized_eigh, solve, solve_banded, solve_triangular, svd,
+    randomized_eigh, solve, solve_banded, solve_triangular, svd, vdot,
 };
 #[cfg(feature = "chol-wall-bench")]
 use fsci_linalg::{cholesky_wall_mr4_nr4_candidate, cholesky_wall_mr4_nr8_orig};
@@ -131,6 +131,10 @@ fn frobenius_norm_scalar_reference(a: &[Vec<f64>]) -> f64 {
         .sqrt()
 }
 
+fn vdot_scalar_reference(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(&left, &right)| left * right).sum()
+}
+
 fn bench_frobenius_norm_simd(c: &mut Criterion) {
     let matrix = make_matmul_matrix(2048, 1024, 0x51ad);
     let mut group = c.benchmark_group("frobenius_norm_simd");
@@ -142,6 +146,25 @@ fn bench_frobenius_norm_simd(c: &mut Criterion) {
     });
     group.bench_function("candidate_2048x1024", |bencher| {
         bencher.iter(|| black_box(frobenius_norm(black_box(&matrix))))
+    });
+    group.finish();
+}
+
+fn bench_vdot_simd_ab(c: &mut Criterion) {
+    let len = 2_097_152usize;
+    let left: Vec<f64> = (0..len)
+        .map(|idx| ((idx % 251) as f64 - 125.0) / 31.0)
+        .collect();
+    let right: Vec<f64> = (0..len)
+        .map(|idx| ((idx % 239) as f64 - 119.0) / 29.0)
+        .collect();
+    let mut group = c.benchmark_group("vdot_simd_ab");
+    group.sample_size(15);
+    group.bench_function("current_simd_n2097152", |bencher| {
+        bencher.iter(|| black_box(vdot(black_box(&left), black_box(&right))))
+    });
+    group.bench_function("orig_scalar_n2097152", |bencher| {
+        bencher.iter(|| black_box(vdot_scalar_reference(black_box(&left), black_box(&right))))
     });
     group.finish();
 }
@@ -1657,6 +1680,7 @@ criterion_group!(
     bench_pinv,
     bench_matmul,
     bench_frobenius_norm_simd,
+    bench_vdot_simd_ab,
     bench_is_diagonal,
     bench_eigh_dense,
     bench_randomized_eigh
