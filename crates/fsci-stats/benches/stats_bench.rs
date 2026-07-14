@@ -3,8 +3,8 @@ use fsci_stats::{
     BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, BIWEIGHT_MAD_HOIST_DISABLE, HaltonSampler,
     SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
-    bayes_mvs, cohens_d, excess_kurtosis, gstd, histogram, kendalltau, kruskal, ks_2samp,
-    l2_star_discrepancy, mad, mean_absolute_error, mean_squared_error,
+    bayes_mvs, brier_score, cohens_d, excess_kurtosis, gstd, histogram, kendalltau, kruskal,
+    ks_2samp, l2_star_discrepancy, mad, mean_absolute_error, mean_squared_error,
     mannkendall, mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf,
     pooled_variance, psd_welch,
     rand_index,
@@ -85,6 +85,39 @@ fn bench_mean_squared_error_simd_ab(c: &mut Criterion) {
     group.bench_function("orig_scalar_n262144", |bencher| {
         bencher.iter(|| {
             black_box(mean_squared_error_scalar_reference(
+                black_box(&y_true),
+                black_box(&y_pred),
+            ))
+        })
+    });
+    group.finish();
+}
+
+fn brier_score_scalar_reference(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    y_true
+        .iter()
+        .zip(y_pred)
+        .map(|(&truth, &prediction)| (prediction - truth).powi(2))
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
+fn bench_brier_score_simd_ab(c: &mut Criterion) {
+    let len = 262_144usize;
+    let y_true: Vec<f64> = (0..len).map(|idx| (idx % 2) as f64).collect();
+    let y_pred: Vec<f64> = (0..len)
+        .map(|idx| ((idx % 997) as f64 + 0.5) / 998.0)
+        .collect();
+    let mut group = c.benchmark_group("brier_score_simd_ab");
+    group.sample_size(10);
+    group.warm_up_time(std::time::Duration::from_millis(200));
+    group.measurement_time(std::time::Duration::from_secs(1));
+    group.bench_function("current_simd_n262144", |bencher| {
+        bencher.iter(|| black_box(brier_score(black_box(&y_true), black_box(&y_pred))))
+    });
+    group.bench_function("orig_scalar_n262144", |bencher| {
+        bencher.iter(|| {
+            black_box(brier_score_scalar_reference(
                 black_box(&y_true),
                 black_box(&y_pred),
             ))
@@ -1159,6 +1192,7 @@ criterion_group!(
     benches,
     bench_mean_absolute_error_simd_ab,
     bench_mean_squared_error_simd_ab,
+    bench_brier_score_simd_ab,
     bench_gstd_par_reductions_ab,
     bench_pooled_variance_par_reductions_ab,
     bench_ttest_rel_par_reductions_ab,

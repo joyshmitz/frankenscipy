@@ -49015,15 +49015,9 @@ pub fn log_loss(y_true: &[f64], y_pred: &[f64]) -> f64 {
 /// Brier score for probabilistic prediction accuracy.
 /// y_true is 0 or 1, y_pred is the predicted probability.
 pub fn brier_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
-    if y_true.len() != y_pred.len() || y_true.is_empty() {
-        return f64::NAN;
-    }
-    y_true
-        .iter()
-        .zip(y_pred.iter())
-        .map(|(&t, &p)| (p - t).powi(2))
-        .sum::<f64>()
-        / y_true.len() as f64
+    // Brier score is exactly the mean squared prediction error. Reuse the
+    // portable-SIMD reduction instead of maintaining a second scalar kernel.
+    mean_squared_error(y_true, y_pred)
 }
 
 /// Expected Calibration Error - weighted average of bin calibration errors.
@@ -90008,6 +90002,30 @@ mod tests {
             (result - 0.048).abs() < 1e-10,
             "brier_score got {result}, expected 0.048"
         );
+    }
+
+    #[test]
+    fn brier_score_simd_matches_scalar_reference() {
+        let len = 4_099usize;
+        let y_true: Vec<f64> = (0..len).map(|idx| (idx % 2) as f64).collect();
+        let y_pred: Vec<f64> = (0..len)
+            .map(|idx| ((idx % 997) as f64 + 0.5) / 998.0)
+            .collect();
+        let scalar_sum: f64 = y_true
+            .iter()
+            .zip(&y_pred)
+            .map(|(&truth, &prediction)| (prediction - truth).powi(2))
+            .sum();
+        let expected = scalar_sum / len as f64;
+        let actual = brier_score(&y_true, &y_pred);
+        assert!((actual - expected).abs() <= 64.0 * f64::EPSILON * expected.max(1.0));
+
+        assert!(brier_score(&[], &[]).is_nan());
+        assert!(brier_score(&[1.0], &[]).is_nan());
+        assert!(brier_score(&[f64::NAN], &[1.0]).is_nan());
+        assert_eq!(brier_score(&[0.0], &[f64::INFINITY]), f64::INFINITY);
+        assert!(brier_score(&[f64::INFINITY], &[f64::INFINITY]).is_nan());
+        assert_eq!(brier_score(&[-0.0], &[0.0]).to_bits(), 0.0f64.to_bits());
     }
 
     #[test]

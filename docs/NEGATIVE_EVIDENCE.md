@@ -21518,3 +21518,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   stats crate, with none in the owned MSE or benchmark hunks; whole-file rustfmt likewise exposed unrelated existing
   drift, so no peer formatting was rewritten. No second benchmark, `release-perf` build, local Cargo fallback, or
   stash mutation was used. Bead: `frankenscipy-jft3x`.
+
+## 2026-07-14 - cod - KEEP Brier score reuse of SIMD squared-error kernel (2.793x at n=262,144)
+
+- Negative-ledger-first triage again rejected the assigned dense-linalg SYRK harness because prior attribution places
+  standalone SYRK below 1% of Cholesky wall time. The prediction-metric vein remained live: `brier_score` had no prior
+  keep or rejection and spent its complete valid path in a scalar squared-difference reduction mathematically
+  identical to the newly vectorized `mean_squared_error`. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever delegates `brier_score` to that existing portable-SIMD kernel, deleting the duplicate scalar reduction.
+  Input validation, empty and mismatch NaNs, squared-error arithmetic, final division, infinities, and signed-zero
+  behavior remain shared with the same formula. A focused strict-remote proof on `vmi1152480` matched the literal
+  former scalar formula within a 64-epsilon scaled bound across 4,099 values and preserved all edge contracts.
+- The one and only benchmark invocation compared production kernel reuse with the literal former Brier reduction in
+  the same `--profile release` binary on strict-remote worker `vmi1152480`, using 262,144 values, 200 ms warm-up, and
+  one second of measurement per arm. SIMD reuse measured `[51.057, 54.580, 58.271]` us versus
+  `[142.62, 152.46, 164.26]` us scalar: **2.7933x** centered, **2.4475x** conservative, and **64.20%** lower centered
+  time with no interval overlap. The complete remote command returned in 247.5 seconds, including a 144.0-second cold
+  release build, beneath the five-minute cap.
+- The focused proof and `git diff --check` passed; staged UBS exited zero with no critical findings and only legacy
+  whole-file warnings. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used.
+  Bead: `frankenscipy-to9bm`.
