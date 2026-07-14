@@ -30426,6 +30426,97 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
     }
 }
 
+/// [`mannwhitneyu`] on two samples already sorted ascending (`total_cmp` order) and NaN-free. An
+/// O(n+m) two-pointer merge over the pre-sorted pair yields BOTH the pooled rank sum of `sa` and the
+/// tie correction `Σ(t³−t)`, so an all-pairs matrix can sort each sample ONCE instead of rank-sorting
+/// the pool per pair. BYTE-IDENTICAL to `mannwhitneyu(x, y)` on the same finite data: the pooled average
+/// ranks are exact int/half-int (order-independent rank sum below 2^53), tie groups are the same
+/// value-groups the reference's rank-sort finds, and the identical downstream (exact-vs-asymptotic
+/// branch, continuity correction) is fed the same u1/tie_correction.
+fn mannwhitneyu_sorted(sa: &[f64], sb: &[f64]) -> TtestResult {
+    let n1 = sa.len();
+    let n2 = sb.len();
+    if n1 < 2 || n2 < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+    let (n1f, n2f) = (n1 as f64, n2 as f64);
+    let mut ia = 0usize;
+    let mut ib = 0usize;
+    let mut rank_sum_a = 0.0f64;
+    let mut tie_correction = 0.0f64;
+    while ia < n1 || ib < n2 {
+        let next_val = match (sa.get(ia), sb.get(ib)) {
+            (Some(&a), Some(&b)) => {
+                if a.total_cmp(&b) == std::cmp::Ordering::Greater {
+                    b
+                } else {
+                    a
+                }
+            }
+            (Some(&a), None) => a,
+            (None, Some(&b)) => b,
+            (None, None) => break,
+        };
+        let start = ia + ib;
+        let mut na = 0usize;
+        while ia < n1 && sa[ia].total_cmp(&next_val) == std::cmp::Ordering::Equal {
+            ia += 1;
+            na += 1;
+        }
+        let mut nb = 0usize;
+        while ib < n2 && sb[ib].total_cmp(&next_val) == std::cmp::Ordering::Equal {
+            ib += 1;
+            nb += 1;
+        }
+        let group = na + nb;
+        let avg_rank = start as f64 + 1.0 + (group as f64 - 1.0) / 2.0;
+        rank_sum_a += na as f64 * avg_rank;
+        let t = group as f64;
+        if t > 1.0 {
+            tie_correction += t * t * t - t;
+        }
+    }
+    let u1 = rank_sum_a - n1f * (n1f + 1.0) / 2.0;
+    let u2 = n1f * n2f - u1;
+    let u = u1.min(u2);
+    let mu = n1f * n2f / 2.0;
+    let n = n1f + n2f;
+    if mwu_use_exact(n1, n2, tie_correction == 0.0) {
+        return TtestResult {
+            statistic: u1,
+            pvalue: mwu_exact_pvalue(u1, n1, n2, "two-sided"),
+            df: f64::NAN,
+        };
+    }
+    let variance_no_ties = n1f * n2f * (n + 1.0) / 12.0;
+    let variance = if n > 1.0 {
+        variance_no_ties - n1f * n2f * tie_correction / (12.0 * n * (n - 1.0))
+    } else {
+        variance_no_ties
+    };
+    let sigma = variance.max(0.0).sqrt();
+    if sigma == 0.0 {
+        return TtestResult {
+            statistic: u1,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+    let abs_diff = (u - mu).abs();
+    let z = (abs_diff - 0.5).max(0.0) / sigma;
+    let normal = Normal::standard();
+    let pvalue = (2.0 * (1.0 - normal.cdf(z))).clamp(0.0, 1.0);
+    TtestResult {
+        statistic: u1,
+        pvalue,
+        df: f64::NAN,
+    }
+}
+
 /// Mann-Whitney U test with alternative hypothesis specification.
 ///
 /// Matches `scipy.stats.mannwhitneyu(x, y, alternative=...)`.
@@ -43096,11 +43187,37 @@ pub fn ks_2samp_matrix(samples: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<Vec<f
 /// smaller U (order-independent) and a normal-approximation p-value, so both are symmetric. SciPy has NO
 /// vectorized all-pairs form — pairwise rank-sum comparison (a common multiple-comparison workflow) means
 /// looping `scipy.stats.mannwhitneyu` in Python; this runs the O(n log n) per-pair kernel in parallel.
+/// When `true`, [`mannwhitneyu_matrix`] rank-sorts the concatenated pool inside every pair (the ORIG
+/// per-pair path); default `false` sorts each sample ONCE up front and merge-ranks. Byte-identical. A/B.
+#[doc(hidden)]
+pub static MANNWHITNEYU_MATRIX_PRESORT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn mannwhitneyu_matrix(
     samples: &[Vec<f64>],
 ) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
-    all_pairs_two_symmetric_matrices(samples, |a, b| {
-        let r = mannwhitneyu(a, b);
+    // Each `mannwhitneyu(a,b)` rankdata's the concatenated pool (a sort), so the naive all-pairs loop
+    // re-sorts every sample O(m) times. The sort is query-INDEPENDENT: when all samples are finite (the
+    // common case), sort each ONCE up front and merge-rank the pre-sorted pair via `mannwhitneyu_sorted`
+    // (which recovers both the rank sum and the tie correction) — m sorts instead of ~m². BYTE-IDENTICAL.
+    // NaN anywhere → fall back to the per-pair path (mannwhitneyu returns NaN per NaN pair).
+    let any_nan = samples.iter().any(|s| s.iter().any(|v| v.is_nan()));
+    if any_nan || MANNWHITNEYU_MATRIX_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return all_pairs_two_symmetric_matrices(samples, |a, b| {
+            let r = mannwhitneyu(a, b);
+            (r.statistic, r.pvalue)
+        });
+    }
+    let sorted: Vec<Vec<f64>> = samples
+        .iter()
+        .map(|s| {
+            let mut v = s.clone();
+            sort_f64_total(&mut v);
+            v
+        })
+        .collect();
+    all_pairs_two_symmetric_matrices(&sorted, |sa, sb| {
+        let r = mannwhitneyu_sorted(sa, sb);
         (r.statistic, r.pvalue)
     })
 }
