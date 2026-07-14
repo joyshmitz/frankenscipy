@@ -21177,3 +21177,18 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Likely cause: a short contiguous linear scan is cache-friendly and predictable, while binary search adds branches
   and nonsequential probes. The implementation, fixture, and benchmark were manually removed; only this rejection
   row lands. No second benchmark or local Cargo fallback was used, and stashes were untouched.
+
+## 2026-07-14 - cod - KEEP SIMD `sparse_norm` Frobenius reduction (4.985x at nnz=2,097,152)
+
+- Negative-ledger-first selection found no prior `sparse_norm` optimization or rejection. The adjacent dense
+  Frobenius SIMD keep established the accepted reassociation contract, while sparse Frobenius/default still used a
+  scalar square-sum. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever exposes the existing hidden `fsci-linalg` 8-wide dot helper and reuses it for the sparse `fro`,
+  `frobenius`, and default arms. The `1`-norm and infinity-norm paths are unchanged. A regression fixture covers a
+  deterministic 4,099-value finite vector within 32 epsilon-scaled error plus payload NaN, infinity, and empty CSR;
+  it was added but not separately executed under the one-benchmark turn constraint.
+- The one and only benchmark invocation compared production SIMD with the literal scalar reduction in the same
+  binary on strict-remote worker `vmi1152480`. SIMD measured `[361.92, 392.53, 436.60]` us versus
+  `[1.4773, 1.9569, 2.7058]` ms for scalar: **4.985x** centered and **3.384x** conservative, with no interval overlap.
+- The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
+  `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes were untouched.

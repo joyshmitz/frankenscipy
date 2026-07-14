@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fsci_linalg::{
     DecompOptions, LinalgError, SolveOptions as DenseSolveOptions, expm as dense_expm,
-    solve_banded as dense_solve_banded, solveh_banded as dense_solveh_banded,
+    simd_dot, solve_banded as dense_solve_banded, solveh_banded as dense_solveh_banded,
 };
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
@@ -4488,7 +4488,7 @@ fn hopcroft_karp_dfs(
 pub fn sparse_norm(a: &CsrMatrix, kind: &str) -> f64 {
     let n = a.shape().rows;
     match kind {
-        "fro" | "frobenius" => a.data().iter().map(|&v| v * v).sum::<f64>().sqrt(),
+        "fro" | "frobenius" => simd_dot(a.data(), a.data()).sqrt(),
         "1" => {
             let m = a.shape().cols;
             let mut col_sums = vec![0.0; m];
@@ -4521,7 +4521,7 @@ pub fn sparse_norm(a: &CsrMatrix, kind: &str) -> f64 {
             }
             max_row
         }
-        _ => a.data().iter().map(|&v| v * v).sum::<f64>().sqrt(), // default frobenius
+        _ => simd_dot(a.data(), a.data()).sqrt(), // default frobenius
     }
 }
 
@@ -10275,6 +10275,57 @@ mod tests {
             (norm - expected).abs() < 1e-10,
             "norm got {norm}, expected {expected}"
         );
+    }
+
+    #[test]
+    fn sparse_frobenius_norm_simd_matches_scalar_reference() {
+        let len = 4_099usize;
+        let data: Vec<f64> = (0..len)
+            .map(|idx| ((idx % 257) as f64 - 128.0) / 17.0)
+            .collect();
+        let expected = data.iter().map(|value| value * value).sum::<f64>().sqrt();
+        let matrix = CsrMatrix::from_components(
+            Shape2D::new(1, len),
+            data,
+            (0..len).collect(),
+            vec![0, len],
+            false,
+        )
+        .expect("finite CSR");
+        for kind in ["fro", "frobenius", "unknown"] {
+            let actual = sparse_norm(&matrix, kind);
+            assert!((actual - expected).abs() <= 32.0 * f64::EPSILON * expected);
+        }
+
+        let nan = CsrMatrix::from_components(
+            Shape2D::new(1, 1),
+            vec![f64::from_bits(0x7ff8_0000_0000_0042)],
+            vec![0],
+            vec![0, 1],
+            false,
+        )
+        .expect("NaN CSR");
+        assert!(sparse_norm(&nan, "fro").is_nan());
+
+        let infinite = CsrMatrix::from_components(
+            Shape2D::new(1, 1),
+            vec![f64::INFINITY],
+            vec![0],
+            vec![0, 1],
+            false,
+        )
+        .expect("infinite CSR");
+        assert_eq!(sparse_norm(&infinite, "fro"), f64::INFINITY);
+
+        let empty = CsrMatrix::from_components(
+            Shape2D::new(0, 0),
+            Vec::new(),
+            Vec::new(),
+            vec![0],
+            false,
+        )
+        .expect("empty CSR");
+        assert_eq!(sparse_norm(&empty, "fro"), 0.0);
     }
 
     #[test]

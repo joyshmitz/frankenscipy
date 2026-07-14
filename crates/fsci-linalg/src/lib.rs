@@ -19015,8 +19015,9 @@ fn det_flat_lu_product(a_in: &[Vec<f64>]) -> Option<f64> {
 }
 
 /// 8-wide dot product `sum x[i]*y[i]` (lanes reduced at the end). `x`/`y` same length.
+#[doc(hidden)]
 #[inline]
-fn simd_dot(x: &[f64], y: &[f64]) -> f64 {
+pub fn simd_dot(x: &[f64], y: &[f64]) -> f64 {
     let mut acc = Simd::<f64, 8>::splat(0.0);
     let mut p = 0;
     while p + 8 <= x.len() {
