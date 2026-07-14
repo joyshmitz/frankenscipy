@@ -21605,3 +21605,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   critical issues. The complete benchmark command returned in 162.7 seconds, beneath the five-minute cap. No
   `release-perf` build, second benchmark, local Cargo fallback, or stash mutation was used. Bead:
   `frankenscipy-hpuir`.
+
+## 2026-07-14 - cod - REJECT parallel large-buffer WAV PCM encoding (0.976x conservative)
+
+- Negative-ledger-first triage excluded the assigned dense-linalg SYRK harness because prior attribution places
+  standalone SYRK below 1% of Cholesky wall time. Recent FFT/runtime/stats veins were thinning, so this pass inspected
+  the unledgered `wav_write` operation. Direct source attribution showed that its only input-sized work after O(1)
+  validation and header construction is the serial f64 clamp/scale/i16 little-endian encoding loop.
+- ONE candidate retained the literal serial path below 262,144 samples and otherwise pre-sized the PCM body and split
+  disjoint input/output chunks across scoped threads. A strict-remote focused test on `vmi1149989` proved the parallel
+  output byte-identical to the original loop above the gate, including clipped values, infinities, and NaN. Strict-
+  remote all-target Clippy passed with `-D warnings`; rustfmt and diff hygiene passed; UBS reported only pre-existing
+  broad-file heuristic findings.
+- The one and only benchmark invocation compared the candidate with the literal original loop in the same
+  `--profile release` binary on strict-remote worker `vmi1152480`, using 4,000,000 samples, 100 ms warm-up, 500 ms
+  measurement per arm, and 10 samples. Parallel measured `[3.8621, 5.4060, 6.4696]` ms versus
+  `[6.3160, 7.0475, 7.9935]` ms serial: **1.3036x** centered and **0.9763x** conservative, with overlapping intervals.
+  The centered result was promising but did not clear a robust keep floor under the one-run limit.
+- Disposition: source, test, and benchmark hunks were dropped; this evidence-only row prevents re-chasing naive scoped-
+  thread PCM encoding without a lower-variance design. The complete remote benchmark returned in 151.2 seconds,
+  beneath the five-minute cap. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was
+  used. Bead: `frankenscipy-nfdeg`.
