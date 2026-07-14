@@ -52977,10 +52977,39 @@ pub fn binned_statistic_2d(
         }
     };
 
-    let stats: Vec<Vec<f64>> = bin_values
-        .iter()
-        .map(|row| row.iter().map(|bv| cell_stat(bv)).collect())
-        .collect();
+    // Each cell's statistic (a quickselect for median, a reduction for std) is INDEPENDENT and
+    // dominates the O(n) materialization above, so fan the per-cell map across cores (chunked over the
+    // outer bin rows, written to ordered slots). BYTE-IDENTICAL: each cell's stat is deterministic and
+    // row order is preserved. Shares [`BINNED_STAT_MAP_FORCE_SERIAL`] with the 1-D `binned_statistic`.
+    let cell_stat = &cell_stat;
+    let stats: Vec<Vec<f64>> = if BINNED_STAT_MAP_FORCE_SERIAL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || bins < 2
+        || x.len() < (1 << 18)
+    {
+        bin_values
+            .iter()
+            .map(|row| row.iter().map(|bv| cell_stat(bv)).collect())
+            .collect()
+    } else {
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(bins)
+            .max(1);
+        let chunk = bins.div_ceil(nthreads);
+        let mut stats: Vec<Vec<f64>> = vec![Vec::new(); bins];
+        std::thread::scope(|scope| {
+            for (out_rows, bv_rows) in stats.chunks_mut(chunk).zip(bin_values.chunks(chunk)) {
+                scope.spawn(move || {
+                    for (out_row, bv_row) in out_rows.iter_mut().zip(bv_rows) {
+                        *out_row = bv_row.iter().map(|bv| cell_stat(bv)).collect();
+                    }
+                });
+            }
+        });
+        stats
+    };
 
     (stats, x_edges, y_edges)
 }
