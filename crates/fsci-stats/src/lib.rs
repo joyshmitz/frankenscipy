@@ -27341,8 +27341,11 @@ pub fn ttest_1samp(data: &[f64], popmean: f64) -> TtestResult {
             df: n - 1.0,
         };
     }
-    let mean: f64 = data.iter().sum::<f64>() / n;
-    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    // Mean via `par_sum` + Σ(x−mean)² via `sum_sq_dev` — both work-gated parallel (byte-identical
+    // below the 1<<22 gate; the variance is m2-insensitive to the mean, so par_sum is byte-safe there
+    // too). Both were serial `.sum()` stragglers vs the parallel sem/variance reductions.
+    let mean: f64 = par_sum(data) / n;
+    let var: f64 = sum_sq_dev(data, mean) / (n - 1.0);
     let se = (var / n).sqrt();
     if se == 0.0 {
         // All values identical: t is infinite or NaN depending on whether mean == popmean
@@ -27392,8 +27395,11 @@ pub fn ttest_1samp_alternative(data: &[f64], popmean: f64, alternative: &str) ->
             df: n - 1.0,
         };
     }
-    let mean: f64 = data.iter().sum::<f64>() / n;
-    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    // Mean via `par_sum` + Σ(x−mean)² via `sum_sq_dev` — both work-gated parallel (byte-identical
+    // below the 1<<22 gate; the variance is m2-insensitive to the mean, so par_sum is byte-safe there
+    // too). Both were serial `.sum()` stragglers vs the parallel sem/variance reductions.
+    let mean: f64 = par_sum(data) / n;
+    let var: f64 = sum_sq_dev(data, mean) / (n - 1.0);
     let se = (var / n).sqrt();
     if se == 0.0 {
         let statistic = if (mean - popmean).abs() == 0.0 {
@@ -55799,6 +55805,32 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ttest_1samp_par_reductions_match_serial_below_gate() {
+        use std::sync::atomic::Ordering;
+        // Below the 1<<22 gate par_sum/sum_sq_dev are the exact serial folds, so statistic/pvalue/df
+        // are bit-for-bit identical regardless of the force-serial flags.
+        let cases: &[(&[f64], f64)] = &[
+            (&[1.0, 2.0, 3.0, 4.0, 5.0], 2.5),
+            (&[-3.0, 0.5, 2.0, -1.25, 7.0, 4.0, -2.5, 9.0], 0.0),
+            (&[10.0, 10.0, 10.0, 10.0], 10.0), // se==0 path
+            (&[1e6, -1e6, 3.5, -2.5, 100.0, -50.0, 0.0, 7.0], 1.0),
+        ];
+        for &(data, popmean) in cases {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = ttest_1samp(data, popmean);
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = ttest_1samp(data, popmean);
+            assert_eq!(serial.statistic.to_bits(), parallel.statistic.to_bits());
+            assert_eq!(serial.pvalue.to_bits(), parallel.pvalue.to_bits());
+            assert_eq!(serial.df.to_bits(), parallel.df.to_bits());
+        }
+        PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn excess_kurtosis_par_sum_mean_matches_serial_below_gate() {

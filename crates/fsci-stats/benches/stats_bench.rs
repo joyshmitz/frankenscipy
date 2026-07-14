@@ -5,8 +5,9 @@ use fsci_stats::{
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
     excess_kurtosis, histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mad, mannkendall,
     mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf, psd_welch, rand_index,
-    siegelslopes, somersd, theilslopes, wasserstein_distance, wraparound_discrepancy,
-    MAD_FN_REUSE_DISABLE, MAD_REUSE_DISABLE, MAD_ZSCORE_HOIST_DISABLE, PAR_SUM_FORCE_SERIAL,
+    siegelslopes, somersd, theilslopes, ttest_1samp, wasserstein_distance, wraparound_discrepancy,
+    MAD_FN_REUSE_DISABLE, MAD_REUSE_DISABLE, MAD_ZSCORE_HOIST_DISABLE, MOMENT_PAR_FORCE_SERIAL,
+    PAR_SUM_FORCE_SERIAL,
 };
 use std::hint::black_box;
 
@@ -830,6 +831,31 @@ fn bench_biweight_midcorrelation_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_ttest_1samp_par_reductions_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("ttest_1samp_par_reductions_ab");
+    group.sample_size(10);
+    // Both the mean and the Σ(x-mean)² were serial; toggle both reduction gates for the A/B.
+    let data = deterministic_data(16_000_000);
+    group.bench_function("current_parallel", |b| {
+        b.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            black_box(ttest_1samp(black_box(&data), black_box(0.1)))
+        });
+    });
+    group.bench_function("orig_serial", |b| {
+        b.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            black_box(ttest_1samp(black_box(&data), black_box(0.1)))
+        });
+    });
+    PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_excess_kurtosis_par_mean_ab(c: &mut Criterion) {
     use std::sync::atomic::Ordering;
     let mut group = c.benchmark_group("excess_kurtosis_par_mean_ab");
@@ -901,6 +927,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_ttest_1samp_par_reductions_ab,
     bench_excess_kurtosis_par_mean_ab,
     bench_mad_fn_reuse_ab,
     bench_mad_zscore_hoist_ab,
