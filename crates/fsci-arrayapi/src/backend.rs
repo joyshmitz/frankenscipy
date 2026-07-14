@@ -603,6 +603,9 @@ impl ArrayApiBackend for CoreArrayBackend {
 
     fn astype(&self, array: &Self::Array, dtype: DType) -> ArrayApiResult<Self::Array> {
         let resolved_dtype = self.resolve_supported_dtype(Some(dtype))?;
+        if resolved_dtype == array.dtype {
+            return Ok(array.clone());
+        }
         let values = cast_values_to_dtype(&array.values, array.dtype, resolved_dtype)?;
         Ok(CoreArray {
             shape: array.shape.clone(),
@@ -2463,6 +2466,132 @@ mod tests {
         };
         let ok = full(&backend, &Shape::new(vec![1]), &full_request);
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn same_dtype_astype_matches_former_scalar_recast_bits() {
+        fn assert_scalar_bits_eq(actual: ScalarValue, expected: ScalarValue) {
+            match (actual, expected) {
+                (ScalarValue::Bool(a), ScalarValue::Bool(b)) => assert_eq!(a, b),
+                (ScalarValue::I64(a), ScalarValue::I64(b)) => assert_eq!(a, b),
+                (ScalarValue::U64(a), ScalarValue::U64(b)) => assert_eq!(a, b),
+                (ScalarValue::F64(a), ScalarValue::F64(b)) => {
+                    assert_eq!(a.to_bits(), b.to_bits());
+                }
+                (
+                    ScalarValue::ComplexF64 { re: ar, im: ai },
+                    ScalarValue::ComplexF64 { re: br, im: bi },
+                ) => {
+                    assert_eq!(ar.to_bits(), br.to_bits());
+                    assert_eq!(ai.to_bits(), bi.to_bits());
+                }
+                (a, b) => assert_eq!(a, b, "scalar variants differ"),
+            }
+        }
+
+        let backend = strict_backend();
+        let cases = [
+            (DType::Float64, Vec::new()),
+            (
+                DType::Bool,
+                vec![ScalarValue::Bool(false), ScalarValue::Bool(true)],
+            ),
+            (
+                DType::Int8,
+                vec![ScalarValue::I64(-128), ScalarValue::I64(127)],
+            ),
+            (
+                DType::Int16,
+                vec![ScalarValue::I64(-32_768), ScalarValue::I64(32_767)],
+            ),
+            (
+                DType::Int32,
+                vec![ScalarValue::I64(-17), ScalarValue::I64(23)],
+            ),
+            (
+                DType::Int64,
+                vec![ScalarValue::I64(i64::MIN), ScalarValue::I64(i64::MAX)],
+            ),
+            (
+                DType::UInt8,
+                vec![ScalarValue::U64(0), ScalarValue::U64(255)],
+            ),
+            (
+                DType::UInt16,
+                vec![ScalarValue::U64(0), ScalarValue::U64(65_535)],
+            ),
+            (
+                DType::UInt32,
+                vec![ScalarValue::U64(1), ScalarValue::U64(u32::MAX.into())],
+            ),
+            (
+                DType::UInt64,
+                vec![ScalarValue::U64(0), ScalarValue::U64(u64::MAX)],
+            ),
+            (
+                DType::Float32,
+                vec![
+                    ScalarValue::F64(-0.0),
+                    ScalarValue::F64(f64::INFINITY),
+                    ScalarValue::F64(f64::from_bits(0x7ff8_0000_0000_0042)),
+                ],
+            ),
+            (
+                DType::Float64,
+                vec![
+                    ScalarValue::F64(-0.0),
+                    ScalarValue::F64(f64::NEG_INFINITY),
+                    ScalarValue::F64(f64::from_bits(0x7ff8_0000_0000_1234)),
+                ],
+            ),
+            (
+                DType::Complex64,
+                vec![
+                    ScalarValue::ComplexF64 { re: -0.0, im: 0.0 },
+                    ScalarValue::ComplexF64 {
+                        re: f64::INFINITY,
+                        im: f64::from_bits(0x7ff8_0000_0000_0042),
+                    },
+                ],
+            ),
+            (
+                DType::Complex128,
+                vec![
+                    ScalarValue::ComplexF64 { re: -0.0, im: 0.0 },
+                    ScalarValue::ComplexF64 {
+                        re: f64::NEG_INFINITY,
+                        im: f64::from_bits(0x7ff8_0000_0000_1234),
+                    },
+                ],
+            ),
+        ];
+
+        for (dtype, inputs) in cases {
+            let array = from_slice(
+                &backend,
+                &inputs,
+                &CreationRequest {
+                    shape: Shape::new(vec![inputs.len()]),
+                    dtype,
+                    order: MemoryOrder::F,
+                },
+            )
+            .expect("valid typed source");
+            let former_values = array
+                .values()
+                .iter()
+                .map(|value| cast_scalar_to_dtype(*value, dtype).expect("former scalar recast"))
+                .collect::<Vec<_>>();
+            let actual = backend.astype(&array, dtype).expect("same-dtype astype");
+
+            assert_eq!(actual.shape(), array.shape());
+            assert_eq!(actual.dtype(), dtype);
+            assert_eq!(actual.order(), array.order());
+            assert_eq!(actual.values().len(), former_values.len());
+            for (&actual_value, &expected_value) in actual.values().iter().zip(&former_values) {
+                assert_scalar_bits_eq(actual_value, expected_value);
+            }
+        }
     }
 
     #[test]

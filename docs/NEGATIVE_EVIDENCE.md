@@ -20840,3 +20840,29 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   warnings denied. `git diff --check` passed, and the new hunks match rustfmt while a whole-file check continues to
   show pre-existing drift outside them. UBS exited zero with **0 critical** findings in the two staged Rust files;
   its shadow-workspace scan was not used as Cargo evidence.
+
+## 2026-07-13 - cod - KEEP arrayapi same-dtype `astype` identity clone (4.85x at 1,000,000 values)
+
+- Negative-ledger-first selection found no prior same-dtype `astype` keep or rejection. The adjacent June 2 cast
+  specialization covers real-to-complex conversion, leaving the identity-cast path distinct and eligible. The public
+  path still cloned its payload through a generic per-scalar enum dispatch even though constructors already normalize
+  every stored value to the array's declared dtype.
+- ONE lever returns `array.clone()` after the unchanged supported-dtype resolution when the resolved dtype matches the
+  input dtype. Shape, dtype, memory order, payload length, scalar variants, and every floating-point bit are preserved;
+  unsupported-dtype diagnostics and error precedence remain ahead of the branch.
+- The new public Criterion row's strict-remote production-original interval on `vmi1227854` was
+  `[5.9409, 6.0929, 6.2582]` ms. Because RCH ignored a requested worker hint, that run is retained only as baseline and
+  source-attribution evidence; a separate standalone candidate attempt that admitted no timed row was excluded.
+- The decisive same-binary candidate/reference/candidate bracket on `vmi1152480` measured the optimized public path at
+  `[1.8499, 1.9861, 2.1004]` ms, an exact temporary copy of the former scalar-recast method body at
+  `[8.9279, 9.6347, 10.846]` ms, and the optimized public path again at `[1.8682, 1.9887, 2.2274]` ms. The centered
+  speedups are **4.851x** and **4.845x**, with a conservative interval floor above **4.008x**. The temporary comparator
+  was removed; only the public benchmark row remains.
+- The focused strict-remote exact-bit proof passed **1/1**. It reconstructs the former scalar-recast result for all 13
+  supported dtypes plus an empty case, covering signed zero, infinities, payload NaNs, both complex widths, shape, order,
+  dtype, length, and every scalar bit. Every authoritative Cargo command ran fail-closed through `rch exec`; no local
+  Cargo fallback informed this keep.
+- Final library-plus-benchmark Clippy passed remotely with `-D warnings`. `rustfmt --check` on both owned Rust files and
+  `git diff --check` also passed. UBS first flagged an explicit `panic!` in the new test-only mismatch arm; replacing it
+  with an assertion preserved the failure contract, and the final staged scan exited zero with **0 critical** findings.
+  UBS shadow-workspace Cargo probes were excluded from the strict-remote proof.

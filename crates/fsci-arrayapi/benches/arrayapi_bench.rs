@@ -303,6 +303,26 @@ fn bench_dtype_cast(c: &mut Criterion) {
         );
     }
 
+    let same_dtype_size = 1_000_000;
+    let same_dtype_source = make_array(
+        &backend,
+        Shape::new(vec![same_dtype_size]),
+        DType::Float64,
+        MemoryOrder::C,
+    );
+    group.bench_with_input(
+        BenchmarkId::new("astype_float64_to_float64", same_dtype_size),
+        &same_dtype_size,
+        |b, _| {
+            b.iter(|| {
+                let out = backend
+                    .astype(black_box(&same_dtype_source), DType::Float64)
+                    .expect("same-dtype astype should succeed");
+                black_box(out.size());
+            });
+        },
+    );
+
     group.finish();
 }
 
