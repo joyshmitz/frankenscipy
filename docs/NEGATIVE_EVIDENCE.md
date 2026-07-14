@@ -21472,3 +21472,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   control in one run. Strict-remote clippy reached one pre-existing digit-grouping warning at `lib.rs:1143`; staged
   UBS found only legacy test panic heuristics. No second benchmark, `release-perf` build, local Cargo fallback, or
   stash mutation was used. Bead: `frankenscipy-4gdfc`.
+
+## 2026-07-14 - cod - REJECT hoisted `face` row channel (13.40% slower centered)
+
+- Negative-ledger-first triage found the only ready perf quick-win was an assigned dense-linalg SYRK harness whose
+  existing attribution placed standalone SYRK below 1% of Cholesky wall time, so the search pivoted to the fresh
+  `fsci-datasets` subsystem, which had no prior performance ledger row. Direct source attribution found the
+  row-only green-channel division nested inside all 786,432 pixels of full `face()` generation. Opportunity score:
+  20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever computed that channel once per row, reducing its source-level division count from 786,432 to 768 while
+  preserving allocation, pixel order, and all other arithmetic. A focused strict-remote proof on `vmi1152480`
+  matched the literal former per-pixel formula exactly for full RGB, full grayscale, and both centered 128x128
+  fixtures, including complete image metadata and every output byte.
+- The one and only benchmark invocation compared the hoisted candidate and literal former loop in the same
+  `--profile release` libtest binary on strict-remote worker `vmi1152480`, using full 768x1024 RGB generation.
+  Hoisted generation measured **1,405,807.66 ns/iter (+/- 1,121,083.20)** versus
+  **1,239,672.25 ns/iter (+/- 374,133.86)** former: **1.1340x slower centered** (**+13.40%**), with broadly
+  overlapping noise bands.
+- **REJECT; candidate, exact-byte proof, and benchmark seam removed.** Manual source hoisting added no independent
+  runtime signal; optimized code generation plus allocation and byte emission already dominate this generator. Do
+  not retry row/column invariant arithmetic hoists alone; revisit only with an independently attributed generation
+  primitive or representation change. Final strict-remote all-target clippy, direct rustfmt/diff hygiene, and staged
+  UBS passed. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used. Bead:
+  `frankenscipy-su352`.
