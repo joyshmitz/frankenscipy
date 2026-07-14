@@ -37022,6 +37022,13 @@ pub fn trim1(data: &[f64], proportiontocut: f64, tail: &str) -> Vec<f64> {
 pub static TVAR_FORCE_COLLECT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`tvar`]'s alloc-free inline path folds its two in-limit passes serially (byte-identical
+/// to the collect path); default `false` fans each conditional reduction across cores for huge inputs
+/// (within per-op ULP tolerance above the gate). `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static TVAR_PAR_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute the trimmed variance of an array.
 ///
 /// Values outside the specified limits are excluded before computing variance.
@@ -37062,25 +37069,72 @@ pub fn tvar(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
     // `Σ(x-mean)²` are the same left-to-right folds from 0.0 over the in-limit elements in data
     // order as over `filtered`, and `count == filtered.len()`. Eliminates the intermediate Vec
     // (its alloc + write + two reads → two reads of `data` behind a cheap comparison).
-    let mut sum = 0.0f64;
-    let mut count = 0usize;
-    for &x in data {
-        if within(x) {
-            sum += x;
-            count += 1;
+    // Two INDEPENDENT conditional reductions (`Σx`+count, then `Σ(x-mean)²`) over the in-limit elements.
+    // Fan each across cores for huge `data`: below the gate / when forced serial, the single-chunk fold
+    // IS the serial loop (byte-identical to the collect path); above it the per-thread partials
+    // reassociate within per-op ULP tolerance, and the count is an exact integer sum (order-independent).
+    let par_serial = TVAR_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(data.len() / (1 << 16))
+        .max(1);
+    let chunk = data.len().div_ceil(nthreads);
+
+    let sum_count = |ds: &[f64]| -> (f64, usize) {
+        let mut s = 0.0f64;
+        let mut c = 0usize;
+        for &x in ds {
+            if within(x) {
+                s += x;
+                c += 1;
+            }
         }
-    }
+        (s, c)
+    };
+    let (sum, count) = if par_serial || nthreads <= 1 {
+        sum_count(data)
+    } else {
+        let sum_count = &sum_count;
+        let parts: Vec<(f64, usize)> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || sum_count(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("tvar sum worker panicked"))
+                .collect()
+        });
+        parts.into_iter().fold((0.0f64, 0usize), |(a, b), (s, c)| (a + s, b + c))
+    };
     if count <= ddof {
         return f64::NAN;
     }
     let n = count as f64;
     let mean = sum / n;
-    let mut sum_sq = 0.0f64;
-    for &x in data {
-        if within(x) {
-            sum_sq += (x - mean).powi(2);
+
+    let ss = |ds: &[f64]| -> f64 {
+        let mut s = 0.0f64;
+        for &x in ds {
+            if within(x) {
+                s += (x - mean).powi(2);
+            }
         }
-    }
+        s
+    };
+    let sum_sq = if par_serial || nthreads <= 1 {
+        ss(data)
+    } else {
+        let ss = &ss;
+        let parts: Vec<f64> = std::thread::scope(|scope| {
+            data.chunks(chunk)
+                .map(|ds| scope.spawn(move || ss(ds)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("tvar ss worker panicked"))
+                .collect()
+        });
+        parts.into_iter().sum()
+    };
     sum_sq / (n - ddof as f64)
 }
 
