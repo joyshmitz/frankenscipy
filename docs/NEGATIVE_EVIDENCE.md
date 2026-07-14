@@ -21192,3 +21192,18 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `[1.4773, 1.9569, 2.7058]` ms for scalar: **4.985x** centered and **3.384x** conservative, with no interval overlap.
 - The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
   `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes were untouched.
+
+## 2026-07-14 - cod - KEEP SIMD `sparse_sum` reduction (3.478x at nnz=2,097,152)
+
+- Negative-ledger-first selection found no prior `sparse_sum` optimization or rejection. The preceding Frobenius
+  keep multiplies before reducing; this is a distinct plain-sum primitive. Opportunity score: 20.0 (impact 4 x
+  confidence 5 / effort 1).
+- ONE lever adds a hidden 8-wide contiguous sum helper in `fsci-linalg` and routes only `sparse_sum` through it;
+  row and column reductions are unchanged. A regression fixture bounds finite reassociation error by 64 epsilon
+  times the input absolute sum and covers payload NaN, positive infinity, mixed infinities, and empty CSR. The
+  fixture was added but not separately executed under the one-benchmark turn constraint.
+- The one and only benchmark invocation compared production SIMD with the literal scalar reduction in the same
+  binary on strict-remote worker `vmi1152480`. SIMD measured `[301.57, 382.99, 497.96]` us versus
+  `[1.1692, 1.3319, 1.6564]` ms for scalar: **3.478x** centered and **2.348x** conservative, with no interval overlap.
+- The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
+  `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes were untouched.

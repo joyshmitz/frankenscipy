@@ -19032,6 +19032,24 @@ pub fn simd_dot(x: &[f64], y: &[f64]) -> f64 {
     s
 }
 
+/// 8-wide sum (lanes reduced at the end).
+#[doc(hidden)]
+#[inline]
+pub fn simd_sum(values: &[f64]) -> f64 {
+    let mut acc = Simd::<f64, 8>::splat(0.0);
+    let mut p = 0;
+    while p + 8 <= values.len() {
+        acc += Simd::<f64, 8>::from_slice(&values[p..p + 8]);
+        p += 8;
+    }
+    let mut sum: f64 = acc.to_array().iter().sum();
+    while p < values.len() {
+        sum += values[p];
+        p += 1;
+    }
+    sum
+}
+
 /// Single pass over `row`, returning `(Σ row·x, Σ row·row)`. The `dot` term uses
 /// the identical 8-lane accumulation and final reduction as [`simd_dot`], so it is
 /// bit-for-bit `simd_dot(row, x)`; the `normsq` term folds `‖row‖²` into the SAME

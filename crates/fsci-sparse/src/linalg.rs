@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fsci_linalg::{
     DecompOptions, LinalgError, SolveOptions as DenseSolveOptions, expm as dense_expm,
-    simd_dot, solve_banded as dense_solve_banded, solveh_banded as dense_solveh_banded,
+    simd_dot, simd_sum, solve_banded as dense_solve_banded,
+    solveh_banded as dense_solveh_banded,
 };
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
@@ -6027,7 +6028,7 @@ pub fn sparse_power(a: &CsrMatrix, p: f64) -> CsrMatrix {
 
 /// Compute the sum of all elements in a CSR matrix.
 pub fn sparse_sum(a: &CsrMatrix) -> f64 {
-    a.data().iter().sum()
+    simd_sum(a.data())
 }
 
 /// Compute the row sums of a CSR matrix.
@@ -10326,6 +10327,66 @@ mod tests {
         )
         .expect("empty CSR");
         assert_eq!(sparse_norm(&empty, "fro"), 0.0);
+    }
+
+    #[test]
+    fn sparse_sum_simd_matches_scalar_reference() {
+        let len = 4_099usize;
+        let data: Vec<f64> = (0..len)
+            .map(|idx| ((idx % 257) as f64 - 128.0) / 17.0)
+            .collect();
+        let expected: f64 = data.iter().sum();
+        let scale: f64 = data.iter().map(|value| value.abs()).sum();
+        let matrix = CsrMatrix::from_components(
+            Shape2D::new(1, len),
+            data,
+            (0..len).collect(),
+            vec![0, len],
+            false,
+        )
+        .expect("finite CSR");
+        let actual = sparse_sum(&matrix);
+        assert!((actual - expected).abs() <= 64.0 * f64::EPSILON * scale);
+
+        let nan = CsrMatrix::from_components(
+            Shape2D::new(1, 1),
+            vec![f64::from_bits(0x7ff8_0000_0000_0042)],
+            vec![0],
+            vec![0, 1],
+            false,
+        )
+        .expect("NaN CSR");
+        assert!(sparse_sum(&nan).is_nan());
+
+        let infinite = CsrMatrix::from_components(
+            Shape2D::new(1, 1),
+            vec![f64::INFINITY],
+            vec![0],
+            vec![0, 1],
+            false,
+        )
+        .expect("infinite CSR");
+        assert_eq!(sparse_sum(&infinite), f64::INFINITY);
+
+        let mixed_infinity = CsrMatrix::from_components(
+            Shape2D::new(1, 2),
+            vec![f64::INFINITY, f64::NEG_INFINITY],
+            vec![0, 1],
+            vec![0, 2],
+            false,
+        )
+        .expect("mixed infinity CSR");
+        assert!(sparse_sum(&mixed_infinity).is_nan());
+
+        let empty = CsrMatrix::from_components(
+            Shape2D::new(0, 0),
+            Vec::new(),
+            Vec::new(),
+            vec![0],
+            false,
+        )
+        .expect("empty CSR");
+        assert_eq!(sparse_sum(&empty).to_bits(), 0.0f64.to_bits());
     }
 
     #[test]

@@ -4,7 +4,7 @@ use fsci_sparse::{
     DIAGS_VALIDATE, FormatConvertible, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions,
     VSTACK_FORCE_GENERIC, add_csr, block_diag, bmat, diags, eye, eye_array, find, kron, random,
     scale_coo, scale_csc, scale_csr, sparse_diagonal, sparse_frobenius_inner, sparse_is_symmetric,
-    sparse_norm, sparse_trace, spilu, spmm, spmv_csr, spsolve, tril, vstack,
+    sparse_norm, sparse_sum, sparse_trace, spilu, spmm, spmv_csr, spsolve, tril, vstack,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -44,6 +44,10 @@ fn sparse_trace_materialized_reference(matrix: &CsrMatrix) -> f64 {
 
 fn sparse_norm_scalar_reference(matrix: &CsrMatrix) -> f64 {
     matrix.data().iter().map(|value| value * value).sum::<f64>().sqrt()
+}
+
+fn sparse_sum_scalar_reference(matrix: &CsrMatrix) -> f64 {
+    matrix.data().iter().sum()
 }
 
 fn sparse_frobenius_inner_nested_reference(a: &CsrMatrix, b: &CsrMatrix) -> f64 {
@@ -989,6 +993,20 @@ fn bench_sparse_norm_fro_simd_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sparse_sum_simd_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_sum_simd_ab");
+    group.sample_size(15);
+    let matrix = make_inner_bench_matrix(32_768, 64, 1.0);
+
+    group.bench_function("current_simd_nnz2097152", |bencher| {
+        bencher.iter(|| black_box(sparse_sum(black_box(&matrix))));
+    });
+    group.bench_function("orig_scalar_nnz2097152", |bencher| {
+        bencher.iter(|| black_box(sparse_sum_scalar_reference(black_box(&matrix))));
+    });
+    group.finish();
+}
+
 fn bench_sparse_frobenius_inner_merge_ab(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_frobenius_inner_merge_ab");
     group.sample_size(15);
@@ -1056,6 +1074,7 @@ criterion_group!(
     bench_random_tiny_density,
     bench_sparse_trace_direct_ab,
     bench_sparse_norm_fro_simd_ab,
+    bench_sparse_sum_simd_ab,
     bench_sparse_frobenius_inner_merge_ab,
     bench_sparse_is_symmetric_lookup_ab,
 );
