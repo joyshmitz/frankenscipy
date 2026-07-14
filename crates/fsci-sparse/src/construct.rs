@@ -690,6 +690,12 @@ pub fn block_array(blocks: &[Vec<Option<&CsrMatrix>>]) -> SparseResult<CsrMatrix
 ///
 /// Mirrors `scipy.sparse.vstack` for sparse inputs. The Rust API returns CSR
 /// directly; call `.to_coo()` when coordinate output is desired.
+/// When `true`, [`vstack`] takes the ORIG COO->to_csr path even for canonical CSR blocks; default
+/// `false` concatenates canonical blocks directly into a CSR. Byte-identical result. A/B perf gate.
+#[doc(hidden)]
+pub static VSTACK_FORCE_GENERIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn vstack(blocks: &[&dyn FormatConvertible]) -> SparseResult<CsrMatrix> {
     stack_sparse_blocks(blocks, StackAxis::Rows)
 }
@@ -1118,6 +1124,61 @@ fn stack_sparse_blocks(
         return coo.to_csr();
     }
 
+    // vstack (Rows): blocks occupy disjoint, monotonic output-row ranges and SHARE the column
+    // space (no column shift). When every block is canonical CSR, the stacked result is already
+    // canonical — concatenate each block's indices/data verbatim and append its per-row nnz to
+    // indptr, skipping the N to_coo conversions, the COO triplets, and to_csr's rebuild.
+    // Byte-identical to the COO->to_csr result (same entries in row-major order, same canonical
+    // meta). Falls through to the generic path when a block isn't canonical (there to_csr would
+    // re-sort). `VSTACK_FORCE_GENERIC` restores the original COO path (same-binary A/B).
+    if matches!(axis, StackAxis::Rows)
+        && !VSTACK_FORCE_GENERIC.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        let csrs: Vec<CsrMatrix> = blocks
+            .iter()
+            .map(|block| block.to_csr())
+            .collect::<SparseResult<Vec<_>>>()?;
+        let shared_cols = csrs[0].shape().cols;
+        let mut all_canonical = true;
+        let mut total_rows = 0usize;
+        let mut total_nnz = 0usize;
+        for csr in &csrs {
+            if csr.shape().cols != shared_cols {
+                return Err(SparseError::IncompatibleShape {
+                    message: "vstack requires all blocks to have matching column counts"
+                        .to_string(),
+                });
+            }
+            let c = csr.canonical_meta();
+            all_canonical &= c.sorted_indices && c.deduplicated;
+            total_rows += csr.shape().rows;
+            total_nnz += csr.nnz();
+        }
+        if all_canonical {
+            let mut indices = Vec::with_capacity(total_nnz);
+            let mut data = Vec::with_capacity(total_nnz);
+            let mut indptr = Vec::with_capacity(total_rows + 1);
+            indptr.push(0usize);
+            let mut acc = 0usize;
+            for csr in &csrs {
+                data.extend_from_slice(csr.data());
+                indices.extend_from_slice(csr.indices());
+                let bp = csr.indptr();
+                for i in 0..csr.shape().rows {
+                    acc += bp[i + 1] - bp[i];
+                    indptr.push(acc);
+                }
+            }
+            let shape = Shape2D::new(total_rows, shared_cols);
+            let mut result = CsrMatrix::from_components_unchecked(shape, data, indices, indptr);
+            result.canonical = CanonicalMeta {
+                sorted_indices: true,
+                deduplicated: true,
+            };
+            return Ok(result);
+        }
+    }
+
     let first = blocks[0].to_coo()?;
     let mut total_rows = first.shape().rows;
     let mut total_cols = first.shape().cols;
@@ -1489,6 +1550,49 @@ mod tests {
                 old.canonical_meta().deduplicated
             );
         }
+    }
+
+    #[test]
+    fn vstack_direct_matches_generic_bitwise() {
+        use std::sync::atomic::Ordering;
+        // Canonical CSR blocks sharing the column count (20).
+        let a = random(Shape2D::new(10, 20), 0.2, 0x11)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        let b = random(Shape2D::new(15, 20), 0.15, 0x22)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        let c = random(Shape2D::new(5, 20), 0.3, 0x33)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        let blocks: Vec<&dyn FormatConvertible> = vec![&a, &b, &c];
+        VSTACK_FORCE_GENERIC.store(true, Ordering::Relaxed);
+        let generic = vstack(&blocks).unwrap();
+        VSTACK_FORCE_GENERIC.store(false, Ordering::Relaxed);
+        let direct = vstack(&blocks).unwrap();
+        VSTACK_FORCE_GENERIC.store(false, Ordering::Relaxed);
+        assert_eq!(direct.shape(), generic.shape());
+        assert_eq!(direct.indptr(), generic.indptr());
+        assert_eq!(direct.indices(), generic.indices());
+        assert_eq!(
+            direct.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            generic
+                .data()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            direct.canonical_meta().sorted_indices,
+            generic.canonical_meta().sorted_indices
+        );
+        assert_eq!(
+            direct.canonical_meta().deduplicated,
+            generic.canonical_meta().deduplicated
+        );
     }
 
     #[test]

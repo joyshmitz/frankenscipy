@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
-    DIAGS_VALIDATE, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions, add_csr, block_diag, diags,
-    eye, eye_array, kron, random, scale_coo, scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve,
-    tril,
+    DIAGS_VALIDATE, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions, VSTACK_FORCE_GENERIC, add_csr,
+    block_diag, diags, eye, eye_array, kron, random, scale_coo, scale_csc, scale_csr, spilu, spmm,
+    spmv_csr, spsolve, tril, vstack,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -427,6 +427,39 @@ fn bench_eye_rectangular_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_vstack_canonical_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_vstack_canonical_ab");
+    group.sample_size(10);
+    // 16 canonical CSR blocks sharing 4000 cols, ~20k nnz each (~320k total over 16k rows): the
+    // generic path pays N to_coo conversions + COO alloc + to_csr rebuild the direct concat skips.
+    let cols = 4_000usize;
+    let block_rows = 1_000usize;
+    let blocks: Vec<CsrMatrix> = (0..16u64)
+        .map(|i| make_random_rect_csr(block_rows, cols, 0.005, SEED ^ i))
+        .collect();
+    let refs: Vec<&dyn FormatConvertible> = blocks
+        .iter()
+        .map(|m| m as &dyn FormatConvertible)
+        .collect();
+
+    group.bench_function("current_direct", |bn| {
+        bn.iter(|| {
+            VSTACK_FORCE_GENERIC.store(false, Ordering::Relaxed);
+            let m = vstack(black_box(&refs)).expect("vstack");
+            black_box(m.nnz());
+        });
+    });
+    group.bench_function("orig_generic", |bn| {
+        bn.iter(|| {
+            VSTACK_FORCE_GENERIC.store(true, Ordering::Relaxed);
+            let m = vstack(black_box(&refs)).expect("vstack");
+            black_box(m.nnz());
+        });
+    });
+    VSTACK_FORCE_GENERIC.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_kron_validate_ab(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_kron_validate_ab");
     group.sample_size(10);
@@ -807,6 +840,7 @@ criterion_group!(
     bench_diags,
     bench_diags_validate_ab,
     bench_kron_validate_ab,
+    bench_vstack_canonical_ab,
     bench_spmm,
     bench_kron,
     bench_spilu,
