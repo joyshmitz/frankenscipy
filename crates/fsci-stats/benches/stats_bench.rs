@@ -1,11 +1,11 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_stats::{
-    BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, HaltonSampler, SobolSampler, SomersDInput, acf,
-    argsort, binned_statistic, binned_statistic_2d, binned_statistic_dd, centered_discrepancy,
-    ecdf, energy_distance, histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy,
-    mannkendall, mannwhitneyu, median_abs_deviation, mixture_discrepancy, pacf, psd_welch,
-    rand_index, siegelslopes, somersd, theilslopes, wasserstein_distance, wraparound_discrepancy,
-    MAD_REUSE_DISABLE,
+    BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, BIWEIGHT_MAD_HOIST_DISABLE, HaltonSampler,
+    SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
+    binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
+    histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mannkendall, mannwhitneyu,
+    median_abs_deviation, mixture_discrepancy, pacf, psd_welch, rand_index, siegelslopes, somersd,
+    theilslopes, wasserstein_distance, wraparound_discrepancy, MAD_REUSE_DISABLE,
 };
 use std::hint::black_box;
 
@@ -796,8 +796,42 @@ fn bench_mad_reuse_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_biweight_midcorrelation_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("biweight_midcorrelation_hoist_ab");
+    group.sample_size(10);
+    for &n in &[200_000usize, 2_000_000usize] {
+        let x = deterministic_data(n);
+        let y: Vec<f64> = x
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| v * 0.8 + (i as f64 * 0.013).sin())
+            .collect();
+        let data = (x, y);
+        group.bench_with_input(BenchmarkId::new("current_hoist", n), &data, |b, (x, y)| {
+            b.iter(|| {
+                BIWEIGHT_MAD_HOIST_DISABLE.store(false, Ordering::Relaxed);
+                black_box(biweight_midcorrelation(black_box(x), black_box(y), 9.0))
+            });
+        });
+        group.bench_with_input(
+            BenchmarkId::new("orig_double_median", n),
+            &data,
+            |b, (x, y)| {
+                b.iter(|| {
+                    BIWEIGHT_MAD_HOIST_DISABLE.store(true, Ordering::Relaxed);
+                    black_box(biweight_midcorrelation(black_box(x), black_box(y), 9.0))
+                });
+            },
+        );
+    }
+    BIWEIGHT_MAD_HOIST_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_biweight_midcorrelation_ab,
     bench_mad_reuse_ab,
     bench_zipfian_cdf,
     bench_discrete_moments,

@@ -51280,6 +51280,17 @@ pub fn mad(data: &[f64], scale: f64) -> f64 {
     median(&abs_devs) / scale
 }
 
+/// MAD given an ALREADY-computed median, so callers that need both `median(data)` and `mad(data)`
+/// don't recompute the median inside `mad`. Byte-identical to `mad(data, scale)` when `med ==
+/// median(data)` (the abs-dev multiset and its in-place median are unchanged).
+fn mad_from_median(data: &[f64], med: f64, scale: f64) -> f64 {
+    if data.is_empty() || scale == 0.0 {
+        return f64::NAN;
+    }
+    let mut abs_devs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
+    median_in_place(&mut abs_devs) / scale
+}
+
 /// O(n log n) medcouple via implicit sorted-matrix median selection.
 ///
 /// The naive medcouple materializes every kernel value
@@ -51449,25 +51460,52 @@ pub fn medcouple(data: &[f64]) -> f64 {
 pub static BIWEIGHT_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`biweight_midcorrelation`] computes each side's MAD via `mad(data, 1.0)`, which
+/// recomputes `median(data)` internally (the ORIG double median). Default `false` feeds the
+/// already-computed median to `mad_from_median`, halving each side's median selects from 2 to 1.
+/// Byte-identical. A/B perf gate.
+#[doc(hidden)]
+pub static BIWEIGHT_MAD_HOIST_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// MAD of `data` reusing the caller's `med = median(data)`, unless `BIWEIGHT_MAD_HOIST_DISABLE`
+/// forces the original `mad` (which recomputes the median). Free fn so it stays `Send` in the
+/// parallel branch below.
+fn biweight_mad(data: &[f64], med: f64) -> f64 {
+    if BIWEIGHT_MAD_HOIST_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        mad(data, 1.0)
+    } else {
+        mad_from_median(data, med, 1.0)
+    }
+}
+
 pub fn biweight_midcorrelation(x: &[f64], y: &[f64], c: f64) -> f64 {
     if x.len() != y.len() || x.len() < 3 {
         return f64::NAN;
     }
 
     // The x-side robust stats (med_x, mad_x) depend only on x, the y-side only on y — two INDEPENDENT
-    // select/sort-dominated computations (mad itself is two medians), and they dominate the O(n) biweight
-    // loop below. Overlap them on separate threads for large inputs. BIT-IDENTICAL: median/mad are
-    // deterministic, so only the wall-clock overlaps. `BIWEIGHT_FORCE_SERIAL` restores the serial order.
+    // select/sort-dominated computations, and they dominate the O(n) biweight loop below. mad_x reuses
+    // med_x (mad() would recompute median(x) — a redundant O(n) select), and the two sides overlap on
+    // separate threads for large inputs. BIT-IDENTICAL: median/mad are deterministic, so only the
+    // wall-clock overlaps. `BIWEIGHT_FORCE_SERIAL` restores the serial order.
     let (med_x, mad_x, med_y, mad_y) = if BIWEIGHT_FORCE_SERIAL
         .load(std::sync::atomic::Ordering::Relaxed)
         || x.len() < (1 << 16)
     {
-        (median(x), mad(x, 1.0), median(y), mad(y, 1.0))
+        let mx = median(x);
+        let madx = biweight_mad(x, mx);
+        let my = median(y);
+        let mady = biweight_mad(y, my);
+        (mx, madx, my, mady)
     } else {
         std::thread::scope(|scope| {
-            let h = scope.spawn(|| (median(y), mad(y, 1.0)));
+            let h = scope.spawn(|| {
+                let my = median(y);
+                (my, biweight_mad(y, my))
+            });
             let mx = median(x);
-            let madx = mad(x, 1.0);
+            let madx = biweight_mad(x, mx);
             let (my, mady) = h.join().expect("biweight_midcorrelation worker panicked");
             (mx, madx, my, mady)
         })
@@ -55723,6 +55761,25 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn biweight_midcorrelation_median_hoist_matches_original_bitwise() {
+        use std::sync::atomic::Ordering;
+        let x = [
+            1.0, 5.0, 2.0, 8.0, 3.0, 7.0, 4.0, 6.0, 0.5, -2.0, 9.0, 3.5, -1.5, 4.25,
+        ];
+        let y = [
+            2.0, 1.0, 9.0, 3.0, 5.0, 4.0, 8.0, 6.0, -1.0, 7.5, 0.0, 4.5, 2.75, -3.0,
+        ];
+        for &c in &[9.0, 6.0, 3.0] {
+            BIWEIGHT_MAD_HOIST_DISABLE.store(true, Ordering::Relaxed);
+            let original = biweight_midcorrelation(&x, &y, c);
+            BIWEIGHT_MAD_HOIST_DISABLE.store(false, Ordering::Relaxed);
+            let hoisted = biweight_midcorrelation(&x, &y, c);
+            assert_eq!(original.to_bits(), hoisted.to_bits(), "mismatch c={c}");
+        }
+        BIWEIGHT_MAD_HOIST_DISABLE.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn median_abs_deviation_buffer_reuse_matches_original_bitwise() {
