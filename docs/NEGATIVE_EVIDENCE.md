@@ -20810,3 +20810,33 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Both decisive benchmark commands used direct Cargo argv in fail-closed strict mode through `rch exec` on
   `vmi1149989`; no local Cargo fallback informed this rejection. UBS exited zero with no critical findings; its
   shadow-workspace probes were excluded from the remote-only benchmark evidence.
+
+## 2026-07-13 - cod - KEEP sparse `scale_coo` trusted structure reuse (2.331x at 100,000 nnz)
+
+- Negative-ledger-first selection excluded the earlier CSR/CSC scale keeps and rejected a tempting metadata-only
+  CSR-to-CSC precheck removal before editing because public component constructors can carry forged canonical
+  metadata. The distinct public `scale_coo` path still cloned valid coordinates and then rescanned both complete
+  coordinate arrays solely to prove bounds already guaranteed by its immutable `CooMatrix` input; no prior ledger
+  entry covered this path.
+- ONE lever constructs the output COO directly from the input shape and cloned coordinates after the unchanged
+  finite-factor guard, removing only the redundant row and column bounds scans. Data multiplication order, error
+  precedence, shape, coordinate order, unsorted entries, duplicates, explicit zeros, and every floating-point
+  operation are unchanged.
+- The unchanged public Criterion row's strict-remote production-original interval on `vmi1149989` was
+  `[117.55, 124.26, 131.82]` us and the same-worker candidate interval was `[51.944, 53.310, 54.582]` us: a centered
+  **2.331x** speedup with a conservative interval speedup above **2.153x**. Criterion reported
+  `[-61.517%, -59.291%, -56.952%]`, `p=0.00`, and improved performance.
+- The decisive same-binary comparator on that worker ran a literal benchmark-local copy of the former checked
+  source at `[115.25, 117.57, 122.46]` us beside the optimized public path, confirming a centered **2.205x** speedup
+  and conservative interval speedup above **2.111x**. An earlier candidate interval on `vmi1227854` was treated only
+  as supporting routing evidence because RCH ignored the requested worker hint.
+- The focused strict-remote scale suite passed **4/4**. Its exact-source proof compares shape, coordinate arrays,
+  and every output value via `to_bits()` against the former implementation for unsorted duplicates, positive and
+  negative zero, infinity, and a payload NaN; the existing suite preserves the non-finite-factor rejection contract.
+  Every authoritative Cargo benchmark and test command ran fail-closed through `rch exec`; no local Cargo fallback
+  informed this keep.
+- Strict-remote Clippy first surfaced only four pre-existing `needless_range_loop` findings in unchanged
+  `linalg.rs`; the exact library-plus-benchmark retry passed with that one documented category allowed and all other
+  warnings denied. `git diff --check` passed, and the new hunks match rustfmt while a whole-file check continues to
+  show pre-existing drift outside them. UBS exited zero with **0 critical** findings in the two staged Rust files;
+  its shadow-workspace scan was not used as Cargo evidence.

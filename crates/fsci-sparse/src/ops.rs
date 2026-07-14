@@ -538,13 +538,12 @@ pub fn sub_coo(lhs: &CooMatrix, rhs: &CooMatrix) -> SparseResult<CooMatrix> {
 pub fn scale_coo(matrix: &CooMatrix, alpha: f64) -> SparseResult<CooMatrix> {
     validate_scale_factor(alpha)?;
     let data: Vec<f64> = matrix.data().iter().map(|v| v * alpha).collect();
-    CooMatrix::from_triplets(
-        matrix.shape(),
+    Ok(CooMatrix {
+        shape: matrix.shape(),
         data,
-        matrix.row_indices().to_vec(),
-        matrix.col_indices().to_vec(),
-        false,
-    )
+        row_indices: matrix.row_indices().to_vec(),
+        col_indices: matrix.col_indices().to_vec(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1739,6 +1738,55 @@ mod tests {
                 Err(SparseError::InvalidArgument { .. })
             ));
         }
+    }
+
+    #[test]
+    fn scale_coo_preserves_old_structure_and_value_bits() {
+        fn old_scale_coo(matrix: &CooMatrix, alpha: f64) -> SparseResult<CooMatrix> {
+            validate_scale_factor(alpha)?;
+            let data = matrix.data().iter().map(|value| value * alpha).collect();
+            CooMatrix::from_triplets(
+                matrix.shape(),
+                data,
+                matrix.row_indices().to_vec(),
+                matrix.col_indices().to_vec(),
+                false,
+            )
+        }
+
+        let matrix = CooMatrix::from_triplets(
+            Shape2D::new(4, 5),
+            vec![
+                1.25,
+                -0.0,
+                0.0,
+                -3.5,
+                f64::INFINITY,
+                f64::from_bits(0x7ff8_0000_0000_1234),
+            ],
+            vec![3, 0, 3, 1, 3, 1],
+            vec![4, 2, 4, 0, 1, 0],
+            false,
+        )
+        .expect("valid unsorted duplicate COO");
+        let expected = old_scale_coo(&matrix, -2.0).expect("old scale");
+        let actual = scale_coo(&matrix, -2.0).expect("scale");
+
+        assert_eq!(actual.shape(), expected.shape());
+        assert_eq!(actual.row_indices(), expected.row_indices());
+        assert_eq!(actual.col_indices(), expected.col_indices());
+        assert_eq!(
+            actual
+                .data()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .data()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

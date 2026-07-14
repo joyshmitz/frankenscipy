@@ -1,8 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
-    IluOptions, Shape2D, SolveOptions, add_csr, block_diag, diags, eye, kron, random, scale_csc,
-    scale_csr, spilu, spmm, spmv_csr, spsolve,
+    IluOptions, Shape2D, SolveOptions, add_csr, block_diag, diags, eye, kron, random, scale_coo,
+    scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -47,6 +47,19 @@ fn scale_csc_checked_reference(matrix: &CscMatrix, alpha: f64) -> CscMatrix {
         false,
     )
     .expect("checked scale csc")
+}
+
+fn scale_coo_checked_reference(matrix: &CooMatrix, alpha: f64) -> CooMatrix {
+    assert!(alpha.is_finite());
+    let data = matrix.data().iter().map(|value| value * alpha).collect();
+    CooMatrix::from_triplets(
+        matrix.shape(),
+        data,
+        matrix.row_indices().to_vec(),
+        matrix.col_indices().to_vec(),
+        false,
+    )
+    .expect("checked COO reference")
 }
 
 fn bench_csr_construction(c: &mut Criterion) {
@@ -133,6 +146,7 @@ fn bench_arithmetic(c: &mut Criterion) {
     for &(n, density) in CONFIGS {
         let a = make_random_csr(n, density);
         let a_csc = a.to_csc().expect("a csc");
+        let a_coo = a.to_coo().expect("a coo");
         let b = random(Shape2D::new(n, n), density, SEED ^ 0xFF)
             .expect("random b")
             .to_csr()
@@ -167,6 +181,28 @@ fn bench_arithmetic(c: &mut Criterion) {
             |b_iter, a| {
                 b_iter.iter(|| {
                     let scaled = scale_csc(black_box(a), black_box(2.5)).expect("scale csc");
+                    black_box(scaled.nnz());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("{label}_scale_coo"), n),
+            &a_coo,
+            |b_iter, a| {
+                b_iter.iter(|| {
+                    let scaled = scale_coo(black_box(a), black_box(2.5)).expect("scale coo");
+                    black_box(scaled.nnz());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("{label}_scale_coo_checked_reference"), n),
+            &a_coo,
+            |b_iter, a| {
+                b_iter.iter(|| {
+                    let scaled = scale_coo_checked_reference(black_box(a), black_box(2.5));
                     black_box(scaled.nnz());
                 });
             },
