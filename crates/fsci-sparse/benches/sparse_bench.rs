@@ -3,7 +3,8 @@ use fsci_sparse::{
     BMAT_FORCE_GENERIC, COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix,
     DIAGS_VALIDATE, FormatConvertible, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions,
     VSTACK_FORCE_GENERIC, add_csr, block_diag, bmat, diags, eye, eye_array, find, kron, random,
-    scale_coo, scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril, vstack,
+    scale_coo, scale_csc, scale_csr, sparse_diagonal, sparse_trace, spilu, spmm, spmv_csr, spsolve,
+    tril, vstack,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -35,6 +36,10 @@ fn make_random_rect_csr(rows: usize, cols: usize, density: f64, seed: u64) -> Cs
 
 fn make_vector(n: usize) -> Vec<f64> {
     (0..n).map(|i| (i as f64) * 0.01 - 0.5).collect()
+}
+
+fn sparse_trace_materialized_reference(matrix: &CsrMatrix) -> f64 {
+    sparse_diagonal(matrix).iter().sum()
 }
 
 fn scale_csc_checked_reference(matrix: &CscMatrix, alpha: f64) -> CscMatrix {
@@ -868,6 +873,28 @@ fn bench_block_diag(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sparse_trace_direct_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_trace_direct_ab");
+    group.sample_size(15);
+    let n = 65_535usize;
+    let matrix = CsrMatrix::from_components(
+        Shape2D::new(n, n),
+        (0..n).map(|i| 1.0 + (i % 17) as f64).collect(),
+        (0..n).collect(),
+        (0..=n).collect(),
+        false,
+    )
+    .expect("diagonal csr");
+
+    group.bench_function("current_direct_n65535", |bencher| {
+        bencher.iter(|| black_box(sparse_trace(black_box(&matrix))));
+    });
+    group.bench_function("orig_materialized_n65535", |bencher| {
+        bencher.iter(|| black_box(sparse_trace_materialized_reference(black_box(&matrix))));
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_coo_sum_duplicates,
@@ -889,6 +916,7 @@ criterion_group!(
     bench_kron,
     bench_spilu,
     bench_spsolve_laplacian,
-    bench_random_tiny_density
+    bench_random_tiny_density,
+    bench_sparse_trace_direct_ab,
 );
 criterion_main!(benches);

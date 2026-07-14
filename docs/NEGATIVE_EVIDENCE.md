@@ -21110,3 +21110,19 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `git diff --check` passed. Every authoritative Cargo command ran fail-closed through direct `rch exec`; no local
   Cargo fallback informed this keep. Staged UBS exited 0 with zero critical findings; its broad legacy warnings and
   shadow-workspace Cargo probes are supplementary, not part of the remote-only proof.
+
+## 2026-07-14 - cod - KEEP sparse direct `sparse_trace` accumulation (2.557x at n=65,535)
+
+- Negative-ledger-first selection found no prior `sparse_trace` optimization or rejection. The function materialized
+  the complete diagonal vector solely to sum it; removing that allocation is distinct from the existing parallel
+  row-reduction lanes. Opportunity score: 15.0 (impact 3 x confidence 5 / effort 1).
+- ONE lever retains the same ascending row search, first stored diagonal match, default `+0.0`, and one addition per
+  row, but accumulates directly instead of allocating `sparse_diagonal(a)`. Addition count/order and floating-point
+  behavior remain unchanged, including missing entries, signed zero, infinities, and payload NaNs.
+- The one and only benchmark invocation compared the production path with a literal materialized-diagonal reference
+  in the same binary on strict-remote worker `vmi1149989`. Direct measured `[77.900, 82.201, 87.956]` us versus
+  `[191.33, 210.22, 237.63]` us for the former path: **2.557x** centered and **2.175x** conservative, with no overlap.
+- A bit-exact regression fixture covers empty and rectangular matrices, missing and duplicate diagonal entries,
+  signed zero, infinities, and a payload NaN. The benchmark compiled the production and reference paths remotely;
+  no second benchmark or local Cargo fallback was used. Direct rustfmt found only historical drift outside the owned
+  implementation, proof, and benchmark hunks; `git diff --check` passed.

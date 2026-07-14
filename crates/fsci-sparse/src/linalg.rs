@@ -4549,7 +4549,19 @@ pub fn sparse_diagonal(a: &CsrMatrix) -> Vec<f64> {
 ///
 /// Matches `scipy.sparse.csr_matrix.trace()`.
 pub fn sparse_trace(a: &CsrMatrix) -> f64 {
-    sparse_diagonal(a).iter().sum()
+    let n = a.shape().rows.min(a.shape().cols);
+    let mut trace = 0.0;
+    for row in 0..n {
+        let mut diagonal = 0.0;
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            if a.indices()[idx] == row {
+                diagonal = a.data()[idx];
+                break;
+            }
+        }
+        trace += diagonal;
+    }
+    trace
 }
 
 /// Transpose a CSR matrix, returning a new CSR matrix.
@@ -6690,6 +6702,49 @@ mod tests {
         )
         .unwrap();
         assert!((sparse_sum(&sparse_abs(&n)) - 6.0).abs() < 1e-12, "abs");
+    }
+
+    #[test]
+    fn sparse_trace_direct_scan_matches_materialized_diagonal_bits() {
+        fn assert_matches(matrix: &CsrMatrix) {
+            let expected: f64 = sparse_diagonal(matrix).iter().sum();
+            assert_eq!(sparse_trace(matrix).to_bits(), expected.to_bits());
+        }
+
+        let empty = CsrMatrix::from_components(
+            Shape2D::new(3, 4),
+            Vec::new(),
+            Vec::new(),
+            vec![0, 0, 0, 0],
+            false,
+        )
+        .expect("empty csr");
+        assert_matches(&empty);
+
+        let rectangular = CsrMatrix::from_components(
+            Shape2D::new(5, 4),
+            vec![-0.0, 9.0, 1.25, 99.0, 2.0, 4.0, 5.0, 6.0, -2.5, 7.0, 8.0],
+            vec![0, 2, 1, 1, 3, 0, 3, 1, 3, 0, 3],
+            vec![0, 2, 5, 7, 9, 11],
+            false,
+        )
+        .expect("rectangular csr");
+        assert_matches(&rectangular);
+
+        let non_finite = CsrMatrix::from_components(
+            Shape2D::new(4, 4),
+            vec![
+                f64::INFINITY,
+                1.0,
+                f64::from_bits(0x7ff8_0000_0000_0042),
+                f64::NEG_INFINITY,
+            ],
+            vec![0, 0, 2, 3],
+            vec![0, 1, 2, 3, 4],
+            false,
+        )
+        .expect("non-finite csr");
+        assert_matches(&non_finite);
     }
 
     #[test]
