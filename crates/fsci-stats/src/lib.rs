@@ -37436,6 +37436,13 @@ pub fn tmax(data: &[f64], upperlimit: f64, inclusive: bool) -> f64 {
 ///
 /// # Returns
 /// The expectile value, or NaN for empty input or invalid alpha.
+/// When `true`, [`expectile`] folds each iteration's weighted `Σw`/`Σw·x` serially (the ORIG
+/// behaviour); default `false` fans it across cores for huge inputs. Byte-identical below the gate;
+/// above it within the estimator's 1e-12 convergence tolerance. `#[doc(hidden)]` — internal A/B gate.
+#[doc(hidden)]
+pub static EXPECTILE_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn expectile(data: &[f64], alpha: f64) -> f64 {
     if data.is_empty() || alpha <= 0.0 || alpha >= 1.0 {
         return f64::NAN;
@@ -37449,16 +37456,51 @@ pub fn expectile(data: &[f64], alpha: f64) -> f64 {
     // Start with the mean as initial guess
     let mut mu = filtered.iter().sum::<f64>() / filtered.len() as f64;
 
+    // The per-iteration pass folds `Σw` and `Σw·x` (w = alpha if x≥mu else 1-alpha) — the dominant O(n)
+    // work; iterations are sequential (mu depends on the previous). Fan each iteration's reduction across
+    // cores for huge inputs. BYTE-IDENTICAL below the gate / when forced serial (single-chunk fold IS the
+    // serial loop); above it the partials reassociate (~ULP per iteration), and since the fixed point is
+    // only resolved to the 1e-12 convergence tolerance the returned expectile stays within that tolerance.
+    let n = filtered.len();
+    let par = !EXPECTILE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) && n >= (1 << 22);
+    let nthreads = if par {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / (1 << 16))
+            .max(1)
+    } else {
+        1
+    };
+    let chunk = n.div_ceil(nthreads);
+
     // Iteratively solve for the expectile using weighted least squares
     for _ in 0..100 {
-        let mut sum_w = 0.0;
-        let mut sum_wx = 0.0;
-
-        for &x in &filtered {
-            let w = if x >= mu { alpha } else { 1.0 - alpha };
-            sum_w += w;
-            sum_wx += w * x;
-        }
+        let reduce = |ds: &[f64]| -> (f64, f64) {
+            let mut sw = 0.0f64;
+            let mut swx = 0.0f64;
+            for &x in ds {
+                let w = if x >= mu { alpha } else { 1.0 - alpha };
+                sw += w;
+                swx += w * x;
+            }
+            (sw, swx)
+        };
+        let (sum_w, sum_wx) = if nthreads <= 1 {
+            reduce(&filtered)
+        } else {
+            let reduce = &reduce;
+            let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+                filtered
+                    .chunks(chunk)
+                    .map(|ds| scope.spawn(move || reduce(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("expectile worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold((0.0f64, 0.0f64), |(a, b), (s, t)| (a + s, b + t))
+        };
 
         let new_mu = sum_wx / sum_w;
         if (new_mu - mu).abs() < 1e-12 {
