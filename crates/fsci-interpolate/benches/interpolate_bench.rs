@@ -4,7 +4,7 @@ use fsci_interpolate::{
     BarycentricInterpolator, CloughTocher2DInterpolator, CubicSplineStandalone, GriddataMethod,
     Interp1d, Interp1dOptions, InterpKind, LinearNDInterpolator, PchipInterpolator,
     RbfInterpolator, RbfKernel, SmoothBivariateSpline, SmoothBivariateSplineOptions, make_interp_spline, make_smoothing_spline, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod, SplineBc, griddata,
-    interp1d_linear, lagrange, polymul, polyroots, bisplrep,
+    interp1d_linear, lagrange, polymul, polyroots, polysub, bisplrep,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -148,6 +148,8 @@ fn bench_polynomial(c: &mut Criterion) {
     let x_new = query_1d(2048);
     let a = values_1d(&grid_1d(512));
     let b = values_1d(&grid_1d(512));
+    let sub_a = values_1d(&grid_1d(1_000_000));
+    let sub_b = values_1d(&grid_1d(1_000_000));
     let roots_coeffs = vec![1.0, -2.5, 1.1, -0.25, 0.03];
 
     let mut group = c.benchmark_group("polynomial");
@@ -158,6 +160,9 @@ fn bench_polynomial(c: &mut Criterion) {
         b.iter(|| lagrange(&x, &y).expect("lagrange"))
     });
     group.bench_function("polymul/512x512", |bench| bench.iter(|| polymul(&a, &b)));
+    group.bench_function("polysub/1000000x1000000", |bench| {
+        bench.iter(|| polysub(black_box(&sub_a), black_box(&sub_b)))
+    });
     group.bench_function("polyroots/degree4", |b| b.iter(|| polyroots(&roots_coeffs)));
     group.finish();
 }

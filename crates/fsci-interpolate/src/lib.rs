@@ -8305,8 +8305,17 @@ pub fn polyadd(a: &[f64], b: &[f64]) -> Vec<f64> {
 
 /// Polynomial subtraction.
 pub fn polysub(a: &[f64], b: &[f64]) -> Vec<f64> {
-    let neg_b: Vec<f64> = b.iter().map(|&v| -v).collect();
-    polyadd(a, &neg_b)
+    let n = a.len().max(b.len());
+    let mut result = vec![0.0; n];
+    let offset_a = n - a.len();
+    let offset_b = n - b.len();
+    for (i, &v) in a.iter().enumerate() {
+        result[offset_a + i] += v;
+    }
+    for (i, &v) in b.iter().enumerate() {
+        result[offset_b + i] += -v;
+    }
+    result
 }
 
 /// Polynomial derivative.
@@ -13698,6 +13707,38 @@ mod tests {
                 (got - want).abs() < 1e-10,
                 "polysub[{i}] got {got}, expected {want}"
             );
+        }
+    }
+
+    #[test]
+    fn polysub_preserves_old_operation_bits() {
+        fn old_polysub(a: &[f64], b: &[f64]) -> Vec<f64> {
+            let neg_b: Vec<f64> = b.iter().map(|&value| -value).collect();
+            polyadd(a, &neg_b)
+        }
+
+        let cases = [
+            (vec![], vec![]),
+            (vec![-0.0], vec![]),
+            (vec![], vec![0.0, -0.0]),
+            (vec![1.0, -0.0, 3.0], vec![0.0, 2.0]),
+            (vec![0.0], vec![-0.0, 2.0, -3.0]),
+            (
+                vec![f64::from_bits(0x7ff8_0000_0000_1234), f64::INFINITY],
+                vec![f64::from_bits(0xfff8_0000_0000_5678), -0.0],
+            ),
+        ];
+
+        for (a, b) in cases {
+            let expected = old_polysub(&a, &b)
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>();
+            let actual = polysub(&a, &b)
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "a={a:?}, b={b:?}");
         }
     }
 

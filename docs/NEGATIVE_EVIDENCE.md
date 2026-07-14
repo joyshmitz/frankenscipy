@@ -20761,3 +20761,31 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   fail-closed through `rch exec`; no local Cargo fallback informed the keep. The exact library-plus-benchmark
   Clippy gate passed after allowing only four pre-existing `needless_range_loop` findings in unchanged `linalg.rs`.
   UBS exited zero with no critical findings; its shadow-workspace probes were excluded from remote-only proof.
+
+## 2026-07-13 - cod - KEEP interpolate direct `polysub` subtraction (2.072x at 1,000,000 coefficients)
+
+- Negative-ledger-first selection found no prior `polysub`, `polyadd`, or negated-RHS allocation result; the
+  exhausted interpolate entries cover parallel and hoisted multi-point evaluation, leaving polynomial arithmetic as
+  a distinct eligible lane. The production path allocated and filled a complete negated-RHS vector before asking
+  `polyadd` to allocate and fill the result.
+- ONE lever writes the aligned left operand and negated aligned right operand directly into the result, eliminating
+  the temporary RHS allocation and its full write pass. Output length and offsets are unchanged, and retaining the
+  original A-then-`+= -v` operation order preserves floating-point behavior, including signed zero and NaN payloads.
+- The new public Criterion row's production-original interval on pinned worker `vmi1149989` was
+  `[1.5755, 1.9390, 2.2800]` ms; the same-worker candidate interval was
+  `[907.34, 935.67, 966.87]` us. That is a centered **2.072x** speedup with a conservative interval speedup above
+  **1.629x**. Criterion reported `[-54.118%, -47.021%, -38.294%]`, `p=0.00`, and improved performance.
+- A temporary benchmark-local model of the former allocating source measured
+  `[7.6942, 8.1515, 8.4874]` ms and was explicitly rejected as an acceptance comparator because cross-crate
+  optimization skew made it disagree sharply with the actual production-original baseline. It was removed; only
+  the identical public row's same-worker before/after result decided this keep.
+- The focused strict-remote `polysub` suite passed **2/2**. Its exact-source proof compares every output bit against
+  the former implementation across empty and unequal inputs, signed zeros, infinities, and payload NaNs. The first
+  benchmark attempt surfaced a no-admissible-worker refusal before Cargo; every admitted benchmark and proof command
+  ran fail-closed on `vmi1149989` through `rch exec`, with no local Cargo fallback.
+- Focused strict-remote Clippy reached `fsci-interpolate` and stopped on 86 pre-existing crate-wide findings outside
+  the owned source and benchmark hunks. These include unchanged duplicated attributes, dead code, manual-copy,
+  range-loop, type-complexity, and related warnings; no finding pointed at this lever. UBS exited zero with no
+  critical findings; its shadow-workspace probes were excluded from remote-only proof. RCH refused the requested
+  strict-remote `cargo fmt --check` as a non-compilation command (RCH-E301), before any local fallback; the staged
+  hunks pass `git diff --check` and manual formatting review.
