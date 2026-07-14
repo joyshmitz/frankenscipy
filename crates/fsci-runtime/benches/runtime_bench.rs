@@ -61,6 +61,36 @@ fn solver_evidence(sequence: usize) -> SolverEvidenceEntry {
     }
 }
 
+fn serialize_jsonl_collect_join(entries: &[SolverEvidenceEntry]) -> String {
+    entries
+        .iter()
+        .filter_map(|entry| serde_json::to_string(entry).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn bench_solver_evidence_jsonl(c: &mut Criterion) {
+    const ENTRIES: usize = 1_024;
+    let entries = (0..ENTRIES).map(solver_evidence).collect::<Vec<_>>();
+    let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, ENTRIES);
+    for entry in entries.iter().cloned() {
+        portfolio.record_evidence(entry);
+    }
+    assert_eq!(
+        portfolio.serialize_jsonl(),
+        serialize_jsonl_collect_join(&entries)
+    );
+
+    let mut group = c.benchmark_group("solver_evidence_jsonl");
+    group.bench_function("stream", |b| {
+        b.iter(|| black_box(portfolio.serialize_jsonl()));
+    });
+    group.bench_function("collect_join_baseline", |b| {
+        b.iter(|| black_box(serialize_jsonl_collect_join(black_box(&entries))));
+    });
+    group.finish();
+}
+
 fn bench_solver_evidence_rollover(c: &mut Criterion) {
     const CAPACITY: usize = 1_024;
     let mut group = c.benchmark_group("solver_evidence_rollover");
@@ -97,6 +127,7 @@ criterion_group!(
     bench_policy_decide,
     bench_solver_select_action,
     bench_calibrator_observe,
+    bench_solver_evidence_jsonl,
     bench_solver_evidence_rollover
 );
 criterion_main!(benches);

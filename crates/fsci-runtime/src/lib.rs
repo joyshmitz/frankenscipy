@@ -239,11 +239,17 @@ impl SolverPortfolio {
     /// Serialize evidence ledger to JSONL format for audit trail (§0.19).
     #[must_use]
     pub fn serialize_jsonl(&self) -> String {
-        self.evidence
-            .iter()
-            .filter_map(|e| serde_json::to_string(e).ok())
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut output = Vec::with_capacity(self.evidence.len().saturating_mul(256));
+        for entry in &self.evidence {
+            let entry_start = output.len();
+            if entry_start != 0 {
+                output.push(b'\n');
+            }
+            if serde_json::to_writer(&mut output, entry).is_err() {
+                output.truncate(entry_start);
+            }
+        }
+        String::from_utf8(output).expect("serde_json always emits UTF-8")
     }
 
     #[must_use]
@@ -696,7 +702,7 @@ mod tests {
     fn casp_jsonl_serialization() {
         let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 16);
         portfolio.record_evidence(SolverEvidenceEntry {
-            component: "test",
+            component: "test\"entry",
             matrix_shape: (4, 4),
             rcond_estimate: 0.01,
             chosen_action: SolverAction::PivotedQR,
@@ -706,11 +712,30 @@ mod tests {
             fallback_active: false,
             backward_error: None,
         });
+        portfolio.record_evidence(SolverEvidenceEntry {
+            component: "test\nentry",
+            matrix_shape: (8, 2),
+            rcond_estimate: 1e-12,
+            chosen_action: SolverAction::SVDFallback,
+            posterior: vec![0.0, 0.0, 1.0, 0.0],
+            expected_losses: vec![40.0, 8.0, 1.0, 0.0, 0.0],
+            chosen_expected_loss: 1.0,
+            fallback_active: true,
+            backward_error: Some(1e-14),
+        });
+        let former = portfolio
+            .evidence
+            .iter()
+            .filter_map(|entry| serde_json::to_string(entry).ok())
+            .collect::<Vec<_>>()
+            .join("\n");
         let jsonl = portfolio.serialize_jsonl();
-        assert!(!jsonl.is_empty());
-        let parsed = serde_json::from_str::<serde_json::Value>(&jsonl)
-            .expect("invalid JSONL evidence entry");
-        assert_eq!(parsed["component"], "test");
+        assert_eq!(jsonl, former);
+        let parsed = serde_json::from_str::<serde_json::Value>(
+            jsonl.lines().next().expect("missing JSONL evidence entry"),
+        )
+        .expect("invalid JSONL evidence entry");
+        assert_eq!(parsed["component"], "test\"entry");
     }
 
     #[test]

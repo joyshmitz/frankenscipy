@@ -21538,3 +21538,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - The focused proof and `git diff --check` passed; staged UBS exited zero with no critical findings and only legacy
   whole-file warnings. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used.
   Bead: `frankenscipy-to9bm`.
+
+## 2026-07-14 - cod - KEEP streamed solver-evidence JSONL serialization (1.348x at 1,024 entries)
+
+- Negative-ledger-first triage rejected the assigned dense-linalg SYRK harness because prior attribution places
+  standalone SYRK below 1% of Cholesky wall time. The squared-error stats vein had yielded two consecutive keeps and
+  was thinning, so the search pivoted to the fresh `fsci-runtime` serialization path. No prior keep or rejection
+  covered `SolverPortfolio::serialize_jsonl`; direct source attribution showed that it allocated one `String` per
+  evidence row, stored all rows in a `Vec`, then copied every serialized byte again during `join`. Opportunity score:
+  20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever writes compact serde JSON directly into one pre-sized byte buffer, inserting newlines only between
+  successfully serialized records. This removes the per-record strings, pointer-vector allocation, and final join
+  copy while preserving record order, compact JSON spelling, escaping, skipped-error behavior, and exact output bytes.
+  A focused strict-remote proof on `vmi1149989` matched the literal former collect-and-join implementation exactly for
+  multiple records with escaped strings and both absent and present optional backward-error fields.
+- The one and only benchmark invocation compared streaming with the literal former collect-and-join path in the same
+  `--profile release` binary on strict-remote worker `vmi1152480`, using 1,024 evidence records, 200 ms warm-up, and
+  one second of measurement per arm. Streaming measured `[344.93, 354.69, 363.44]` us versus
+  `[434.52, 478.10, 525.37]` us for collect-and-join: **1.3479x** centered, **1.1956x** conservative, and **25.81%**
+  lower centered time with no interval overlap. The complete remote command returned in 133.2 seconds, including a
+  38.4-second cold release build, beneath the five-minute cap.
+- Strict-remote all-target Clippy passed with `-D warnings`; rustfmt and diff hygiene passed; staged UBS exited zero
+  with no critical findings. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was
+  used. Bead: `frankenscipy-anl13`.
