@@ -21159,3 +21159,21 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   symmetric/asymmetric, non-finite, unsorted/duplicate, rectangular, finite, infinite, NaN, and negative-tolerance
   cases. The benchmark compiled the production and reference paths remotely; no second benchmark or local Cargo
   fallback was used. `git diff --check` passed.
+
+## 2026-07-14 - cod - REJECT canonical `sparse_diagonal` binary lookup (0.726x at n=1,023, width=64)
+
+- Negative-ledger-first selection found no prior binary-search attempt for `sparse_diagonal`. The existing retained
+  lever parallelizes independent rows; this candidate deliberately stayed below its 65,536-nnz fan-out gate to
+  isolate only the per-row lookup primitive. Opportunity score before measurement: 15.0 (impact 3 x confidence 5 /
+  effort 1).
+- ONE candidate used binary search only for sorted, deduplicated CSR rows and retained the exact first-match linear
+  scan for unsorted or duplicate-bearing inputs. A literal former-path fixture covered output bits for signed zero,
+  infinities, payload NaN, missing diagonals, duplicates, empty matrices, and rectangular shapes.
+- The one and only benchmark invocation compared candidate and literal original in the same binary on strict-remote
+  worker `vmi1152480`. Binary lookup measured `[18.977, 27.362, 43.536]` us versus
+  `[18.384, 19.861, 21.633]` us for the linear scan: **0.726x** centered throughput, or **37.77% slower**. The
+  candidate interval also overlapped the original after a high outlier, so it clears neither a median nor a
+  conservative keep gate.
+- Likely cause: a short contiguous linear scan is cache-friendly and predictable, while binary search adds branches
+  and nonsequential probes. The implementation, fixture, and benchmark were manually removed; only this rejection
+  row lands. No second benchmark or local Cargo fallback was used, and stashes were untouched.
