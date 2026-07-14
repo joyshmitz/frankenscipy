@@ -4,7 +4,7 @@ use fsci_stats::{
     SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
     bayes_mvs, cohens_d, excess_kurtosis, gstd, histogram, kendalltau, kruskal, ks_2samp,
-    l2_star_discrepancy, mad, mean_absolute_error,
+    l2_star_discrepancy, mad, mean_absolute_error, mean_squared_error,
     mannkendall, mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf,
     pooled_variance, psd_welch,
     rand_index,
@@ -52,6 +52,39 @@ fn bench_mean_absolute_error_simd_ab(c: &mut Criterion) {
     group.bench_function("orig_scalar_n2097152", |bencher| {
         bencher.iter(|| {
             black_box(mean_absolute_error_scalar_reference(
+                black_box(&y_true),
+                black_box(&y_pred),
+            ))
+        })
+    });
+    group.finish();
+}
+
+fn mean_squared_error_scalar_reference(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    y_true
+        .iter()
+        .zip(y_pred)
+        .map(|(&truth, &prediction)| (truth - prediction).powi(2))
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
+fn bench_mean_squared_error_simd_ab(c: &mut Criterion) {
+    let len = 262_144usize;
+    let y_true = deterministic_data(len);
+    let y_pred: Vec<f64> = (0..len)
+        .map(|idx| ((idx % 251) as f64 - 125.0) / 31.0)
+        .collect();
+    let mut group = c.benchmark_group("mean_squared_error_simd_ab");
+    group.sample_size(10);
+    group.warm_up_time(std::time::Duration::from_millis(200));
+    group.measurement_time(std::time::Duration::from_secs(1));
+    group.bench_function("current_simd_n262144", |bencher| {
+        bencher.iter(|| black_box(mean_squared_error(black_box(&y_true), black_box(&y_pred))))
+    });
+    group.bench_function("orig_scalar_n262144", |bencher| {
+        bencher.iter(|| {
+            black_box(mean_squared_error_scalar_reference(
                 black_box(&y_true),
                 black_box(&y_pred),
             ))
@@ -1125,6 +1158,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_mean_absolute_error_simd_ab,
+    bench_mean_squared_error_simd_ab,
     bench_gstd_par_reductions_ab,
     bench_pooled_variance_par_reductions_ab,
     bench_ttest_rel_par_reductions_ab,

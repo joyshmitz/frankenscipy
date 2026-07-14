@@ -21495,3 +21495,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   primitive or representation change. Final strict-remote all-target clippy, direct rustfmt/diff hygiene, and staged
   UBS passed. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used. Bead:
   `frankenscipy-su352`.
+
+## 2026-07-14 - cod - KEEP SIMD stats `mean_squared_error` reduction (3.297x at n=262,144)
+
+- Negative-ledger-first triage found the only perf quick-win was an assigned dense-linalg SYRK harness whose
+  measured primitive share remained below 1%, while the cluster and ndimage ledgers marked their accessible seams
+  as harvested. The independent prediction metric `mean_squared_error` had no prior optimization or rejection and
+  still spent its entire valid-input path in a scalar zipped square-sum. Opportunity score: 20.0 (impact 4 x
+  confidence 5 / effort 1).
+- ONE lever accumulates eight squared differences per portable-SIMD lane, then preserves the former scalar tail and
+  final division. `root_mean_squared_error` inherits the reduction without another code path. A focused
+  strict-remote proof on `vmi1149989` matched the literal scalar formula within 64 epsilon-scaled result magnitude
+  across 4,099 finite values and preserved empty, length-mismatch, NaN, infinity, and signed-zero contracts.
+- The one and only benchmark invocation compared production SIMD with the literal former scalar reduction in the
+  same `--profile release` binary on strict-remote worker `vmi1152480`, using 262,144 values, 200 ms warm-up, and one
+  second of measurement per arm. SIMD measured `[48.511, 52.570, 57.500]` us versus
+  `[152.30, 173.33, 207.13]` us scalar: **3.2971x** centered, **2.6487x** conservative, and **69.67%** lower centered
+  time with no interval overlap. The complete remote command returned in 231.2 seconds, including a 132.5-second
+  cold release build, beneath the five-minute cap.
+- The focused proof and `git diff --check` passed; staged UBS reported zero critical findings. Strict-remote
+  all-target clippy reached 64 pre-existing library and 77 pre-existing test-target errors elsewhere in the large
+  stats crate, with none in the owned MSE or benchmark hunks; whole-file rustfmt likewise exposed unrelated existing
+  drift, so no peer formatting was rewritten. No second benchmark, `release-perf` build, local Cargo fallback, or
+  stash mutation was used. Bead: `frankenscipy-jft3x`.

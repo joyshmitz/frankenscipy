@@ -48757,12 +48757,25 @@ pub fn mean_squared_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
     if y_true.len() != y_pred.len() || y_true.is_empty() {
         return f64::NAN;
     }
-    y_true
-        .iter()
-        .zip(y_pred.iter())
-        .map(|(&t, &p)| (t - p).powi(2))
-        .sum::<f64>()
-        / y_true.len() as f64
+    use std::simd::{Simd, num::SimdFloat};
+
+    const LANES: usize = 8;
+    let mut acc = Simd::<f64, LANES>::splat(0.0);
+    let mut index = 0;
+    while index + LANES <= y_true.len() {
+        let truth = Simd::<f64, LANES>::from_slice(&y_true[index..index + LANES]);
+        let prediction = Simd::<f64, LANES>::from_slice(&y_pred[index..index + LANES]);
+        let difference = truth - prediction;
+        acc += difference * difference;
+        index += LANES;
+    }
+    let mut sum = acc.reduce_sum();
+    while index < y_true.len() {
+        let difference = y_true[index] - y_pred[index];
+        sum += difference * difference;
+        index += 1;
+    }
+    sum / y_true.len() as f64
 }
 
 /// Compute the root mean squared error.
@@ -90408,6 +90421,35 @@ mod tests {
         assert!(
             (result - 0.02).abs() < 1e-10,
             "mean_squared_error got {result}, expected 0.02"
+        );
+    }
+
+    #[test]
+    fn mean_squared_error_simd_matches_scalar_reference() {
+        let len = 4_099usize;
+        let y_true: Vec<f64> = (0..len)
+            .map(|idx| ((idx % 257) as f64 - 128.0) / 17.0)
+            .collect();
+        let y_pred: Vec<f64> = (0..len)
+            .map(|idx| ((idx % 251) as f64 - 125.0) / 19.0)
+            .collect();
+        let scalar_sum: f64 = y_true
+            .iter()
+            .zip(&y_pred)
+            .map(|(&truth, &prediction)| (truth - prediction).powi(2))
+            .sum();
+        let expected = scalar_sum / len as f64;
+        let actual = mean_squared_error(&y_true, &y_pred);
+        assert!((actual - expected).abs() <= 64.0 * f64::EPSILON * expected.max(1.0));
+
+        assert!(mean_squared_error(&[], &[]).is_nan());
+        assert!(mean_squared_error(&[1.0], &[]).is_nan());
+        assert!(mean_squared_error(&[f64::NAN], &[1.0]).is_nan());
+        assert_eq!(mean_squared_error(&[f64::INFINITY], &[0.0]), f64::INFINITY);
+        assert!(mean_squared_error(&[f64::INFINITY], &[f64::INFINITY]).is_nan());
+        assert_eq!(
+            mean_squared_error(&[-0.0], &[0.0]).to_bits(),
+            0.0f64.to_bits()
         );
     }
 
