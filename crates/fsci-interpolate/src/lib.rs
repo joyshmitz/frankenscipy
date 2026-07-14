@@ -8024,24 +8024,18 @@ fn cubic_roots_on_interval(c0: f64, c1: f64, c2: f64, c3: f64, h: f64) -> Vec<f6
     roots
 }
 
-/// Evaluate a polynomial and its derivatives.
-///
-/// Returns (p(x), p'(x), p''(x), ...) up to order `der`.
-pub fn polyval_der(coeffs: &[f64], x: f64, der: usize) -> Vec<f64> {
+#[cfg(test)]
+fn polyval_der_restarted(coeffs: &[f64], x: f64, der: usize) -> Vec<f64> {
     let n = coeffs.len();
     if n == 0 {
         return vec![0.0; der + 1];
     }
 
-    // First compute all derivatives of the polynomial at x
     let mut result = vec![0.0; der + 1];
-
-    // Horner's method for each derivative
     for (d, item) in result.iter_mut().enumerate().take(der + 1) {
         if d >= n {
             break;
         }
-        // Coefficients of the d-th derivative
         let mut dc = coeffs.to_vec();
         for _ in 0..d {
             let len = dc.len();
@@ -8052,6 +8046,31 @@ pub fn polyval_der(coeffs: &[f64], x: f64, der: usize) -> Vec<f64> {
             dc = (0..len - 1).map(|i| dc[i] * (len - 1 - i) as f64).collect();
         }
         *item = polyval(&dc, x);
+    }
+    result
+}
+
+/// Evaluate a polynomial and its derivatives.
+///
+/// Returns (p(x), p'(x), p''(x), ...) up to order `der`.
+pub fn polyval_der(coeffs: &[f64], x: f64, der: usize) -> Vec<f64> {
+    let n = coeffs.len();
+    if n == 0 {
+        return vec![0.0; der + 1];
+    }
+
+    let mut result = vec![0.0; der + 1];
+    let mut dc = coeffs.to_vec();
+    let orders = result.len().min(n);
+    for (order, item) in result.iter_mut().take(orders).enumerate() {
+        *item = polyval(&dc, x);
+        if order + 1 < orders {
+            let len = dc.len();
+            for (i, coefficient) in dc.iter_mut().enumerate().take(len - 1) {
+                *coefficient *= (len - 1 - i) as f64;
+            }
+            dc.truncate(len - 1);
+        }
     }
 
     result
@@ -13645,6 +13664,42 @@ mod tests {
         // p=2x^3-3x+1 at x=1: p=0, p'=6x^2-3=3, p''=12x=12, p'''=12.
         let r2 = polyval_der(&[2.0, 0.0, -3.0, 1.0], 1.0, 3);
         assert_eq!(r2, vec![0.0, 3.0, 12.0, 12.0]);
+    }
+
+    #[test]
+    fn polyval_der_prefix_reuse_matches_restarted_reference_bits() {
+        let payload_nan = f64::from_bits(0x7ff8_0000_0000_1234);
+        let coefficient_sets = [
+            Vec::new(),
+            vec![3.0],
+            vec![1.0, -3.0, 2.0],
+            vec![-0.0, 0.0, f64::INFINITY, f64::NEG_INFINITY, payload_nan],
+        ];
+        let points = [
+            -0.0,
+            0.0,
+            0.875,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            payload_nan,
+        ];
+
+        for coeffs in &coefficient_sets {
+            for &x in &points {
+                for der in [0, 1, 2, 4, 8] {
+                    let actual = polyval_der(coeffs, x, der);
+                    let expected = polyval_der_restarted(coeffs, x, der);
+                    assert_eq!(actual.len(), expected.len());
+                    for (order, (&got, &want)) in actual.iter().zip(&expected).enumerate() {
+                        assert_eq!(
+                            got.to_bits(),
+                            want.to_bits(),
+                            "coeffs={coeffs:?} x={x:?} der={der} order={order}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

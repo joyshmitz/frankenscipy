@@ -5,7 +5,7 @@ use fsci_interpolate::{
     RbfInterpolator, RbfKernel, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod,
     SmoothBivariateSpline, SmoothBivariateSplineOptions, SplineBc, bisplrep, griddata,
     interp1d_linear, lagrange, make_interp_spline, make_smoothing_spline, polyder,
-    polyint_definite, polymul, polyroots, polysub,
+    polyint_definite, polymul, polyroots, polysub, polyval_der,
 };
 use fsci_runtime::RuntimeMode;
 use std::hint::black_box;
@@ -167,6 +167,15 @@ fn bench_polynomial(c: &mut Criterion) {
     });
     group.bench_function("polyder/1000000/m8", |bench| {
         bench.iter(|| polyder(black_box(&sub_a), black_box(8)))
+    });
+    group.bench_function("polyval_der/1000000/d8", |bench| {
+        bench.iter(|| {
+            black_box(polyval_der(
+                black_box(&sub_a),
+                black_box(0.875),
+                black_box(8),
+            ))
+        })
     });
     group.bench_function("polyint_definite/1000000", |bench| {
         bench.iter(|| {

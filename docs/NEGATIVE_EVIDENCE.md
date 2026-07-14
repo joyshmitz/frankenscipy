@@ -21002,3 +21002,31 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   overhead structure that avoids per-row allocation/sort. Every authoritative Cargo command used direct argv through
   fail-closed `rch exec`; no local Cargo evidence informed this rejection. `git diff --check` passed; staged UBS found
   no supported language because the final commit is Markdown-only.
+
+## 2026-07-14 - cod - KEEP interpolate prefix-reused `polyval_der` (5.94-6.46x at n=1,000,000, der=8)
+
+- Negative-ledger-first selection found no prior `polyval_der` optimization or rejection. The adjacent polynomial
+  results are direct `polysub` subtraction (KEEP), tiled single-output `polyder` synthesis (REJECT), and streaming
+  `polyint_definite` (KEEP); reusing derivative prefixes across every requested output order is a distinct lane. The
+  opportunity score was 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever replaces nine full coefficient clones and 36 restarted derivative-materialization passes at `der=8` with
+  one clone and eight in-place prefix transformations. All nine Horner evaluations are unchanged. Each coefficient is
+  multiplied by the same factors in the same order as the restarted implementation, and differentiation stops after
+  the last requested output instead of constructing an unused next prefix.
+- The new public fast-profile Criterion row's strict-remote production-original interval on `vmi1293453` was
+  `[56.875, 59.476, 62.129]` ms. Because worker routing changed, that baseline establishes the original public-path
+  cost but is not used for the acceptance ratio.
+- The decisive same-binary bracket ran candidate/literal-original/candidate-repeat in one strict-remote invocation on
+  `vmi1227854`. Their intervals were `[18.253, 19.177, 20.227]`, `[110.11, 113.91, 117.63]`, and
+  `[17.464, 17.643, 17.831]` ms. The candidate centers were **5.940x** and **6.456x** faster than the middle original;
+  even the conservative interval ratios were **5.444x** and **6.175x**, with no overlap. KEEP. The A/B-only toggle,
+  literal-original benchmark row, and repeat row were removed; the public production row remains.
+- The focused strict-remote suite passed **2/2** on `vmi1152480`. The exact-source guard compares every output bit to
+  the former restarted implementation across empty, constant, and finite inputs; signed zeros, infinities, payload
+  NaNs; derivative orders 0/1/2/4/8; and finite and non-finite evaluation points. Every authoritative Cargo command
+  used direct argv through fail-closed `rch exec`; no local Cargo fallback informed this keep.
+- Final strict-remote `cargo check -p fsci-interpolate --all-targets` passed on `vmi1227854`. Scoped Clippy reached
+  `fsci-interpolate` and stopped on the same **86 pre-existing** crate-wide findings in unchanged FITPACK, spherical-
+  spline, and older library code; none pointed at either owned hunk. Direct `rustfmt --check` exposed the crate's broad
+  pre-existing format drift, with no diff at the owned source or benchmark hunks; `git diff --check` passed. Staged UBS
+  exited 0 with zero critical findings; its shadow-workspace Cargo probes are supplementary, not remote-only proof.
