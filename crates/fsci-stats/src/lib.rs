@@ -33559,7 +33559,7 @@ pub fn moment(data: &[f64], k: u32) -> f64 {
         return 1.0;
     }
     let n = data.len() as f64;
-    let mean_val = data.iter().sum::<f64>() / n;
+    let mean_val = par_sum(data) / n;
     // Σ(x−mean)^k — the dominant O(n) reduction (mean fixed above); `powi(k)` per element. Below the
     // gate (and under MOMENT_PAR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to
     // `.map(powi).sum()`); above 1<<22 fan across cores as per-thread partials, within per-op ULP
@@ -33681,7 +33681,7 @@ pub fn central_moment(data: &[f64], k: u32) -> f64 {
         return 1.0;
     }
     let n = data.len() as f64;
-    let mean_val = data.iter().sum::<f64>() / n;
+    let mean_val = par_sum(data) / n;
     // Σ(x−mean)^k — the dominant O(n) reduction (mean fixed above); `powi(k)` per element. Below the
     // gate (and under MOMENT_PAR_FORCE_SERIAL) fold in ONE serial pass (byte-identical to
     // `.map(powi).sum()`); above 1<<22 fan across cores as per-thread partials, within per-op ULP
@@ -33731,7 +33731,7 @@ pub fn standardized_moment(data: &[f64], k: u32) -> f64 {
         return f64::NAN;
     }
     let n = data.len() as f64;
-    let mean_val = data.iter().sum::<f64>() / n;
+    let mean_val = par_sum(data) / n;
 
     // m2=Σd² and mk=Σd^k (d=x−mean) both depend only on the mean → FUSE the two passes into one and,
     // for large inputs, fan it across cores as per-thread (m2, mk) partials. BYTE-IDENTICAL below the
