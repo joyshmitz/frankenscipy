@@ -21626,3 +21626,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   thread PCM encoding without a lower-variance design. The complete remote benchmark returned in 151.2 seconds,
   beneath the five-minute cap. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was
   used. Bead: `frankenscipy-nfdeg`.
+
+## 2026-07-14 - cod - REJECT medium-size `vnorm` SIMD reuse (pre-timing parity gate)
+
+- Negative-ledger-first triage excluded the assigned dense-linalg SYRK harness because prior attribution places
+  standalone SYRK below 1% of Cholesky wall time. Cluster, optimization, special-function, and constants ledgers were
+  already dense with nearby keeps and rejects, so this pass selected an unledgered linalg primitive: below the existing
+  1,048,576-element parallel gate, `vnorm` still used a scalar square-and-sum while the sibling `vdot` path already had
+  a portable-SIMD kernel. Opportunity score before proof: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE candidate preserved the exact scalar fold below 64 elements and the existing huge-input parallel route, while
+  routing only the medium band through `simd_dot(v, v)`. A focused strict-remote test on `vmi1152480` passed at 4,099
+  elements and retained exact tiny-vector, NaN, and infinity behavior.
+- The one and only benchmark invocation used the same `--profile release` binary on strict-remote worker `vmi1152480`,
+  with 262,144 elements, 10 samples, 100 ms warm-up, and 500 ms measurement per arm. Its pre-timing scalar-reference
+  assertion failed because the reordered SIMD reduction exceeded the declared `64 * EPSILON * norm` tolerance, so no
+  performance interval was admitted. The complete command returned in 145.8 seconds, beneath the five-minute cap.
+- Disposition: source, test, and benchmark hunks were dropped. Revisit only with an explicitly derived size-scaled
+  error budget or a norm-specific stable reduction, not naive `simd_dot` reuse. Targeted UBS exited zero with no critical
+  findings; diff hygiene and formatting passed. Strict-remote all-target Clippy was blocked by unrelated existing lint
+  debt (including `lib.rs:9431` and legacy excessive-precision fixtures), with no finding in this candidate. No second
+  benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-ajx42`.
