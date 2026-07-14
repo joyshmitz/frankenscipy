@@ -34300,8 +34300,11 @@ pub fn bayes_mvs(data: &[f64], alpha: f64) -> BayesMvsResult {
     }
 
     let nf = n as f64;
-    let xbar = data.iter().sum::<f64>() / nf;
-    let ss: f64 = data.iter().map(|&x| (x - xbar).powi(2)).sum();
+    // Mean via `par_sum` + Σ(x−xbar)² via `sum_sq_dev` — both work-gated parallel (byte-identical
+    // below the 1<<22 gate; the variance is m2-insensitive to the mean, so par_sum is byte-safe there
+    // too). Both were serial `.sum()` stragglers vs the parallel sem/variance reductions.
+    let xbar = par_sum(data) / nf;
+    let ss: f64 = sum_sq_dev(data, xbar);
 
     // For mean: t-distribution with df = n-1
     let df = nf - 1.0;
@@ -34471,8 +34474,11 @@ pub fn mvsdist(data: &[f64]) -> MvsDist {
         };
     }
     let nf = n as f64;
-    let xbar = data.iter().sum::<f64>() / nf;
-    let ss: f64 = data.iter().map(|&x| (x - xbar).powi(2)).sum();
+    // Mean via `par_sum` + Σ(x−xbar)² via `sum_sq_dev` — both work-gated parallel (byte-identical
+    // below the 1<<22 gate; the variance is m2-insensitive to the mean, so par_sum is byte-safe there
+    // too). Both were serial `.sum()` stragglers vs the parallel sem/variance reductions.
+    let xbar = par_sum(data) / nf;
+    let ss: f64 = sum_sq_dev(data, xbar);
     let df = nf - 1.0;
     let se = (ss / df / nf).sqrt();
 
@@ -55805,6 +55811,34 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bayes_mvs_par_reductions_match_serial_below_gate() {
+        use std::sync::atomic::Ordering;
+        let cases: &[&[f64]] = &[
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            &[-3.0, 0.5, 2.0, -1.25, 7.0, 4.0, -2.5, 9.0, 3.0, -6.0],
+            &[1e6, -1e6, 3.5, -2.5, 100.0, -50.0, 0.0, 7.0, 11.0],
+        ];
+        let bits = |ci: &CredibleInterval| {
+            (ci.statistic.to_bits(), ci.low.to_bits(), ci.high.to_bits())
+        };
+        for &data in cases {
+            for &alpha in &[0.9, 0.95] {
+                PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                let serial = bayes_mvs(data, alpha);
+                PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                let parallel = bayes_mvs(data, alpha);
+                assert_eq!(bits(&serial.mean), bits(&parallel.mean));
+                assert_eq!(bits(&serial.variance), bits(&parallel.variance));
+                assert_eq!(bits(&serial.std), bits(&parallel.std));
+            }
+        }
+        PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn ttest_1samp_par_reductions_match_serial_below_gate() {
