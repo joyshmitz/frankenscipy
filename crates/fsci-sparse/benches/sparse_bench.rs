@@ -4,7 +4,8 @@ use fsci_sparse::{
     DIAGS_VALIDATE, FormatConvertible, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions,
     VSTACK_FORCE_GENERIC, add_csr, block_diag, bmat, diags, eye, eye_array, find, kron, random,
     scale_coo, scale_csc, scale_csr, sparse_diagonal, sparse_frobenius_inner, sparse_is_symmetric,
-    sparse_norm, sparse_sum, sparse_trace, spilu, spmm, spmv_csr, spsolve, tril, vstack,
+    sparse_norm, sparse_sum, sparse_trace, sparse_transpose, spilu, spmm, spmv_csr, spsolve, tril,
+    vstack,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -124,6 +125,49 @@ fn make_symmetric_block_matrix(n: usize, block_width: usize) -> CsrMatrix {
     }
     CsrMatrix::from_components(Shape2D::new(n, n), data, indices, indptr, false)
         .expect("canonical symmetric block matrix")
+}
+
+fn make_wide_transpose_matrix(rows: usize, cols: usize, row_width: usize) -> CsrMatrix {
+    let mut data = Vec::with_capacity(rows * row_width);
+    let mut indices = Vec::with_capacity(rows * row_width);
+    let mut indptr = Vec::with_capacity(rows + 1);
+    indptr.push(0);
+    for row in 0..rows {
+        for offset in 0..row_width {
+            indices.push((row * 131 + offset * 977) % cols);
+            data.push((row * row_width + offset) as f64 * 0.001 - 2.0);
+        }
+        indptr.push(data.len());
+    }
+    CsrMatrix::from_components(Shape2D::new(rows, cols), data, indices, indptr, false)
+        .expect("wide transpose matrix")
+}
+
+fn sparse_transpose_separate_counts_reference(a: &CsrMatrix) -> CsrMatrix {
+    let (rows, cols) = (a.shape().rows, a.shape().cols);
+    let nnz = a.data().len();
+    let mut counts = vec![0usize; cols];
+    for &col in a.indices() {
+        counts[col] += 1;
+    }
+    let mut indptr = vec![0usize; cols + 1];
+    for col in 0..cols {
+        indptr[col + 1] = indptr[col] + counts[col];
+    }
+    let mut indices = vec![0usize; nnz];
+    let mut data = vec![0.0; nnz];
+    let mut positions = vec![0usize; cols];
+    for row in 0..rows {
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            let col = a.indices()[idx];
+            let dest = indptr[col] + positions[col];
+            indices[dest] = row;
+            data[dest] = a.data()[idx];
+            positions[col] += 1;
+        }
+    }
+    CsrMatrix::from_components(Shape2D::new(cols, rows), data, indices, indptr, false)
+        .expect("reference transpose")
 }
 
 fn scale_csc_checked_reference(matrix: &CscMatrix, alpha: f64) -> CscMatrix {
@@ -1050,6 +1094,26 @@ fn bench_sparse_is_symmetric_lookup_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sparse_transpose_bookkeeping_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_transpose_bookkeeping_ab");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(1));
+    let matrix = make_wide_transpose_matrix(512, 32_768, 16);
+
+    group.bench_function("current_in_place_counts", |bencher| {
+        bencher.iter(|| black_box(sparse_transpose(black_box(&matrix))));
+    });
+    group.bench_function("orig_separate_counts", |bencher| {
+        bencher.iter(|| {
+            black_box(sparse_transpose_separate_counts_reference(black_box(
+                &matrix,
+            )))
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_coo_sum_duplicates,
@@ -1077,5 +1141,6 @@ criterion_group!(
     bench_sparse_sum_simd_ab,
     bench_sparse_frobenius_inner_merge_ab,
     bench_sparse_is_symmetric_lookup_ab,
+    bench_sparse_transpose_bookkeeping_ab,
 );
 criterion_main!(benches);

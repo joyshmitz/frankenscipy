@@ -21387,3 +21387,25 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   **53.7802x** conservative, and **98.48%** lower centered time with no interval overlap.
 - No `release-perf` build, second benchmark, local Cargo fallback, or stash mutation was used. Bead:
   `frankenscipy-kcmm1`.
+
+## 2026-07-14 - cod - KEEP in-place CSR transpose counts (1.692x at 512x32,768, nnz 8,192)
+
+- Negative-ledger-first reconciliation excluded the harvested sparse trace, diagonal, norm, sum, Frobenius-inner,
+  symmetry, constructor, and row-reduction lanes and found no prior `sparse_transpose` optimization or rejection.
+  Direct attribution showed three full-column bookkeeping allocations (`col_counts`, `t_indptr`, and `pos`) plus a
+  base-offset addition in every stored-entry write. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever counts columns directly into `t_indptr[1..]`, prefixes those counts in place, and initializes absolute
+  write cursors from the completed row pointers. This removes one column-sized allocation/zero-fill and the
+  per-entry `t_indptr[j] + pos[j]` addition while retaining the same row-major visitation and destination sequence.
+  A focused strict-remote test proved exact shape, row pointers, indices, and `f64::to_bits()` data parity against
+  the literal separate-counts implementation for empty and rectangular matrices with signed zero, payload NaN,
+  and infinities.
+- The one and only benchmark invocation compared production in-place counts with the literal former bookkeeping
+  path in the same `--profile release` binary on strict-remote worker `vmi1152480`, using a 512x32,768 matrix with
+  8,192 stored values. In-place counts measured `[53.405, 57.961, 66.650]` us versus
+  `[90.687, 98.097, 106.64]` us separately counted: **1.6924x** centered, **1.3606x** conservative, and **40.91%**
+  lower centered time with no interval overlap.
+- The release build completed in 1m14s. Strict-remote all-target clippy reached the pre-existing
+  `fsci-linalg/src/lib.rs:9431` `needless_range_loop` warning before linting the owned crate; the focused test,
+  bench-target compile, and `git diff --check` passed. No `release-perf` build, second benchmark, local Cargo
+  fallback, or stash mutation was used. Bead: `frankenscipy-o63d7`.

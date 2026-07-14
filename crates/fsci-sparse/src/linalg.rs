@@ -4572,24 +4572,26 @@ pub fn sparse_transpose(a: &CsrMatrix) -> CsrMatrix {
     let (rows, cols) = (a.shape().rows, a.shape().cols);
     let nnz = a.data().len();
 
-    // Count entries per column (= per row of transpose)
-    let mut col_counts = vec![0usize; cols];
+    // Count entries per column directly in the output row-pointer storage.
+    // Keeping the leading zero means slot `j + 1` is the count for column `j`.
+    // This avoids a separate `col_counts` allocation and zero-fill.
+    let mut t_indptr = vec![0usize; cols + 1];
     for &j in a.indices() {
         if j < cols {
-            col_counts[j] += 1;
+            t_indptr[j + 1] += 1;
         }
     }
 
-    // Build transpose indptr
-    let mut t_indptr = vec![0usize; cols + 1];
-    for j in 0..cols {
-        t_indptr[j + 1] = t_indptr[j] + col_counts[j];
+    // Prefix the counts in place to build transpose indptr.
+    for j in 1..=cols {
+        t_indptr[j] += t_indptr[j - 1];
     }
 
-    // Fill transpose data
+    // Absolute write cursors start at each output row's offset. This also
+    // removes the `t_indptr[j] + pos[j]` addition from every stored entry.
     let mut t_indices = vec![0usize; nnz];
     let mut t_data = vec![0.0; nnz];
-    let mut pos = vec![0usize; cols];
+    let mut next = t_indptr[..cols].to_vec();
 
     for i in 0..rows {
         let start = a.indptr()[i];
@@ -4597,10 +4599,10 @@ pub fn sparse_transpose(a: &CsrMatrix) -> CsrMatrix {
         for idx in start..end {
             let j = a.indices()[idx];
             if j < cols {
-                let dest = t_indptr[j] + pos[j];
+                let dest = next[j];
                 t_indices[dest] = i;
                 t_data[dest] = a.data()[idx];
-                pos[j] += 1;
+                next[j] += 1;
             }
         }
     }
@@ -6803,6 +6805,73 @@ mod tests {
         )
         .expect("non-finite csr");
         assert_matches(&non_finite);
+    }
+
+    #[test]
+    fn sparse_transpose_in_place_counts_match_separate_counts_exactly() {
+        fn reference(a: &CsrMatrix) -> CsrMatrix {
+            let (rows, cols) = (a.shape().rows, a.shape().cols);
+            let nnz = a.data().len();
+            let mut counts = vec![0usize; cols];
+            for &col in a.indices() {
+                counts[col] += 1;
+            }
+            let mut indptr = vec![0usize; cols + 1];
+            for col in 0..cols {
+                indptr[col + 1] = indptr[col] + counts[col];
+            }
+            let mut indices = vec![0usize; nnz];
+            let mut data = vec![0.0; nnz];
+            let mut positions = vec![0usize; cols];
+            for row in 0..rows {
+                for idx in a.indptr()[row]..a.indptr()[row + 1] {
+                    let col = a.indices()[idx];
+                    let dest = indptr[col] + positions[col];
+                    indices[dest] = row;
+                    data[dest] = a.data()[idx];
+                    positions[col] += 1;
+                }
+            }
+            CsrMatrix::from_components_unchecked(Shape2D::new(cols, rows), data, indices, indptr)
+        }
+
+        for matrix in [
+            CsrMatrix::from_components(Shape2D::new(0, 7), Vec::new(), Vec::new(), vec![0], false)
+                .expect("empty wide matrix"),
+            CsrMatrix::from_components(
+                Shape2D::new(4, 7),
+                vec![
+                    -0.0,
+                    f64::from_bits(0x7ff8_0000_0000_0042),
+                    3.5,
+                    f64::INFINITY,
+                    -2.25,
+                    f64::NEG_INFINITY,
+                ],
+                vec![6, 1, 5, 0, 3, 6],
+                vec![0, 2, 3, 5, 6],
+                false,
+            )
+            .expect("rectangular matrix"),
+        ] {
+            let expected = reference(&matrix);
+            let actual = sparse_transpose(&matrix);
+            assert_eq!(actual.shape(), expected.shape());
+            assert_eq!(actual.indptr(), expected.indptr());
+            assert_eq!(actual.indices(), expected.indices());
+            assert_eq!(
+                actual
+                    .data()
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+                    .data()
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
