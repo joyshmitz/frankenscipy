@@ -5,7 +5,8 @@ use fsci_stats::{
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
     bayes_mvs, cohens_d, excess_kurtosis, histogram, kendalltau, kruskal, ks_2samp,
     l2_star_discrepancy, mad,
-    mannkendall, mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf, psd_welch,
+    mannkendall, mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf,
+    pooled_variance, psd_welch,
     rand_index,
     siegelslopes, somersd, theilslopes, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance,
     wraparound_discrepancy,
@@ -834,6 +835,33 @@ fn bench_biweight_midcorrelation_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_pooled_variance_par_reductions_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("pooled_variance_par_reductions_ab");
+    group.sample_size(10);
+    // Two large groups (each above the 1<<22 gate) so the per-group mean+SS parallelize.
+    let g1 = deterministic_data(8_000_000);
+    let g2: Vec<f64> = g1.iter().map(|&v| v * 0.9 + 0.5).collect();
+    let groups: Vec<&[f64]> = vec![g1.as_slice(), g2.as_slice()];
+    group.bench_function("current_parallel", |bn| {
+        bn.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            black_box(pooled_variance(black_box(&groups)))
+        });
+    });
+    group.bench_function("orig_serial", |bn| {
+        bn.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            black_box(pooled_variance(black_box(&groups)))
+        });
+    });
+    PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_ttest_rel_par_reductions_ab(c: &mut Criterion) {
     use std::sync::atomic::Ordering;
     let mut group = c.benchmark_group("ttest_rel_par_reductions_ab");
@@ -1031,6 +1059,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_pooled_variance_par_reductions_ab,
     bench_ttest_rel_par_reductions_ab,
     bench_cohens_d_par_reductions_ab,
     bench_ttest_ind_par_mean_ab,

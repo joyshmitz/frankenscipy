@@ -34234,8 +34234,11 @@ pub fn pooled_variance(groups: &[&[f64]]) -> f64 {
 
     for group in groups {
         let n = group.len() as f64;
-        let mean = group.iter().sum::<f64>() / n;
-        let ss: f64 = group.iter().map(|&x| (x - mean).powi(2)).sum();
+        // Per-group mean via `par_sum` + Σ(x−mean)² via `sum_sq_dev` — both work-gated parallel
+        // (byte-identical below the 1<<22 gate; variance is m2-insensitive to the mean, so par_sum is
+        // byte-safe above it too). Both were serial `.sum()` folds.
+        let mean = par_sum(group) / n;
+        let ss: f64 = sum_sq_dev(group, mean);
         sum_ss += ss;
         sum_df += n - 1.0;
     }
@@ -55826,6 +55829,34 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pooled_variance_par_reductions_match_serial_below_gate() {
+        use std::sync::atomic::Ordering;
+        let group_sets: &[&[&[f64]]] = &[
+            &[&[1.0, 2.0, 3.0, 4.0], &[2.0, 4.0, 6.0]],
+            &[
+                &[-3.0, 0.5, 2.0, -1.25, 7.0],
+                &[4.0, -2.5, 9.0],
+                &[1.5, 0.0, -6.0, 3.0],
+            ],
+            &[&[1e6, -1e6, 3.5, -2.5], &[100.0, -50.0, 0.0, 7.0]],
+        ];
+        for &groups in group_sets {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = pooled_variance(groups);
+            let serial_std = pooled_std(groups);
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = pooled_variance(groups);
+            let parallel_std = pooled_std(groups);
+            assert_eq!(serial.to_bits(), parallel.to_bits());
+            assert_eq!(serial_std.to_bits(), parallel_std.to_bits());
+        }
+        PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn ttest_rel_par_reductions_match_serial_below_gate() {
