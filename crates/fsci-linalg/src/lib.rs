@@ -9404,6 +9404,13 @@ pub fn solve_toeplitz_many(
 // Matrix Property Checks
 // ══════════════════════════════════════════════════════════════════════
 
+/// When `true`, [`issymmetric`] scans the upper triangle serially (the ORIG behaviour); default
+/// `false` fans the scan across cores for large matrices. Byte-identical (deterministic bool).
+/// `#[doc(hidden)]` — internal A/B perf gate.
+#[doc(hidden)]
+pub static ISSYMMETRIC_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Check if a matrix is symmetric within tolerance.
 ///
 /// Returns true if `|A[i,j] - A[j,i]| <= atol + rtol * max(|A[i,j]|, |A[j,i]|)` for all i,j.
@@ -9416,20 +9423,61 @@ pub fn issymmetric(a: &[Vec<f64>], atol: f64, rtol: f64) -> Result<bool, LinalgE
             detail: "input array must be square".to_string(),
         });
     }
-    for (i, row) in a.iter().enumerate().take(rows) {
-        for (j, &upper) in row.iter().enumerate().skip(i + 1).take(cols - (i + 1)) {
-            let lower = a[j][i];
-            if !upper.is_finite() || !lower.is_finite() {
-                return Ok(false);
-            }
-            let diff = (upper - lower).abs();
-            let scale = upper.abs().max(lower.abs());
-            if diff > atol + rtol * scale {
-                return Ok(false);
+    // Each upper-triangle entry `a[i][j]` is compared to its (cache-hostile, strided) mirror `a[j][i]`
+    // — an O(n²) scan whose rows are INDEPENDENT. Fan them across cores for large matrices, ANDing the
+    // per-chunk verdicts. BYTE-IDENTICAL: the returned bool is deterministic (symmetric iff every pair
+    // matches / all finite), order-independent. `ISSYMMETRIC_FORCE_SERIAL` restores the serial scan.
+    let check_rows = |i0: usize, i1: usize| -> bool {
+        for i in i0..i1 {
+            let row = &a[i];
+            for j in (i + 1)..cols {
+                let upper = row[j];
+                let lower = a[j][i];
+                if !upper.is_finite() || !lower.is_finite() {
+                    return false;
+                }
+                let diff = (upper - lower).abs();
+                let scale = upper.abs().max(lower.abs());
+                if diff > atol + rtol * scale {
+                    return false;
+                }
             }
         }
+        true
+    };
+    let nthreads = if ISSYMMETRIC_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || rows.saturating_mul(rows) < (1 << 20)
+        || rows < 2
+    {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(rows)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return Ok(check_rows(0, rows));
     }
-    Ok(true)
+    let chunk = rows.div_ceil(nthreads);
+    let check_rows = &check_rows;
+    let parts: Vec<bool> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= rows {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(rows);
+                Some(scope.spawn(move || check_rows(i0, i1)))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("issymmetric worker panicked"))
+            .collect()
+    });
+    Ok(parts.into_iter().all(|b| b))
 }
 
 /// Check if a matrix is Hermitian within tolerance.
