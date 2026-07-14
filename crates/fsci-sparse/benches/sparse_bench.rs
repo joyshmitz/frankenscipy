@@ -62,6 +62,34 @@ fn scale_coo_checked_reference(matrix: &CooMatrix, alpha: f64) -> CooMatrix {
     .expect("checked COO reference")
 }
 
+fn csr_to_coo_checked_reference(matrix: &CsrMatrix) -> CooMatrix {
+    let mut rows = Vec::with_capacity(matrix.nnz());
+    let mut cols = Vec::with_capacity(matrix.nnz());
+    let mut data = Vec::with_capacity(matrix.nnz());
+    for row in 0..matrix.shape().rows {
+        for idx in matrix.indptr()[row]..matrix.indptr()[row + 1] {
+            rows.push(row);
+            cols.push(matrix.indices()[idx]);
+            data.push(matrix.data()[idx]);
+        }
+    }
+    CooMatrix::from_triplets(matrix.shape(), data, rows, cols, false).expect("checked CSR->COO")
+}
+
+fn csc_to_coo_checked_reference(matrix: &CscMatrix) -> CooMatrix {
+    let mut rows = Vec::with_capacity(matrix.nnz());
+    let mut cols = Vec::with_capacity(matrix.nnz());
+    let mut data = Vec::with_capacity(matrix.nnz());
+    for col in 0..matrix.shape().cols {
+        for idx in matrix.indptr()[col]..matrix.indptr()[col + 1] {
+            rows.push(matrix.indices()[idx]);
+            cols.push(col);
+            data.push(matrix.data()[idx]);
+        }
+    }
+    CooMatrix::from_triplets(matrix.shape(), data, rows, cols, false).expect("checked CSC->COO")
+}
+
 fn bench_csr_construction(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_csr_construction");
 
@@ -204,6 +232,50 @@ fn bench_arithmetic(c: &mut Criterion) {
                 b_iter.iter(|| {
                     let scaled = scale_coo_checked_reference(black_box(a), black_box(2.5));
                     black_box(scaled.nnz());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("{label}_csr_to_coo"), n),
+            &a,
+            |b_iter, a| {
+                b_iter.iter(|| {
+                    let coo = black_box(a).to_coo().expect("csr to_coo");
+                    black_box(coo.nnz());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("{label}_csr_to_coo_checked_reference"), n),
+            &a,
+            |b_iter, a| {
+                b_iter.iter(|| {
+                    let coo = csr_to_coo_checked_reference(black_box(a));
+                    black_box(coo.nnz());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("{label}_csc_to_coo"), n),
+            &a_csc,
+            |b_iter, a| {
+                b_iter.iter(|| {
+                    let coo = black_box(a).to_coo().expect("csc to_coo");
+                    black_box(coo.nnz());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("{label}_csc_to_coo_checked_reference"), n),
+            &a_csc,
+            |b_iter, a| {
+                b_iter.iter(|| {
+                    let coo = csc_to_coo_checked_reference(black_box(a));
+                    black_box(coo.nnz());
                 });
             },
         );

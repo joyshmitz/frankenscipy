@@ -88,7 +88,17 @@ impl FormatConvertible for CsrMatrix {
                 data.push(self.data()[idx]);
             }
         }
-        CooMatrix::from_triplets(self.shape(), data, rows, cols, false)
+        // Row indices come from the `0..rows` loop counter and column indices
+        // are copied verbatim from `self.indices()`, both already validated when
+        // this CSR was built. Constructing the COO directly skips the two O(nnz)
+        // bounds re-scans `from_triplets` would run over provably in-bounds data;
+        // byte-identical to `from_triplets(.., false)`, which just returns the struct.
+        Ok(CooMatrix {
+            shape: self.shape(),
+            data,
+            row_indices: rows,
+            col_indices: cols,
+        })
     }
 }
 
@@ -123,7 +133,17 @@ impl FormatConvertible for CscMatrix {
                 data.push(self.data()[idx]);
             }
         }
-        CooMatrix::from_triplets(self.shape(), data, rows, cols, false)
+        // Column indices come from the `0..cols` loop counter and row indices are
+        // copied verbatim from `self.indices()`, both already validated when this
+        // CSC was built. Constructing the COO directly skips the two O(nnz) bounds
+        // re-scans `from_triplets` would run over provably in-bounds data;
+        // byte-identical to `from_triplets(.., false)`, which just returns the struct.
+        Ok(CooMatrix {
+            shape: self.shape(),
+            data,
+            row_indices: rows,
+            col_indices: cols,
+        })
     }
 }
 
@@ -1787,6 +1807,60 @@ mod tests {
                 .map(|value| value.to_bits())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn to_coo_direct_matches_from_triplets_path_bit_for_bit() {
+        fn old_csr_to_coo(matrix: &CsrMatrix) -> CooMatrix {
+            let mut rows = Vec::with_capacity(matrix.nnz());
+            let mut cols = Vec::with_capacity(matrix.nnz());
+            let mut data = Vec::with_capacity(matrix.nnz());
+            for row in 0..matrix.shape().rows {
+                for idx in matrix.indptr()[row]..matrix.indptr()[row + 1] {
+                    rows.push(row);
+                    cols.push(matrix.indices()[idx]);
+                    data.push(matrix.data()[idx]);
+                }
+            }
+            CooMatrix::from_triplets(matrix.shape(), data, rows, cols, false).expect("old csr->coo")
+        }
+        fn old_csc_to_coo(matrix: &CscMatrix) -> CooMatrix {
+            let mut rows = Vec::with_capacity(matrix.nnz());
+            let mut cols = Vec::with_capacity(matrix.nnz());
+            let mut data = Vec::with_capacity(matrix.nnz());
+            for col in 0..matrix.shape().cols {
+                for idx in matrix.indptr()[col]..matrix.indptr()[col + 1] {
+                    rows.push(matrix.indices()[idx]);
+                    cols.push(col);
+                    data.push(matrix.data()[idx]);
+                }
+            }
+            CooMatrix::from_triplets(matrix.shape(), data, rows, cols, false).expect("old csc->coo")
+        }
+        fn assert_coo_bit_identical(actual: &CooMatrix, expected: &CooMatrix) {
+            assert_eq!(actual.shape(), expected.shape());
+            assert_eq!(actual.row_indices(), expected.row_indices());
+            assert_eq!(actual.col_indices(), expected.col_indices());
+            assert_eq!(
+                actual.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+            );
+        }
+
+        // Include an empty row/col plus signed-zero, infinity and a NaN payload so
+        // any reordering or value mangling would surface.
+        let csr = CsrMatrix::from_components(
+            Shape2D::new(4, 5),
+            vec![-0.0, f64::INFINITY, f64::from_bits(0x7ff8_0000_0000_1234), -3.5, 0.0],
+            vec![0, 4, 2, 1, 3],
+            vec![0, 2, 2, 4, 5],
+            false,
+        )
+        .expect("valid csr");
+        assert_coo_bit_identical(&csr.to_coo().expect("csr to_coo"), &old_csr_to_coo(&csr));
+
+        let csc = csr.to_csc().expect("csr->csc");
+        assert_coo_bit_identical(&csc.to_coo().expect("csc to_coo"), &old_csc_to_coo(&csc));
     }
 
     #[test]
