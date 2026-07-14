@@ -64,15 +64,25 @@ pub fn eye_rectangular(rows: usize, cols: usize, k: isize) -> SparseResult<CsrMa
             (k_abs, (rows - k_abs).min(cols))
         }
     };
+    // The k-th diagonal places exactly one entry per row in `[row_start, row_start+length)`, at
+    // column `col_start + i` for the i-th diagonal row (col_start = k for k>=0, else 0). That is
+    // already the row-major, per-row-sorted, duplicate-free CSR layout, so build it directly:
+    // `indptr[row]` = entries in rows before `row` = clamp(row - row_start, 0, length). This skips
+    // the intermediate COO allocation, its `from_triplets` validation, and `to_csr`'s sort +
+    // canonicalization — byte-identical to the old COO→to_csr path (same indices/indptr/values and
+    // {sorted, deduplicated} metadata).
+    let col_start = if k >= 0 { k as usize } else { 0 };
     let data = vec![1.0; length];
-    let r: Vec<usize> = (row_start..row_start + length).collect();
-    let c: Vec<usize> = if k >= 0 {
-        (k as usize..k as usize + length).collect()
-    } else {
-        (0..length).collect()
+    let indices: Vec<usize> = (col_start..col_start + length).collect();
+    let indptr: Vec<usize> = (0..=rows)
+        .map(|row| row.saturating_sub(row_start).min(length))
+        .collect();
+    let mut result = CsrMatrix::from_components_unchecked(shape, data, indices, indptr);
+    result.canonical = CanonicalMeta {
+        sorted_indices: true,
+        deduplicated: true,
     };
-    let coo = CooMatrix::from_triplets(shape, data, r, c, false)?;
-    coo.to_csr()
+    Ok(result)
 }
 
 /// Emit rows `[base..end)` of a [`diags`] matrix into local `(counts, indices, data)` buffers by
@@ -1396,6 +1406,70 @@ mod tests {
         let err = diags(&[vec![1.0, 2.0, 3.0]], &[1], Some(Shape2D::new(3, 3)))
             .expect_err("bounds violation");
         assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn eye_rectangular_direct_matches_coo_to_csr_path() {
+        fn old_eye_rect(rows: usize, cols: usize, k: isize) -> CsrMatrix {
+            let shape = Shape2D::new(rows, cols);
+            let (row_start, length) = if k >= 0 {
+                let k_us = k as usize;
+                if k_us >= cols {
+                    (0usize, 0usize)
+                } else {
+                    (0usize, rows.min(cols - k_us))
+                }
+            } else {
+                let k_abs = (-k) as usize;
+                if k_abs >= rows {
+                    (0usize, 0usize)
+                } else {
+                    (k_abs, (rows - k_abs).min(cols))
+                }
+            };
+            let data = vec![1.0; length];
+            let r: Vec<usize> = (row_start..row_start + length).collect();
+            let c: Vec<usize> = if k >= 0 {
+                (k as usize..k as usize + length).collect()
+            } else {
+                (0..length).collect()
+            };
+            CooMatrix::from_triplets(shape, data, r, c, false)
+                .unwrap()
+                .to_csr()
+                .unwrap()
+        }
+        // Main diagonal, upper/lower shifts, non-square both ways, out-of-range k (empty), 1x1.
+        for &(rows, cols, k) in &[
+            (5usize, 5usize, 0isize),
+            (5, 5, 2),
+            (5, 5, -1),
+            (4, 7, 3),
+            (7, 4, -2),
+            (6, 6, 10),
+            (6, 6, -10),
+            (1, 1, 0),
+            (5, 3, -4),
+        ] {
+            let old = old_eye_rect(rows, cols, k);
+            let new = eye_rectangular(rows, cols, k).expect("eye_rectangular");
+            assert_eq!(new.shape(), old.shape(), "shape {rows}x{cols} k{k}");
+            assert_eq!(new.indptr(), old.indptr(), "indptr {rows}x{cols} k{k}");
+            assert_eq!(new.indices(), old.indices(), "indices {rows}x{cols} k{k}");
+            assert_eq!(
+                new.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                old.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "data {rows}x{cols} k{k}"
+            );
+            assert_eq!(
+                new.canonical_meta().sorted_indices,
+                old.canonical_meta().sorted_indices
+            );
+            assert_eq!(
+                new.canonical_meta().deduplicated,
+                old.canonical_meta().deduplicated
+            );
+        }
     }
 
     #[test]

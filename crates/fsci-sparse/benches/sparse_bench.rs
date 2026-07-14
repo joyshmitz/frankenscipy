@@ -1,8 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
-    DIAGS_VALIDATE, IluOptions, Shape2D, SolveOptions, add_csr, block_diag, diags, eye, kron,
-    random, scale_coo, scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril,
+    DIAGS_VALIDATE, IluOptions, Shape2D, SolveOptions, add_csr, block_diag, diags, eye, eye_array,
+    kron, random, scale_coo, scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -374,6 +374,58 @@ fn bench_diags(c: &mut Criterion) {
     group.finish();
 }
 
+// Reproduces the old `eye_array`/`eye_rectangular` path: build the single diagonal as a COO then
+// canonicalize via to_csr. The current path builds the CSR directly.
+fn eye_rect_via_coo_reference(rows: usize, cols: usize, k: isize) -> CsrMatrix {
+    let shape = Shape2D::new(rows, cols);
+    let (row_start, length) = if k >= 0 {
+        let k_us = k as usize;
+        if k_us >= cols {
+            (0usize, 0usize)
+        } else {
+            (0usize, rows.min(cols - k_us))
+        }
+    } else {
+        let k_abs = (-k) as usize;
+        if k_abs >= rows {
+            (0usize, 0usize)
+        } else {
+            (k_abs, (rows - k_abs).min(cols))
+        }
+    };
+    let data = vec![1.0; length];
+    let r: Vec<usize> = (row_start..row_start + length).collect();
+    let c: Vec<usize> = if k >= 0 {
+        (k as usize..k as usize + length).collect()
+    } else {
+        (0..length).collect()
+    };
+    CooMatrix::from_triplets(shape, data, r, c, false)
+        .expect("eye ref coo")
+        .to_csr()
+        .expect("eye ref to_csr")
+}
+
+fn bench_eye_rectangular_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_eye_rectangular_ab");
+    group.sample_size(10);
+    for &n in &[100_000usize, 1_000_000usize] {
+        group.bench_with_input(BenchmarkId::new("current_direct", n), &n, |b, &n| {
+            b.iter(|| {
+                let m = eye_array(black_box(n), black_box(n), black_box(1)).expect("eye_array");
+                black_box(m.nnz());
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("orig_coo_to_csr", n), &n, |b, &n| {
+            b.iter(|| {
+                let m = eye_rect_via_coo_reference(black_box(n), black_box(n), black_box(1));
+                black_box(m.nnz());
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_diags_validate_ab(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_diags_validate_ab");
     group.sample_size(10);
@@ -725,6 +777,7 @@ criterion_group!(
     bench_format_conversion,
     bench_arithmetic,
     bench_eye,
+    bench_eye_rectangular_ab,
     bench_diags,
     bench_diags_validate_ab,
     bench_spmm,
