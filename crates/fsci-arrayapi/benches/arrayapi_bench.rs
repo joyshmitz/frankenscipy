@@ -1,9 +1,10 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_arrayapi::{
-    ArrayApiArray, ArrayApiBackend, CoreArrayBackend, CreationRequest, DType, ExecutionMode,
-    FullRequest, IndexExpr, IndexRequest, IndexingMode, MemoryOrder, ScalarValue, Shape, SliceSpec,
-    from_slice, full, getitem, promote_and_broadcast, zeros,
+    ArrayApiArray, ArrayApiBackend, CoreArray, CoreArrayBackend, CreationRequest, DType,
+    ExecutionMode, FullRequest, IndexExpr, IndexRequest, IndexingMode, MemoryOrder, ScalarValue,
+    Shape, SliceSpec, from_slice, full, getitem, promote_and_broadcast, zeros,
 };
+use nalgebra::DMatrix;
 use std::hint::black_box;
 
 const SIZES: &[usize] = &[10, 100, 1000, 10_000];
@@ -32,6 +33,50 @@ fn make_array(
         order,
     };
     from_slice(backend, &values, &request).expect("array construction should succeed")
+}
+
+fn to_dmatrix_original_float64(array: &CoreArray) -> DMatrix<f64> {
+    let rows = array.shape().dims[0];
+    let cols = array.shape().dims[1];
+    let mut data = Vec::with_capacity(rows.saturating_mul(cols));
+    for value in array.values() {
+        let ScalarValue::F64(value) = *value else {
+            panic!("benchmark input must contain float scalars"); // ubs:ignore — setup constructs a Float64 CoreArray
+        };
+        data.push(value);
+    }
+    match array.order() {
+        MemoryOrder::F => DMatrix::from_column_slice(rows, cols, &data),
+        _ => DMatrix::from_row_slice(rows, cols, &data),
+    }
+}
+
+fn bench_to_dmatrix_ab(c: &mut Criterion) {
+    let backend = strict_backend();
+    let array = make_array(
+        &backend,
+        Shape::new(vec![512, 512]),
+        DType::Float64,
+        MemoryOrder::F,
+    );
+    let current = array.to_dmatrix().expect("direct matrix conversion");
+    let original = to_dmatrix_original_float64(&array);
+    assert!(
+        current
+            .as_slice()
+            .iter()
+            .zip(original.as_slice())
+            .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+    );
+
+    let mut group = c.benchmark_group("arrayapi_to_dmatrix_ab");
+    group.bench_function("current_direct/512x512_f", |b| {
+        b.iter(|| black_box(array.to_dmatrix().expect("direct matrix conversion")))
+    });
+    group.bench_function("original_staged/512x512_f", |b| {
+        b.iter(|| black_box(to_dmatrix_original_float64(black_box(&array))))
+    });
+    group.finish();
 }
 
 fn bench_creation(c: &mut Criterion) {
@@ -328,6 +373,7 @@ fn bench_dtype_cast(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_to_dmatrix_ab,
     bench_creation,
     bench_broadcast,
     bench_indexing,

@@ -21349,3 +21349,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   two-flop memory-streaming kernel even at one million elements. Do not retry via `par_index_fill`; reconsider only
   with persistent workers or a vectorized primitive whose setup is amortized outside the call. No second benchmark,
   local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-lr6do`.
+
+## 2026-07-14 - cod - KEEP streamed float `CoreArray::to_dmatrix` conversion (2.556x at 512x512)
+
+- Negative-ledger-first reconciliation found the ready sparse, spatial, cluster, IO, and stats perf rows already
+  landed, then found no prior `to_dmatrix` optimization or rejection in the fresh Array API conversion seam.
+  Attribution showed that float conversion first materialized every value in a temporary `Vec<f64>`, then asked
+  nalgebra to copy or relayout that buffer into its destination allocation. Opportunity score: 20.0 (impact 4 x
+  confidence 5 / effort 1).
+- ONE lever streams invariant Float32/Float64 `ScalarValue::F64` storage directly through nalgebra's
+  `from_iterator` for F order and `from_row_iterator` otherwise. Bool, integer, complex, validation, and fallible
+  conversion paths retain the literal staged implementation. Iterator order and every floating-point bit are
+  unchanged.
+- A strict-remote fixture passed exact destination-storage `to_bits()` parity against the staged path for Float32
+  and Float64 across C, F, A, and K order, including signed zero, a payload NaN, and infinities. The one and only
+  benchmark invocation then compared direct and literal staged conversion in the same `--profile release` binary on
+  worker `vmi1152480`, using a 512x512 F-order matrix.
+- Direct conversion measured `[176.24, 185.86, 202.62]` us versus `[446.60, 475.11, 496.44]` us staged:
+  **2.5563x** centered, **2.2041x** conservative, and **60.88%** lower centered time with no interval overlap.
+  Strict-remote all-target clippy, direct rustfmt, and `git diff --check` passed. No `release-perf` build, second
+  benchmark, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-63kc7`.

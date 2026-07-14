@@ -142,6 +142,21 @@ impl CoreArray {
 
         let rows = self.shape.dims[0];
         let cols = self.shape.dims[1];
+
+        // Float arrays are stored exclusively as ScalarValue::F64. Feed those
+        // values straight into nalgebra's destination allocation instead of
+        // staging a second full-size Vec<f64> first.
+        if matches!(self.dtype, DType::Float32 | DType::Float64) {
+            let values = self.values.iter().map(|value| match *value {
+                ScalarValue::F64(value) => value,
+                _ => unreachable!("float CoreArray contained a non-float scalar"),
+            });
+            return match self.order {
+                MemoryOrder::F => Ok(DMatrix::from_iterator(rows, cols, values)),
+                _ => Ok(DMatrix::from_row_iterator(rows, cols, values)),
+            };
+        }
+
         let mut data = Vec::with_capacity(rows.saturating_mul(cols));
         for value in &self.values {
             data.push(scalar_to_f64(*value)?);
@@ -2265,6 +2280,51 @@ mod tests {
         let vector_array = CoreArray::from_dvector(&vector);
         let vector_back = vector_array.to_dvector().expect("dvector conversion");
         assert_eq!(vector_back, vector);
+    }
+
+    #[test]
+    fn to_dmatrix_float_stream_matches_staged_path_bits() {
+        let backend = strict_backend();
+        let inputs = [
+            ScalarValue::F64(-0.0),
+            ScalarValue::F64(1.25),
+            ScalarValue::F64(f64::from_bits(0x7ff8_0000_0000_0042)),
+            ScalarValue::F64(f64::INFINITY),
+            ScalarValue::F64(-3.5),
+            ScalarValue::F64(f64::NEG_INFINITY),
+        ];
+
+        for dtype in [DType::Float32, DType::Float64] {
+            for order in [
+                MemoryOrder::C,
+                MemoryOrder::F,
+                MemoryOrder::A,
+                MemoryOrder::K,
+            ] {
+                let array = backend
+                    .array_from_slice(&inputs, &Shape::new(vec![2, 3]), dtype, order)
+                    .expect("float array construction");
+                let staged = array
+                    .values
+                    .iter()
+                    .map(|value| scalar_to_f64(*value).expect("float scalar"))
+                    .collect::<Vec<_>>();
+                let expected = match order {
+                    MemoryOrder::F => DMatrix::from_column_slice(2, 3, &staged),
+                    _ => DMatrix::from_row_slice(2, 3, &staged),
+                };
+                let actual = array.to_dmatrix().expect("direct matrix conversion");
+
+                assert_eq!(actual.shape(), expected.shape());
+                assert!(
+                    actual
+                        .as_slice()
+                        .iter()
+                        .zip(expected.as_slice())
+                        .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+                );
+            }
+        }
     }
 
     #[test]
