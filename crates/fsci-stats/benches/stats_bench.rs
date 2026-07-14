@@ -3,8 +3,9 @@ use fsci_stats::{
     BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, HaltonSampler, SobolSampler, SomersDInput, acf,
     argsort, binned_statistic, binned_statistic_2d, binned_statistic_dd, centered_discrepancy,
     ecdf, energy_distance, histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy,
-    mannkendall, mannwhitneyu, mixture_discrepancy, pacf, psd_welch, rand_index, siegelslopes,
-    somersd, theilslopes, wasserstein_distance, wraparound_discrepancy,
+    mannkendall, mannwhitneyu, median_abs_deviation, mixture_discrepancy, pacf, psd_welch,
+    rand_index, siegelslopes, somersd, theilslopes, wasserstein_distance, wraparound_discrepancy,
+    MAD_REUSE_DISABLE,
 };
 use std::hint::black_box;
 
@@ -772,8 +773,32 @@ fn bench_zipfian_cdf(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_mad_reuse_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("median_abs_deviation_reuse_ab");
+    group.sample_size(10);
+    for &n in &[100_000usize, 1_000_000usize] {
+        let data = deterministic_data(n);
+        group.bench_with_input(BenchmarkId::new("current_reuse", n), &data, |b, d| {
+            b.iter(|| {
+                MAD_REUSE_DISABLE.store(false, Ordering::Relaxed);
+                black_box(median_abs_deviation(black_box(d), black_box(1.4826)))
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("orig_three_alloc", n), &data, |b, d| {
+            b.iter(|| {
+                MAD_REUSE_DISABLE.store(true, Ordering::Relaxed);
+                black_box(median_abs_deviation(black_box(d), black_box(1.4826)))
+            });
+        });
+    }
+    MAD_REUSE_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_mad_reuse_ab,
     bench_zipfian_cdf,
     bench_discrete_moments,
     bench_discrete_entropy,

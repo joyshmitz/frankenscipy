@@ -33595,13 +33595,33 @@ pub fn kurtosis_weighted(data: &[f64], weights: &[f64]) -> f64 {
 /// Matches `scipy.stats.median_abs_deviation(a, scale=1.0)`.
 /// scipy DIVIDES the raw MAD by `scale`, so pass scale=1.4826
 /// to get the normal-consistent std estimator.
+/// When `true`, [`median_abs_deviation`] takes the ORIG path (two `quantile_select` copies plus a
+/// separate `diffs` vector = three O(n) allocations); default `false` reuses one buffer for both
+/// medians. Byte-identical (`median_in_place` == `quantile_select(_, 0.5)`). A/B perf gate.
+#[doc(hidden)]
+pub static MAD_REUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn median_abs_deviation(data: &[f64], scale: f64) -> f64 {
     if data.is_empty() || scale == 0.0 {
         return f64::NAN;
     }
-    let med = quantile_select(data, 0.5);
-    let diffs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
-    let mad = quantile_select(&diffs, 0.5);
+    if MAD_REUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let med = quantile_select(data, 0.5);
+        let diffs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
+        let mad = quantile_select(&diffs, 0.5);
+        return mad / scale;
+    }
+    // One buffer for both medians. Copy data, take its median in place, then overwrite the buffer
+    // with |data - med| (recomputed from `data` in original order, since the select permuted the
+    // buffer) and take that median in place. Collapses three O(n) allocations (data copy, diffs,
+    // diffs copy) to one. `median_in_place` is byte-identical to `quantile_select(_, 0.5)`.
+    let mut buf = data.to_vec();
+    let med = median_in_place(&mut buf);
+    for (slot, &x) in buf.iter_mut().zip(data) {
+        *slot = (x - med).abs();
+    }
+    let mad = median_in_place(&mut buf);
     mad / scale
 }
 
@@ -55703,6 +55723,34 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn median_abs_deviation_buffer_reuse_matches_original_bitwise() {
+        use std::sync::atomic::Ordering;
+        // even/odd n, negatives, duplicates, signed zero, single element, non-unit scale.
+        let cases: &[&[f64]] = &[
+            &[1.0, 2.0, 3.0, 4.0],
+            &[5.0, 1.0, 3.0, 2.0, 4.0],
+            &[-3.0, -1.0, 0.0, 2.5, 7.0, -0.0],
+            &[10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            &[42.0],
+            &[1e300, -1e300, 0.0, 1.5, -2.5, 3.25, 100.0],
+        ];
+        for &data in cases {
+            for &scale in &[1.0, 1.4826, 0.5] {
+                MAD_REUSE_DISABLE.store(true, Ordering::Relaxed);
+                let original = median_abs_deviation(data, scale);
+                MAD_REUSE_DISABLE.store(false, Ordering::Relaxed);
+                let reused = median_abs_deviation(data, scale);
+                assert_eq!(
+                    original.to_bits(),
+                    reused.to_bits(),
+                    "MAD mismatch for {data:?} scale {scale}"
+                );
+            }
+        }
+        MAD_REUSE_DISABLE.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn logseries_cdf_streamed_matches_scipy() {
