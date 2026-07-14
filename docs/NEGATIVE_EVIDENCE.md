@@ -21312,3 +21312,21 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
   `rustfmt --check` and `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes
   were untouched.
+
+## 2026-07-14 - cod - KEEP streamed general-array `mmread` (1.211x at 256x256)
+
+- Negative-ledger-first selection found no prior optimization or rejection for the Matrix Market general-array
+  reader. Attribution showed that it allocated a `(usize, usize)` position plus a parsed `f64` for every element
+  before scattering into the final dense buffer: about 1.5 MiB of transient staging at 256x256 and 24 MiB at
+  1000x1000. Opportunity score: 25.0 (impact 5 x confidence 5 / effort 1).
+- ONE lever streams each column-major general-array value directly into its row-major destination. Symmetric,
+  Hermitian, and skew-symmetric reconstruction retain the former positions path; validation order and exact
+  too-few/too-many diagnostics are unchanged. Targeted strict-remote tests passed 21/21, including exact signed-zero
+  bits and the existing symmetry and malformed-input fixtures.
+- The one and only benchmark invocation compared the public streaming path with the literal former staging loop in
+  the same release binary on strict-remote worker `vmi1152480`. Streaming measured `[2.4891, 2.7230, 2.9075]` ms
+  versus `[3.1758, 3.2966, 3.4098]` ms for staging: **1.211x** centered and **1.092x** conservative, with no interval
+  overlap. The setup assertion proved every output bit equal before timing.
+- The foreground benchmark used `--profile release` on a 256x256 input. No `release-perf` build, second benchmark,
+  or local Cargo fallback was used. Strict-remote targeted tests and all-target clippy, direct rustfmt, and
+  `git diff --check` passed; stashes were untouched. Bead: `frankenscipy-swn8f`.

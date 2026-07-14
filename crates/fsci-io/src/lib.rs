@@ -412,15 +412,51 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
             let dense_len = checked_mm_dense_read_len(rows, cols)?;
             let mut data = vec![0.0; dense_len];
 
+            // General arrays store every value in column-major order. Stream
+            // them straight into the row-major destination instead of staging
+            // one `(row, col)` pair and one parsed value per matrix element.
+            if info.symmetry == MmSymmetry::General {
+                let mut values_seen = 0usize;
+                for line in lines {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('%') {
+                        continue;
+                    }
+                    if values_seen >= dense_len {
+                        return Err(IoError::InvalidFormat(format!(
+                            "array format has more than the declared {dense_len} values"
+                        )));
+                    }
+                    let value = trimmed
+                        .parse()
+                        .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
+                    let row = values_seen % rows;
+                    let col = values_seen / rows;
+                    data[row * cols + col] = value;
+                    values_seen += 1;
+                }
+                if values_seen != dense_len {
+                    return Err(IoError::InvalidFormat(format!(
+                        "array format expected {dense_len} values but found {values_seen}"
+                    )));
+                }
+
+                return Ok(MmMatrix {
+                    rows,
+                    cols,
+                    data,
+                    complex_data: None,
+                    info,
+                });
+            }
+
             // Stored (row, col) positions in column-major file order. For
             // symmetric/hermitian only the lower triangle (incl. diagonal) is
             // stored; skew-symmetric stores the strictly-lower triangle; the
             // upper triangle is reconstructed by mirroring (negating for skew).
             // This matches `scipy.io.mmread` of `scipy.io.mmwrite(..., symmetry=)`.
             let positions: Vec<(usize, usize)> = match info.symmetry {
-                MmSymmetry::General => (0..cols)
-                    .flat_map(|c| (0..rows).map(move |r| (r, c)))
-                    .collect(),
+                MmSymmetry::General => Vec::new(),
                 MmSymmetry::Symmetric | MmSymmetry::Hermitian => (0..cols)
                     .flat_map(|c| (c..rows).map(move |r| (r, c)))
                     .collect(),
@@ -5105,6 +5141,21 @@ mod tests {
         assert_eq!(mat.data[0], 1.0); // (0,0)
         assert_eq!(mat.data[3], 2.0); // (1,0)
         assert_eq!(mat.data[1], 3.0); // (0,1)
+    }
+
+    #[test]
+    fn mmread_general_array_preserves_value_bits() {
+        let content = "%%MatrixMarket matrix array real general\n\
+                        2 3\n\
+                        -0.0\n1.25\n0.0\n-2.5\n3.75\n-4.0\n";
+        let mat = mmread(content).expect("general array");
+        let expected = [-0.0_f64, 0.0, 3.75, 1.25, -2.5, -4.0];
+        assert!(
+            mat.data
+                .iter()
+                .zip(expected)
+                .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+        );
     }
 
     #[test]

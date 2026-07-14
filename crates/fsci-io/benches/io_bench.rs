@@ -19,6 +19,36 @@ fn row_matrix(rows: usize, cols: usize) -> Vec<Vec<f64>> {
         .collect()
 }
 
+/// Literal pre-streaming general-array reader used only as the same-binary
+/// benchmark control. It intentionally retains both staging allocations.
+fn mmread_general_array_staged_reference(content: &str, rows: usize, cols: usize) -> Vec<f64> {
+    let mut lines = content.lines();
+    let _header = lines.next().expect("Matrix Market header");
+    let _size = lines
+        .find(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('%')
+        })
+        .expect("Matrix Market size");
+    let positions: Vec<(usize, usize)> = (0..cols)
+        .flat_map(|col| (0..rows).map(move |row| (row, col)))
+        .collect();
+    let values: Vec<f64> = lines
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty() && !trimmed.starts_with('%')).then_some(trimmed)
+        })
+        .map(|value| value.parse().expect("Matrix Market value"))
+        .collect();
+    assert_eq!(values.len(), positions.len());
+
+    let mut data = vec![0.0; rows * cols];
+    for (&(row, col), &value) in positions.iter().zip(&values) {
+        data[row * cols + col] = value;
+    }
+    data
+}
+
 /// Whitespace-delimited text round trip. savetxt writes cells with `write!` into
 /// the buffer (frankenscipy-d1uxy); loadtxt's serial path parses straight into the
 /// output buffer (frankenscipy-fwnb1) — both exercised here at <4096 rows.
@@ -47,6 +77,30 @@ fn bench_matrix_market(c: &mut Criterion) {
     group.bench_function("mmwrite/100x100", |b| b.iter(|| mmwrite(rows, cols, &data)));
     group.bench_function("mmread/100x100", |b| b.iter(|| mmread(&mm)));
     group.bench_function("mmread/1000x1000", |b| b.iter(|| mmread(&large_mm)));
+    group.finish();
+}
+
+/// Same-binary A/B for streaming general array values directly into their
+/// row-major destination versus the former positions-plus-values staging.
+fn bench_mmread_general_array_stream_ab(c: &mut Criterion) {
+    let (rows, cols) = (256usize, 256usize);
+    let mm = mmwrite(rows, cols, &matrix(rows, cols)).expect("mmwrite");
+    let current = mmread(&mm).expect("mmread").data;
+    let staged = mmread_general_array_staged_reference(&mm, rows, cols);
+    assert!(
+        current
+            .iter()
+            .zip(&staged)
+            .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+    );
+
+    let mut group = c.benchmark_group("mmread_general_array_stream_ab");
+    group.bench_function("current_stream/256x256", |b| {
+        b.iter(|| mmread(&mm).expect("mmread").data)
+    });
+    group.bench_function("original_staged/256x256", |b| {
+        b.iter(|| mmread_general_array_staged_reference(&mm, rows, cols))
+    });
     group.finish();
 }
 
@@ -144,6 +198,7 @@ criterion_group!(
     benches,
     bench_text_io,
     bench_matrix_market,
+    bench_mmread_general_array_stream_ab,
     bench_write_helpers,
     bench_savetxt_parallel_ab,
     bench_write_json_parallel_ab,
