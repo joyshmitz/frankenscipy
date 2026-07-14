@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_fft::{
-    FFT_PRIME_FORCE_BLUESTEIN, FftOptions, cross_spectral_density, dct, fft, fft2, ifft, irfft,
-    rfft,
+    FFT_PRIME_FORCE_BLUESTEIN, FftOptions, cross_spectral_density, dct, fft, fft2, fftshift, ifft,
+    irfft, rfft,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -263,6 +263,55 @@ fn bench_cross_spectral_density(c: &mut Criterion) {
     group.finish();
 }
 
+fn fftshift_last_axis_scalar_reference(input: &[f64], rows: usize, cols: usize) -> Vec<f64> {
+    let data = input.to_vec();
+    let k = cols / 2;
+    let mut out = data.clone();
+    for (flat, slot) in out.iter_mut().enumerate() {
+        let coord = flat % cols;
+        let src_coord = (coord + cols - k) % cols;
+        let src = flat - coord + src_coord;
+        *slot = data[src];
+    }
+    debug_assert_eq!(out.len(), rows * cols);
+    out
+}
+
+fn bench_fftshift_contiguous_axis(c: &mut Criterion) {
+    const ROWS: usize = 1024;
+    const COLS: usize = 1024;
+    let input = make_real_input(ROWS * COLS);
+    let shape = [ROWS, COLS];
+    let axes = [1];
+    let candidate = fftshift(&input, &shape, Some(&axes)).expect("fftshift");
+    let original = fftshift_last_axis_scalar_reference(&input, ROWS, COLS);
+    assert_eq!(candidate, original);
+
+    let mut group = c.benchmark_group("fftshift_contiguous_axis");
+    group.bench_function("candidate/1024x1024", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                fftshift(
+                    black_box(&input),
+                    black_box(shape.as_slice()),
+                    Some(black_box(axes.as_slice())),
+                )
+                .expect("contiguous fftshift"),
+            )
+        })
+    });
+    group.bench_function("original/1024x1024", |bencher| {
+        bencher.iter(|| {
+            black_box(fftshift_last_axis_scalar_reference(
+                black_box(&input),
+                black_box(ROWS),
+                black_box(COLS),
+            ))
+        })
+    });
+    group.finish();
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // BASELINE BENCHMARKS - Per SPEC §17
 // Run with: cargo bench --bench fft_bench -- baseline
@@ -340,7 +389,8 @@ criterion_group!(
     bench_dct,
     bench_irfft,
     bench_fft2,
-    bench_cross_spectral_density
+    bench_cross_spectral_density,
+    bench_fftshift_contiguous_axis
 );
 
 criterion_group!(

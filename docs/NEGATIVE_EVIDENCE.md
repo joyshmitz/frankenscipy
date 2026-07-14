@@ -21292,3 +21292,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
   `git diff --check` passed. Direct rustfmt checking exposed only pre-existing formatting drift outside the owned
   hunks in `lib.rs`. No second benchmark or local Cargo fallback was used, and stashes were untouched.
+
+## 2026-07-14 - cod - KEEP contiguous-axis `fftshift` block rotation (2.071x at 1024x1024)
+
+- Negative-ledger-first selection excluded the worked mixed-radix, audit-fingerprint, and CSD FFT families and
+  found no prior `fftshift` or `roll_axis` optimization/rejection. The public N-D shift helper still cloned an output
+  buffer, then performed division, modulo, indexing, and replacement for every element even when the selected axis
+  was contiguous. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever handles only `stride == 1` by reserving the exact output length and appending each block's two rotated
+  slices in order. Strided axes retain the literal scalar formula; zero-length and zero-shift paths, validation and
+  error order, axis order, generic element ownership, and FFT/IFFT shift direction are unchanged. A regression
+  fixture compares `f64` bits with the former scalar formula for odd-length FFT and inverse shifts, including signed
+  zero, payload NaNs, and infinities; it was added but not separately executed under the one-benchmark limit.
+- The one and only benchmark invocation compared the public block-copy path with the literal former clone-and-index
+  loop in the same binary on strict-remote worker `vmi1152480`. Block rotation measured
+  `[2.1509, 2.7186, 3.7122]` ms versus `[5.3984, 5.6308, 5.8140]` ms for the former path: **2.071x** centered and
+  **1.454x** conservative, with no interval overlap. Its setup assertion proved the full scored output equal before
+  timing.
+- The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
+  `rustfmt --check` and `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes
+  were untouched.

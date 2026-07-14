@@ -57,6 +57,16 @@ fn roll_axis<T: Clone>(input: &[T], shape: &[usize], axis: usize, k_right: usize
     }
     // Stride of `axis` in the row-major layout (product of trailing dims).
     let stride: usize = shape[axis + 1..].iter().product();
+    if stride == 1 {
+        debug_assert!(input.len().is_multiple_of(n));
+        let split = n - k;
+        let mut out = Vec::with_capacity(input.len());
+        for block in input.chunks_exact(n) {
+            out.extend_from_slice(&block[split..]);
+            out.extend_from_slice(&block[..split]);
+        }
+        return out;
+    }
     let mut out = input.to_vec();
     for (flat, slot) in out.iter_mut().enumerate() {
         let coord = (flat / stride) % n;
@@ -601,6 +611,51 @@ mod tests {
         // shape mismatch errors
         assert!(fftshift(&d, &[2, 3], None).is_err());
         assert!(fftshift(&d, &[5], Some(&[1])).is_err());
+    }
+
+    #[test]
+    fn fftshift_contiguous_axis_matches_scalar_bits() {
+        fn scalar_roll(input: &[f64], shape: &[usize], axis: usize, k_right: usize) -> Vec<f64> {
+            let n = shape[axis];
+            let k = k_right % n;
+            let stride: usize = shape[axis + 1..].iter().product();
+            let mut out = input.to_vec();
+            for (flat, slot) in out.iter_mut().enumerate() {
+                let coord = (flat / stride) % n;
+                let src_coord = (coord + n - k) % n;
+                let src = flat - coord * stride + src_coord * stride;
+                *slot = input[src];
+            }
+            out
+        }
+
+        let input = vec![
+            0.0,
+            -0.0,
+            f64::from_bits(0x7ff8_0000_0000_1234),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1.25,
+            -3.5,
+            f64::from_bits(0xfff8_0000_0000_5678),
+            9.0,
+            -11.0,
+        ];
+        let shape = [2, 5];
+        for (got, expected) in fftshift(&input, &shape, Some(&[1]))
+            .expect("fftshift")
+            .iter()
+            .zip(scalar_roll(&input, &shape, 1, shape[1] / 2))
+        {
+            assert_eq!(got.to_bits(), expected.to_bits());
+        }
+        for (got, expected) in ifftshift(&input, &shape, Some(&[1]))
+            .expect("ifftshift")
+            .iter()
+            .zip(scalar_roll(&input, &shape, 1, shape[1] - shape[1] / 2))
+        {
+            assert_eq!(got.to_bits(), expected.to_bits());
+        }
     }
 
     #[test]
