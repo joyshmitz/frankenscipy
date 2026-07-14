@@ -21646,3 +21646,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   findings; diff hygiene and formatting passed. Strict-remote all-target Clippy was blocked by unrelated existing lint
   debt (including `lib.rs:9431` and legacy excessive-precision fixtures), with no finding in this candidate. No second
   benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-ajx42`.
+
+## 2026-07-14 - cod - INVALID weighted-mean fused-pass timing (remote release cache miss)
+
+- Negative-ledger-first `bv --robot-triage` surfaced the assigned dense-linalg SYRK harness, but prior attribution
+  places standalone SYRK below 1% of Cholesky wall time. The remaining open performance beads were stale against
+  already-landed implementations, so this pass pivoted to the fresh stats `weighted_mean` primitive. Direct source
+  attribution found two independent left-to-right reductions: one pass over weights for `sum(weights)`, followed by a
+  pass over values and weights for `sum(value * weight)`. Opportunity score: 15.0 (impact 3 x confidence 5 / effort 1).
+- ONE candidate accumulated both independent sums in a single traversal, reducing valid-input slice reads from three
+  to two while preserving each accumulator's operation order. A focused strict-remote test on `vmi1152480` proved
+  exact `to_bits()` parity with the literal former implementation for 4,099 finite inputs and retained empty,
+  mismatched-length, zero-sum-weight, NaN, and infinity behavior.
+- The one and only benchmark invocation requested the same-binary fused-versus-literal comparison under
+  `--profile release` on strict-remote worker `vmi1152480`, with 262,144 elements, 10 samples, 100 ms warm-up, and
+  500 ms measurement per arm. RCH selected a cold worker-scoped target, refreshed dependencies, and was still release
+  linking when the command hit the enforced 290-second cutoff; neither timed arm ran, so no performance evidence was
+  admitted.
+- Disposition: source, test, and benchmark hunks were dropped; this evidence-only row records the infrastructure
+  blocker rather than claiming a keep without timing. Targeted staged UBS exited zero with no critical findings and
+  the candidate diff passed whitespace hygiene. The focused remote correctness test passed. No second benchmark,
+  `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-g05xc`.
