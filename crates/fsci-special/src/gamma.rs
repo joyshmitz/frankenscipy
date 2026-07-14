@@ -2112,6 +2112,9 @@ pub fn factorialk(n: i64, k: i64) -> f64 {
     if n == 0 {
         return 1.0;
     }
+    if k == 1 {
+        return factorial(n as u64);
+    }
     let mut result = 1.0_f64;
     let mut step = n;
     while step > 0 {
@@ -5500,15 +5503,24 @@ mod tests {
     }
 
     #[test]
-    fn factorialk_metamorphic_k_one_matches_factorial() {
-        // factorialk(n, 1) == n! for n in 0..=10
-        for n in 0..=10 {
+    fn factorialk_k_one_matches_literal_product() {
+        fn literal_product(n: i64) -> f64 {
+            let mut result = 1.0;
+            for value in 1..=n {
+                result *= value as f64;
+            }
+            result
+        }
+
+        for n in [0, 1, 2, 10, 20, 21, 64, 128, 170, 171, 200] {
             let fk = factorialk(n, 1);
-            let fact = factorial(n as u64);
-            assert!(
-                (fk - fact).abs() < 1e-12,
-                "factorialk({n}, 1) = {fk}, factorial({n}) = {fact}"
-            );
+            let original = literal_product(n);
+            if original.is_finite() {
+                let rel_err = (fk - original).abs() / original.abs().max(1.0);
+                assert!(rel_err <= 2.0e-13, "factorialk({n}, 1) rel_err={rel_err:e}");
+            } else {
+                assert_eq!(fk, original, "factorialk({n}, 1) overflow mismatch");
+            }
         }
     }
 

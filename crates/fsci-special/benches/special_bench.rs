@@ -2,10 +2,10 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     MATHIEU_PERIODIC_CACHE_DISABLE_FOR_BENCH, SpecialTensor, bei_zeros, beip_zeros, ber_zeros,
-    berp_zeros, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, gamma, gammainc,
-    gammaln, hyperu, hyperu_scalar, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv, kei_zeros,
-    keip_zeros, kelvin_zeros, ker_zeros, kerp_zeros, log_ndtr, log_ndtr_scalar, mathieu_cem,
-    mathieu_sem, ndtri, pbdv, pbdv_many, rgamma, spence_scalar, y0, zeta, zeta_scalar,
+    berp_zeros, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, factorialk, gamma,
+    gammainc, gammaln, hyperu, hyperu_scalar, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv,
+    kei_zeros, keip_zeros, kelvin_zeros, ker_zeros, kerp_zeros, log_ndtr, log_ndtr_scalar,
+    mathieu_cem, mathieu_sem, ndtri, pbdv, pbdv_many, rgamma, spence_scalar, y0, zeta, zeta_scalar,
 };
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -39,6 +39,42 @@ fn consume_tensor(t: SpecialTensor) {
         }
         _ => panic!("unexpected tensor shape"),
     }
+}
+
+fn factorialk_product(n: i64, k: i64) -> f64 {
+    if k < 1 || n < 0 {
+        return f64::NAN;
+    }
+    if n == 0 {
+        return 1.0;
+    }
+    let mut result = 1.0;
+    let mut step = n;
+    while step > 0 {
+        result *= step as f64;
+        step -= k;
+    }
+    result
+}
+
+fn bench_factorialk_k1(c: &mut Criterion) {
+    let n = 128;
+    let candidate = factorialk(n, 1);
+    let original = factorialk_product(n, 1);
+    let rel_err = (candidate - original).abs() / original.abs();
+    assert!(
+        rel_err <= 2.0e-13,
+        "factorialk benchmark rel_err={rel_err:e}"
+    );
+
+    let mut group = c.benchmark_group("factorialk_k1_delegate");
+    group.bench_function("candidate/128", |b| {
+        b.iter(|| black_box(factorialk(black_box(n), black_box(1))))
+    });
+    group.bench_function("original/128", |b| {
+        b.iter(|| black_box(factorialk_product(black_box(n), black_box(1))))
+    });
+    group.finish();
 }
 
 const GAMMA_INPUTS: &[f64] = &[0.5, 1.0, 2.5, 5.0, 10.0, 50.0, 100.0];
@@ -1186,6 +1222,7 @@ fn bench_kelvin_zeros_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_factorialk_k1,
     bench_kelvin_zeros_ab,
     bench_mathieu_periodic_cache_gauntlet,
     bench_spence_cephes_gauntlet,

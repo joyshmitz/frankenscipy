@@ -21255,3 +21255,22 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`; its
   setup assertion also proved the large benchmark row bit-identical before timing. `git diff --check` passed. No
   second benchmark or local Cargo fallback was used, and stashes were untouched.
+
+## 2026-07-14 - cod - KEEP `factorialk(n, 1)` delegation (3.676x at n=128)
+
+- Negative-ledger-first selection found no prior `factorialk` optimization or rejection. The special-function ledger
+  already closes error/CDF SIMD, parallel batch maps, and `logsumexp`; this independent scalar combinatorial kernel
+  still performed `n` dependent multiplications even though its documented `k == 1` contract is ordinary factorial.
+  Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever routes only validated nonzero `k == 1` calls through the existing `factorial` table/Lanczos kernel. Invalid
+  `n`/`k`, zero, overflow, and every `k != 1` path are unchanged. A regression fixture compares the delegated result
+  with the literal former product across table, Lanczos, finite-limit, and overflow inputs, using a `2e-13` relative
+  bound for the permitted floating-point reformulation.
+- The one and only benchmark invocation compared production delegation with the literal former product in the same
+  binary on strict-remote worker `vmi1152480`. Delegation measured `[35.094, 40.700, 45.314]` ns versus
+  `[125.33, 149.62, 179.96]` ns for the former path: **3.676x** centered and **2.766x** conservative, with no interval
+  overlap. Its setup assertion checked the scored row against the same `2e-13` numerical bound before timing.
+- The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
+  `git diff --check` passed. Direct rustfmt checking reached one pre-existing formatting mismatch in unchanged
+  `gamma.rs` code; the owned hunks follow rustfmt output. No second benchmark or local Cargo fallback was used, and
+  stashes were untouched.
