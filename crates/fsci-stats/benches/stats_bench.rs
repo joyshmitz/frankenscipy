@@ -3,10 +3,10 @@ use fsci_stats::{
     BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, BIWEIGHT_MAD_HOIST_DISABLE, HaltonSampler,
     SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
-    histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mad, mannkendall, mannwhitneyu,
-    mad_zscore, median_abs_deviation, mixture_discrepancy, pacf, psd_welch, rand_index, siegelslopes,
-    somersd, theilslopes, wasserstein_distance, wraparound_discrepancy, MAD_FN_REUSE_DISABLE,
-    MAD_REUSE_DISABLE, MAD_ZSCORE_HOIST_DISABLE,
+    excess_kurtosis, histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mad, mannkendall,
+    mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf, psd_welch, rand_index,
+    siegelslopes, somersd, theilslopes, wasserstein_distance, wraparound_discrepancy,
+    MAD_FN_REUSE_DISABLE, MAD_REUSE_DISABLE, MAD_ZSCORE_HOIST_DISABLE, PAR_SUM_FORCE_SERIAL,
 };
 use std::hint::black_box;
 
@@ -830,6 +830,29 @@ fn bench_biweight_midcorrelation_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_excess_kurtosis_par_mean_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("excess_kurtosis_par_mean_ab");
+    group.sample_size(10);
+    // Above the 1<<22 gate the m2/m4 loop is already parallel; the mean was the serial straggler.
+    // Toggling PAR_SUM_FORCE_SERIAL swaps the mean between serial (orig) and parallel (current).
+    let data = deterministic_data(16_000_000);
+    group.bench_function("current_par_mean", |b| {
+        b.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            black_box(excess_kurtosis(black_box(&data)))
+        });
+    });
+    group.bench_function("orig_serial_mean", |b| {
+        b.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            black_box(excess_kurtosis(black_box(&data)))
+        });
+    });
+    PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_mad_fn_reuse_ab(c: &mut Criterion) {
     use std::sync::atomic::Ordering;
     let mut group = c.benchmark_group("mad_fn_reuse_ab");
@@ -878,6 +901,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_excess_kurtosis_par_mean_ab,
     bench_mad_fn_reuse_ab,
     bench_mad_zscore_hoist_ab,
     bench_biweight_midcorrelation_ab,

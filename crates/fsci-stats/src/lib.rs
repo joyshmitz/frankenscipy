@@ -51610,7 +51610,11 @@ pub fn excess_kurtosis(data: &[f64]) -> f64 {
     if n < 4.0 {
         return f64::NAN;
     }
-    let mean: f64 = data.iter().sum::<f64>() / n;
+    // Mean via `par_sum` (was a serial `.iter().sum()` straggler while the m2/m4 loop below was already
+    // parallel — the twin `kurtosis` already routes its mean through `par_sum`). BYTE-IDENTICAL below
+    // the gate (`par_sum` is exactly `data.iter().sum()` there); above 1<<22 it fans across cores like
+    // the moment loop, within per-op ULP.
+    let mean: f64 = par_sum(data) / n;
     // m2=Σd², m4=Σd²·d² (d=x−mean) fused into ONE pass — the ORIG made two separate traversals — and,
     // for huge inputs, fanned across cores. BYTE-IDENTICAL below the gate: `d2*d2` == `(x−mean).powi(4)`
     // (both `(x*x)*(x*x)`) and each Σ is the same left-to-right fold; above 1<<22 the per-thread (m2,m4)
@@ -55795,6 +55799,31 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn excess_kurtosis_par_sum_mean_matches_serial_below_gate() {
+        use std::sync::atomic::Ordering;
+        // Below par_sum's 1<<22 gate the parallel and serial means are the exact same
+        // `data.iter().sum()`, so the whole result is bit-for-bit identical.
+        let cases: &[&[f64]] = &[
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &[-3.0, 0.5, 2.0, -1.25, 7.0, 4.0, -2.5, 9.0],
+            &[10.0, 10.0, 10.0, 10.0, 10.0], // m2==0 => 0.0
+            &[1e8, -1e8, 3.5, -2.5, 100.0, -50.0, 0.0, 7.0],
+        ];
+        for &data in cases {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = excess_kurtosis(data);
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = excess_kurtosis(data);
+            assert_eq!(
+                serial.to_bits(),
+                parallel.to_bits(),
+                "excess_kurtosis mismatch for {data:?}"
+            );
+        }
+        PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn mad_fn_buffer_reuse_matches_original_bitwise() {
