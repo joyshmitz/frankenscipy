@@ -27508,8 +27508,11 @@ pub fn ttest_ind(a: &[f64], b: &[f64]) -> TtestResult {
             df,
         };
     }
-    let mean1: f64 = a.iter().sum::<f64>() / n1;
-    let mean2: f64 = b.iter().sum::<f64>() / n2;
+    // Means via `par_sum` — the variances below already use the parallel `sum_sq_dev`, so the mean
+    // was the last serial straggler. Byte-identical below the 1<<22 gate (par_sum is the exact serial
+    // sum there); above it the means reassociate within per-op ULP like the already-parallel variances.
+    let mean1: f64 = par_sum(a) / n1;
+    let mean2: f64 = par_sum(b) / n2;
     let var1: f64 = if a.len() > 1 {
         sum_sq_dev(a, mean1) / (n1 - 1.0)
     } else {
@@ -27574,8 +27577,11 @@ pub fn ttest_ind_alternative(a: &[f64], b: &[f64], alternative: &str) -> TtestRe
             df,
         };
     }
-    let mean1: f64 = a.iter().sum::<f64>() / n1;
-    let mean2: f64 = b.iter().sum::<f64>() / n2;
+    // Means via `par_sum` — the variances below already use the parallel `sum_sq_dev`, so the mean
+    // was the last serial straggler. Byte-identical below the 1<<22 gate (par_sum is the exact serial
+    // sum there); above it the means reassociate within per-op ULP like the already-parallel variances.
+    let mean1: f64 = par_sum(a) / n1;
+    let mean2: f64 = par_sum(b) / n2;
     let var1: f64 = if a.len() > 1 {
         sum_sq_dev(a, mean1) / (n1 - 1.0)
     } else {
@@ -27637,8 +27643,11 @@ pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
     }
     let n1 = a.len() as f64;
     let n2 = b.len() as f64;
-    let mean1: f64 = a.iter().sum::<f64>() / n1;
-    let mean2: f64 = b.iter().sum::<f64>() / n2;
+    // Means via `par_sum` — the variances below already use the parallel `sum_sq_dev`, so the mean
+    // was the last serial straggler. Byte-identical below the 1<<22 gate (par_sum is the exact serial
+    // sum there); above it the means reassociate within per-op ULP like the already-parallel variances.
+    let mean1: f64 = par_sum(a) / n1;
+    let mean2: f64 = par_sum(b) / n2;
     let var1: f64 = sum_sq_dev(a, mean1) / (n1 - 1.0);
     let var2: f64 = sum_sq_dev(b, mean2) / (n2 - 1.0);
 
@@ -55811,6 +55820,32 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ttest_ind_par_mean_matches_serial_below_gate() {
+        use std::sync::atomic::Ordering;
+        // Below par_sum's 1<<22 gate the parallel and serial means are the exact same fold, so
+        // statistic/pvalue/df are bit-for-bit identical (variances already used sum_sq_dev).
+        let pairs: &[(&[f64], &[f64])] = &[
+            (&[1.0, 2.0, 3.0, 4.0, 5.0], &[2.0, 3.0, 4.0, 5.0, 6.0, 7.0]),
+            (
+                &[-3.0, 0.5, 2.0, -1.25, 7.0],
+                &[4.0, -2.5, 9.0, 3.0, -6.0, 1.5, 0.0],
+            ),
+            (&[5.0, 5.0, 5.0], &[5.0, 5.0, 5.0]), // se==0 path
+            (&[1e6, -1e6, 3.5, -2.5], &[100.0, -50.0, 0.0, 7.0, 11.0]),
+        ];
+        for &(a, b) in pairs {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = ttest_ind(a, b);
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = ttest_ind(a, b);
+            assert_eq!(serial.statistic.to_bits(), parallel.statistic.to_bits());
+            assert_eq!(serial.pvalue.to_bits(), parallel.pvalue.to_bits());
+            assert_eq!(serial.df.to_bits(), parallel.df.to_bits());
+        }
+        PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn bayes_mvs_par_reductions_match_serial_below_gate() {
