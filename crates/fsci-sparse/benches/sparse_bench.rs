@@ -3,8 +3,8 @@ use fsci_sparse::{
     BMAT_FORCE_GENERIC, COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix,
     DIAGS_VALIDATE, FormatConvertible, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions,
     VSTACK_FORCE_GENERIC, add_csr, block_diag, bmat, diags, eye, eye_array, find, kron, random,
-    scale_coo, scale_csc, scale_csr, sparse_diagonal, sparse_frobenius_inner, sparse_trace, spilu,
-    spmm, spmv_csr, spsolve, tril, vstack,
+    scale_coo, scale_csc, scale_csr, sparse_diagonal, sparse_frobenius_inner, sparse_is_symmetric,
+    sparse_trace, spilu, spmm, spmv_csr, spsolve, tril, vstack,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -71,6 +71,51 @@ fn make_inner_bench_matrix(n: usize, row_width: usize, value_bias: f64) -> CsrMa
     }
     CsrMatrix::from_components(Shape2D::new(n, n), data, indices, indptr, false)
         .expect("canonical inner-product matrix")
+}
+
+fn sparse_is_symmetric_linear_reference(a: &CsrMatrix, tol: f64) -> bool {
+    let n = a.shape().rows;
+    if n != a.shape().cols {
+        return false;
+    }
+    for row in 0..n {
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            let col = a.indices()[idx];
+            let value = a.data()[idx];
+            let mut found = false;
+            for transpose_idx in a.indptr()[col]..a.indptr()[col + 1] {
+                if a.indices()[transpose_idx] == row {
+                    if (a.data()[transpose_idx] - value).abs() > tol {
+                        return false;
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            if !found && value.abs() > tol {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn make_symmetric_block_matrix(n: usize, block_width: usize) -> CsrMatrix {
+    assert!(block_width > 0 && n.is_multiple_of(block_width));
+    let mut data = Vec::with_capacity(n * block_width);
+    let mut indices = Vec::with_capacity(n * block_width);
+    let mut indptr = Vec::with_capacity(n + 1);
+    indptr.push(0);
+    for row in 0..n {
+        let block_start = (row / block_width) * block_width;
+        for col in block_start..block_start + block_width {
+            indices.push(col);
+            data.push(1.0 + ((row + col) % 101) as f64 * 0.001);
+        }
+        indptr.push(data.len());
+    }
+    CsrMatrix::from_components(Shape2D::new(n, n), data, indices, indptr, false)
+        .expect("canonical symmetric block matrix")
 }
 
 fn scale_csc_checked_reference(matrix: &CscMatrix, alpha: f64) -> CscMatrix {
@@ -950,6 +995,25 @@ fn bench_sparse_frobenius_inner_merge_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sparse_is_symmetric_lookup_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_is_symmetric_lookup_ab");
+    group.sample_size(15);
+    let matrix = make_symmetric_block_matrix(4_096, 64);
+
+    group.bench_function("current_binary_n4096_w64", |bencher| {
+        bencher.iter(|| black_box(sparse_is_symmetric(black_box(&matrix), black_box(0.0))));
+    });
+    group.bench_function("orig_linear_n4096_w64", |bencher| {
+        bencher.iter(|| {
+            black_box(sparse_is_symmetric_linear_reference(
+                black_box(&matrix),
+                black_box(0.0),
+            ))
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_coo_sum_duplicates,
@@ -974,5 +1038,6 @@ criterion_group!(
     bench_random_tiny_density,
     bench_sparse_trace_direct_ab,
     bench_sparse_frobenius_inner_merge_ab,
+    bench_sparse_is_symmetric_lookup_ab,
 );
 criterion_main!(benches);

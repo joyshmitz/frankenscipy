@@ -21142,3 +21142,20 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - A bit-exact regression fixture was added against the literal former implementation for canonical finite and
   non-finite inputs plus unsorted/duplicate fallback inputs. The benchmark compiled the production and reference
   paths remotely; no second benchmark or local Cargo fallback was used. `git diff --check` passed.
+
+## 2026-07-14 - cod - KEEP canonical `sparse_is_symmetric` binary lookup (1.227x at 4096x4096)
+
+- Negative-ledger-first selection found no prior `sparse_is_symmetric` optimization or rejection. The canonical
+  path linearly searched an entire counterpart row for every stored entry. Opportunity score: 20.0 (impact 4 x
+  confidence 5 / effort 1).
+- ONE lever uses binary search only when CSR metadata proves every row sorted and deduplicated. Entries and symmetry
+  comparisons retain their original row-major order, a unique counterpart yields the same subtraction and tolerance
+  comparison, and unsorted or duplicate-bearing inputs retain the literal former linear-search path.
+- The one and only benchmark invocation compared production with a literal linear-search reference in the same
+  binary on strict-remote worker `vmi1152480`. Binary lookup measured `[3.4753, 3.7307, 4.0259]` ms versus
+  `[4.1940, 4.5785, 5.3846]` ms for the former path: **1.227x** centered and **1.042x** conservative, with no interval
+  overlap.
+- An exact-boolean regression fixture was added against the literal former implementation across canonical
+  symmetric/asymmetric, non-finite, unsorted/duplicate, rectangular, finite, infinite, NaN, and negative-tolerance
+  cases. The benchmark compiled the production and reference paths remotely; no second benchmark or local Cargo
+  fallback was used. `git diff --check` passed.

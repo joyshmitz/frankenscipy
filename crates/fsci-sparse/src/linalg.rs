@@ -5230,6 +5230,34 @@ pub fn sparse_is_symmetric(a: &CsrMatrix, tol: f64) -> bool {
         return false;
     }
 
+    let meta = a.canonical_meta();
+    if meta.sorted_indices && meta.deduplicated {
+        for i in 0..n {
+            let start = a.indptr()[i];
+            let end = a.indptr()[i + 1];
+            for idx in start..end {
+                let j = a.indices()[idx];
+                let v = a.data()[idx];
+                let j_start = a.indptr()[j];
+                let j_end = a.indptr()[j + 1];
+
+                match a.indices()[j_start..j_end].binary_search(&i) {
+                    Ok(j_offset) => {
+                        if (a.data()[j_start + j_offset] - v).abs() > tol {
+                            return false;
+                        }
+                    }
+                    Err(_) => {
+                        if v.abs() > tol {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
     for i in 0..n {
         let start = a.indptr()[i];
         let end = a.indptr()[i + 1];
@@ -6853,6 +6881,85 @@ mod tests {
         )
         .expect("noncanonical b");
         assert_matches(&noncanonical_a, &noncanonical_b);
+    }
+
+    #[test]
+    fn sparse_is_symmetric_binary_search_matches_linear_lookup() {
+        fn linear_reference(a: &CsrMatrix, tol: f64) -> bool {
+            let n = a.shape().rows;
+            if n != a.shape().cols {
+                return false;
+            }
+            for i in 0..n {
+                for idx in a.indptr()[i]..a.indptr()[i + 1] {
+                    let j = a.indices()[idx];
+                    let v = a.data()[idx];
+                    let mut found = false;
+                    for j_idx in a.indptr()[j]..a.indptr()[j + 1] {
+                        if a.indices()[j_idx] == i {
+                            if (a.data()[j_idx] - v).abs() > tol {
+                                return false;
+                            }
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found && v.abs() > tol {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+
+        fn assert_matches(matrix: &CsrMatrix) {
+            for tol in [-1.0, 0.0, 0.25, f64::INFINITY, f64::NAN] {
+                assert_eq!(
+                    sparse_is_symmetric(matrix, tol),
+                    linear_reference(matrix, tol)
+                );
+            }
+        }
+
+        let canonical_symmetric = CsrMatrix::from_components(
+            Shape2D::new(3, 3),
+            vec![1.0, 2.0, 2.0, 3.0, f64::INFINITY, f64::INFINITY, 4.0],
+            vec![0, 1, 0, 1, 2, 1, 2],
+            vec![0, 2, 5, 7],
+            false,
+        )
+        .expect("canonical symmetric matrix");
+        assert_matches(&canonical_symmetric);
+
+        let canonical_asymmetric = CsrMatrix::from_components(
+            Shape2D::new(3, 3),
+            vec![1.0, 2.0, 2.5, -0.0],
+            vec![0, 2, 0, 1],
+            vec![0, 2, 3, 4],
+            false,
+        )
+        .expect("canonical asymmetric matrix");
+        assert_matches(&canonical_asymmetric);
+
+        let noncanonical = CsrMatrix::from_components(
+            Shape2D::new(3, 3),
+            vec![2.0, 1.0, 3.0, 2.0, 4.0, 5.0],
+            vec![2, 0, 2, 0, 1, 1],
+            vec![0, 3, 5, 6],
+            false,
+        )
+        .expect("unsorted duplicate matrix");
+        assert_matches(&noncanonical);
+
+        let rectangular = CsrMatrix::from_components(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0],
+            vec![0, 2],
+            vec![0, 1, 2],
+            false,
+        )
+        .expect("rectangular matrix");
+        assert_matches(&rectangular);
     }
 
     #[test]
