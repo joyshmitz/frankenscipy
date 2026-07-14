@@ -3,7 +3,7 @@ use fsci_stats::{
     BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, BIWEIGHT_MAD_HOIST_DISABLE, HaltonSampler,
     SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
-    bayes_mvs, cohens_d, excess_kurtosis, histogram, kendalltau, kruskal, ks_2samp,
+    bayes_mvs, cohens_d, excess_kurtosis, gstd, histogram, kendalltau, kruskal, ks_2samp,
     l2_star_discrepancy, mad,
     mannkendall, mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf,
     pooled_variance, psd_welch,
@@ -835,6 +835,35 @@ fn bench_biweight_midcorrelation_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_gstd_par_reductions_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("gstd_par_reductions_ab");
+    group.sample_size(10);
+    // The ln map stays parallel in both arms (GSTD_FORCE_SERIAL default false); toggle the reduction
+    // gates so the A/B isolates parallelizing the mean_log + var_log reductions (the serial bottleneck).
+    let data: Vec<f64> = deterministic_data(16_000_000)
+        .iter()
+        .map(|&v| v.abs() + 1.0) // gstd needs strictly-positive input
+        .collect();
+    group.bench_function("current_parallel", |bn| {
+        bn.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            black_box(gstd(black_box(&data)))
+        });
+    });
+    group.bench_function("orig_serial_reductions", |bn| {
+        bn.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            black_box(gstd(black_box(&data)))
+        });
+    });
+    PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_pooled_variance_par_reductions_ab(c: &mut Criterion) {
     use std::sync::atomic::Ordering;
     let mut group = c.benchmark_group("pooled_variance_par_reductions_ab");
@@ -1059,6 +1088,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_gstd_par_reductions_ab,
     bench_pooled_variance_par_reductions_ab,
     bench_ttest_rel_par_reductions_ab,
     bench_cohens_d_par_reductions_ab,
