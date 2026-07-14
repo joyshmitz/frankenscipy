@@ -37244,25 +37244,69 @@ pub fn tsem(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
         let sum_sq: f64 = filtered.iter().map(|&x| (x - mean).powi(2)).sum();
         (n, sum_sq)
     } else {
-        let mut sum = 0.0f64;
-        let mut count = 0usize;
-        for &x in data {
-            if within(x) {
-                sum += x;
-                count += 1;
+        // Two INDEPENDENT conditional reductions fanned across cores (same lever as tvar): byte-identical
+        // below the gate / when forced serial (single-chunk fold IS the serial loop; exact integer count),
+        // ULP above. Shares TVAR_PAR_FORCE_SERIAL.
+        let par_serial = TVAR_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+        let nthreads = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(data.len() / (1 << 16))
+            .max(1);
+        let chunk = data.len().div_ceil(nthreads);
+        let sum_count = |ds: &[f64]| -> (f64, usize) {
+            let mut s = 0.0f64;
+            let mut c = 0usize;
+            for &x in ds {
+                if within(x) {
+                    s += x;
+                    c += 1;
+                }
             }
-        }
+            (s, c)
+        };
+        let (sum, count) = if par_serial || nthreads <= 1 {
+            sum_count(data)
+        } else {
+            let sum_count = &sum_count;
+            let parts: Vec<(f64, usize)> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || sum_count(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("tsem sum worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold((0.0f64, 0usize), |(a, b), (s, c)| (a + s, b + c))
+        };
         if count <= ddof {
             return f64::NAN;
         }
         let n = count as f64;
         let mean = sum / n;
-        let mut sum_sq = 0.0f64;
-        for &x in data {
-            if within(x) {
-                sum_sq += (x - mean).powi(2);
+        let ss = |ds: &[f64]| -> f64 {
+            let mut s = 0.0f64;
+            for &x in ds {
+                if within(x) {
+                    s += (x - mean).powi(2);
+                }
             }
-        }
+            s
+        };
+        let sum_sq = if par_serial || nthreads <= 1 {
+            ss(data)
+        } else {
+            let ss = &ss;
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || ss(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("tsem ss worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().sum()
+        };
         (n, sum_sq)
     };
     let var = sum_sq / (n - ddof as f64);
