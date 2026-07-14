@@ -20971,3 +20971,34 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `rch exec`; no local Cargo fallback informed the rejection. The source, exact-proof test, toggle, and benchmark probe
   were all manually reverted; only this evidence entry ships. `git diff --check` passed; staged UBS found no supported
   language because the final commit is Markdown-only.
+
+## 2026-07-14 - cod - REJECT signal `find_peaks_cwt` indexed ridge-column lookup (0.768-0.942x at n=5000, widths=29)
+
+- Negative-ledger-first selection excluded the 2026-06-20 rejected CWT width/build parallelism and the 2026-07-09
+  sliding noise-percentile keep. The distinct ridge-link stage snapshots every active ridge's last column, then scans
+  that snapshot for every current-row maximum. On `find_peaks_cwt/n5000_w29`, 4,009 maxima drive 1,961,137 absolute-
+  distance comparisons against as many as 1,028 active ridges.
+- ONE lever built one sorted `(last_column, original_ridge_index)` index per row, deduplicated equal columns to the
+  smallest original index, and probed only the predecessor/successor around each maximum. Comparing
+  `(distance, original_ridge_index)` preserved the original first-minimum argmin, including duplicate-column and
+  equidistant ties. Snapshot timing, distance acceptance, gap accounting, new-line insertion, expiry, and final order
+  were unchanged. The indexed proxy reduced nearest-neighbor comparisons about 32x, to 61,257, but added a second
+  allocation and sort per queried row.
+- The production `release-perf` baseline first received a fail-closed `insufficient_slots=8,hard_preflight=2` refusal.
+  A one-job retry was admitted on `vmi1152480`, but single-thread LTO still had not reached Criterion after more than
+  13 minutes; it was cancelled with exit 130 before any timed row and is excluded from the verdict. No local fallback
+  supplied a baseline.
+- The decisive same-binary fast-profile A/B used one strict-remote invocation on `vmi1152480` with
+  `release-perf`, LTO disabled, and 16 codegen units. Indexed/reference/indexed-repeat intervals were respectively
+  `[23.079, 28.641, 35.423]`, `[21.979, 26.983, 33.162]`, and `[29.300, 35.143, 41.764]` ms. Relative to the literal
+  original, the indexed centers were **0.942x** (**+6.145% time**) and **0.768x** (**+30.241% time**); both lost, both
+  intervals overlapped the reference, and conservative interval speedups were only 0.620x and 0.526x. REJECT.
+- Exact proof was not the blocker: strict-remote exhaustive lookup and full ridge-state comparison passed **2/2** on
+  `vmi1149989`, covering empty snapshots, all ordered/duplicate vectors through length five, equidistant ties, every
+  ridge's rows/columns/gap/order, and the forced linear path. The existing SciPy peak-set parity test passed **1/1**
+  remotely on `vmi1227854`.
+- The candidate, literal-original helper, proof tests, global toggle, and added A/B rows were manually restored; the
+  existing public `n5000_w29` row remains. Retry only with a profile proving ridge lookup dominates and a lower-
+  overhead structure that avoids per-row allocation/sort. Every authoritative Cargo command used direct argv through
+  fail-closed `rch exec`; no local Cargo evidence informed this rejection. `git diff --check` passed; staged UBS found
+  no supported language because the final commit is Markdown-only.
