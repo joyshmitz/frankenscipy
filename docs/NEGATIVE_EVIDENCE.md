@@ -20789,3 +20789,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   critical findings; its shadow-workspace probes were excluded from remote-only proof. RCH refused the requested
   strict-remote `cargo fmt --check` as a non-compilation command (RCH-E301), before any local fallback; the staged
   hunks pass `git diff --check` and manual formatting review.
+
+## 2026-07-13 - cod - REJECT interpolate cache-tiled single-allocation `polyder` (1.252x slower at m=8)
+
+- Negative-ledger-first selection found no prior `polyder` optimization or rejection. This was a distinct
+  polynomial-arithmetic lane after the direct-`polysub` keep: the production `m=8` path cloned its input and then
+  allocated and filled eight successively shorter coefficient vectors.
+- ONE candidate allocated only the final output, skipped coefficients discarded by later derivative rounds, and
+  processed 1,024-coefficient tiles through all eight rounds before moving on. For every retained coefficient it
+  applied the same factors in the same order as the original implementation, while eliminating eight allocations
+  and full-vector handoffs. Its opportunity score was 10.0 (impact 4 x confidence 5 / effort 2).
+- A new public Criterion row measured `polyder` over 1,000,000 coefficients at `m=8`. Its strict-remote
+  production-original interval on `vmi1149989` was `[2.6822, 2.8703, 3.0661]` ms. The same-worker candidate interval
+  was `[3.3279, 3.5923, 3.8991]` ms, a centered **1.252x slowdown** with non-overlapping intervals. Criterion reported
+  `[+7.5095%, +22.224%, +36.720%]`, `p=0.01`, and a performance regression.
+- Decision: **REJECT.** Avoiding allocations and main-memory handoffs did not repay the tiled loop's lost throughput
+  on this public path. Production source and the unneeded candidate-only proof test were restored manually; the
+  public benchmark row remains as a retry guard. Do not retry single-output/tiled `polyder` synthesis at this shape
+  without evidence that a different fixed-order/vectorized formulation beats the existing round-wise loops.
+- Both decisive benchmark commands used direct Cargo argv in fail-closed strict mode through `rch exec` on
+  `vmi1149989`; no local Cargo fallback informed this rejection. UBS exited zero with no critical findings; its
+  shadow-workspace probes were excluded from the remote-only benchmark evidence.
