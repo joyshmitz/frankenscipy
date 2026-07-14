@@ -27706,8 +27706,11 @@ pub fn ttest_rel(
     }
     let n = a.len() as f64;
     let diffs: Vec<f64> = a.iter().zip(b.iter()).map(|(&ai, &bi)| ai - bi).collect();
-    let d_mean = diffs.iter().sum::<f64>() / n;
-    let d_var = diffs.iter().map(|&d| (d - d_mean).powi(2)).sum::<f64>() / (n - 1.0);
+    // Mean of diffs via `par_sum` + Σ(d−d̄)² via `sum_sq_dev` — both work-gated parallel (byte-identical
+    // below the 1<<22 gate; the variance is m2-insensitive to the mean, so par_sum is byte-safe there
+    // too). Both were serial `.sum()` folds over `diffs`.
+    let d_mean = par_sum(&diffs) / n;
+    let d_var = sum_sq_dev(&diffs, d_mean) / (n - 1.0);
     let se = (d_var / n).sqrt();
     let df = n - 1.0;
     let tdist = StudentT::new(df);
@@ -55823,6 +55826,34 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ttest_rel_par_reductions_match_serial_below_gate() {
+        use std::sync::atomic::Ordering;
+        let pairs: &[(&[f64], &[f64])] = &[
+            (&[1.0, 2.0, 3.0, 4.0, 5.0], &[1.5, 1.0, 3.5, 3.0, 6.0]),
+            (
+                &[-3.0, 0.5, 2.0, -1.25, 7.0, 4.0],
+                &[4.0, -2.5, 9.0, 3.0, -6.0, 1.5],
+            ),
+            (&[5.0, 6.0, 7.0], &[5.0, 6.0, 7.0]), // all diffs 0 => se==0, d_mean==0
+            (&[5.0, 6.0, 7.0], &[4.0, 5.0, 6.0]), // constant diff => se==0, d_mean!=0
+            (&[1e6, -1e6, 3.5, -2.5], &[100.0, -50.0, 0.0, 7.0]),
+        ];
+        for &(a, b) in pairs {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let serial = ttest_rel(a, b, None).unwrap();
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let parallel = ttest_rel(a, b, None).unwrap();
+            assert_eq!(serial.statistic.to_bits(), parallel.statistic.to_bits());
+            assert_eq!(serial.pvalue.to_bits(), parallel.pvalue.to_bits());
+            assert_eq!(serial.df.to_bits(), parallel.df.to_bits());
+        }
+        PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn cohens_d_par_reductions_match_serial_below_gate() {

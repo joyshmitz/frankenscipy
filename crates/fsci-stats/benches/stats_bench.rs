@@ -7,7 +7,7 @@ use fsci_stats::{
     l2_star_discrepancy, mad,
     mannkendall, mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf, psd_welch,
     rand_index,
-    siegelslopes, somersd, theilslopes, ttest_1samp, ttest_ind, wasserstein_distance,
+    siegelslopes, somersd, theilslopes, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance,
     wraparound_discrepancy,
     MAD_FN_REUSE_DISABLE, MAD_REUSE_DISABLE, MAD_ZSCORE_HOIST_DISABLE, MOMENT_PAR_FORCE_SERIAL,
     PAR_SUM_FORCE_SERIAL,
@@ -834,6 +834,32 @@ fn bench_biweight_midcorrelation_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_ttest_rel_par_reductions_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("ttest_rel_par_reductions_ab");
+    group.sample_size(10);
+    // The diffs mean and Σ(d-d̄)² were both serial; toggle both reduction gates for the A/B.
+    let a = deterministic_data(16_000_000);
+    let b: Vec<f64> = a.iter().map(|&v| v * 0.9 + 0.5).collect();
+    group.bench_function("current_parallel", |bn| {
+        bn.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            black_box(ttest_rel(black_box(&a), black_box(&b), None).unwrap())
+        });
+    });
+    group.bench_function("orig_serial", |bn| {
+        bn.iter(|| {
+            PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            MOMENT_PAR_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            black_box(ttest_rel(black_box(&a), black_box(&b), None).unwrap())
+        });
+    });
+    PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_cohens_d_par_reductions_ab(c: &mut Criterion) {
     use std::sync::atomic::Ordering;
     let mut group = c.benchmark_group("cohens_d_par_reductions_ab");
@@ -1005,6 +1031,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_ttest_rel_par_reductions_ab,
     bench_cohens_d_par_reductions_ab,
     bench_ttest_ind_par_mean_ab,
     bench_bayes_mvs_par_reductions_ab,
