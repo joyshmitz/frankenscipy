@@ -20919,3 +20919,31 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Both same-binary preflights matched all one million output bits plus dimensions and every `MmInfo` field. All three
   benchmark commands used direct Cargo argv in fail-closed strict mode through `rch exec`; no local Cargo fallback
   informed the rejection.
+
+## 2026-07-13 - cod - KEEP linalg gated row-parallel `is_diagonal` (1.352x at 5000x5000)
+
+- Negative-ledger-first selection found no prior `is_diagonal` optimization or rejection. The recent `issymmetric`
+  keep scans only the upper triangle and compares paired elements; diagonal classification is a distinct full-matrix
+  predicate used by CASP structure detection. Its valid-diagonal path still scanned every cell serially.
+- ONE lever keeps the first eight rows serial for cheap early rejection, then partitions the remaining independent rows
+  across scoped threads above 1,048,576 cells. Ragged-shape validation remains first, the exact off-diagonal predicate
+  and tolerance comparison are unchanged, diagonal values remain ignored even when non-finite, and there is no
+  floating-point reduction or ordering dependency.
+- The unchanged public row's strict-remote production-original interval on `vmi1152480` was
+  `[28.049, 29.460, 30.919]` ms. The same worker's candidate interval was `[18.342, 21.786, 25.588]` ms: a centered
+  **1.352x** speedup with a conservative interval speedup above **1.096x**. Criterion reported
+  `[-38.777%, -26.049%, -12.322%]`, `p=0.00`, and improved performance.
+- The same-binary serial reference measured `[22.761, 23.784, 24.955]` ms between candidate intervals
+  `[18.342, 21.786, 25.588]` ms and `[14.885, 17.195, 19.659]` ms. Both candidate centers were faster, by **1.092x**
+  and **1.383x**; the second bracket's conservative interval speedup exceeded **1.157x**. The unchanged public row's
+  same-worker before/after comparison is the decisive acceptance evidence.
+- The focused strict-remote suite passed **2/2**. Its serial/parallel proof covers a full 1024x1024 scan, diagonal NaN
+  and infinity, signed-zero off-diagonals, NaN tolerance behavior, and late off-diagonal NaN and finite failures; the
+  existing test preserves early NaN rejection. Every authoritative Cargo command ran fail-closed through `rch exec`;
+  no local Cargo fallback informed the keep.
+- The strict-remote scoped clippy gate reached `vmi1152480` and stopped on one pre-existing
+  `clippy::needless_range_loop` at `crates/fsci-linalg/src/lib.rs:9431`, outside this change's hunk. RCH also refused
+  the non-compilation `cargo fmt --check` command in fail-closed mode rather than falling back locally; `git diff
+  --check` passed, and the staged UBS shadow scan exited 0 with zero critical findings and reported clean formatting,
+  clippy, check, and test-build results. UBS's shadow-workspace Cargo checks are supplementary only, not part of the
+  strict-remote authoritative proof.

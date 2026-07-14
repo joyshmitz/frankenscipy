@@ -17537,22 +17537,68 @@ pub fn mat_norm_inf(a: &[Vec<f64>]) -> f64 {
     parts.into_iter().fold(0.0f64, nan_max)
 }
 
-/// Check if a matrix is diagonal.
-pub fn is_diagonal(a: &[Vec<f64>], tol: f64) -> bool {
-    if let Some(first) = a.first() {
-        let cols = first.len();
-        if a.iter().any(|row| row.len() != cols) {
-            return false;
-        }
-    }
-    for (i, row) in a.iter().enumerate() {
-        for (j, &v) in row.iter().enumerate() {
-            if i != j && (!v.is_finite() || v.abs() > tol) {
+fn diagonal_rows_are_valid(rows: &[Vec<f64>], first_row: usize, tol: f64) -> bool {
+    for (row_offset, row) in rows.iter().enumerate() {
+        let row_index = first_row + row_offset;
+        for (col_index, &value) in row.iter().enumerate() {
+            if row_index != col_index && (!value.is_finite() || value.abs() > tol) {
                 return false;
             }
         }
     }
     true
+}
+
+/// When `true`, [`is_diagonal`] uses its original serial scan.
+#[doc(hidden)]
+pub static IS_DIAGONAL_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Check if a matrix is diagonal.
+pub fn is_diagonal(a: &[Vec<f64>], tol: f64) -> bool {
+    let cols = a.first().map_or(0, Vec::len);
+    if a.iter().any(|row| row.len() != cols) {
+        return false;
+    }
+
+    let rows = a.len();
+    if IS_DIAGONAL_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || rows.saturating_mul(cols) < 1_048_576
+        || rows < 2
+    {
+        return diagonal_rows_are_valid(a, 0, tol);
+    }
+
+    // Preserve cheap early rejection before paying scoped-thread startup. The
+    // remaining rows are independent predicate scans with no reduction order.
+    let serial_rows = rows.min(8);
+    if !diagonal_rows_are_valid(&a[..serial_rows], 0, tol) {
+        return false;
+    }
+    let remaining = &a[serial_rows..];
+    if remaining.is_empty() {
+        return true;
+    }
+
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(remaining.len());
+    if threads <= 1 {
+        return diagonal_rows_are_valid(remaining, serial_rows, tol);
+    }
+    let chunk_rows = remaining.len().div_ceil(threads);
+    std::thread::scope(|scope| {
+        remaining
+            .chunks(chunk_rows)
+            .enumerate()
+            .map(|(chunk_index, chunk)| {
+                let first_row = serial_rows + chunk_index * chunk_rows;
+                scope.spawn(move || diagonal_rows_are_valid(chunk, first_row, tol))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .all(|handle| handle.join().expect("is_diagonal chunk panicked"))
+    })
 }
 
 /// Check if a matrix is upper triangular.
@@ -22513,6 +22559,30 @@ mod tests {
     fn is_diagonal_rejects_nan_off_diagonal() {
         let a = vec![vec![1.0, f64::NAN], vec![0.0, 2.0]];
         assert!(!is_diagonal(&a, 0.0));
+    }
+
+    #[test]
+    fn is_diagonal_parallel_matches_serial() {
+        fn assert_matches(a: &[Vec<f64>], tol: f64) {
+            IS_DIAGONAL_FORCE_SERIAL.store(true, std::sync::atomic::Ordering::Relaxed);
+            let serial = is_diagonal(a, tol);
+            IS_DIAGONAL_FORCE_SERIAL.store(false, std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(is_diagonal(a, tol), serial);
+        }
+
+        let n = 1_024;
+        let mut a = vec![vec![0.0; n]; n];
+        a[0][0] = f64::NAN;
+        a[n - 1][n - 1] = f64::INFINITY;
+        a[n - 1][0] = -0.0;
+        assert_matches(&a, 0.0);
+        assert_matches(&a, f64::NAN);
+
+        a[n - 1][0] = f64::NAN;
+        assert_matches(&a, 0.0);
+        a[n - 1][0] = 1.0e-6;
+        assert_matches(&a, 1.0e-7);
+        IS_DIAGONAL_FORCE_SERIAL.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[test]

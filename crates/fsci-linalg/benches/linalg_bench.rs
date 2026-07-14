@@ -7,11 +7,11 @@ use std::{
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
-    DecompOptions, HELMERT_FORCE_SERIAL, InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions,
-    MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions, SolveOptions, TriangularSolveOptions,
-    cho_factor, cho_solve, det, dft, eigh, frobenius_norm, inv, lstsq, lu_factor, lu_solve, matmul,
-    orthogonal_procrustes, pascal, pinv, randomized_eigh, solve, solve_banded, solve_triangular,
-    svd,
+    DecompOptions, HELMERT_FORCE_SERIAL, IS_DIAGONAL_FORCE_SERIAL, InvOptions,
+    KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions,
+    SolveOptions, TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, frobenius_norm,
+    inv, is_diagonal, lstsq, lu_factor, lu_solve, matmul, orthogonal_procrustes, pascal, pinv,
+    randomized_eigh, solve, solve_banded, solve_triangular, svd,
 };
 #[cfg(feature = "chol-wall-bench")]
 use fsci_linalg::{cholesky_wall_mr4_nr4_candidate, cholesky_wall_mr4_nr8_orig};
@@ -143,6 +143,33 @@ fn bench_frobenius_norm_simd(c: &mut Criterion) {
     group.bench_function("candidate_2048x1024", |bencher| {
         bencher.iter(|| black_box(frobenius_norm(black_box(&matrix))))
     });
+    group.finish();
+}
+
+fn bench_is_diagonal(c: &mut Criterion) {
+    let matrix = vec![vec![0.0; 5_000]; 5_000];
+    IS_DIAGONAL_FORCE_SERIAL.store(true, Ordering::Relaxed);
+    let reference = is_diagonal(&matrix, 0.0);
+    IS_DIAGONAL_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    assert_eq!(is_diagonal(&matrix, 0.0), reference);
+
+    let mut group = c.benchmark_group("is_diagonal");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    IS_DIAGONAL_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.bench_function("5000x5000", |bencher| {
+        bencher.iter(|| black_box(is_diagonal(black_box(&matrix), black_box(0.0))))
+    });
+    IS_DIAGONAL_FORCE_SERIAL.store(true, Ordering::Relaxed);
+    group.bench_function("orig_serial/5000x5000", |bencher| {
+        bencher.iter(|| black_box(is_diagonal(black_box(&matrix), black_box(0.0))))
+    });
+    IS_DIAGONAL_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.bench_function("current_repeat/5000x5000", |bencher| {
+        bencher.iter(|| black_box(is_diagonal(black_box(&matrix), black_box(0.0))))
+    });
+    IS_DIAGONAL_FORCE_SERIAL.store(false, Ordering::Relaxed);
     group.finish();
 }
 
@@ -1630,6 +1657,7 @@ criterion_group!(
     bench_pinv,
     bench_matmul,
     bench_frobenius_norm_simd,
+    bench_is_diagonal,
     bench_eigh_dense,
     bench_randomized_eigh
 );
