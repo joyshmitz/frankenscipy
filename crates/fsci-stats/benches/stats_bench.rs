@@ -4,7 +4,7 @@ use fsci_stats::{
     SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
     bayes_mvs, cohens_d, excess_kurtosis, gstd, histogram, kendalltau, kruskal, ks_2samp,
-    l2_star_discrepancy, mad,
+    l2_star_discrepancy, mad, mean_absolute_error,
     mannkendall, mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf,
     pooled_variance, psd_welch,
     rand_index,
@@ -22,6 +22,42 @@ fn deterministic_data(n: usize) -> Vec<f64> {
             (x * 0.017).sin() + (x * 0.031).cos() * 0.25 + (i % 17) as f64 * 0.001
         })
         .collect()
+}
+
+fn mean_absolute_error_scalar_reference(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    y_true
+        .iter()
+        .zip(y_pred)
+        .map(|(&truth, &prediction)| (truth - prediction).abs())
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
+fn bench_mean_absolute_error_simd_ab(c: &mut Criterion) {
+    let len = 2_097_152usize;
+    let y_true = deterministic_data(len);
+    let y_pred: Vec<f64> = (0..len)
+        .map(|idx| ((idx % 251) as f64 - 125.0) / 31.0)
+        .collect();
+    let mut group = c.benchmark_group("mean_absolute_error_simd_ab");
+    group.sample_size(15);
+    group.bench_function("current_simd_n2097152", |bencher| {
+        bencher.iter(|| {
+            black_box(mean_absolute_error(
+                black_box(&y_true),
+                black_box(&y_pred),
+            ))
+        })
+    });
+    group.bench_function("orig_scalar_n2097152", |bencher| {
+        bencher.iter(|| {
+            black_box(mean_absolute_error_scalar_reference(
+                black_box(&y_true),
+                black_box(&y_pred),
+            ))
+        })
+    });
+    group.finish();
 }
 
 fn qmc_halton_sample(n: usize, dimension: usize) -> Vec<f64> {
@@ -1088,6 +1124,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_mean_absolute_error_simd_ab,
     bench_gstd_par_reductions_ab,
     bench_pooled_variance_par_reductions_ab,
     bench_ttest_rel_par_reductions_ab,

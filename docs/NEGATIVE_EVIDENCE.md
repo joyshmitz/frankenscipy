@@ -21222,3 +21222,18 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `[1.2774, 1.5602, 1.7838]` ms for scalar: **1.710x** centered and **1.327x** conservative, with no interval overlap.
 - The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
   `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes were untouched.
+
+## 2026-07-14 - cod - KEEP SIMD stats `mean_absolute_error` reduction (1.660x at n=2,097,152)
+
+- Negative-ledger-first selection found no prior `mean_absolute_error` optimization or rejection. The weighted-mean
+  family is already heavily harvested; this independent prediction-metric reduction remained scalar. Opportunity
+  score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever accumulates eight absolute differences per vector lane, then handles the scalar tail and retains the
+  original final division. Length-mismatch and empty-input error behavior are unchanged. A regression fixture bounds
+  finite reassociation error by 64 epsilon-scaled result magnitude and covers NaN, finite-vs-infinity, infinity-vs-
+  infinity, empty, and mismatched inputs; it was added but not separately executed under the one-benchmark limit.
+- The one and only benchmark invocation compared production SIMD with the literal scalar reduction in the same
+  binary on strict-remote worker `vmi1152480`. SIMD measured `[746.62, 795.46, 880.13]` us versus
+  `[1.2315, 1.3203, 1.4351]` ms for scalar: **1.660x** centered and **1.399x** conservative, with no interval overlap.
+- The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
+  `git diff --check` passed. No second benchmark or local Cargo fallback was used, and stashes were untouched.
