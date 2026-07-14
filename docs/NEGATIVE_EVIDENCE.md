@@ -21450,3 +21450,25 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   representation lever and independent attribution. Strict-remote clippy reached three pre-existing warnings in
   `curvefit.rs` and an unrelated NNLS region; the focused proof and diff hygiene passed. No second benchmark,
   `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-2oqis`.
+
+## 2026-07-14 - cod - REJECT allocation-free `constants::find` name folding (17.39% lower, noisy)
+
+- Negative-ledger-first triage found the only ready perf item was an A/B harness in the heavily mined dense-linalg
+  lane, while the recent opt, spatial, ndimage, integrate, and ODR seams were already harvested or rejected. The
+  fresh `fsci-constants` screen found no prior entry for `find`: each query lowercased and heap-allocated every static
+  ASCII constant name before substring matching. Opportunity score: 15.0 (impact 3 x confidence 5 / effort 1).
+- ONE lever retained the query's Unicode `to_lowercase` behavior but compared it against table names with
+  allocation-free ASCII folding. A focused strict-remote proof on `vmi1149989` matched the literal former algorithm's
+  complete sorted results for every table name, uppercase variants, empty and missing queries, and Unicode case-fold
+  probes including the Kelvin sign.
+- The one and only benchmark invocation compared the candidate and literal former per-name-lowercase path in the
+  same `--profile release` libtest binary on strict-remote worker `vmi1152480`, using the small `"mass"` query.
+  Allocation-free folding measured **3,225.32 ns/iter (+/- 1,437.49)** versus
+  **3,904.25 ns/iter (+/- 4,193.53)** former: **1.2105x** centered (**17.39%** lower centered time), but both noise
+  bands overlap broadly and the reference dispersion exceeds its center.
+- **REJECT; candidate, proof fixture, and benchmark seam removed.** The centered movement is directionally
+  consistent with removing allocations but is not robust shipping evidence. Do not retry this microbenchmark alone;
+  revisit only with an attributed end-to-end constants workload or a distinct batched harness that clears a null
+  control in one run. Strict-remote clippy reached one pre-existing digit-grouping warning at `lib.rs:1143`; staged
+  UBS found only legacy test panic heuristics. No second benchmark, `release-perf` build, local Cargo fallback, or
+  stash mutation was used. Bead: `frankenscipy-4gdfc`.
