@@ -1,7 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_runtime::{
-    ConformalCalibrator, DecisionSignals, MatrixConditionState, PolicyController, RuntimeMode,
-    SolverAction, SolverEvidenceEntry, SolverPortfolio,
+    ConformalCalibrator, DecisionEvidenceEntry, DecisionSignals, MatrixConditionState,
+    PolicyAction, PolicyController, PolicyEvidenceLedger, RiskState, RuntimeMode, SolverAction,
+    SolverEvidenceEntry, SolverPortfolio,
 };
 use std::hint::black_box;
 
@@ -91,6 +92,49 @@ fn bench_solver_evidence_jsonl(c: &mut Criterion) {
     group.finish();
 }
 
+fn policy_evidence(sequence: usize) -> DecisionEvidenceEntry {
+    DecisionEvidenceEntry {
+        mode: RuntimeMode::Strict,
+        signals: DecisionSignals::new(8.0, 0.25, 0.1),
+        logits: [0.5, 1.0, -1.0],
+        posterior: [0.25, 0.7, 0.05],
+        expected_losses: [35.0, 12.0, 40.0],
+        action: PolicyAction::FullValidate,
+        top_state: RiskState::IllConditioned,
+        reason: format!("runtime_bench_sequence={sequence}"),
+    }
+}
+
+fn policy_jsonl_collect_join(entries: &[DecisionEvidenceEntry]) -> String {
+    entries
+        .iter()
+        .filter_map(|entry| serde_json::to_string(&entry.alien_artifact_decision()).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn bench_policy_evidence_jsonl(c: &mut Criterion) {
+    const ENTRIES: usize = 1_024;
+    let entries = (0..ENTRIES).map(policy_evidence).collect::<Vec<_>>();
+    let mut ledger = PolicyEvidenceLedger::new(ENTRIES);
+    for entry in entries.iter().cloned() {
+        ledger.record(entry);
+    }
+    assert_eq!(
+        ledger.to_alien_artifact_jsonl(),
+        policy_jsonl_collect_join(&entries)
+    );
+
+    let mut group = c.benchmark_group("policy_evidence_jsonl");
+    group.bench_function("stream", |b| {
+        b.iter(|| black_box(ledger.to_alien_artifact_jsonl()));
+    });
+    group.bench_function("collect_join_baseline", |b| {
+        b.iter(|| black_box(policy_jsonl_collect_join(black_box(&entries))));
+    });
+    group.finish();
+}
+
 fn bench_solver_evidence_rollover(c: &mut Criterion) {
     const CAPACITY: usize = 1_024;
     let mut group = c.benchmark_group("solver_evidence_rollover");
@@ -128,6 +172,7 @@ criterion_group!(
     bench_solver_select_action,
     bench_calibrator_observe,
     bench_solver_evidence_jsonl,
+    bench_policy_evidence_jsonl,
     bench_solver_evidence_rollover
 );
 criterion_main!(benches);

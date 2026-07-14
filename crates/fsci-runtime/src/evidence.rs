@@ -136,11 +136,17 @@ impl PolicyEvidenceLedger {
     /// Serialize Spec §6 decision records as JSONL for audit artifacts.
     #[must_use]
     pub fn to_alien_artifact_jsonl(&self) -> String {
-        self.entries
-            .iter()
-            .filter_map(|entry| serde_json::to_string(&entry.alien_artifact_decision()).ok())
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut output = Vec::with_capacity(self.entries.len().saturating_mul(512));
+        for entry in &self.entries {
+            let entry_start = output.len();
+            if entry_start != 0 {
+                output.push(b'\n');
+            }
+            if serde_json::to_writer(&mut output, &entry.alien_artifact_decision()).is_err() {
+                output.truncate(entry_start);
+            }
+        }
+        String::from_utf8(output).expect("serde_json always emits UTF-8")
     }
 
     #[must_use]
@@ -439,16 +445,34 @@ mod tests {
             top_state: RiskState::IncompatibleMetadata,
             reason: String::from("non_finite_signals=true"),
         });
+        ledger.record(DecisionEvidenceEntry {
+            mode: RuntimeMode::Strict,
+            signals: DecisionSignals::new(8.0, 0.25, 0.1),
+            logits: [0.5, 1.0, -1.0],
+            posterior: [0.25, 0.7, 0.05],
+            expected_losses: [35.0, 12.0, 40.0],
+            action: PolicyAction::FullValidate,
+            top_state: RiskState::IllConditioned,
+            reason: String::from("escaped=\"line\"\nnext"),
+        });
 
         let latest = ledger
             .latest_alien_artifact_decision()
             .expect("latest decision");
-        assert_eq!(latest.confidence, 1.0);
-        assert!(latest.calibration_fallback_trigger);
+        assert_eq!(latest.confidence, 0.7);
+        assert!(!latest.calibration_fallback_trigger);
 
+        let former = ledger
+            .iter()
+            .filter_map(|entry| serde_json::to_string(&entry.alien_artifact_decision()).ok())
+            .collect::<Vec<_>>()
+            .join("\n");
         let jsonl = ledger.to_alien_artifact_jsonl();
-        let parsed =
-            serde_json::from_str::<serde_json::Value>(&jsonl).expect("valid JSONL decision");
+        assert_eq!(jsonl, former);
+        let parsed = serde_json::from_str::<serde_json::Value>(
+            jsonl.lines().next().expect("missing JSONL decision"),
+        )
+        .expect("valid JSONL decision");
         assert!(parsed.get("state_space").is_some());
         assert!(parsed.get("evidence").is_some());
         assert!(parsed.get("loss_matrix").is_some());

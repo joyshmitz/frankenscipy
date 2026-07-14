@@ -21561,3 +21561,25 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Strict-remote all-target Clippy passed with `-D warnings`; rustfmt and diff hygiene passed; staged UBS exited zero
   with no critical findings. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was
   used. Bead: `frankenscipy-anl13`.
+
+## 2026-07-14 - cod - KEEP streamed policy-evidence JSONL serialization (1.411x at 1,024 entries)
+
+- Negative-ledger-first triage again excluded the assigned dense-linalg SYRK harness because prior attribution places
+  standalone SYRK below 1% of Cholesky wall time. The runtime serialization vein remained live: no prior keep or
+  rejection covered `PolicyEvidenceLedger::to_alien_artifact_jsonl`, whose complete path still constructed each
+  audit decision, allocated one JSON `String` per record, stored all strings in a `Vec`, then copied every byte during
+  `join`. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever writes each unchanged `AlienArtifactDecision` directly into a pre-sized byte buffer and inserts newlines
+  only between successfully serialized records. Decision conversion, reason cloning, record order, compact JSON
+  spelling, escaping, skipped-error behavior, and exact output bytes are unchanged. A focused strict-remote proof on
+  `vmi1149989` matched the literal former collect-and-join implementation exactly across finite and non-finite signals,
+  escaped reason text, and multiple records, then rechecked the required audit fields.
+- The one and only benchmark invocation compared streaming with the literal former collect-and-join path in the same
+  `--profile release` binary on strict-remote worker `vmi1152480`, using 1,024 policy records, 100 ms warm-up, and
+  500 ms measurement per arm. Streaming measured `[808.34, 842.49, 886.42]` us versus
+  `[1.1333, 1.1889, 1.2444]` ms for collect-and-join: **1.4112x** centered, **1.2785x** conservative, and **29.14%**
+  lower centered time with no interval overlap. The complete remote command returned in 137.4 seconds, including a
+  38.6-second cold release build, beneath the five-minute cap.
+- Strict-remote all-target Clippy passed with `-D warnings`; rustfmt and diff hygiene passed; staged UBS exited zero
+  with no critical findings. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was
+  used. Bead: `frankenscipy-6loqs`.
