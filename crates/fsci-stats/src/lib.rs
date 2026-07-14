@@ -51286,13 +51286,32 @@ impl ContinuousDistribution for FoldedNormal {
 /// Matches `scipy.stats.median_abs_deviation`, which DIVIDES the
 /// raw MAD by `scale`. With scale=1.4826, this yields the normal-
 /// consistent std estimator.
+/// When `true`, [`mad`] uses the ORIG three-allocation path (`median(data)` copies data, the
+/// `abs_devs` vector, then `median(&abs_devs)` copies again); default `false` reuses one buffer for
+/// both medians. Byte-identical (`median_in_place` == `median`). A/B perf gate.
+#[doc(hidden)]
+pub static MAD_FN_REUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn mad(data: &[f64], scale: f64) -> f64 {
     if data.is_empty() || scale == 0.0 {
         return f64::NAN;
     }
-    let med = median(data);
-    let abs_devs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
-    median(&abs_devs) / scale
+    if MAD_FN_REUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let med = median(data);
+        let abs_devs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
+        return median(&abs_devs) / scale;
+    }
+    // One buffer for both medians (was three O(n) allocations: the two `median` copies plus
+    // `abs_devs`). Copy data, take its median in place, overwrite the buffer with |data - med|
+    // recomputed from `data` in original order (the select permuted it), then median in place again.
+    // Same lever as median_abs_deviation; `median_in_place` is byte-identical to `median`.
+    let mut buf = data.to_vec();
+    let med = median_in_place(&mut buf);
+    for (slot, &x) in buf.iter_mut().zip(data) {
+        *slot = (x - med).abs();
+    }
+    median_in_place(&mut buf) / scale
 }
 
 /// MAD given an ALREADY-computed median, so callers that need both `median(data)` and `mad(data)`
@@ -55776,6 +55795,33 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mad_fn_buffer_reuse_matches_original_bitwise() {
+        use std::sync::atomic::Ordering;
+        let cases: &[&[f64]] = &[
+            &[1.0, 2.0, 3.0, 4.0],
+            &[5.0, 1.0, 3.0, 2.0, 4.0],
+            &[-3.0, -1.0, 0.0, 2.5, 7.0, -0.0],
+            &[10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            &[42.0],
+            &[1e300, -1e300, 0.0, 1.5, -2.5, 3.25, 100.0],
+        ];
+        for &data in cases {
+            for &scale in &[1.0, 1.4826, 0.5] {
+                MAD_FN_REUSE_DISABLE.store(true, Ordering::Relaxed);
+                let original = mad(data, scale);
+                MAD_FN_REUSE_DISABLE.store(false, Ordering::Relaxed);
+                let reused = mad(data, scale);
+                assert_eq!(
+                    original.to_bits(),
+                    reused.to_bits(),
+                    "mad mismatch for {data:?} scale {scale}"
+                );
+            }
+        }
+        MAD_FN_REUSE_DISABLE.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn mad_zscore_median_hoist_matches_original_bitwise() {

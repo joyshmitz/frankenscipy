@@ -3,10 +3,10 @@ use fsci_stats::{
     BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, BIWEIGHT_MAD_HOIST_DISABLE, HaltonSampler,
     SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
-    histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mannkendall, mannwhitneyu,
+    histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mad, mannkendall, mannwhitneyu,
     mad_zscore, median_abs_deviation, mixture_discrepancy, pacf, psd_welch, rand_index, siegelslopes,
-    somersd, theilslopes, wasserstein_distance, wraparound_discrepancy, MAD_REUSE_DISABLE,
-    MAD_ZSCORE_HOIST_DISABLE,
+    somersd, theilslopes, wasserstein_distance, wraparound_discrepancy, MAD_FN_REUSE_DISABLE,
+    MAD_REUSE_DISABLE, MAD_ZSCORE_HOIST_DISABLE,
 };
 use std::hint::black_box;
 
@@ -830,6 +830,29 @@ fn bench_biweight_midcorrelation_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_mad_fn_reuse_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("mad_fn_reuse_ab");
+    group.sample_size(10);
+    for &n in &[100_000usize, 1_000_000usize] {
+        let data = deterministic_data(n);
+        group.bench_with_input(BenchmarkId::new("current_reuse", n), &data, |b, d| {
+            b.iter(|| {
+                MAD_FN_REUSE_DISABLE.store(false, Ordering::Relaxed);
+                black_box(mad(black_box(d), black_box(1.4826)))
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("orig_three_alloc", n), &data, |b, d| {
+            b.iter(|| {
+                MAD_FN_REUSE_DISABLE.store(true, Ordering::Relaxed);
+                black_box(mad(black_box(d), black_box(1.4826)))
+            });
+        });
+    }
+    MAD_FN_REUSE_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
     use std::sync::atomic::Ordering;
     let mut group = c.benchmark_group("mad_zscore_hoist_ab");
@@ -855,6 +878,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_mad_fn_reuse_ab,
     bench_mad_zscore_hoist_ab,
     bench_biweight_midcorrelation_ab,
     bench_mad_reuse_ab,
