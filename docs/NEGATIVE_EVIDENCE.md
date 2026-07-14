@@ -20894,3 +20894,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   rustfmt checks continue to expose broad pre-existing drift outside the owned hunks; the new hunks match rustfmt. UBS
   exited zero with **0 critical** findings in the two staged Rust files; its shadow-workspace Cargo probes were excluded
   from the strict-remote proof.
+
+## 2026-07-13 - cod - REJECT io streaming MatrixMarket array scatter (unstable 1.022x-1.282x at 1,000,000 values)
+
+- Negative-ledger-first selection found no prior result for dense MatrixMarket **array-format** `mmread` streaming.
+  Existing IO entries cover coordinate token parsing and sparse COO return, while the array path still materialized a
+  16-byte `(row, col)` position plus an 8-byte value for every stored scalar before a second scatter pass. The candidate
+  was one structural lever: parse each scalar directly into the dense result, mirror it immediately, and advance two
+  scalar row/column counters, removing 24 MB of temporaries at 1000x1000.
+- The retained public Criterion row measured the untouched production source on `vmi1153651` at
+  `[68.039, 69.148, 70.256]` ms. Because the decisive same-binary runs routed to another worker, that interval is only
+  source-attribution and retry-guard evidence, not the acceptance comparison.
+- The first strict-remote candidate/reference/candidate bracket on `vmi1152480` measured streaming at
+  `[38.204, 40.004, 42.038]` ms, the literal former materializing branch at `[39.203, 40.882, 42.636]` ms, and streaming
+  again at `[35.253, 36.947, 38.848]` ms. Centered ratios were **1.022x** and **1.106x**; the first comparison overlapped
+  and had a conservative interval ratio below 1.0, so it did not clear the shipping floor.
+- A tightened counter-state rerun on the same worker measured streaming at `[39.803, 42.016, 44.942]` ms, reference at
+  `[45.359, 53.859, 65.218]` ms, and streaming again at `[40.084, 42.046, 44.228]` ms. The apparent centered ratios were
+  **1.282x** and **1.281x**, but the unchanged reference center swung **31.7%** from the immediately preceding run and
+  contained three high-severe outliers. That temporal noise cannot repair the first bracket's overlapping result.
+- Decision: **REJECT.** The source, exact-old-path toggle, and candidate-only bit proof were restored manually; the
+  public `mmread/1000x1000` row remains as a retry guard. Do not retry direct parse-and-scatter at this shape without a
+  paired/null-controlled harness that first demonstrates a stable floor above allocator and worker noise.
+- Both same-binary preflights matched all one million output bits plus dimensions and every `MmInfo` field. All three
+  benchmark commands used direct Cargo argv in fail-closed strict mode through `rch exec`; no local Cargo fallback
+  informed the rejection.

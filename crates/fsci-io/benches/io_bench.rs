@@ -40,9 +40,13 @@ fn bench_matrix_market(c: &mut Criterion) {
     let (rows, cols) = (100usize, 100usize);
     let data = matrix(rows, cols);
     let mm = mmwrite(rows, cols, &data).expect("mmwrite");
+    let (large_rows, large_cols) = (1_000usize, 1_000usize);
+    let large_data = matrix(large_rows, large_cols);
+    let large_mm = mmwrite(large_rows, large_cols, &large_data).expect("large mmwrite");
     let mut group = c.benchmark_group("matrix_market");
     group.bench_function("mmwrite/100x100", |b| b.iter(|| mmwrite(rows, cols, &data)));
     group.bench_function("mmread/100x100", |b| b.iter(|| mmread(&mm)));
+    group.bench_function("mmread/1000x1000", |b| b.iter(|| mmread(&large_mm)));
     group.finish();
 }
 
