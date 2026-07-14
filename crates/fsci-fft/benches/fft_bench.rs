@@ -1,7 +1,11 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use fsci_fft::plan::{
+    PlanFingerprint, PlanKey, PlanMetadata, PlanningStrategy, clear_shared_plan_cache,
+    lookup_shared_plan, store_shared_plan, touch_shared_plan,
+};
 use fsci_fft::{
-    FFT_PRIME_FORCE_BLUESTEIN, FftOptions, cross_spectral_density, dct, fft, fft2, fftshift, ifft,
-    irfft, rfft,
+    FFT_PRIME_FORCE_BLUESTEIN, FftOptions, Normalization, TransformKind, cross_spectral_density,
+    dct, fft, fft2, fftshift, ifft, irfft, rfft,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -312,6 +316,39 @@ fn bench_fftshift_contiguous_axis(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_plan_cache_hit(c: &mut Criterion) {
+    clear_shared_plan_cache();
+    let key = PlanKey::new(
+        TransformKind::Fftn,
+        vec![64, 64, 64],
+        vec![0, 1, 2],
+        Normalization::Backward,
+        false,
+    );
+    let metadata = PlanMetadata {
+        key: key.clone(),
+        fingerprint: PlanFingerprint {
+            radix_path: vec![2; 18],
+            estimated_flops: 23_592_960,
+            scratch_bytes: 262_144 * std::mem::size_of::<Complex64>(),
+        },
+        generated_by: PlanningStrategy::EstimateOnly,
+    };
+    assert!(store_shared_plan(metadata));
+    assert!(touch_shared_plan(&key));
+    assert!(lookup_shared_plan(&key).is_some());
+
+    let mut group = c.benchmark_group("fft_plan_cache_hit");
+    group.bench_function("clone_free_touch", |bencher| {
+        bencher.iter(|| black_box(touch_shared_plan(black_box(&key))))
+    });
+    group.bench_function("former_metadata_clone", |bencher| {
+        bencher.iter(|| black_box(lookup_shared_plan(black_box(&key)).is_some()))
+    });
+    group.finish();
+    clear_shared_plan_cache();
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // BASELINE BENCHMARKS - Per SPEC §17
 // Run with: cargo bench --bench fft_bench -- baseline
@@ -390,7 +427,8 @@ criterion_group!(
     bench_irfft,
     bench_fft2,
     bench_cross_spectral_density,
-    bench_fftshift_contiguous_axis
+    bench_fftshift_contiguous_axis,
+    bench_plan_cache_hit
 );
 
 criterion_group!(

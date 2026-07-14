@@ -21583,3 +21583,25 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Strict-remote all-target Clippy passed with `-D warnings`; rustfmt and diff hygiene passed; staged UBS exited zero
   with no critical findings. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was
   used. Bead: `frankenscipy-6loqs`.
+
+## 2026-07-14 - cod - KEEP clone-free FFT plan-cache hit/touch (1.384x)
+
+- Negative-ledger-first triage excluded the assigned dense-linalg SYRK harness because prior attribution places
+  standalone SYRK below 1% of Cholesky wall time. The runtime serialization and prediction-metric veins had yielded
+  consecutive keeps, so the search pivoted to the fresh FFT plan-cache seam. No prior row covered cache-hit metadata
+  cloning. Direct source attribution showed every 1-D and N-D transform asks `lookup_shared_plan(key).is_some()`;
+  each hit deep-cloned the cached `PlanMetadata` and its three heap-backed vectors (`shape`, `axes`, and
+  `radix_path`) only to derive a Boolean trace bit. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever adds a clone-free cache hit/touch operation and uses it from the transform path. The mutex boundary,
+  key comparison, LRU recency update, miss insertion, cache contents, trace hit bit, and transform arithmetic are
+  unchanged. A focused strict-remote proof on `vmi1152480` verified identical hit/miss behavior and eviction order
+  after touching an older entry, including a missing-key probe.
+- The one and only benchmark invocation compared the production clone-free touch with the literal former cloning
+  lookup in the same `--profile release` binary on strict-remote worker `vmi1152480`, using a representative
+  three-axis plan key and radix path, 100 ms warm-up, 500 ms measurement per arm, and 10 samples. Clone-free touch
+  measured `[96.712, 100.02, 103.35]` ns versus `[134.66, 138.43, 141.82]` ns for metadata cloning:
+  **1.3840x** centered, **1.3030x** conservative, and **27.75%** lower centered time with no interval overlap.
+- Strict-remote all-target Clippy passed with `-D warnings`; rustfmt and diff hygiene passed; staged UBS found zero
+  critical issues. The complete benchmark command returned in 162.7 seconds, beneath the five-minute cap. No
+  `release-perf` build, second benchmark, local Cargo fallback, or stash mutation was used. Bead:
+  `frankenscipy-hpuir`.

@@ -9,7 +9,7 @@ pub use fsci_runtime::SyncSharedAuditLedger;
 use fsci_runtime::{AuditAction, AuditEvent, AuditLedger, RuntimeMode, casp_now_unix_ms};
 
 use crate::plan::{
-    PlanFingerprint, PlanKey, PlanMetadata, PlanningStrategy, lookup_shared_plan, store_shared_plan,
+    PlanFingerprint, PlanKey, PlanMetadata, PlanningStrategy, store_shared_plan, touch_shared_plan,
 };
 use crate::{Normalization, TransformKind};
 
@@ -4701,7 +4701,7 @@ fn resolve_backend(kind: BackendKind) -> &'static dyn FftBackend {
 }
 
 fn touch_plan_cache(key: &PlanKey, n: usize) -> bool {
-    if lookup_shared_plan(key).is_some() {
+    if touch_shared_plan(key) {
         return true;
     }
 

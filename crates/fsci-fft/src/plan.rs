@@ -141,6 +141,14 @@ impl BoundedPlanCache {
         Some(metadata)
     }
 
+    fn contains_and_touch(&mut self, key: &PlanKey) -> bool {
+        if !self.entries.contains_key(key) {
+            return false;
+        }
+        self.touch_key(key);
+        true
+    }
+
     fn store_with_config(&mut self, metadata: PlanMetadata, config: PlanCacheConfig) -> bool {
         self.config = config;
         self.store(metadata)
@@ -317,6 +325,13 @@ pub fn lookup_shared_plan(key: &PlanKey) -> Option<PlanMetadata> {
     lock_shared_cache().lookup_and_touch(key)
 }
 
+/// Return whether `key` is cached while updating its recency, without cloning
+/// the cached plan metadata.
+#[must_use]
+pub fn touch_shared_plan(key: &PlanKey) -> bool {
+    lock_shared_cache().contains_and_touch(key)
+}
+
 #[must_use]
 pub fn store_shared_plan(metadata: PlanMetadata) -> bool {
     lock_shared_cache().store(metadata)
@@ -365,7 +380,7 @@ mod tests {
     use super::{
         CacheAdmissionPolicy, PlanCacheConfig, PlanFingerprint, PlanKey, PlanMetadata,
         PlanningStrategy, clear_shared_plan_cache, lookup_shared_plan, shared_cache,
-        shared_plan_cache_len, store_shared_plan, store_shared_plan_with_config,
+        shared_plan_cache_len, store_shared_plan, store_shared_plan_with_config, touch_shared_plan,
     };
     use crate::{Normalization, TransformKind};
     use std::sync::MutexGuard;
@@ -527,6 +542,36 @@ mod tests {
         );
         assert!(lookup_shared_plan(&test_key(16)).is_none());
         assert!(lookup_shared_plan(&test_key(32)).is_some());
+        assert!(lookup_shared_plan(&test_key(64)).is_some());
+    }
+
+    #[test]
+    fn clone_free_touch_preserves_lru_eviction_order() {
+        let _g = serial_cache_lock();
+        clear_shared_plan_cache();
+        let config = PlanCacheConfig {
+            capacity: 2,
+            admission_policy: CacheAdmissionPolicy::AlwaysInsert,
+            ..PlanCacheConfig::default()
+        };
+
+        assert!(store_shared_plan_with_config(
+            test_metadata(16, 320, 16 * 16),
+            config.clone()
+        ));
+        assert!(store_shared_plan_with_config(
+            test_metadata(32, 800, 32 * 16),
+            config.clone()
+        ));
+        assert!(touch_shared_plan(&test_key(16)));
+        assert!(!touch_shared_plan(&test_key(8)));
+        assert!(store_shared_plan_with_config(
+            test_metadata(64, 1_920, 64 * 16),
+            config
+        ));
+
+        assert!(lookup_shared_plan(&test_key(16)).is_some());
+        assert!(lookup_shared_plan(&test_key(32)).is_none());
         assert!(lookup_shared_plan(&test_key(64)).is_some());
     }
 
