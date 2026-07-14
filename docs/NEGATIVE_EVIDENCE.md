@@ -20947,3 +20947,27 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   --check` passed, and the staged UBS shadow scan exited 0 with zero critical findings and reported clean formatting,
   clippy, check, and test-build results. UBS's shadow-workspace Cargo checks are supplementary only, not part of the
   strict-remote authoritative proof.
+
+## 2026-07-13 - cod - REJECT ODR structured beta-gradient reuse (0.972x paired median, IN-FLOOR)
+
+- Negative-ledger-first screening found no prior attempt to reuse `g_beta = Aᵀr` between the structured solver's
+  convergence check and its damping retries. The 2026-07-08 dense finite-difference Jacobian thread fan-out rejection
+  is a different, dense-reference path; the 2026-07-04 structured Schur keep established this benchmark family but did
+  not test this redundant scan.
+- ONE lever computed each beta-gradient component once per outer LM iteration, preserving its ascending-row
+  floating-point accumulation, then reused the same bits for convergence and up to eight unchanged-Jacobian damping
+  attempts. A forced-original mode repeated the former scan inside every `lm_step` for direct A/B proof.
+- The untouched production-original `odr_structured_scalar/structured_n400` row measured
+  `[678.38, 694.80, 713.78]` us on strict-remote worker `vmi1153651`. A same-binary bracket on `vmi1149989` was
+  drift-dominated: cached `[578.52, 593.92, 615.87]` us, original `[525.46, 569.97, 599.98]` us, then cached repeat
+  `[400.81, 412.66, 430.27]` us. The candidate was slower than the middle original once and much faster after it, so
+  positional Criterion rows were not acceptable shipping evidence.
+- A tighter same-binary paired control on `vmi1153651` alternated cached/original order within every iteration. Its ten
+  measured speedups were `0.9483, 1.0588, 1.1075, 0.7974, 1.1486, 0.9673, 0.9411, 1.0089, 0.9772, 0.9627`; the
+  median was **0.9723x**, six of ten samples lost, and the range straddled the null broadly. This is below the shipping
+  floor despite removing a real redundant pass.
+- The forced-original and cached solvers produced exactly equal complete `Output` values, and the focused
+  strict-remote structured suite passed **3/3**. Every authoritative Cargo command used direct argv through fail-closed
+  `rch exec`; no local Cargo fallback informed the rejection. The source, exact-proof test, toggle, and benchmark probe
+  were all manually reverted; only this evidence entry ships. `git diff --check` passed; staged UBS found no supported
+  language because the final commit is Markdown-only.
