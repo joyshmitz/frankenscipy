@@ -596,7 +596,15 @@ fn triangular_filter<T: FormatConvertible>(
         }
     }
 
-    CooMatrix::from_triplets(coo.shape(), data, rows, cols, false)
+    // rows/cols are a subset of the already-validated `coo` indices, so they are
+    // provably in-bounds; construct the COO directly to skip the two O(nnz) bounds
+    // re-scans `from_triplets(.., false)` would run before returning the struct.
+    Ok(CooMatrix {
+        shape: coo.shape(),
+        data,
+        row_indices: rows,
+        col_indices: cols,
+    })
 }
 
 fn is_lower_triangle(row: usize, col: usize, k: isize) -> bool {

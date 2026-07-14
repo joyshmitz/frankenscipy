@@ -2,7 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
     IluOptions, Shape2D, SolveOptions, add_csr, block_diag, diags, eye, kron, random, scale_coo,
-    scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve,
+    scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -60,6 +60,25 @@ fn scale_coo_checked_reference(matrix: &CooMatrix, alpha: f64) -> CooMatrix {
         false,
     )
     .expect("checked COO reference")
+}
+
+// Reproduces the old `tril(.., 0)` path: identical to_coo + lower-triangle filter,
+// differing only in routing the result through from_triplets' redundant bounds scan.
+fn tril0_checked_reference(matrix: &CsrMatrix) -> CooMatrix {
+    let coo = matrix.to_coo().expect("to_coo");
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut data = Vec::new();
+    for idx in 0..coo.nnz() {
+        let row = coo.row_indices()[idx];
+        let col = coo.col_indices()[idx];
+        if row >= col {
+            rows.push(row);
+            cols.push(col);
+            data.push(coo.data()[idx]);
+        }
+    }
+    CooMatrix::from_triplets(coo.shape(), data, rows, cols, false).expect("checked tril")
 }
 
 fn csr_to_coo_checked_reference(matrix: &CsrMatrix) -> CooMatrix {
@@ -232,6 +251,28 @@ fn bench_arithmetic(c: &mut Criterion) {
                 b_iter.iter(|| {
                     let scaled = scale_coo_checked_reference(black_box(a), black_box(2.5));
                     black_box(scaled.nnz());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("{label}_tril"), n),
+            &a,
+            |b_iter, a| {
+                b_iter.iter(|| {
+                    let lower = tril(black_box(a), black_box(0)).expect("tril");
+                    black_box(lower.nnz());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("{label}_tril_checked_reference"), n),
+            &a,
+            |b_iter, a| {
+                b_iter.iter(|| {
+                    let lower = tril0_checked_reference(black_box(a));
+                    black_box(lower.nnz());
                 });
             },
         );
