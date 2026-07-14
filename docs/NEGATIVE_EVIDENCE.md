@@ -21085,3 +21085,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   owned implementation, proof, and benchmark hunks match rustfmt. `git diff --check` passed. Every authoritative Cargo
   command ran fail-closed through direct `rch exec`; no local Cargo fallback informed this keep. Staged UBS exited 0
   with zero critical findings; its shadow-workspace Cargo probes are supplementary, not remote-only proof.
+
+## 2026-07-14 - cod - KEEP sparse owned-triplet `find` canonicalization (1.151x at 10000x10000)
+
+- Negative-ledger-first selection found no prior `find` optimization or rejection. Adjacent sparse entries concern
+  constructors, conversions, arithmetic, and graph kernels; transferring the owned COO triplets into the existing
+  canonicalizer is a distinct lane. The opportunity score was 15.0 (impact 3 x confidence 5 / effort 1).
+- ONE lever destructures the owned `CooMatrix` returned by `to_coo()` and moves its shape, data, row-index, and
+  column-index buffers into the same `CooMatrix::from_triplets(..., true)` call. This removes three full `Vec` clones
+  while retaining the identical canonicalization, duplicate-summation order, explicit-zero filter, error precedence,
+  output ordering, and floating-point bits.
+- The retained public fast-profile row measured production-original at `[1.4787, 1.5148, 1.5645]` ms and the
+  candidate at `[1.2640, 1.3160, 1.4007]` ms on pinned worker `vmi1149989`. The centered speedup is **1.151x** and the
+  conservative endpoint speedup is **1.056x**, with no interval overlap. Criterion's paired change was wholly
+  improved at `[-29.342%, -20.770%, -11.813%]`, `p=0.00`.
+- The focused strict-remote proof passed **2/2** on `vmi1149989`. A literal copy of the former implementation matched
+  exact row/column vectors and `to_bits()` value vectors for COO, CSR, and CSC inputs covering empty matrices,
+  unsorted coordinates, finite duplicate addition and cancellation, explicit negative zero, infinities, and a
+  payload NaN; the independent duplicate/zero behavior test also passed.
+- Final strict-remote `cargo check -p fsci-sparse --all-targets` passed on `vmi1152480`. Strict-remote no-deps Clippy
+  reached `fsci-sparse` and stopped only on four pre-existing `needless_range_loop` findings in unchanged `linalg.rs`
+  at lines 4387, 4412, 5755, and 12244; none intersects an owned hunk. Direct rustfmt checking exposed broad
+  historical drift elsewhere in the crate; the owned implementation, proof, and benchmark hunks match rustfmt.
+  `git diff --check` passed. Every authoritative Cargo command ran fail-closed through direct `rch exec`; no local
+  Cargo fallback informed this keep. Staged UBS exited 0 with zero critical findings; its broad legacy warnings and
+  shadow-workspace Cargo probes are supplementary, not part of the remote-only proof.

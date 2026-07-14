@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
-    COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
-    BMAT_FORCE_GENERIC, DIAGS_VALIDATE, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions,
+    BMAT_FORCE_GENERIC, COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix,
+    DIAGS_VALIDATE, FormatConvertible, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions,
     VSTACK_FORCE_GENERIC, add_csr, block_diag, bmat, diags, eye, eye_array, find, kron, random,
     scale_coo, scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril, vstack,
 };

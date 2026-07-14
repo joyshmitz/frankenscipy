@@ -319,13 +319,7 @@ pub fn find<T: FormatConvertible>(matrix: &T) -> SparseResult<(Vec<usize>, Vec<u
         row_indices,
         col_indices,
     } = matrix.to_coo()?;
-    let canonical = CooMatrix::from_triplets(
-        shape,
-        data,
-        row_indices,
-        col_indices,
-        true,
-    )?;
+    let canonical = CooMatrix::from_triplets(shape, data, row_indices, col_indices, true)?;
 
     let mut rows = Vec::with_capacity(canonical.nnz());
     let mut cols = Vec::with_capacity(canonical.nnz());
