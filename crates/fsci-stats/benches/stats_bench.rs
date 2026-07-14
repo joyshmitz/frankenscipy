@@ -4,8 +4,9 @@ use fsci_stats::{
     SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
     binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
     histogram, kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mannkendall, mannwhitneyu,
-    median_abs_deviation, mixture_discrepancy, pacf, psd_welch, rand_index, siegelslopes, somersd,
-    theilslopes, wasserstein_distance, wraparound_discrepancy, MAD_REUSE_DISABLE,
+    mad_zscore, median_abs_deviation, mixture_discrepancy, pacf, psd_welch, rand_index, siegelslopes,
+    somersd, theilslopes, wasserstein_distance, wraparound_discrepancy, MAD_REUSE_DISABLE,
+    MAD_ZSCORE_HOIST_DISABLE,
 };
 use std::hint::black_box;
 
@@ -829,8 +830,32 @@ fn bench_biweight_midcorrelation_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("mad_zscore_hoist_ab");
+    group.sample_size(10);
+    for &n in &[100_000usize, 1_000_000usize] {
+        let data = deterministic_data(n);
+        group.bench_with_input(BenchmarkId::new("current_hoist", n), &data, |b, d| {
+            b.iter(|| {
+                MAD_ZSCORE_HOIST_DISABLE.store(false, Ordering::Relaxed);
+                black_box(mad_zscore(black_box(d), true))
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("orig_double_median", n), &data, |b, d| {
+            b.iter(|| {
+                MAD_ZSCORE_HOIST_DISABLE.store(true, Ordering::Relaxed);
+                black_box(mad_zscore(black_box(d), true))
+            });
+        });
+    }
+    MAD_ZSCORE_HOIST_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_mad_zscore_hoist_ab,
     bench_biweight_midcorrelation_ab,
     bench_mad_reuse_ab,
     bench_zipfian_cdf,

@@ -36091,6 +36091,13 @@ pub fn robust_zscore(data: &[f64], scale: bool) -> Vec<f64> {
     data.iter().map(|&x| (x - med) / scale_factor).collect()
 }
 
+/// When `true`, [`mad_zscore`] computes its MAD via `mad(data, 1.0)`, which recomputes
+/// `median(data)` internally (the ORIG double median). Default `false` feeds the already-computed
+/// median to `mad_from_median`, halving the median selects from 2 to 1. Byte-identical. A/B perf gate.
+#[doc(hidden)]
+pub static MAD_ZSCORE_HOIST_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Compute robust z-scores using median and MAD.
 ///
 /// mad_zscore = (x - median) / MAD
@@ -36108,9 +36115,17 @@ pub fn mad_zscore(data: &[f64], scale: bool) -> Vec<f64> {
         return vec![f64::NAN; data.len()];
     }
 
+    // `mad(data, 1.0)` recomputes `median(data)` internally; reuse the `med` we already have via
+    // `mad_from_median` (byte-identical when the fed median equals `median(data)`), dropping a
+    // redundant O(n) median select + allocation.
     let med = median(data);
     let scale_factor = if scale { 1.4826022185056018 } else { 1.0 };
-    let mad_val = mad(data, 1.0) * scale_factor;
+    let mad_raw = if MAD_ZSCORE_HOIST_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        mad(data, 1.0)
+    } else {
+        mad_from_median(data, med, 1.0)
+    };
+    let mad_val = mad_raw * scale_factor;
 
     if mad_val == 0.0 {
         return vec![f64::NAN; data.len()];
@@ -55761,6 +55776,30 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mad_zscore_median_hoist_matches_original_bitwise() {
+        use std::sync::atomic::Ordering;
+        let cases: &[&[f64]] = &[
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[5.0, 1.0, 3.0, 2.0, 4.0],
+            &[-3.0, -1.0, 0.0, 2.5, 7.0, -0.0, 11.0],
+            &[10.0, 10.0, 10.0, 10.0], // MAD == 0 => all-NaN path
+            &[1e300, -1e300, 0.0, 1.5, -2.5, 3.25, 100.0],
+        ];
+        for &data in cases {
+            for &scale in &[true, false] {
+                MAD_ZSCORE_HOIST_DISABLE.store(true, Ordering::Relaxed);
+                let original = mad_zscore(data, scale);
+                MAD_ZSCORE_HOIST_DISABLE.store(false, Ordering::Relaxed);
+                let hoisted = mad_zscore(data, scale);
+                let ob: Vec<u64> = original.iter().map(|v| v.to_bits()).collect();
+                let hb: Vec<u64> = hoisted.iter().map(|v| v.to_bits()).collect();
+                assert_eq!(ob, hb, "mad_zscore mismatch for {data:?} scale {scale}");
+            }
+        }
+        MAD_ZSCORE_HOIST_DISABLE.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn biweight_midcorrelation_median_hoist_matches_original_bitwise() {
