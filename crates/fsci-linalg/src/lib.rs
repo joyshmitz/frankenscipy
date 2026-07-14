@@ -17377,7 +17377,12 @@ pub fn mat_from_flat(data: &[f64], rows: usize, cols: usize) -> Vec<Vec<f64>> {
 
 /// Flatten a matrix to a vector (row-major order).
 pub fn mat_flatten(a: &[Vec<f64>]) -> Vec<f64> {
-    a.iter().flat_map(|row| row.iter().cloned()).collect()
+    let len = a.iter().map(Vec::len).sum();
+    let mut flattened = Vec::with_capacity(len);
+    for row in a {
+        flattened.extend_from_slice(row);
+    }
+    flattened
 }
 
 /// Check if two matrices are equal within tolerance.
@@ -21857,6 +21862,23 @@ mod tests {
             hstack(&[&a[..], &b[..]]),
             vec![vec![1.0, 2.0, 5.0], vec![3.0, 4.0, 6.0]]
         );
+    }
+
+    #[test]
+    fn mat_flatten_contiguous_rows_match_iterator_bits() {
+        let matrix = vec![
+            vec![],
+            vec![0.0, -0.0, f64::from_bits(0x7ff8_0000_0000_1234)],
+            vec![f64::INFINITY, f64::NEG_INFINITY],
+            vec![],
+            vec![1.25, -3.5],
+        ];
+        let original: Vec<f64> = matrix.iter().flat_map(|row| row.iter().copied()).collect();
+        let flattened = mat_flatten(&matrix);
+        assert_eq!(flattened.len(), original.len());
+        for (got, expected) in flattened.iter().zip(&original) {
+            assert_eq!(got.to_bits(), expected.to_bits());
+        }
     }
 
     #[test]

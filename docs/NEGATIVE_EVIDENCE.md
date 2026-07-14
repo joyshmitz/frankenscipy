@@ -21274,3 +21274,21 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `git diff --check` passed. Direct rustfmt checking reached one pre-existing formatting mismatch in unchanged
   `gamma.rs` code; the owned hunks follow rustfmt output. No second benchmark or local Cargo fallback was used, and
   stashes were untouched.
+
+## 2026-07-14 - cod - KEEP exact-capacity `mat_flatten` row copies (1.399x at 2048x1024)
+
+- Negative-ledger-first selection found no prior `mat_flatten` optimization or rejection. Dense factorizations,
+  norms, and dot products are already heavily harvested; this independent public matrix helper still flattened rows
+  through a nested iterator collection without exposing the exact output length. Opportunity score: 20.0 (impact 4 x
+  confidence 5 / effort 1).
+- ONE lever sums the ragged row lengths once, reserves the exact output capacity, and copies each contiguous row with
+  `extend_from_slice`. Row order, empty and ragged rows, allocation ownership, and every `f64` bit pattern are
+  unchanged. A regression fixture compares exact bits with the literal former iterator for signed zero, payload NaN,
+  infinities, empty rows, and ragged rows; it was added but not separately executed under the one-benchmark limit.
+- The one and only benchmark invocation compared production exact-capacity row copies with the literal former nested
+  iterator in the same binary on strict-remote worker `vmi1152480`. Row copies measured
+  `[1.0163, 1.2126, 1.4043]` ms versus `[1.6161, 1.6964, 1.7640]` ms for the former path: **1.399x** centered and
+  **1.151x** conservative, with no interval overlap. Its setup assertion proved the scored row equal before timing.
+- The foreground `cargo bench` compiled the production and benchmark paths successfully under `release-perf`.
+  `git diff --check` passed. Direct rustfmt checking exposed only pre-existing formatting drift outside the owned
+  hunks in `lib.rs`. No second benchmark or local Cargo fallback was used, and stashes were untouched.

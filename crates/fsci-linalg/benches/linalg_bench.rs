@@ -10,8 +10,8 @@ use fsci_linalg::{
     DecompOptions, HELMERT_FORCE_SERIAL, IS_DIAGONAL_FORCE_SERIAL, InvOptions,
     KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions,
     SolveOptions, TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, frobenius_norm,
-    inv, is_diagonal, lstsq, lu_factor, lu_solve, matmul, orthogonal_procrustes, pascal, pinv,
-    randomized_eigh, solve, solve_banded, solve_triangular, svd, vdot,
+    inv, is_diagonal, lstsq, lu_factor, lu_solve, mat_flatten, matmul, orthogonal_procrustes,
+    pascal, pinv, randomized_eigh, solve, solve_banded, solve_triangular, svd, vdot,
 };
 #[cfg(feature = "chol-wall-bench")]
 use fsci_linalg::{cholesky_wall_mr4_nr4_candidate, cholesky_wall_mr4_nr8_orig};
@@ -133,6 +133,26 @@ fn frobenius_norm_scalar_reference(a: &[Vec<f64>]) -> f64 {
 
 fn vdot_scalar_reference(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(&left, &right)| left * right).sum()
+}
+
+fn mat_flatten_iterator_reference(a: &[Vec<f64>]) -> Vec<f64> {
+    a.iter().flat_map(|row| row.iter().copied()).collect()
+}
+
+fn bench_mat_flatten_contiguous_rows(c: &mut Criterion) {
+    let matrix = make_matmul_matrix(2048, 1024, 0x6f31);
+    let candidate = mat_flatten(&matrix);
+    let original = mat_flatten_iterator_reference(&matrix);
+    assert_eq!(candidate, original);
+
+    let mut group = c.benchmark_group("mat_flatten_contiguous_rows");
+    group.bench_function("candidate/2048x1024", |bencher| {
+        bencher.iter(|| black_box(mat_flatten(black_box(&matrix))))
+    });
+    group.bench_function("original/2048x1024", |bencher| {
+        bencher.iter(|| black_box(mat_flatten_iterator_reference(black_box(&matrix))))
+    });
+    group.finish();
 }
 
 fn bench_frobenius_norm_simd(c: &mut Criterion) {
@@ -1679,6 +1699,7 @@ criterion_group!(
     bench_lstsq,
     bench_pinv,
     bench_matmul,
+    bench_mat_flatten_contiguous_rows,
     bench_frobenius_norm_simd,
     bench_vdot_simd_ab,
     bench_is_diagonal,
