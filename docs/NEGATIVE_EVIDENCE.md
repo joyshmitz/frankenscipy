@@ -21330,3 +21330,22 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - The foreground benchmark used `--profile release` on a 256x256 input. No `release-perf` build, second benchmark,
   or local Cargo fallback was used. Strict-remote targeted tests and all-target clippy, direct rustfmt, and
   `git diff --check` passed; stashes were untouched. Bead: `frankenscipy-swn8f`.
+
+## 2026-07-14 - cod - REJECT bit-identical signal `preemphasis` output threading (2.633x slower at 1,048,576)
+
+- Negative-ledger-first selection found no prior `preemphasis` optimization or rejection after the ready perf beads
+  proved stale or already landed, so the search pivoted to the fresh `fsci-signal` subsystem. Attribution identified
+  the complete large-input cost as the serial output fill `y[i] = x[i] - coeff * x[i - 1]`; outputs are independent,
+  but each element performs only one multiplication and subtraction. Opportunity score: 16.0 (impact 4 x confidence
+  4 / effort 1).
+- ONE lever routed the fill through the existing work-gated, order-preserving `par_index_fill`. A strict-remote
+  threshold-crossing test passed exact `to_bits()` parity against the literal former loop for 8,193 samples,
+  including signed zero, a payload NaN, infinity, and non-finite coefficient normalization.
+- The one and only benchmark invocation compared the parallel candidate with the literal former serial loop in the
+  same `--profile release` binary on strict-remote worker `vmi1152480`, using a 1,048,576-element input. Parallel fill
+  measured `[3.6178, 4.2176, 5.0242]` ms versus `[1.2000, 1.6021, 2.1869]` ms serial: **2.6325x slower** by midpoint
+  (**+163.25%**), and even the conservative interval endpoints show a **1.6543x regression** with no overlap.
+- **REJECT; candidate, proof, and benchmark seam removed.** Scoped OS-thread setup and result assembly dominate this
+  two-flop memory-streaming kernel even at one million elements. Do not retry via `par_index_fill`; reconsider only
+  with persistent workers or a vectorized primitive whose setup is amortized outside the call. No second benchmark,
+  local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-lr6do`.
