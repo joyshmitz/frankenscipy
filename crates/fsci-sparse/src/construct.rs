@@ -763,6 +763,13 @@ pub fn hstack_with_format(
 ///
 /// For A (m×n) and B (p×q), produces an (m*p × n*q) matrix.
 /// Matches `scipy.sparse.kron(A, B)`.
+/// When `true`, [`kron`]'s canonical fast path validates its (provably canonical) output through
+/// `from_components(.., true)` — the ORIG O(nnz) bounds scan + detect_canonical. Default `false`
+/// stamps {sorted, deduplicated} via the trusted constructor. Byte-identical result. A/B perf gate.
+#[doc(hidden)]
+pub static KRON_VALIDATE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn kron(a: &CsrMatrix, b: &CsrMatrix) -> SparseResult<CsrMatrix> {
     let a_shape = a.shape();
     let b_shape = b.shape();
@@ -935,9 +942,21 @@ fn kron_canonical_csr(
         (data, indices)
     };
 
-    Ok(Some(CsrMatrix::from_components(
-        shape, data, indices, indptr, true,
-    )?))
+    // Both inputs are canonical (checked above), so each output row `r` emits columns
+    // `aj*b_cols + b_col` with aj ascending (a's row sorted) and b_col ascending within each aj
+    // block — strictly increasing and unique, i.e. already sorted + deduplicated. Columns are also
+    // in range (aj*b_cols + b_col < a_cols*b_cols = out_cols). Route through the trusted constructor
+    // to skip `from_components`' redundant O(nnz) bounds scan + detect_canonical; byte-identical
+    // result AND canonical metadata.
+    if KRON_VALIDATE.load(std::sync::atomic::Ordering::Relaxed) {
+        Ok(Some(CsrMatrix::from_components(
+            shape, data, indices, indptr, true,
+        )?))
+    } else {
+        Ok(Some(CsrMatrix::from_components_trusted_canonical(
+            shape, data, indices, indptr,
+        )))
+    }
 }
 
 /// Thread count for the [`kron_canonical_csr`] disjoint-slice fill. Serial below
@@ -1470,6 +1489,44 @@ mod tests {
                 old.canonical_meta().deduplicated
             );
         }
+    }
+
+    #[test]
+    fn kron_trusted_matches_validated_bitwise() {
+        use std::sync::atomic::Ordering;
+        // Canonical CSR inputs (random -> to_csr canonicalizes) so kron takes its fast path.
+        let a = random(Shape2D::new(30, 40), 0.1, 0x1234)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        let b = random(Shape2D::new(20, 25), 0.15, 0x9abc)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        KRON_VALIDATE.store(true, Ordering::Relaxed);
+        let validated = kron(&a, &b).unwrap();
+        KRON_VALIDATE.store(false, Ordering::Relaxed);
+        let trusted = kron(&a, &b).unwrap();
+        KRON_VALIDATE.store(false, Ordering::Relaxed);
+        assert_eq!(trusted.shape(), validated.shape());
+        assert_eq!(trusted.indptr(), validated.indptr());
+        assert_eq!(trusted.indices(), validated.indices());
+        assert_eq!(
+            trusted.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            validated
+                .data()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            trusted.canonical_meta().sorted_indices,
+            validated.canonical_meta().sorted_indices
+        );
+        assert_eq!(
+            trusted.canonical_meta().deduplicated,
+            validated.canonical_meta().deduplicated
+        );
     }
 
     #[test]

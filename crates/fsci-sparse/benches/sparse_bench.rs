@@ -1,8 +1,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
-    DIAGS_VALIDATE, IluOptions, Shape2D, SolveOptions, add_csr, block_diag, diags, eye, eye_array,
-    kron, random, scale_coo, scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril,
+    DIAGS_VALIDATE, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions, add_csr, block_diag, diags,
+    eye, eye_array, kron, random, scale_coo, scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve,
+    tril,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -426,6 +427,31 @@ fn bench_eye_rectangular_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_kron_validate_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_kron_validate_ab");
+    group.sample_size(10);
+    // total_nnz ≈ 5000 * 200 = 1M over 50000 output rows: clears the parallel-fill gate, so the
+    // redundant O(nnz) validation scan (bounds + detect_canonical) is a serial tail worth trimming.
+    let a = make_random_csr(1_000, 0.005);
+    let b = make_random_csr(50, 0.08);
+    group.bench_function("current_trusted", |bn| {
+        bn.iter(|| {
+            KRON_VALIDATE.store(false, Ordering::Relaxed);
+            let m = kron(black_box(&a), black_box(&b)).expect("kron");
+            black_box(m.nnz());
+        });
+    });
+    group.bench_function("orig_validated", |bn| {
+        bn.iter(|| {
+            KRON_VALIDATE.store(true, Ordering::Relaxed);
+            let m = kron(black_box(&a), black_box(&b)).expect("kron");
+            black_box(m.nnz());
+        });
+    });
+    KRON_VALIDATE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_diags_validate_ab(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_diags_validate_ab");
     group.sample_size(10);
@@ -780,6 +806,7 @@ criterion_group!(
     bench_eye_rectangular_ab,
     bench_diags,
     bench_diags_validate_ab,
+    bench_kron_validate_ab,
     bench_spmm,
     bench_kron,
     bench_spilu,
