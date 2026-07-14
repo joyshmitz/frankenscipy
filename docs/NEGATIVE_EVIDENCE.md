@@ -21430,3 +21430,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   representation can reuse caller-owned output storage and measure that distinct ownership change independently.
   No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used. Bead:
   `frankenscipy-hxjqf`.
+
+## 2026-07-14 - cod - REJECT four-chain `rosen` reduction (4.79% lower centered, intervals overlap)
+
+- Negative-ledger-first reconciliation found the cluster lane already explicitly exhausted, then found no prior
+  keep or rejection for public `rosen` in the fresh `fsci-opt` subsystem. Direct source attribution showed one
+  dependency-chained scalar reduction across otherwise independent, nonnegative Rosenbrock terms. Opportunity
+  score: 16.0 (impact 4 x confidence 4 / effort 1).
+- ONE lever accumulated four consecutive terms through independent chains and combined them at the end. A focused
+  strict-remote test on worker `vmi1152480` matched the literal scalar reference within a length-scaled roundoff
+  bound across empty, short, and 4,099-element inputs, and covered NaN, infinity, and signed zero. The term
+  expression was unchanged; only the reduction association differed.
+- The one and only benchmark invocation compared four chains with the literal former scalar loop in the same
+  `--profile release` binary on strict-remote worker `vmi1152480`, using 262,144 values. Four chains measured
+  `[179.24, 201.29, 228.64]` us versus `[195.52, 211.41, 238.53]` us scalar: **1.0503x** centered (**4.79%** lower
+  centered time), but the intervals overlap and the conservative ratio is only **0.8551x**.
+- **REJECT; candidate, proof fixture, and benchmark seam removed.** The modest centered movement does not clear the
+  one-run noise floor. Do not retry accumulator-count tuning alone; revisit only with a distinct vectorization or
+  representation lever and independent attribution. Strict-remote clippy reached three pre-existing warnings in
+  `curvefit.rs` and an unrelated NNLS region; the focused proof and diff hygiene passed. No second benchmark,
+  `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-2oqis`.
