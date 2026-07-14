@@ -21667,3 +21667,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   blocker rather than claiming a keep without timing. Targeted staged UBS exited zero with no critical findings and
   the candidate diff passed whitespace hygiene. The focused remote correctness test passed. No second benchmark,
   `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-g05xc`.
+
+## 2026-07-14 - cod - REJECT tiled `CoreArray::from_dmatrix` conversion (4.109x slower)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced the dense-linalg SYRK harness, which prior attribution
+  places below 1% of Cholesky wall time. The older cluster perf beads were stale and the cluster ledger explicitly
+  marks that lane exhausted, so this pass pivoted to the fresh Array API input-conversion seam. No prior row covered
+  `CoreArray::from_dmatrix`. Direct source attribution found that its only input-sized work reads nalgebra's
+  column-major matrix through a row-major loop; a 512-row matrix therefore presents 4 KiB-spaced inner-loop reads.
+  Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE candidate pre-sized the C-order `ScalarValue` destination and copied through 32x32 tiles, reading each source
+  column contiguously within a tile while writing each unchanged value to its original row-major index. A focused
+  strict-remote proof on `vmi1149989` matched every output bit across tile boundaries, including `-0.0`, infinity, and
+  a payload NaN. Strict-remote all-target Clippy passed with `-D warnings`; rustfmt/diff hygiene passed; staged static
+  UBS exited zero with no critical findings.
+- The one and only benchmark invocation compared the tiled candidate with the literal former row-major push loop in
+  the same `--profile release` binary on strict-remote worker `vmi1152480`, using a 512x512 matrix, 10 samples, 100 ms
+  warm-up, and 500 ms measurement per arm. Tiled measured `[2.2990, 2.5037, 2.7111]` ms versus
+  `[576.70, 609.24, 671.13]` us original: **0.24334x** centered throughput, or a **4.109x slowdown**, with no interval
+  overlap. Pre-initializing the destination and turning cheap strided f64 reads into strided `ScalarValue` writes cost
+  far more than the hypothesized source-locality gain.
+- Disposition: source, proof test, and benchmark hunks were dropped. Keep the original sequential-push conversion;
+  do not retry destination-indexed tiling without an allocation-safe uninitialized-write primitive, which this
+  `#![forbid(unsafe_code)]` crate intentionally lacks. The complete remote benchmark returned in 147.8 seconds, below
+  the five-minute cap. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used.
+  Bead: `frankenscipy-8c20v`.
