@@ -163,6 +163,28 @@ impl CsrMatrix {
         }
     }
 
+    /// Construct a CSR matrix the caller has already proven valid AND canonical (sorted,
+    /// deduplicated), skipping both the O(nnz) `validate_compressed` bounds scan and the
+    /// `detect_canonical` pass. Same result AND metadata as `from_components(.., true)` when
+    /// the inputs genuinely are canonical — the caller owns that invariant.
+    pub(crate) fn from_components_trusted_canonical(
+        shape: Shape2D,
+        data: Vec<f64>,
+        indices: Vec<usize>,
+        indptr: Vec<usize>,
+    ) -> Self {
+        Self {
+            shape,
+            data,
+            indices,
+            indptr,
+            canonical: CanonicalMeta {
+                sorted_indices: true,
+                deduplicated: true,
+            },
+        }
+    }
+
     #[must_use]
     pub const fn shape(&self) -> Shape2D {
         self.shape

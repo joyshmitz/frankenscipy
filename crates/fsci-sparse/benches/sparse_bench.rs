@@ -1,8 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
-    IluOptions, Shape2D, SolveOptions, add_csr, block_diag, diags, eye, kron, random, scale_coo,
-    scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril,
+    DIAGS_VALIDATE, IluOptions, Shape2D, SolveOptions, add_csr, block_diag, diags, eye, kron,
+    random, scale_coo, scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -374,6 +374,38 @@ fn bench_diags(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_diags_validate_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_diags_validate_ab");
+    group.sample_size(10);
+    // Wide band so capacity clears the parallel-fill gate (~1M entries): the redundant O(nnz)
+    // validation scans (bounds + detect_canonical) are serial while the fill fans across cores.
+    let n = 50_000usize;
+    let band = 10isize;
+    let offsets: Vec<isize> = (-band..=band).collect();
+    let diagonals: Vec<Vec<f64>> = offsets
+        .iter()
+        .map(|&o| vec![1.0; n - o.unsigned_abs() as usize])
+        .collect();
+    let shape = Some(Shape2D::new(n, n));
+
+    group.bench_function(BenchmarkId::new("current_trusted", n), |b| {
+        b.iter(|| {
+            DIAGS_VALIDATE.store(false, Ordering::Relaxed);
+            let csr = diags(black_box(&diagonals), black_box(&offsets), shape).expect("diags");
+            black_box(csr.nnz());
+        });
+    });
+    group.bench_function(BenchmarkId::new("orig_validated", n), |b| {
+        b.iter(|| {
+            DIAGS_VALIDATE.store(true, Ordering::Relaxed);
+            let csr = diags(black_box(&diagonals), black_box(&offsets), shape).expect("diags");
+            black_box(csr.nnz());
+        });
+    });
+    DIAGS_VALIDATE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_spmm(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_spmm");
     for &(n, density) in &[(500usize, 0.02f64), (1_000, 0.01), (2_000, 0.01)] {
@@ -694,6 +726,7 @@ criterion_group!(
     bench_arithmetic,
     bench_eye,
     bench_diags,
+    bench_diags_validate_ab,
     bench_spmm,
     bench_kron,
     bench_spilu,

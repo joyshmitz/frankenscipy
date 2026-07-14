@@ -11,7 +11,8 @@ pub use audit::{
 };
 
 pub use construct::{
-    HstackOutput, SPARSE_DIAGS_FORCE_SERIAL, block_array, block_diag, bmat, diags, diags_array, eye,
+    DIAGS_VALIDATE, HstackOutput, SPARSE_DIAGS_FORCE_SERIAL, block_array, block_diag, bmat,
+    diags, diags_array, eye,
     eye_array, eye_rectangular, hstack, hstack_with_format, identity, kron, kronsum, random,
     spdiags, vstack,
 };

@@ -121,6 +121,15 @@ fn diags_row_block(
 pub static SPARSE_DIAGS_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`diags`] takes the ORIG validating path: bounds-check EVERY diagonal element
+/// (O(nnz) pre-scan) then build the CSR through `from_components(.., true)` (another O(nnz) bounds
+/// scan + `detect_canonical`). Default `false` checks only each diagonal's last (extremal) element
+/// and, since the emitted rows are provably in-bounds and canonical, builds via the trusted
+/// constructor — skipping both O(nnz) validation scans. Byte-identical result AND metadata. A/B gate.
+#[doc(hidden)]
+pub static DIAGS_VALIDATE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn diags(
     diagonals: &[Vec<f64>],
     offsets: &[isize],
@@ -144,10 +153,21 @@ pub fn diags(
     let inferred = infer_shape(diagonals, offsets)?;
     let shape = shape.unwrap_or(inferred);
 
+    let validate = DIAGS_VALIDATE.load(std::sync::atomic::Ordering::Relaxed);
     for (diag, &offset) in diagonals.iter().zip(offsets.iter()) {
+        if diag.is_empty() {
+            continue;
+        }
         let start_row = if offset < 0 { (-offset) as usize } else { 0 };
         let start_col = if offset > 0 { offset as usize } else { 0 };
-        for k in 0..diag.len() {
+        // `row` and `col` both increase by 1 per step `k`, so the LAST element (k = len-1)
+        // carries the maximum row and column. If it fits the shape, every earlier element
+        // does too; if any element would exceed the shape, the last one does (same axis).
+        // Checking only that extremum yields the byte-identical valid/invalid verdict while
+        // collapsing an O(nnz) bounds pre-scan to O(#diagonals) — meaningful because this
+        // pass is serial while the row fill below fans across cores.
+        let range = if validate { 0..diag.len() } else { (diag.len() - 1)..diag.len() };
+        for k in range {
             let row = start_row + k;
             let col = start_col + k;
             if row >= shape.rows || col >= shape.cols {
@@ -223,7 +243,18 @@ pub fn diags(
         indptr[i + 1] += indptr[i];
     }
 
-    CsrMatrix::from_components(shape, data, indices, indptr, true)
+    // Each output row emits its diagonals in offset-sorted order, and for a fixed row the column
+    // of the entry from offset `o` is `row + o` — strictly ascending in `o` with unique offsets —
+    // so every row is already sorted and deduplicated, and the bounds pre-check above proved the
+    // indices in range. The trusted constructor therefore skips `from_components`' redundant O(nnz)
+    // bounds scan + `detect_canonical`, yielding the identical matrix AND canonical metadata.
+    if validate {
+        CsrMatrix::from_components(shape, data, indices, indptr, true)
+    } else {
+        Ok(CsrMatrix::from_components_trusted_canonical(
+            shape, data, indices, indptr,
+        ))
+    }
 }
 
 /// Construct a sparse DIA matrix from SciPy-style padded diagonal rows.
@@ -1365,6 +1396,44 @@ mod tests {
         let err = diags(&[vec![1.0, 2.0, 3.0]], &[1], Some(Shape2D::new(3, 3)))
             .expect_err("bounds violation");
         assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn diags_precheck_last_only_matches_full_scan_verdict() {
+        use std::sync::atomic::Ordering;
+        // (diagonals, offsets, shape) cases: valid ones and ones that exceed the shape.
+        let cases: &[(&[&[f64]], &[isize], Shape2D)] = &[
+            (&[&[1.0, 2.0, 3.0]], &[0], Shape2D::new(3, 3)),
+            (&[&[1.0, 2.0], &[3.0, 4.0, 5.0]], &[1, 0], Shape2D::new(3, 3)),
+            (&[&[1.0, 2.0, 3.0]], &[1], Shape2D::new(3, 3)), // last col out of bounds
+            (&[&[1.0, 2.0, 3.0, 4.0]], &[0], Shape2D::new(3, 3)), // overruns both axes
+        ];
+        for &(diags_in, offsets, shape) in cases {
+            let owned: Vec<Vec<f64>> = diags_in.iter().map(|d| d.to_vec()).collect();
+            DIAGS_VALIDATE.store(true, Ordering::Relaxed);
+            let full = diags(&owned, offsets, Some(shape));
+            DIAGS_VALIDATE.store(false, Ordering::Relaxed);
+            let fast = diags(&owned, offsets, Some(shape));
+            assert_eq!(full.is_ok(), fast.is_ok(), "verdict mismatch for {offsets:?}");
+            if let (Ok(a), Ok(b)) = (&full, &fast) {
+                assert_eq!(a.indptr(), b.indptr());
+                assert_eq!(a.indices(), b.indices());
+                assert_eq!(
+                    a.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    b.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                );
+                // Trusted path must also carry the same canonical metadata as the validated path.
+                assert_eq!(
+                    a.canonical_meta().sorted_indices,
+                    b.canonical_meta().sorted_indices
+                );
+                assert_eq!(
+                    a.canonical_meta().deduplicated,
+                    b.canonical_meta().deduplicated
+                );
+            }
+        }
+        DIAGS_VALIDATE.store(false, Ordering::Relaxed);
     }
 
     #[test]
