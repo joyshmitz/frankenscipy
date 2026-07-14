@@ -21409,3 +21409,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `fsci-linalg/src/lib.rs:9431` `needless_range_loop` warning before linting the owned crate; the focused test,
   bench-target compile, and `git diff --check` passed. No `release-perf` build, second benchmark, local Cargo
   fallback, or stash mutation was used. Bead: `frankenscipy-o63d7`.
+
+## 2026-07-14 - cod - REJECT exact-capacity `unwrap_phase` output (6.04% slower centered at 262,144)
+
+- Negative-ledger-first reconciliation found the prior signal optimization limited to a threading reject and no
+  existing keep or rejection for `unwrap_phase` allocation. Direct source attribution showed that its cumulative
+  recurrence starts from a one-element `Vec` and grows through `phase.len() - 1` pushes, so geometric growth can
+  reallocate and copy already-unwrapped prefixes. The arithmetic recurrence itself is necessarily serial.
+  Opportunity score: 15.0 (impact 3 x confidence 5 / effort 1).
+- ONE lever replaced geometric growth with an exact `phase.len()` reservation before the same pushes. A focused
+  strict-remote test proved exact `f64::to_bits()` parity against the literal former implementation for empty,
+  singleton, wrap-crossing, signed-zero, payload-NaN, and infinite inputs; the focused bench target also compiled
+  remotely before timing.
+- The one and only benchmark invocation compared exact reservation with the literal former geometric-growth path
+  in the same `--profile release` binary on strict-remote worker `vmi1152480`, using 262,144 wrapped phase values.
+  Exact reservation measured `[1.5522, 1.7117, 1.9452]` ms versus `[1.5643, 1.6142, 1.6823]` ms for geometric
+  growth: **1.0604x slower centered** (**+6.04%**), with overlapping intervals and a worse candidate upper tail.
+- **REJECT; candidate, exact-bit proof, and benchmark seam removed.** Allocation reuse did not clear the null/noise
+  floor of this arithmetic-heavy serial recurrence. Do not retry exact reservation alone; revisit only if a future
+  representation can reuse caller-owned output storage and measure that distinct ownership change independently.
+  No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used. Bead:
+  `frankenscipy-hxjqf`.
