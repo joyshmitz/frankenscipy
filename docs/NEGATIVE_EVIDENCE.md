@@ -20866,3 +20866,31 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `git diff --check` also passed. UBS first flagged an explicit `panic!` in the new test-only mismatch arm; replacing it
   with an assertion preserved the failure contract, and the final staged scan exited zero with **0 critical** findings.
   UBS shadow-workspace Cargo probes were excluded from the strict-remote proof.
+
+## 2026-07-13 - cod - KEEP interpolate streaming `polyint_definite` (8.405x at 1,000,000 coefficients)
+
+- Negative-ledger-first selection found no prior `polyint_definite` optimization or rejection. The adjacent polynomial
+  entries cover direct `polysub` subtraction and rejected tiled `polyder`; definite integration's antiderivative
+  materialization is a separate clean path. Production cloned the coefficient slice, allocated and filled a second
+  antiderivative vector, then traversed that vector once per endpoint.
+- ONE lever computes each identical integrated coefficient once and feeds it directly into the two original Horner
+  chains. Each chain retains its coefficient order and multiply-then-add sequence, including the final trailing `+ 0.0`
+  from `polyint(..., k = 0.0)`, so signed zero, non-finite behavior, division order, and final subtraction are unchanged.
+- The new public Criterion row's strict-remote production-original full-LTO interval on `vmi1156319` was
+  `[9.3455, 9.7584, 10.083]` ms. Its timed body directly exposed the two allocations, division/materialization pass, and
+  two evaluation passes; the long cold link completed before the row and does not enter the timing interval.
+- The decisive LTO-disabled same-binary candidate/reference/candidate bracket on `vmi1153651` measured the optimized
+  public path at `[2.5726, 2.8183, 3.0272]` ms, an exact temporary copy of the former materializing method body at
+  `[20.233, 23.687, 26.637]` ms, and the optimized path again at `[2.3661, 2.5144, 2.8235]` ms. The centered speedups are
+  **8.405x** and **9.421x**, with a conservative interval floor above **6.683x**. The temporary comparator was removed;
+  only the public production row remains.
+- The focused strict-remote exact-bit proof passed **1/1**. It compares the streamed result to the literal former
+  `polyint` plus two-`polyval` composition across empty and finite inputs, signed zero, infinities, payload NaNs, and
+  infinite endpoints. Every authoritative Cargo command ran fail-closed through `rch exec`; no local Cargo fallback
+  informed this keep.
+- Strict-remote library-plus-benchmark Clippy reached `fsci-interpolate` and stopped on **86 pre-existing** crate-wide
+  findings in unchanged FITPACK, spherical-spline, and older library code; none pointed at the owned implementation or
+  proof hunk, and the benchmark target was not reached after the library failure. `git diff --check` passed. Direct
+  rustfmt checks continue to expose broad pre-existing drift outside the owned hunks; the new hunks match rustfmt. UBS
+  exited zero with **0 critical** findings in the two staged Rust files; its shadow-workspace Cargo probes were excluded
+  from the strict-remote proof.

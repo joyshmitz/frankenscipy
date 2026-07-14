@@ -8638,8 +8638,19 @@ pub fn hermite_interp(nodes: &[f64], values: &[f64], derivatives: &[f64], x: f64
 
 /// Compute the definite integral of a polynomial (coefficients highest degree first).
 pub fn polyint_definite(coeffs: &[f64], a: f64, b: f64) -> f64 {
-    let antider = polyint(coeffs, 1, 0.0);
-    polyval(&antider, b) - polyval(&antider, a)
+    let n = coeffs.len();
+    let mut value_at_b = 0.0;
+    let mut value_at_a = 0.0;
+    for (i, &coefficient) in coeffs.iter().enumerate() {
+        let integrated = coefficient / (n - i) as f64;
+        value_at_b = value_at_b * b + integrated;
+        value_at_a = value_at_a * a + integrated;
+    }
+    // Preserve `polyint(..., k = 0.0)`'s trailing coefficient and the final
+    // Horner operation, including signed-zero and non-finite behavior.
+    value_at_b = value_at_b * b + 0.0;
+    value_at_a = value_at_a * a + 0.0;
+    value_at_b - value_at_a
 }
 
 /// Evaluate a polynomial and return (value, error_estimate).
@@ -13596,6 +13607,33 @@ mod tests {
         assert!((v - 14.0).abs() < 1e-12, "integral = {v}");
         // integral_1^3 (2x) dx = [x^2]_1^3 = 8.
         assert!((polyint_definite(&[2.0, 0.0], 1.0, 3.0) - 8.0).abs() < 1e-12, "linear integral");
+    }
+
+    #[test]
+    fn polyint_definite_stream_matches_former_materialization_bits() {
+        let cases = [
+            (Vec::new(), -0.0, 0.0),
+            (vec![3.0, 2.0, 1.0], 0.0, 2.0),
+            (vec![-0.0, 0.0, -1.5, 2.25], -0.75, 0.875),
+            (vec![f64::INFINITY, -0.0], -0.5, 0.25),
+            (
+                vec![f64::from_bits(0x7ff8_0000_0000_0042), 1.0],
+                -0.5,
+                0.25,
+            ),
+            (vec![1.0, -2.0, 3.0], f64::NEG_INFINITY, f64::INFINITY),
+        ];
+
+        for (case_index, (coeffs, a, b)) in cases.iter().enumerate() {
+            let antiderivative = polyint(coeffs, 1, 0.0);
+            let former = polyval(&antiderivative, *b) - polyval(&antiderivative, *a);
+            let streamed = polyint_definite(coeffs, *a, *b);
+            assert_eq!(
+                streamed.to_bits(),
+                former.to_bits(),
+                "case {case_index} differs"
+            );
+        }
     }
 
     #[test]

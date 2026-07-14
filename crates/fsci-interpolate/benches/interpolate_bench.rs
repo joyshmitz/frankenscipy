@@ -1,12 +1,14 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
 use fsci_interpolate::{
     BarycentricInterpolator, CloughTocher2DInterpolator, CubicSplineStandalone, GriddataMethod,
     Interp1d, Interp1dOptions, InterpKind, LinearNDInterpolator, PchipInterpolator,
-    RbfInterpolator, RbfKernel, SmoothBivariateSpline, SmoothBivariateSplineOptions, make_interp_spline, make_smoothing_spline, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod, SplineBc, griddata,
-    interp1d_linear, lagrange, polyder, polymul, polyroots, polysub, bisplrep,
+    RbfInterpolator, RbfKernel, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod,
+    SmoothBivariateSpline, SmoothBivariateSplineOptions, SplineBc, bisplrep, griddata,
+    interp1d_linear, lagrange, make_interp_spline, make_smoothing_spline, polyder,
+    polyint_definite, polymul, polyroots, polysub,
 };
 use fsci_runtime::RuntimeMode;
+use std::hint::black_box;
 
 fn grid_1d(n: usize) -> Vec<f64> {
     (0..n).map(|i| i as f64 / (n - 1) as f64).collect()
@@ -165,6 +167,15 @@ fn bench_polynomial(c: &mut Criterion) {
     });
     group.bench_function("polyder/1000000/m8", |bench| {
         bench.iter(|| polyder(black_box(&sub_a), black_box(8)))
+    });
+    group.bench_function("polyint_definite/1000000", |bench| {
+        bench.iter(|| {
+            black_box(polyint_definite(
+                black_box(&sub_a),
+                black_box(-0.75),
+                black_box(0.875),
+            ))
+        })
     });
     group.bench_function("polyroots/degree4", |b| b.iter(|| polyroots(&roots_coeffs)));
     group.finish();
