@@ -5171,6 +5171,35 @@ pub fn sparse_frobenius_inner(a: &CsrMatrix, b: &CsrMatrix) -> f64 {
     let n = a.shape().rows;
     let mut sum = 0.0;
 
+    let a_meta = a.canonical_meta();
+    let b_meta = b.canonical_meta();
+    if a_meta.sorted_indices
+        && a_meta.deduplicated
+        && b_meta.sorted_indices
+        && b_meta.deduplicated
+    {
+        for row in 0..n {
+            let mut a_idx = a.indptr()[row];
+            let a_end = a.indptr()[row + 1];
+            let mut b_idx = b.indptr()[row];
+            let b_end = b.indptr()[row + 1];
+            while a_idx < a_end && b_idx < b_end {
+                let a_col = a.indices()[a_idx];
+                let b_col = b.indices()[b_idx];
+                if a_col < b_col {
+                    a_idx += 1;
+                } else if a_col > b_col {
+                    b_idx += 1;
+                } else {
+                    sum += a.data()[a_idx] * b.data()[b_idx];
+                    a_idx += 1;
+                    b_idx += 1;
+                }
+            }
+        }
+        return sum;
+    }
+
     for i in 0..n {
         let a_start = a.indptr()[i];
         let a_end = a.indptr()[i + 1];
@@ -6745,6 +6774,85 @@ mod tests {
         )
         .expect("non-finite csr");
         assert_matches(&non_finite);
+    }
+
+    #[test]
+    fn sparse_frobenius_inner_merge_matches_nested_lookup_bits() {
+        fn nested_reference(a: &CsrMatrix, b: &CsrMatrix) -> f64 {
+            let mut sum = 0.0;
+            for row in 0..a.shape().rows {
+                for a_idx in a.indptr()[row]..a.indptr()[row + 1] {
+                    for b_idx in b.indptr()[row]..b.indptr()[row + 1] {
+                        if b.indices()[b_idx] == a.indices()[a_idx] {
+                            sum += a.data()[a_idx] * b.data()[b_idx];
+                            break;
+                        }
+                    }
+                }
+            }
+            sum
+        }
+
+        fn assert_matches(a: &CsrMatrix, b: &CsrMatrix) {
+            assert_eq!(
+                sparse_frobenius_inner(a, b).to_bits(),
+                nested_reference(a, b).to_bits()
+            );
+        }
+
+        let canonical_a = CsrMatrix::from_components(
+            Shape2D::new(3, 5),
+            vec![-0.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            vec![0, 2, 4, 1, 3, 0, 4],
+            vec![0, 3, 5, 7],
+            false,
+        )
+        .expect("canonical a");
+        let canonical_b = CsrMatrix::from_components(
+            Shape2D::new(3, 5),
+            vec![8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
+            vec![0, 1, 4, 0, 3, 0, 2, 4],
+            vec![0, 3, 5, 8],
+            false,
+        )
+        .expect("canonical b");
+        assert_matches(&canonical_a, &canonical_b);
+
+        let non_finite_a = CsrMatrix::from_components(
+            Shape2D::new(2, 2),
+            vec![f64::INFINITY, f64::from_bits(0x7ff8_0000_0000_0042)],
+            vec![0, 1],
+            vec![0, 1, 2],
+            false,
+        )
+        .expect("non-finite a");
+        let non_finite_b = CsrMatrix::from_components(
+            Shape2D::new(2, 2),
+            vec![2.0, f64::NEG_INFINITY],
+            vec![0, 1],
+            vec![0, 1, 2],
+            false,
+        )
+        .expect("non-finite b");
+        assert_matches(&non_finite_a, &non_finite_b);
+
+        let noncanonical_a = CsrMatrix::from_components(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![2, 0, 0, 1],
+            vec![0, 3, 4],
+            false,
+        )
+        .expect("noncanonical a");
+        let noncanonical_b = CsrMatrix::from_components(
+            Shape2D::new(2, 3),
+            vec![5.0, 6.0, 7.0, 8.0],
+            vec![0, 2, 2, 1],
+            vec![0, 3, 4],
+            false,
+        )
+        .expect("noncanonical b");
+        assert_matches(&noncanonical_a, &noncanonical_b);
     }
 
     #[test]

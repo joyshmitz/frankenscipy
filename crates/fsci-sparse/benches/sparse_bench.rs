@@ -3,8 +3,8 @@ use fsci_sparse::{
     BMAT_FORCE_GENERIC, COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix,
     DIAGS_VALIDATE, FormatConvertible, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions,
     VSTACK_FORCE_GENERIC, add_csr, block_diag, bmat, diags, eye, eye_array, find, kron, random,
-    scale_coo, scale_csc, scale_csr, sparse_diagonal, sparse_trace, spilu, spmm, spmv_csr, spsolve,
-    tril, vstack,
+    scale_coo, scale_csc, scale_csr, sparse_diagonal, sparse_frobenius_inner, sparse_trace, spilu,
+    spmm, spmv_csr, spsolve, tril, vstack,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -40,6 +40,37 @@ fn make_vector(n: usize) -> Vec<f64> {
 
 fn sparse_trace_materialized_reference(matrix: &CsrMatrix) -> f64 {
     sparse_diagonal(matrix).iter().sum()
+}
+
+fn sparse_frobenius_inner_nested_reference(a: &CsrMatrix, b: &CsrMatrix) -> f64 {
+    let mut sum = 0.0;
+    for row in 0..a.shape().rows {
+        for a_idx in a.indptr()[row]..a.indptr()[row + 1] {
+            for b_idx in b.indptr()[row]..b.indptr()[row + 1] {
+                if b.indices()[b_idx] == a.indices()[a_idx] {
+                    sum += a.data()[a_idx] * b.data()[b_idx];
+                    break;
+                }
+            }
+        }
+    }
+    sum
+}
+
+fn make_inner_bench_matrix(n: usize, row_width: usize, value_bias: f64) -> CsrMatrix {
+    let mut data = Vec::with_capacity(n * row_width);
+    let mut indices = Vec::with_capacity(n * row_width);
+    let mut indptr = Vec::with_capacity(n + 1);
+    indptr.push(0);
+    for row in 0..n {
+        for col in 0..row_width {
+            indices.push(col);
+            data.push(value_bias + ((row * 17 + col * 13) % 101) as f64 * 0.001);
+        }
+        indptr.push(data.len());
+    }
+    CsrMatrix::from_components(Shape2D::new(n, n), data, indices, indptr, false)
+        .expect("canonical inner-product matrix")
 }
 
 fn scale_csc_checked_reference(matrix: &CscMatrix, alpha: f64) -> CscMatrix {
@@ -895,6 +926,30 @@ fn bench_sparse_trace_direct_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sparse_frobenius_inner_merge_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_frobenius_inner_merge_ab");
+    group.sample_size(15);
+    let n = 4_096usize;
+    let row_width = 64usize;
+    let a = make_inner_bench_matrix(n, row_width, 1.0);
+    let b = make_inner_bench_matrix(n, row_width, 2.0);
+
+    group.bench_function("current_merge_n4096_w64", |bencher| {
+        bencher.iter(|| {
+            black_box(sparse_frobenius_inner(black_box(&a), black_box(&b)))
+        });
+    });
+    group.bench_function("orig_nested_n4096_w64", |bencher| {
+        bencher.iter(|| {
+            black_box(sparse_frobenius_inner_nested_reference(
+                black_box(&a),
+                black_box(&b),
+            ))
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_coo_sum_duplicates,
@@ -918,5 +973,6 @@ criterion_group!(
     bench_spsolve_laplacian,
     bench_random_tiny_density,
     bench_sparse_trace_direct_ab,
+    bench_sparse_frobenius_inner_merge_ab,
 );
 criterion_main!(benches);

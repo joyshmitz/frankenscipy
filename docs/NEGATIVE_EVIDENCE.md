@@ -21126,3 +21126,19 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   signed zero, infinities, and a payload NaN. The benchmark compiled the production and reference paths remotely;
   no second benchmark or local Cargo fallback was used. Direct rustfmt found only historical drift outside the owned
   implementation, proof, and benchmark hunks; `git diff --check` passed.
+
+## 2026-07-14 - cod - KEEP canonical `sparse_frobenius_inner` row merge (11.507x at 4096x4096)
+
+- Negative-ledger-first selection found no prior `sparse_frobenius_inner` optimization or rejection. The canonical
+  path searched every B-row entry anew for every A-row entry, making equal-width rows quadratic. Opportunity score:
+  20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever detects sorted, deduplicated CSR inputs through their canonical metadata and merges each pair of rows
+  with two monotone cursors. Matching products are still accumulated in A-entry order, preserving multiplication and
+  addition order exactly; unsorted or duplicate-bearing inputs retain the literal former nested-search path.
+- The one and only benchmark invocation compared the production merge with a literal nested-search reference in the
+  same binary on strict-remote worker `vmi1149989`. Merge measured `[331.46, 355.84, 379.84]` us versus
+  `[3.8344, 4.0946, 4.2940]` ms for the former path: **11.507x** centered and **10.095x** conservative, with no
+  interval overlap.
+- A bit-exact regression fixture was added against the literal former implementation for canonical finite and
+  non-finite inputs plus unsorted/duplicate fallback inputs. The benchmark compiled the production and reference
+  paths remotely; no second benchmark or local Cargo fallback was used. `git diff --check` passed.
