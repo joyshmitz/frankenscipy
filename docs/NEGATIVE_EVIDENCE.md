@@ -21692,3 +21692,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `#![forbid(unsafe_code)]` crate intentionally lacks. The complete remote benchmark returned in 147.8 seconds, below
   the five-minute cap. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used.
   Bead: `frankenscipy-8c20v`.
+
+## 2026-07-14 - cod - KEEP NetCDF header length arithmetic (2.697x, byte-identical)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced the dense-linalg SYRK harness, which prior direct
+  attribution places below 1% of Cholesky wall time. Recent ODR and ndimage seams were already harvested, so this
+  pass pivoted to the unledgered `fsci-io::write_netcdf_classic` path. Direct source attribution found three full
+  payload encodes per variable: the placeholder and final headers each called `encode_netcdf_padded_values` only to
+  read `.len()`, then the writer encoded the payload a third time for output.
+- ONE candidate replaces the two header-only encodes with checked `element_count * type_size` plus four-byte padding
+  arithmetic. The actual output encode is unchanged. The former redundant path remains behind a hidden atomic solely
+  for same-binary A/B. The benchmark asserted complete output-byte equality before timing, and a focused unit test
+  covered byte, char, short, int, float, and double padded lengths. All six focused NetCDF tests passed remotely.
+- The release bench binary was first built with an untimed strict-remote `--profile release --no-run` warm-up on
+  `vmi1152480`, with no timeout. The one and only measurement invocation then used the same worker hint, profile,
+  target path, 512x256 double payload, 10 samples, 100 ms warm-up, and 500 ms measurement per arm. RCH still reported
+  a cache miss and rebuilt before launching Criterion, but no timeout was applied and both timed arms completed.
+  Length-only measured `[113.57, 126.00, 137.53]` us versus `[312.75, 339.79, 369.97]` us redundant: **2.697x faster
+  by centered estimate**, with disjoint intervals.
+- Disposition: KEEP. Strict-remote all-target Clippy passed with `-D warnings`; rustfmt and diff hygiene passed; staged
+  UBS reported zero critical findings. No second benchmark, `release-perf` build, local Cargo fallback, or stash
+  mutation was used. Bead: `frankenscipy-34fv7`.

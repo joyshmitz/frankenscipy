@@ -1,7 +1,9 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_io::{
-    MatArray, SAVEMAT_TEXT_FORCE_SERIAL, SAVETXT_FORCE_SERIAL, WRITE_JSON_FORCE_SERIAL, loadtxt,
-    mmread, mmwrite, savemat_text, savetxt, write_csv, write_json_array,
+    MatArray, NetcdfDimension, NetcdfFile, NetcdfValue, NetcdfVariable, SAVEMAT_TEXT_FORCE_SERIAL,
+    SAVETXT_FORCE_SERIAL, WRITE_JSON_FORCE_SERIAL, WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING,
+    loadtxt, mmread, mmwrite, savemat_text, savetxt, write_csv, write_json_array,
+    write_netcdf_classic,
 };
 use std::sync::atomic::Ordering;
 
@@ -194,6 +196,54 @@ fn bench_savemat_text_parallel_ab(c: &mut Criterion) {
     group.finish();
 }
 
+/// Same-binary A/B for calculating NetCDF variable byte sizes from type and
+/// element count rather than encoding every payload twice while building the
+/// placeholder and final headers.
+fn bench_write_netcdf_header_size_ab(c: &mut Criterion) {
+    let (rows, cols) = (512usize, 256usize);
+    let file = NetcdfFile {
+        dimensions: vec![
+            NetcdfDimension {
+                name: "rows".to_string(),
+                len: Some(rows),
+            },
+            NetcdfDimension {
+                name: "cols".to_string(),
+                len: Some(cols),
+            },
+        ],
+        attributes: Vec::new(),
+        variables: vec![NetcdfVariable {
+            name: "samples".to_string(),
+            dim_ids: vec![0, 1],
+            attributes: Vec::new(),
+            data: NetcdfValue::Double(matrix(rows, cols)),
+        }],
+    };
+
+    WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING.store(true, Ordering::Relaxed);
+    let redundant = write_netcdf_classic(&file).expect("redundant header payload encodes");
+    WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING.store(false, Ordering::Relaxed);
+    let current = write_netcdf_classic(&file).expect("length-only header sizing");
+    assert_eq!(current, redundant);
+
+    let mut group = c.benchmark_group("write_netcdf_header_size_ab");
+    group.bench_function("current_length_only/512x256", |b| {
+        b.iter(|| {
+            WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING.store(false, Ordering::Relaxed);
+            write_netcdf_classic(&file)
+        })
+    });
+    group.bench_function("original_redundant_encode/512x256", |b| {
+        b.iter(|| {
+            WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING.store(true, Ordering::Relaxed);
+            write_netcdf_classic(&file)
+        })
+    });
+    WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_text_io,
@@ -202,6 +252,7 @@ criterion_group!(
     bench_write_helpers,
     bench_savetxt_parallel_ab,
     bench_write_json_parallel_ab,
-    bench_savemat_text_parallel_ab
+    bench_savemat_text_parallel_ab,
+    bench_write_netcdf_header_size_ab
 );
 criterion_main!(benches);

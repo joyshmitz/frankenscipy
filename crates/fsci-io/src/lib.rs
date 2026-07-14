@@ -3432,6 +3432,12 @@ pub fn read_netcdf_classic(bytes: &[u8]) -> Result<NetcdfFile, IoError> {
     })
 }
 
+/// Runtime switch to retain the former payload-encoding header-size path for
+/// same-binary A/B benchmarks. Defaults off.
+#[doc(hidden)]
+pub static WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Write a fixed-size NetCDF classic file.
 ///
 /// The writer emits NetCDF classic v1 files and fails closed for unlimited
@@ -3522,6 +3528,13 @@ fn netcdf_value_raw_len(value_type: NetcdfType, count: usize) -> Result<usize, I
         .ok_or_else(|| {
             IoError::InvalidFormat("NetCDF value byte length overflowed usize".to_string())
         })
+}
+
+fn netcdf_padded_value_len(value: &NetcdfValue) -> Result<usize, IoError> {
+    let raw_len = netcdf_value_raw_len(value.value_type(), value.len())?;
+    raw_len
+        .checked_add((4 - (raw_len % 4)) % 4)
+        .ok_or_else(|| IoError::InvalidFormat("NetCDF padded value length overflowed usize".into()))
 }
 
 fn read_netcdf_u32(reader: &mut NetcdfReader<'_>) -> Result<u32, IoError> {
@@ -3866,11 +3879,14 @@ fn encode_netcdf_header(file: &NetcdfFile, begins: &[usize]) -> Result<Vec<u8>, 
             }
             encode_netcdf_attribute_list(&mut out, &variable.attributes)?;
             out.extend_from_slice(&netcdf_type_code(variable.data.value_type()).to_be_bytes());
-            write_netcdf_u32(
-                &mut out,
-                encode_netcdf_padded_values(&variable.data)?.len(),
-                "variable byte size",
-            )?;
+            let value_size = if WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                encode_netcdf_padded_values(&variable.data)?.len()
+            } else {
+                netcdf_padded_value_len(&variable.data)?
+            };
+            write_netcdf_u32(&mut out, value_size, "variable byte size")?;
             write_netcdf_u32(&mut out, begins[idx], "variable begin offset")?;
         }
     }
@@ -6373,6 +6389,27 @@ mod tests {
         assert_eq!(&bytes[..4], b"CDF\x01");
         let parsed = read_netcdf_classic(&bytes).expect("NetCDF classic decode");
         assert_eq!(parsed, file);
+    }
+
+    #[test]
+    fn netcdf_padded_value_len_matches_encoded_payloads() {
+        let values = [
+            NetcdfValue::Byte(vec![-1, 0, 1]),
+            NetcdfValue::Char("hello".to_string()),
+            NetcdfValue::Short(vec![-2, 3, 4]),
+            NetcdfValue::Int(vec![-5, 6]),
+            NetcdfValue::Float(vec![1.25, -2.5, 3.75]),
+            NetcdfValue::Double(vec![1.25, -2.5, 3.75]),
+        ];
+
+        for value in &values {
+            assert_eq!(
+                netcdf_padded_value_len(value).expect("checked padded length"),
+                encode_netcdf_padded_values(value)
+                    .expect("encoded payload")
+                    .len()
+            );
+        }
     }
 
     #[test]
