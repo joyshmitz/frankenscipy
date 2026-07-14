@@ -570,6 +570,13 @@ fn block_diag_canonical_csr(matrices: &[&CsrMatrix], shape: Shape2D) -> SparseRe
 /// All blocks in the same row must have the same number of rows,
 /// and all blocks in the same column must have the same number of columns.
 /// Matches `scipy.sparse.bmat(blocks)`.
+/// When `true`, [`bmat`] takes the ORIG COO->to_csr path even for canonical CSR blocks; default
+/// `false` builds the CSR directly by shifting each canonical block row into its column band.
+/// Byte-identical result. A/B perf gate.
+#[doc(hidden)]
+pub static BMAT_FORCE_GENERIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn bmat(blocks: &[Vec<Option<&CsrMatrix>>]) -> SparseResult<CsrMatrix> {
     if blocks.is_empty() {
         return eye(0);
@@ -636,6 +643,58 @@ pub fn bmat(blocks: &[Vec<Option<&CsrMatrix>>]) -> SparseResult<CsrMatrix> {
         .flatten()
         .filter_map(|block| block.map(CsrMatrix::nnz))
         .sum();
+
+    // Fast path: when every present block is canonical CSR, the bmat output is canonical by
+    // construction — output row (i,r) collects block (i,0)'s row r, then (i,1)'s, … with each
+    // block's columns shifted into its disjoint, ascending column band [col_offset_j .. +width_j),
+    // so entries come out strictly (row,col)-sorted and unique (columns also stay in range).
+    // Build the CSR directly (indptr from per-row nnz, indices/data by shifting each block row's
+    // slice), skipping the COO triplets, from_triplets, and to_csr. Byte-identical to the
+    // COO->to_csr result (same entries, order, canonical meta). `BMAT_FORCE_GENERIC` restores the
+    // original path; falls through when any block is non-canonical (there to_csr would re-sort).
+    let all_canonical = blocks.iter().flatten().all(|block| match block {
+        None => true,
+        Some(mat) => {
+            let c = mat.canonical_meta();
+            c.sorted_indices && c.deduplicated
+        }
+    });
+    if all_canonical && !BMAT_FORCE_GENERIC.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut col_offsets = vec![0usize; n_block_cols];
+        let mut acc_c = 0usize;
+        for (j, off) in col_offsets.iter_mut().enumerate() {
+            *off = acc_c;
+            acc_c += col_widths[j];
+        }
+        let mut indptr = Vec::with_capacity(total_rows + 1);
+        indptr.push(0usize);
+        let mut indices = Vec::with_capacity(cap);
+        let mut data = Vec::with_capacity(cap);
+        let mut acc = 0usize;
+        for (i, block_row) in blocks.iter().enumerate() {
+            for r in 0..row_heights[i] {
+                for (j, block) in block_row.iter().enumerate() {
+                    if let Some(mat) = block {
+                        let bp = mat.indptr();
+                        let co = col_offsets[j];
+                        for idx in bp[r]..bp[r + 1] {
+                            indices.push(co + mat.indices()[idx]);
+                            data.push(mat.data()[idx]);
+                        }
+                        acc += bp[r + 1] - bp[r];
+                    }
+                }
+                indptr.push(acc);
+            }
+        }
+        let mut result = CsrMatrix::from_components_unchecked(shape, data, indices, indptr);
+        result.canonical = CanonicalMeta {
+            sorted_indices: true,
+            deduplicated: true,
+        };
+        return Ok(result);
+    }
+
     let mut all_rows = Vec::with_capacity(cap);
     let mut all_cols = Vec::with_capacity(cap);
     let mut all_data = Vec::with_capacity(cap);
@@ -1550,6 +1609,50 @@ mod tests {
                 old.canonical_meta().deduplicated
             );
         }
+    }
+
+    #[test]
+    fn bmat_direct_matches_generic_bitwise() {
+        use std::sync::atomic::Ordering;
+        // 2x2 grid of canonical CSR blocks with a None (zero) block; heights/widths consistent.
+        let a = random(Shape2D::new(6, 5), 0.25, 0xa1)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        let b = random(Shape2D::new(6, 7), 0.2, 0xb2)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        let d = random(Shape2D::new(4, 7), 0.3, 0xd4)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        // Row 0: [a (6x5), b (6x7)]; Row 1: [None (4x5), d (4x7)].
+        let grid: Vec<Vec<Option<&CsrMatrix>>> = vec![vec![Some(&a), Some(&b)], vec![None, Some(&d)]];
+        BMAT_FORCE_GENERIC.store(true, Ordering::Relaxed);
+        let generic = bmat(&grid).unwrap();
+        BMAT_FORCE_GENERIC.store(false, Ordering::Relaxed);
+        let direct = bmat(&grid).unwrap();
+        BMAT_FORCE_GENERIC.store(false, Ordering::Relaxed);
+        assert_eq!(direct.shape(), generic.shape());
+        assert_eq!(direct.indptr(), generic.indptr());
+        assert_eq!(direct.indices(), generic.indices());
+        assert_eq!(
+            direct.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            generic
+                .data()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            direct.canonical_meta().sorted_indices,
+            generic.canonical_meta().sorted_indices
+        );
+        assert_eq!(
+            direct.canonical_meta().deduplicated,
+            generic.canonical_meta().deduplicated
+        );
     }
 
     #[test]

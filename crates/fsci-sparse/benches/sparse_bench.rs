@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     COO_SUM_DUPLICATES_RADIX_DISABLE, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
-    DIAGS_VALIDATE, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions, VSTACK_FORCE_GENERIC, add_csr,
-    block_diag, diags, eye, eye_array, kron, random, scale_coo, scale_csc, scale_csr, spilu, spmm,
-    spmv_csr, spsolve, tril, vstack,
+    BMAT_FORCE_GENERIC, DIAGS_VALIDATE, IluOptions, KRON_VALIDATE, Shape2D, SolveOptions,
+    VSTACK_FORCE_GENERIC, add_csr, block_diag, bmat, diags, eye, eye_array, kron, random, scale_coo,
+    scale_csc, scale_csr, spilu, spmm, spmv_csr, spsolve, tril, vstack,
 };
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -427,6 +427,38 @@ fn bench_eye_rectangular_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_bmat_canonical_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_bmat_canonical_ab");
+    group.sample_size(10);
+    // 4x4 grid of canonical CSR blocks, ~11k nnz each (~180k total over 6000x6000): the generic
+    // path builds a full COO (3 x nnz) + from_triplets + to_csr the direct row-shift build skips.
+    let g = 4usize;
+    let bs = 1_500usize;
+    let mats: Vec<CsrMatrix> = (0..(g * g) as u64)
+        .map(|i| make_random_rect_csr(bs, bs, 0.005, SEED ^ (i.wrapping_mul(0x9E37))))
+        .collect();
+    let grid: Vec<Vec<Option<&CsrMatrix>>> = (0..g)
+        .map(|i| (0..g).map(|j| Some(&mats[i * g + j])).collect())
+        .collect();
+
+    group.bench_function("current_direct", |bn| {
+        bn.iter(|| {
+            BMAT_FORCE_GENERIC.store(false, Ordering::Relaxed);
+            let m = bmat(black_box(&grid)).expect("bmat");
+            black_box(m.nnz());
+        });
+    });
+    group.bench_function("orig_generic", |bn| {
+        bn.iter(|| {
+            BMAT_FORCE_GENERIC.store(true, Ordering::Relaxed);
+            let m = bmat(black_box(&grid)).expect("bmat");
+            black_box(m.nnz());
+        });
+    });
+    BMAT_FORCE_GENERIC.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_vstack_canonical_ab(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_vstack_canonical_ab");
     group.sample_size(10);
@@ -841,6 +873,7 @@ criterion_group!(
     bench_diags_validate_ab,
     bench_kron_validate_ab,
     bench_vstack_canonical_ab,
+    bench_bmat_canonical_ab,
     bench_spmm,
     bench_kron,
     bench_spilu,
