@@ -21978,3 +21978,32 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   old-path reference, and it reported formatting, Clippy, check, and test health clean in its shadow workspace.
   No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used. Bead:
   `frankenscipy-fz5yj`.
+
+## 2026-07-14 - cod - REJECT `approx_derivative` per-chunk perturbation scratch (1.498x centered, overlapping intervals)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced the assigned dense-linalg SYRK harness, which prior
+  attribution places below 1% of the Cholesky wall. With the just-landed ndimage seam closed, this pass pivoted
+  to the fresh `fsci-opt::approx_derivative` scratch surface. No prior row covered scratch reuse there: the
+  existing opt entry covers parallel column fan-out, while scratch reuse had only been implemented for the
+  separate `numerical_jacobian` helper. Direct source attribution found one full `n`-value clone per two-point
+  column and two per three-point column, or `2*n*n` copied scalars plus `2*n` allocations for the measured
+  three-point path. Opportunity score: 12.5 (impact 5 x confidence 5 / effort 2).
+- ONE candidate allocated the one or two perturbation buffers once per serial/worker chunk, restored the sole
+  changed coordinate after each callback, and retained every callback input, callback order within a column,
+  finite-difference expression, output order, bound adjustment, and error path. A focused strict-remote test on
+  `vmi1153651` matched both two- and three-point Jacobians bit-for-bit against the literal clone-per-column path.
+- The cold Criterion target received an untimed `--profile release --no-run` warm-up on `vmi1293453`, without a
+  timeout. The one and only measurement invocation then used the same worker and worker-scoped target, although
+  RCH rebuilt after the warm-up. For 2,048 variables, a cheap two-output residual, 10 samples, 100 ms warm-up,
+  and 500 ms requested measurement per arm, clone-per-column measured
+  `[1.5778, 1.9311, 2.3415]` ms and per-chunk scratch measured `[0.96040, 1.2894, 1.7604]` ms. The centered ratio
+  was **1.498x** with **33.23%** lower centered time, but the intervals overlapped and the conservative ratio was
+  only **0.896x** (`1.5778 / 1.7604`), so the quick A/B did not prove a keep above noise.
+- Disposition: REJECT for now. Source, proof-test, and benchmark hunks were dropped; retain the existing
+  clone-per-column implementation unless a future paired/null-controlled harness proves the scratch reuse above
+  the variance floor. Owned diff hygiene and bench-file rustfmt passed. Repository formatting and strict-remote
+  `-D warnings` Clippy were blocked only by pre-existing drift/lints outside the candidate hunks
+  (`curvefit.rs:549`, `lib.rs:4376`, and `lib.rs:4380`). Targeted UBS surfaced the existing test panic inventory
+  plus intentional benchmark-only panic/clone constructs, with no production finding in the candidate. No second
+  benchmark, `release-perf` build, manually invoked local Cargo fallback, or stash mutation was used. Bead:
+  `frankenscipy-a1n3z`.
