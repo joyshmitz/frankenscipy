@@ -22007,3 +22007,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   plus intentional benchmark-only panic/clone constructs, with no production finding in the candidate. No second
   benchmark, `release-perf` build, manually invoked local Cargo fallback, or stash mutation was used. Bead:
   `frankenscipy-a1n3z`.
+
+## 2026-07-15 - cod - REJECT spatial `squareform_to_condensed` fused validation/output
+
+- Negative-ledger-first routing rejected the stale assigned SYRK bead and already-mined cluster/signal/sparse
+  seams before selecting this unledgered spatial success path. Source attribution found that the original
+  implementation reads each upper-triangle value once while validating symmetry and again while emitting the
+  condensed vector: about `1.5*n*n` matrix loads versus `1.0*n*n` for a fused validation-and-push walk.
+- ONE candidate moved the output push beside the successful upper/lower comparison, preserving row-major
+  condensed order, comparison order, error strings, and every output bit. Eight focused strict-remote squareform
+  tests passed on `vmi1227854`, including a new exact-bit test covering signed zero, infinities, subnormal, and
+  adjacent finite values.
+- A cold `--profile release` bench target received an untimed `--no-run` warm-up on `vmi1227854` with no timeout.
+  The one and only foreground measurement used the same worker and same-binary original/fused arms at 2,048 x
+  2,048, 10 samples, 100 ms warm-up, and 500 ms requested measurement. RCH rebuilt the warm target, but the timed
+  Criterion samples were unaffected: original `[11.364, 11.745, 12.313]` ms versus fused
+  `[11.084, 11.746, 12.490]` ms. Centered speedup was effectively **1.000x** and the conservative ratio was only
+  **0.910x** (`11.364 / 12.490`); the confidence intervals overlap completely.
+- Disposition: REJECT. The removed matrix reads did not clear the allocation/output and memory-traffic floor.
+  Source, exact-bit test, and benchmark A/B hunks were reverted; only this evidence row and bead closeout remain.
+  Targeted UBS found no critical issue in the candidate files. Strict-remote `-D warnings` Clippy reached
+  `fsci-spatial` and stopped only on four pre-existing unchanged lints at lines 5222, 5594, 6232, and 6750. No
+  second benchmark, `release-perf` build, local Cargo fallback, stash mutation, or unrelated-file edit was used.
+  Bead: `frankenscipy-fybg0`.
