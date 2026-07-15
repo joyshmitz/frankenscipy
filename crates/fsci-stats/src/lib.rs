@@ -8792,6 +8792,25 @@ impl GenHyperbolic {
         Self { p, a, b }
     }
 
+    /// Log-density at many samples, computing the parameter-only Bessel-K
+    /// normalizer once. Each output preserves scalar operation order.
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let (p, a, b) = (self.p, self.a, self.b);
+        let t = (a * a - b * b).sqrt();
+        let ln_kpt = ln_bessel_k(p, t);
+        par_continuous_map_min(xs, 65536, |x| {
+            let r = (1.0 + x * x).sqrt();
+            (p / 2.0) * (a * a - b * b).ln()
+                - 0.5 * (2.0 * std::f64::consts::PI).ln()
+                - (p - 0.5) * a.ln()
+                - ln_kpt
+                + (p - 0.5) * r.ln()
+                + ln_bessel_k(p - 0.5, a * r)
+                + b * x
+        })
+    }
+
     /// Log probability density at `x`.
     pub fn logpdf(&self, x: f64) -> f64 {
         let (p, a, b) = (self.p, self.a, self.b);
@@ -56602,6 +56621,30 @@ mod tests {
             "logpdf {}",
             d.logpdf(0.5)
         );
+    }
+
+    #[test]
+    fn genhyperbolic_logpdf_many_matches_scalar_bits() {
+        let cases = [
+            GenHyperbolic::new(0.5, 1.5, 0.5),
+            GenHyperbolic::new(-1.25, 3.0, -0.75),
+        ];
+        let xs = [
+            f64::NEG_INFINITY,
+            -8.0,
+            -0.0,
+            0.0,
+            0.5,
+            8.0,
+            f64::INFINITY,
+            f64::from_bits(0x7ff8_0000_0000_0042),
+        ];
+        for distribution in cases {
+            let batched = distribution.logpdf_many(&xs);
+            for (&x, &actual) in xs.iter().zip(&batched) {
+                assert_eq!(actual.to_bits(), distribution.logpdf(x).to_bits());
+            }
+        }
     }
 
     #[test]

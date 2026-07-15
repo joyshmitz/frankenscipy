@@ -21904,3 +21904,27 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   strict-remote `-D warnings` Clippy gate were blocked only by the existing broad `fsci-stats`/`fsci-special`
   formatting and lint inventories outside this hunk, which were left untouched. No second benchmark,
   `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-sdsz2`.
+
+## 2026-07-14 - cod - KEEP GenHyperbolic batch Bessel-normalizer hoist (2.976x, bit-identical)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced only the stale dense-linalg SYRK harness, which prior
+  direct attribution places below 1% of Cholesky wall time. Continuing in the still-productive stats batch vein,
+  static call attribution found that mapping `fsci-stats::GenHyperbolic::logpdf` performed two Bessel-K evaluations
+  per sample, one of which, `ln K_p(sqrt(a^2-b^2))`, is wholly parameter-only. A 4,096-point scalar map therefore
+  performed 4,096 avoidable Bessel evaluations, and no prior ledger row covered this surface. Opportunity score:
+  20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever adds `GenHyperbolic::logpdf_many`, computing only that parameter-only Bessel normalizer once while
+  retaining the scalar expression and operation order per sample. A focused strict-remote proof on `vmi1227854`
+  matched every output bit for two parameter sets across ordinary finite samples, signed zero, infinities, and a
+  payload NaN.
+- The changed release bench binary was first built by an untimed strict-remote `--profile release --no-run` warm-up
+  on `vmi1227854`, with no timeout. The one and only measurement invocation then used the same worker and
+  worker-scoped release target, 4,096 symmetric samples, 10 samples, 100 ms warm-up, and 500 ms measurement per arm.
+  The hoisted batch measured `[840.74, 860.27, 876.95]` us versus `[2.4956, 2.5598, 2.6216]` ms for scalar mapping:
+  **2.976x faster centered**, **2.846x conservative**, and **66.39% lower centered time**, with disjoint intervals.
+  RCH rebuilt despite the untimed warm-up, but the complete foreground command returned in 183.0 seconds, below
+  the five-minute cap.
+- Disposition: KEEP. Diff hygiene passed; targeted UBS reported zero critical issues. File-wide rustfmt and the
+  strict-remote `-D warnings` Clippy gate were blocked only by the existing broad `fsci-stats`/`fsci-special`
+  formatting and lint inventories outside this hunk, which were left untouched. No second benchmark,
+  `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-aqwfo`.

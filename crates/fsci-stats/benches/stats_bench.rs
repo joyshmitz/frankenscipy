@@ -243,8 +243,9 @@ fn bench_rand_index(c: &mut Criterion) {
 fn bench_distribution_batch(c: &mut Criterion) {
     use fsci_stats::{
         BetaBinomial, BetaDist, Binomial, Chi, ChiSquared, ContinuousDistribution,
-        DiscreteDistribution, FDistribution, GammaDist, GenGamma, GenInvGauss, GenNorm,
-        Hypergeometric, InverseGamma, JfSkewT, Nakagami, NegBinomial, Poisson, StudentT, VonMises,
+        DiscreteDistribution, FDistribution, GammaDist, GenGamma, GenHyperbolic, GenInvGauss,
+        GenNorm, Hypergeometric, InverseGamma, JfSkewT, Nakagami, NegBinomial, Poisson, StudentT,
+        VonMises,
     };
     let n = 4096usize;
     let mut group = c.benchmark_group("distribution_batch");
@@ -369,6 +370,20 @@ fn bench_distribution_batch(c: &mut Criterion) {
             positive_x
                 .iter()
                 .map(|&x| geninvgauss.logpdf(x))
+                .collect::<Vec<_>>()
+        })
+    });
+
+    // Generalized hyperbolic: one of two Bessel-K calls is parameter-only.
+    let genhyperbolic = GenHyperbolic::new(0.75, 2.5, -0.5);
+    group.bench_function("genhyperbolic/logpdf_many", |b| {
+        b.iter(|| genhyperbolic.logpdf_many(&symmetric_x))
+    });
+    group.bench_function("genhyperbolic/map_logpdf", |b| {
+        b.iter(|| {
+            symmetric_x
+                .iter()
+                .map(|&x| genhyperbolic.logpdf(x))
                 .collect::<Vec<_>>()
         })
     });
