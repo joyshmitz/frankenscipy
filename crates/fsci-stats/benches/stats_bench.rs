@@ -242,7 +242,7 @@ fn bench_rand_index(c: &mut Criterion) {
 /// compute the expensive lgamma/ln_beta normalizer ONCE instead of per point.
 fn bench_distribution_batch(c: &mut Criterion) {
     use fsci_stats::{
-        BetaBinomial, BetaDist, Binomial, Chi, ChiSquared, ContinuousDistribution,
+        BetaBinomial, BetaDist, BetaPrime, Binomial, Chi, ChiSquared, ContinuousDistribution,
         DiscreteDistribution, FDistribution, GammaDist, GenGamma, GenHyperbolic, GenInvGauss,
         GenNorm, Hypergeometric, InverseGamma, JfSkewT, Nakagami, NegBinomial, Poisson, StudentT,
         VonMises,
@@ -271,6 +271,20 @@ fn bench_distribution_batch(c: &mut Criterion) {
     group.bench_function("beta/pdf_many", |b| b.iter(|| bt.pdf_many(&bx)));
     group.bench_function("beta/map_pdf", |b| {
         b.iter(|| bx.iter().map(|&x| bt.pdf(x)).collect::<Vec<_>>())
+    });
+
+    // Beta-prime: three parameter-only lgamma evaluations in ln_beta hoisted.
+    let beta_prime = BetaPrime::new(2.5, 3.75);
+    group.bench_function("betaprime/logpdf_many", |b| {
+        b.iter(|| beta_prime.logpdf_many(&positive_x))
+    });
+    group.bench_function("betaprime/map_logpdf", |b| {
+        b.iter(|| {
+            positive_x
+                .iter()
+                .map(|&x| beta_prime.logpdf(x))
+                .collect::<Vec<_>>()
+        })
     });
 
     // StudentT: gamma-ratio coefficient hoisted over a symmetric grid.

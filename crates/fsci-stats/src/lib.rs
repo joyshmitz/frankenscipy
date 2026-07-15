@@ -50433,6 +50433,21 @@ impl BetaPrime {
         assert!(a > 0.0 && b > 0.0, "a and b must be positive");
         Self { a, b }
     }
+
+    /// Log-density at many points, computing the parameter-only `ln B(a, b)`
+    /// normalizer once. Each output preserves [`ContinuousDistribution::logpdf`]
+    /// operation order; `x <= 0` returns negative infinity.
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let (a, b) = (self.a, self.b);
+        let ln_beta_ab = ln_beta(a, b);
+        par_continuous_map_min(xs, 65536, |x| {
+            if x <= 0.0 {
+                return f64::NEG_INFINITY;
+            }
+            (a - 1.0) * x.ln() - (a + b) * x.ln_1p() - ln_beta_ab
+        })
+    }
 }
 
 impl ContinuousDistribution for BetaPrime {
@@ -75253,6 +75268,35 @@ mod tests {
         );
         assert!((bp.pdf(1.0) - 0.375).abs() < 1e-12, "pdf(1)");
         assert!((bp.cdf(1.0) - 0.6875).abs() < 1e-12, "cdf(1)");
+    }
+
+    #[test]
+    fn betaprime_logpdf_many_matches_scalar_bits() {
+        let xs = [
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            0.125,
+            1.0,
+            13.5,
+            f64::INFINITY,
+            f64::from_bits(0x7ff8_0000_0000_0042),
+        ];
+        for dist in [BetaPrime::new(0.75, 2.5), BetaPrime::new(4.25, 0.625)] {
+            let batch = dist.logpdf_many(&xs);
+            let scalar: Vec<f64> = xs.iter().map(|&x| dist.logpdf(x)).collect();
+            assert_eq!(batch.len(), scalar.len());
+            for (index, (&got, &expected)) in batch.iter().zip(&scalar).enumerate() {
+                assert_eq!(
+                    got.to_bits(),
+                    expected.to_bits(),
+                    "BetaPrime logpdf mismatch at index {index}"
+                );
+            }
+        }
+        assert!(BetaPrime::new(2.0, 3.0).logpdf_many(&[]).is_empty());
     }
 
     #[test]
