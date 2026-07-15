@@ -1,7 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_integrate::{
     IntegrateValidationError, MIN_RTOL, SolveIvpOptions, SolverKind, ToleranceValue,
-    ToleranceWarning, ValidatedTolerance, solve_ivp, validate_tol,
+    ToleranceWarning, ValidatedTolerance, solve_ivp, trapezoid_irregular, trapezoid_richardson,
+    validate_tol,
 };
 use fsci_runtime::RuntimeMode;
 use std::hint::black_box;
@@ -289,6 +290,47 @@ fn bench_validate_tol_clone_scan_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn trapezoid_richardson_collected_original(y: &[f64], x: &[f64]) -> f64 {
+    if y.len() < 2 || x.len() != y.len() {
+        return 0.0;
+    }
+    let t1 = trapezoid_irregular(y, x);
+    if y.len() < 5 {
+        return t1;
+    }
+    let y2: Vec<f64> = y.iter().step_by(2).copied().collect();
+    let x2: Vec<f64> = x.iter().step_by(2).copied().collect();
+    let t2 = trapezoid_irregular(&y2, &x2);
+    (4.0 * t1 - t2) / 3.0
+}
+
+fn bench_trapezoid_richardson_allocation_ab(c: &mut Criterion) {
+    const N: usize = 65_537;
+    let x = (0..N).map(|i| i as f64 * 1e-4).collect::<Vec<_>>();
+    let y = x
+        .iter()
+        .map(|value| (17.0 * value).sin() + value * 0.25)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        trapezoid_richardson(&y, &x).to_bits(),
+        trapezoid_richardson_collected_original(&y, &x).to_bits()
+    );
+
+    let mut group = c.benchmark_group("trapezoid_richardson_allocation_ab");
+    group.bench_function("original_collected/65537", |b| {
+        b.iter(|| {
+            black_box(trapezoid_richardson_collected_original(
+                black_box(&y),
+                black_box(&x),
+            ))
+        });
+    });
+    group.bench_function("candidate_strided/65537", |b| {
+        b.iter(|| black_box(trapezoid_richardson(black_box(&y), black_box(&x))));
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_solve_ivp_exponential,
@@ -297,6 +339,7 @@ criterion_group!(
     bench_solve_ivp_non_finite_y0_validation,
     bench_validate_tol,
     bench_validate_tol_audit_fingerprint_ab,
-    bench_validate_tol_clone_scan_ab
+    bench_validate_tol_clone_scan_ab,
+    bench_trapezoid_richardson_allocation_ab
 );
 criterion_main!(benches);

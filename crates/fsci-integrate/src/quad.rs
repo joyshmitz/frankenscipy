@@ -3454,10 +3454,14 @@ pub fn trapezoid_richardson(y: &[f64], x: &[f64]) -> f64 {
         return t1;
     }
 
-    // Subsample every other point
-    let y2: Vec<f64> = y.iter().step_by(2).cloned().collect();
-    let x2: Vec<f64> = x.iter().step_by(2).cloned().collect();
-    let t2 = trapezoid_irregular(&y2, &x2);
+    // Evaluate the coarse grid in place. This preserves the exact summation
+    // order of collecting indices 0, 2, 4, ... while avoiding two allocations.
+    let mut t2 = 0.0;
+    let mut i = 0;
+    while i + 2 < n {
+        t2 += 0.5 * (y[i] + y[i + 2]) * (x[i + 2] - x[i]);
+        i += 2;
+    }
 
     // Richardson extrapolation: T = (4*T1 - T2) / 3
     (4.0 * t1 - t2) / 3.0
@@ -4099,6 +4103,55 @@ mod tests {
         let x = [0.0, 1.0, 2.0, 3.0, 4.0];
         let y = [0.0, 1.0, 8.0, 27.0, 64.0];
         assert!((trapezoid_richardson(&y, &x) - 64.0).abs() < 1e-10, "richardson cubic");
+    }
+
+    #[test]
+    fn trapezoid_richardson_strided_coarse_pass_is_bit_identical() {
+        fn collected_reference(y: &[f64], x: &[f64]) -> f64 {
+            if y.len() < 2 || x.len() != y.len() {
+                return 0.0;
+            }
+            let t1 = trapezoid_irregular(y, x);
+            if y.len() < 5 {
+                return t1;
+            }
+            let y2: Vec<f64> = y.iter().step_by(2).copied().collect();
+            let x2: Vec<f64> = x.iter().step_by(2).copied().collect();
+            let t2 = trapezoid_irregular(&y2, &x2);
+            (4.0 * t1 - t2) / 3.0
+        }
+
+        let mut cases = vec![
+            (
+                vec![0.0, 1.0, 8.0, 27.0, 64.0],
+                vec![0.0, 1.0, 2.0, 3.0, 4.0],
+            ),
+            (
+                vec![-0.0, 0.25, -1.5, 4.0, 2.25, -3.0],
+                vec![-2.0, -1.75, -0.5, 0.0, 1.25, 3.0],
+            ),
+            (
+                vec![3.0, -2.0, 1.0, 0.5, -0.25, 4.0, 8.0],
+                vec![0.0, 0.1, 0.4, 1.0, 1.8, 3.0, 4.5],
+            ),
+        ];
+        let x = (0..1_025)
+            .map(|i| (i as f64).powi(2) * 1e-6)
+            .collect::<Vec<_>>();
+        let y = x
+            .iter()
+            .map(|value| (17.0 * value).sin() + value * 0.25)
+            .collect::<Vec<_>>();
+        cases.push((y, x));
+
+        for (y, x) in cases {
+            assert_eq!(
+                trapezoid_richardson(&y, &x).to_bits(),
+                collected_reference(&y, &x).to_bits(),
+                "length {}",
+                y.len()
+            );
+        }
     }
 
     #[test]

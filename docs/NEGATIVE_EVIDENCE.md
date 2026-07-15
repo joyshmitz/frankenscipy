@@ -21787,3 +21787,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   and `lib.rs:4371`; those files were left untouched. Targeted UBS only rediscovered the two pre-existing benchmark-
   harness panic arms at lines 29 and 41. No second benchmark, `release-perf` build, local Cargo fallback, or stash
   mutation was used. Bead: `frankenscipy-cp7vu`.
+
+## 2026-07-14 - cod - KEEP allocation-free Richardson coarse pass (2.751x, bit-identical)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced only the dense-linalg SYRK harness, which prior direct
+  attribution places below 1% of Cholesky wall time. With the adjacent special-function vein harvested, this pass
+  pivoted to the fresh, unledgered `fsci-integrate::trapezoid_richardson` primitive. Direct source attribution found
+  that its coarse-grid estimate allocated and copied separate stride-two `x` and `y` vectors before performing a
+  single linear trapezoid pass. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever walks source indices `0, 2, 4, ...` directly for the coarse estimate, removing both allocations and all
+  coarse-grid copies while retaining the former term expression and summation order. A focused strict-remote test on
+  `vmi1152480` compared the literal collected-vector implementation across odd and even lengths, nonuniform grids,
+  signed zero, and a 1,025-point smooth input; every result matched bit-for-bit.
+- The corrected release bench binary was built first with an untimed strict-remote `--profile release --no-run`
+  warm-up on `vmi1152480`, without a timeout. The first nominal measurement launch was invalid: RCH omitted staged
+  working-file changes and the resulting binary listed zero matching arms, so it produced no timing and is not A/B
+  evidence. After safely unstaging only the two owned files, a fresh untimed warm-up and `--list` check proved both
+  arms were present. The one real measurement then used the same worker and target, 65,537 points, 10 samples,
+  100 ms warm-up, and 500 ms measurement per arm. The strided candidate measured
+  `[53.999, 77.436, 120.55]` us versus `[197.69, 213.05, 230.44]` us collected: **2.751x faster centered**,
+  **1.640x conservative**, and **63.65% lower centered time**, with disjoint intervals.
+- Disposition: KEEP. The focused remote proof and owned diff hygiene passed. File-wide rustfmt and targeted UBS
+  rediscovered broad pre-existing `quad.rs` drift and test panic/index inventories; the strict-remote `-D warnings`
+  Clippy gate was blocked before this crate by the three unrelated existing `fsci-opt` lints in `curvefit.rs:549`,
+  `lib.rs:4367`, and `lib.rs:4371`. Those files and findings were left untouched. No second real measurement,
+  `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-gevld`.
