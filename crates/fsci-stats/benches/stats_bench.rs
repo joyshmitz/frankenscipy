@@ -244,7 +244,7 @@ fn bench_distribution_batch(c: &mut Criterion) {
     use fsci_stats::{
         BetaBinomial, BetaDist, Binomial, Chi, ChiSquared, ContinuousDistribution,
         DiscreteDistribution, FDistribution, GammaDist, GenGamma, GenInvGauss, GenNorm,
-        Hypergeometric, InverseGamma, Nakagami, NegBinomial, Poisson, StudentT, VonMises,
+        Hypergeometric, InverseGamma, JfSkewT, Nakagami, NegBinomial, Poisson, StudentT, VonMises,
     };
     let n = 4096usize;
     let mut group = c.benchmark_group("distribution_batch");
@@ -369,6 +369,20 @@ fn bench_distribution_batch(c: &mut Criterion) {
             positive_x
                 .iter()
                 .map(|&x| geninvgauss.logpdf(x))
+                .collect::<Vec<_>>()
+        })
+    });
+
+    // Jones-Faddy skew-t: the beta normalizer depends only on the shape parameters.
+    let jf_skew_t = JfSkewT::new(3.25, 1.75);
+    group.bench_function("jf_skew_t/logpdf_many", |b| {
+        b.iter(|| jf_skew_t.logpdf_many(&symmetric_x))
+    });
+    group.bench_function("jf_skew_t/map_logpdf", |b| {
+        b.iter(|| {
+            symmetric_x
+                .iter()
+                .map(|&x| jf_skew_t.logpdf(x))
                 .collect::<Vec<_>>()
         })
     });

@@ -8825,6 +8825,21 @@ impl JfSkewT {
         Self { a, b }
     }
 
+    /// Log-density at many samples, computing the parameter-only beta
+    /// normalizer once. Each output preserves scalar operation order.
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let (a, b) = (self.a, self.b);
+        let ln_beta = ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b);
+        par_continuous_map_min(xs, 65536, |x| {
+            let s = (a + b + x * x).sqrt();
+            let u = x / s;
+            -(a + b - 1.0) * 2.0_f64.ln() - ln_beta - 0.5 * (a + b).ln()
+                + (a + 0.5) * (1.0 + u).ln()
+                + (b + 0.5) * (1.0 - u).ln()
+        })
+    }
+
     /// Log probability density at `x`.
     pub fn logpdf(&self, x: f64) -> f64 {
         let (a, b) = (self.a, self.b);
@@ -56551,6 +56566,27 @@ mod tests {
         let d = JfSkewT::new(3.0, 2.0);
         assert!((d.pdf(0.5) - 0.3616829086463129).abs() < 1e-12);
         assert!((d.logpdf(0.5) - (-1.0169873939845695)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn jf_skew_t_logpdf_many_matches_scalar_bits() {
+        let cases = [JfSkewT::new(3.0, 2.0), JfSkewT::new(0.75, 4.25)];
+        let xs = [
+            f64::NEG_INFINITY,
+            -8.0,
+            -0.0,
+            0.0,
+            0.5,
+            8.0,
+            f64::INFINITY,
+            f64::from_bits(0x7ff8_0000_0000_0042),
+        ];
+        for distribution in cases {
+            let batched = distribution.logpdf_many(&xs);
+            for (&x, &actual) in xs.iter().zip(&batched) {
+                assert_eq!(actual.to_bits(), distribution.logpdf(x).to_bits());
+            }
+        }
     }
 
     #[test]

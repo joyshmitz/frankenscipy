@@ -21882,3 +21882,25 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   strict-remote `-D warnings` Clippy gate were blocked only by the existing broad `fsci-stats`/`fsci-special`
   formatting and lint inventories outside this hunk, which were left untouched. No second benchmark,
   `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-s361o`.
+
+## 2026-07-14 - cod - KEEP JfSkewT batch beta-normalizer hoist (3.699x, bit-identical)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced only the stale dense-linalg SYRK harness, which prior
+  direct attribution places below 1% of Cholesky wall time. Continuing in the still-productive stats batch vein,
+  direct source attribution found that mapping `fsci-stats::JfSkewT::logpdf` recomputed the parameter-only
+  `ln B(a,b)` normalizer (three `ln_gamma` calls) for every sample. No prior ledger row covered this batch surface.
+  Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever adds `JfSkewT::logpdf_many`, computing the beta normalizer once while retaining the scalar expression
+  and operation order per sample. A focused strict-remote proof on `vmi1227854` matched every output bit for two
+  parameter sets across ordinary finite samples, signed zero, infinities, and a payload NaN.
+- The cold release bench target was first built by an untimed strict-remote `--profile release --no-run` warm-up on
+  `vmi1227854`, with no timeout. The one and only measurement invocation then used the same worker and worker-scoped
+  release target, 4,096 symmetric samples, 10 samples, 100 ms warm-up, and 500 ms measurement per arm. The hoisted
+  batch measured `[67.744, 76.897, 89.297]` us versus `[276.01, 284.45, 304.42]` us for scalar mapping:
+  **3.699x faster centered**, **3.091x conservative**, and **72.97% lower centered time**, with disjoint intervals.
+  RCH rebuilt despite the untimed warm-up, but the complete foreground command returned in 172.2 seconds, below
+  the five-minute cap.
+- Disposition: KEEP. Diff hygiene passed; targeted UBS reported zero critical issues. File-wide rustfmt and the
+  strict-remote `-D warnings` Clippy gate were blocked only by the existing broad `fsci-stats`/`fsci-special`
+  formatting and lint inventories outside this hunk, which were left untouched. No second benchmark,
+  `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-sdsz2`.
