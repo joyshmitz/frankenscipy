@@ -22106,3 +22106,29 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   issue. Strict-remote `-D warnings` Clippy reached `fsci-integrate` and stopped only on four pre-existing
   unchanged lints in `api.rs`, `quad.rs`, and `rk.rs`. No second benchmark, `release-perf` build, manually invoked
   local Cargo fallback, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-rndjp`.
+
+## 2026-07-15 - cod - REJECT ODR Gaussian pivot-row borrowing (0.828x, disjoint regression)
+
+- Negative-ledger-first `bv --robot-triage` again advertised only the peer-owned dense-linalg SYRK harness as a
+  perf quick win. Screening `fsci-signal` found its principal transform/filter families explicitly harvested and
+  its recent residual micro-levers rejected, so this pass pivoted to the fresher `fsci-odr` dense LM solve. Prior
+  attribution establishes `gaussian_solve` as the per-damping dense-reference kernel; direct source attribution
+  found one normalized `n`-element pivot-row clone per pivot, totaling `n` allocations and `n^2` copied scalars per
+  solve. Opportunity score: 8.0 (impact 2 x confidence 4 / effort 1).
+- ONE lever replaced each clone with safe disjoint borrows of rows before and after the pivot. Pivot selection,
+  normalization, elimination row order, zero-factor skips, and every floating-point operation were unchanged.
+  All 19 focused strict-remote ODR unit tests passed on `vmi1153651`, including exact-bit parity through a matrix
+  requiring pivot swaps; the benchmark setup also asserted equality of the complete original/candidate `Output`.
+- The cold target first received an untimed strict-remote `--profile release --no-run` warm-up on
+  `vmi1153651`, without a timeout. The one and only foreground measurement used the same worker and same-binary
+  original/candidate arms for the dense-reference 64-point fit, with 10 samples, 100 ms warm-up, and 500 ms
+  requested measurement per arm. RCH rebuilt despite the warm-up. Original pivot clones measured
+  `[8.5429, 8.8100, 9.2359]` ms versus borrowed pivot rows `[10.100, 10.644, 11.000]` ms: **0.828x centered** and
+  **0.777x conservative** (`8.5429 / 11.000`), with disjoint intervals in the wrong direction.
+- Disposition: REJECT. Avoiding the copies made the hot elimination traversal materially slower, likely because
+  the contiguous cloned pivot row is a better optimization/cache input than the borrowed row behind split/chained
+  iterators. Source, exact-bit test, toggle, and benchmark A/B hunks were reverted; only this evidence row and bead
+  closeout remain. Exact-file rustfmt and strict-remote `-D warnings` Clippy passed. Exact-file UBS exited zero with
+  no critical issue; its warnings were the existing ODR/bench panic and indexing inventory plus the intentionally
+  preserved original clone. No second benchmark, `release-perf` build, manually invoked local Cargo fallback,
+  stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-o3dmz`.
