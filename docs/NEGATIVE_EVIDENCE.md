@@ -22252,3 +22252,25 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   pre-existing drift outside the candidate. Strict-remote `-D warnings` Clippy stopped before cluster on the known
   untouched `fsci-linalg/src/lib.rs:9431` lint. No second actual measurement, `release-perf` build, local Cargo
   fallback, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-q9k9x`.
+
+## 2026-07-15 - cod - KEEP electrocardiogram beat-local pulse table (1.457x median)
+
+- Negative-ledger-first `bv --robot-triage` offered only the peer-owned Cholesky SYRK harness whose direct share
+  remains below 1%, so this pass pivoted to the fresh `fsci-datasets` subsystem. The only prior datasets row rejects
+  an invariant arithmetic hoist in `face`; it explicitly leaves independently attributed generation primitives open.
+  Source attribution found `electrocardiogram` evaluating five triangular pulses for every 108,000 output samples,
+  although the beat phase has only 360 values and repeats 300 times. Opportunity score: 7.5 (impact 3 x confidence
+  5 / effort 2).
+- ONE lever computes the five exact pulses once for each beat phase in a 360-entry stack table and reuses them across
+  the window. Baseline and noise evaluation, all seven floating-point additions, output shape, and metadata retain
+  their original order. A literal former generator proved every one of the 108,000 output `f64` values bit-identical;
+  the focused strict-remote proof and targeted `-D warnings` Clippy both passed on `vmi1152480`.
+- After an untimed strict-remote `--profile release --no-run` warm-up on `vmi1152480`, the sole foreground A/B ran
+  from the same release test binary and worker. Ten alternating samples of three full generations per arm measured
+  former `[1905.132, 2707.682]` us versus table reuse `[1301.678, 1589.378]` us, with medians 2203.247 and 1511.855
+  us: **1.457x median**, **31.38% lower median time**, and **1.199x conservative** (`1905.132 / 1589.378`), with
+  disjoint ranges.
+- Disposition: KEEP. The temporary timing harness was removed; the exact-bit regression proof remains. Targeted UBS
+  reported zero critical findings, and exact-file rustfmt/diff hygiene passed. No second benchmark, `release-perf`
+  build, manually invoked local Cargo fallback, stash mutation, or unrelated-file edit was used. Bead:
+  `frankenscipy-2w69g`.

@@ -16,6 +16,7 @@ const FACE_HEIGHT: usize = 768;
 const FACE_WIDTH: usize = 1024;
 const FACE_CHANNELS: usize = 3;
 const ECG_LEN: usize = 108_000;
+const ECG_BEAT_LEN: usize = 360;
 
 /// Element type for a dataset fixture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -442,8 +443,9 @@ fn face_window(
 }
 
 fn electrocardiogram_window(name: &'static str, start: usize, len: usize) -> SignalF64 {
+    let pulse_table: [[f64; 5]; ECG_BEAT_LEN] = std::array::from_fn(electrocardiogram_pulses);
     let data = (start..start + len)
-        .map(electrocardiogram_value)
+        .map(|index| electrocardiogram_value(index, pulse_table[index % ECG_BEAT_LEN]))
         .collect::<Vec<_>>()
         .into_boxed_slice();
     SignalF64 {
@@ -471,15 +473,20 @@ fn rgb_to_gray([red, green, blue]: [u8; FACE_CHANNELS]) -> u8 {
     ((weighted + 128) >> 8) as u8
 }
 
-fn electrocardiogram_value(index: usize) -> f64 {
-    let beat = index % 360;
+fn electrocardiogram_pulses(beat: usize) -> [f64; 5] {
+    [
+        triangular_pulse(beat, 70, 25, 0.12),
+        -triangular_pulse(beat, 166, 8, 0.18),
+        triangular_pulse(beat, 180, 10, 1.05),
+        -triangular_pulse(beat, 194, 12, 0.28),
+        triangular_pulse(beat, 270, 45, 0.32),
+    ]
+}
+
+fn electrocardiogram_value(index: usize, pulses: [f64; 5]) -> f64 {
+    let [p_wave, q_dip, r_peak, s_dip, t_wave] = pulses;
     let t = index as f64 / ELECTROCARDIOGRAM_SAMPLE_RATE_HZ;
     let baseline = 0.05 * (std::f64::consts::TAU * t / 8.0).sin();
-    let p_wave = triangular_pulse(beat, 70, 25, 0.12);
-    let q_dip = -triangular_pulse(beat, 166, 8, 0.18);
-    let r_peak = triangular_pulse(beat, 180, 10, 1.05);
-    let s_dip = -triangular_pulse(beat, 194, 12, 0.28);
-    let t_wave = triangular_pulse(beat, 270, 45, 0.32);
     let deterministic_noise = ((index * 37 % 101) as f64 - 50.0) * 0.0004;
     baseline + p_wave + q_dip + r_peak + s_dip + t_wave + deterministic_noise
 }
@@ -496,6 +503,31 @@ fn triangular_pulse(beat: usize, center: usize, half_width: usize, amplitude: f6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn former_electrocardiogram_value(index: usize) -> f64 {
+        let beat = index % ECG_BEAT_LEN;
+        let t = index as f64 / ELECTROCARDIOGRAM_SAMPLE_RATE_HZ;
+        let baseline = 0.05 * (std::f64::consts::TAU * t / 8.0).sin();
+        let p_wave = triangular_pulse(beat, 70, 25, 0.12);
+        let q_dip = -triangular_pulse(beat, 166, 8, 0.18);
+        let r_peak = triangular_pulse(beat, 180, 10, 1.05);
+        let s_dip = -triangular_pulse(beat, 194, 12, 0.28);
+        let t_wave = triangular_pulse(beat, 270, 45, 0.32);
+        let deterministic_noise = ((index * 37 % 101) as f64 - 50.0) * 0.0004;
+        baseline + p_wave + q_dip + r_peak + s_dip + t_wave + deterministic_noise
+    }
+
+    fn former_electrocardiogram() -> SignalF64 {
+        let data = (0..ECG_LEN)
+            .map(former_electrocardiogram_value)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        SignalF64 {
+            name: "electrocardiogram",
+            sample_rate_hz: ELECTROCARDIOGRAM_SAMPLE_RATE_HZ,
+            data,
+        }
+    }
 
     #[test]
     fn public_api_matches_scipy_datasets_symbols() {
@@ -587,6 +619,18 @@ mod tests {
         };
         assert_eq!(ecg_head.data(), &ecg_full.data()[..1024]);
         Ok(())
+    }
+
+    #[test]
+    fn electrocardiogram_pulse_table_matches_former_bits() {
+        let former = former_electrocardiogram();
+        let reused = electrocardiogram();
+        assert_eq!(former.name(), reused.name());
+        assert_eq!(former.sample_rate_hz(), reused.sample_rate_hz());
+        assert_eq!(former.len(), reused.len());
+        for (&left, &right) in former.data().iter().zip(reused.data()) {
+            assert_eq!(left.to_bits(), right.to_bits());
+        }
     }
 
     #[test]
