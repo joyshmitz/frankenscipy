@@ -9,7 +9,7 @@ use fsci_stats::{
     pooled_variance, psd_welch,
     rand_index,
     siegelslopes, somersd, theilslopes, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance,
-    wraparound_discrepancy,
+    weighted_mean, wraparound_discrepancy,
     MAD_FN_REUSE_DISABLE, MAD_REUSE_DISABLE, MAD_ZSCORE_HOIST_DISABLE, MOMENT_PAR_FORCE_SERIAL,
     PAR_SUM_FORCE_SERIAL,
 };
@@ -22,6 +22,42 @@ fn deterministic_data(n: usize) -> Vec<f64> {
             (x * 0.017).sin() + (x * 0.031).cos() * 0.25 + (i % 17) as f64 * 0.001
         })
         .collect()
+}
+
+fn weighted_mean_two_pass(values: &[f64], weights: &[f64]) -> f64 {
+    let total_w: f64 = weights.iter().sum();
+    values
+        .iter()
+        .zip(weights)
+        .map(|(&value, &weight)| value * weight)
+        .sum::<f64>()
+        / total_w
+}
+
+fn bench_weighted_mean_fused_ab(c: &mut Criterion) {
+    let len = 262_144usize;
+    let values = deterministic_data(len);
+    let weights: Vec<f64> = (0..len)
+        .map(|i| 0.125 + ((i * 53 + 7) % 257) as f64 / 31.0)
+        .collect();
+    assert_eq!(
+        weighted_mean(&values, &weights).to_bits(),
+        weighted_mean_two_pass(&values, &weights).to_bits()
+    );
+
+    let mut group = c.benchmark_group("weighted_mean_fused_ab");
+    group.bench_function("original_two_pass_n262144", |b| {
+        b.iter(|| {
+            black_box(weighted_mean_two_pass(
+                black_box(&values),
+                black_box(&weights),
+            ))
+        })
+    });
+    group.bench_function("candidate_fused_n262144", |b| {
+        b.iter(|| black_box(weighted_mean(black_box(&values), black_box(&weights))))
+    });
+    group.finish();
 }
 
 fn mean_absolute_error_scalar_reference(y_true: &[f64], y_pred: &[f64]) -> f64 {
@@ -1248,6 +1284,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_weighted_mean_fused_ab,
     bench_mean_absolute_error_simd_ab,
     bench_mean_squared_error_simd_ab,
     bench_brier_score_simd_ab,

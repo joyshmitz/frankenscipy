@@ -22030,3 +22030,27 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `fsci-spatial` and stopped only on four pre-existing unchanged lints at lines 5222, 5594, 6232, and 6750. No
   second benchmark, `release-perf` build, local Cargo fallback, stash mutation, or unrelated-file edit was used.
   Bead: `frankenscipy-fybg0`.
+
+## 2026-07-15 - cod - KEEP `weighted_mean` fused input pass (2.164x, bit-identical)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced the assigned dense-linalg SYRK harness, which prior
+  attribution places below 1% of Cholesky wall time. This pass instead resumed the existing INVALID
+  `weighted_mean` entry: that attempt proved correctness but never reached either timed arm, so it contained no
+  performance evidence. Direct attribution shows that the two-pass implementation reads weights for the
+  denominator and then values plus weights for the numerator, totaling `3*n` scalar input reads. Fusing the two
+  independent accumulators reduces that to `2*n` reads without changing either accumulator's left-to-right
+  arithmetic sequence. Opportunity score: 15.0 (impact 3 x confidence 5 / effort 1).
+- ONE lever accumulates total weight and weighted total in the same zipped loop. A focused strict-remote test on
+  `vmi1153651` matched the literal two-pass implementation bit-for-bit for a deterministic 4,099-element finite
+  case and for zero weights, infinity, payload NaN, and length mismatch.
+- The cold bench target first received an untimed strict-remote `--profile release --no-run` warm-up on
+  `vmi1153651`, without a timeout. The one and only foreground measurement then used the same worker and the same
+  worker-scoped release target, 262,144 values, 10 samples, 100 ms warm-up, and 500 ms measurement per arm. RCH
+  rebuilt despite the warm-up, but the short Criterion regions measured original two-pass
+  `[564.03, 609.57, 654.17]` us versus fused `[274.51, 281.74, 291.10]` us: **2.164x faster centered**,
+  **1.937x conservative**, and **53.78% lower centered time**, with disjoint intervals.
+- Disposition: KEEP. Diff hygiene passed and exact-file UBS exited zero with no critical issue. File-wide rustfmt
+  and strict-remote `-D warnings` Clippy were blocked only by the existing broad `fsci-stats`/`fsci-special`
+  formatting drift and 64-lint inventory outside this hunk, which were left untouched. No second benchmark,
+  `release-perf` build, manually invoked local Cargo fallback, stash mutation, or unrelated-file edit was used.
+  Bead: `frankenscipy-r4rfr`.

@@ -25308,16 +25308,19 @@ pub fn weighted_mean(values: &[f64], weights: &[f64]) -> f64 {
     if values.len() != weights.len() {
         return f64::NAN;
     }
-    let total_w: f64 = weights.iter().sum();
+    // Accumulate the denominator and numerator together. Each accumulator sees
+    // exactly the same left-to-right operation sequence as the former two-pass
+    // implementation, while weights are loaded only once on the valid path.
+    let mut total_w = 0.0;
+    let mut weighted_total = 0.0;
+    for (&value, &weight) in values.iter().zip(weights) {
+        total_w += weight;
+        weighted_total += value * weight;
+    }
     if total_w == 0.0 {
         return f64::NAN;
     }
-    values
-        .iter()
-        .zip(weights.iter())
-        .map(|(&v, &w)| v * w)
-        .sum::<f64>()
-        / total_w
+    weighted_total / total_w
 }
 
 /// Compute weighted variance.
@@ -57080,6 +57083,45 @@ mod tests {
         let w = [1.0_f64, 2.0, 3.0];
         let expected = 14.0 / 6.0;
         assert!((weighted_mean(&data, &w) - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weighted_mean_fused_pass_matches_two_pass_bits() {
+        fn two_pass(values: &[f64], weights: &[f64]) -> f64 {
+            if values.len() != weights.len() {
+                return f64::NAN;
+            }
+            let total_w: f64 = weights.iter().sum();
+            if total_w == 0.0 {
+                return f64::NAN;
+            }
+            values
+                .iter()
+                .zip(weights)
+                .map(|(&value, &weight)| value * weight)
+                .sum::<f64>()
+                / total_w
+        }
+
+        let values: Vec<f64> = (0..4_099)
+            .map(|i| ((i * 97 + 11) as f64 * 0.017).sin() * (1.0 + (i % 13) as f64))
+            .collect();
+        let weights: Vec<f64> = (0..4_099)
+            .map(|i| 0.125 + ((i * 53 + 7) % 257) as f64 / 31.0)
+            .collect();
+        let cases: &[(&[f64], &[f64])] = &[
+            (&values, &weights),
+            (&[1.0, 2.0], &[0.0, 0.0]),
+            (&[0.0, 2.0], &[f64::INFINITY, 1.0]),
+            (&[f64::NAN, 1.0], &[1.0, 2.0]),
+            (&[1.0, 2.0], &[1.0]),
+        ];
+        for &(case_values, case_weights) in cases {
+            assert_eq!(
+                weighted_mean(case_values, case_weights).to_bits(),
+                two_pass(case_values, case_weights).to_bits()
+            );
+        }
     }
 
     #[test]
