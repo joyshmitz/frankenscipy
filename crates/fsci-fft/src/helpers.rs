@@ -105,18 +105,19 @@ pub fn fftshift<T: Clone>(
     axes: Option<&[usize]>,
 ) -> Result<Vec<T>, FftError> {
     validate_nd_shape(input.len(), shape)?;
-    let mut data = input.to_vec();
     let all: Vec<usize> = (0..shape.len()).collect();
     let axes = axes.unwrap_or(&all);
+    let mut data = None;
     for &ax in axes {
         if ax >= shape.len() {
             return Err(FftError::InvalidShape {
                 detail: "axis out of bounds",
             });
         }
-        data = roll_axis(&data, shape, ax, shape[ax] / 2);
+        let shifted = roll_axis(data.as_deref().unwrap_or(input), shape, ax, shape[ax] / 2);
+        data = Some(shifted);
     }
-    Ok(data)
+    Ok(data.unwrap_or_else(|| input.to_vec()))
 }
 
 /// Inverse of [`fftshift`] for an N-dimensional, row-major array.
@@ -130,9 +131,9 @@ pub fn ifftshift<T: Clone>(
     axes: Option<&[usize]>,
 ) -> Result<Vec<T>, FftError> {
     validate_nd_shape(input.len(), shape)?;
-    let mut data = input.to_vec();
     let all: Vec<usize> = (0..shape.len()).collect();
     let axes = axes.unwrap_or(&all);
+    let mut data = None;
     for &ax in axes {
         if ax >= shape.len() {
             return Err(FftError::InvalidShape {
@@ -140,9 +141,10 @@ pub fn ifftshift<T: Clone>(
             });
         }
         let n = shape[ax];
-        data = roll_axis(&data, shape, ax, n - n / 2);
+        let shifted = roll_axis(data.as_deref().unwrap_or(input), shape, ax, n - n / 2);
+        data = Some(shifted);
     }
-    Ok(data)
+    Ok(data.unwrap_or_else(|| input.to_vec()))
 }
 
 fn validate_frequency_args(n: usize, sample_spacing: f64) -> Result<(), FftError> {

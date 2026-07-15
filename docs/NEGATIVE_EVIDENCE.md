@@ -21835,3 +21835,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Disposition: KEEP. Focused strict-remote `-D warnings` Clippy, owned-file rustfmt, and diff hygiene passed; targeted
   UBS reported zero critical issues. No second benchmark, `release-perf` build, local Cargo fallback, or stash
   mutation was used. Bead: `frankenscipy-ryx27`.
+
+## 2026-07-14 - cod - KEEP deferred N-D FFT-shift ownership (2.346x, bit-identical)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced the stale dense-linalg SYRK harness. With the preceding
+  array-API vein closed, this pass pivoted to FFT and read the prior contiguous-axis `fftshift` keep before editing.
+  Direct source attribution found a residual beneath that block-copy win: both public N-D shift directions cloned
+  the complete input before `roll_axis` allocated the required owned result. At 1024x1024 Float64, that was one
+  avoidable 8 MiB copy on a bandwidth-bound path. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever defers ownership until the first selected axis and feeds the borrowed input directly to `roll_axis`.
+  Empty-axis and zero-shift calls still return an owned clone; subsequent axes, validation, shift direction, generic
+  element order, and allocation ownership are unchanged. The existing focused strict-remote fixture on
+  `vmi1152480` compared FFT and inverse shifts against the literal scalar formula with odd lengths, signed zero,
+  payload NaNs, and infinities; every output bit matched.
+- The changed release bench binary was first built with an untimed strict-remote `--profile release --no-run`
+  warm-up on `vmi1152480`, without a timeout. The one and only measurement invocation then used the same worker and
+  worker-scoped release target, a 1024x1024 Float64 last-axis shift, 10 samples, 100 ms warm-up, and 500 ms
+  measurement per arm. Deferred ownership measured `[466.27, 529.85, 589.26]` us versus
+  `[1.1557, 1.2431, 1.2948]` ms for the literal former pre-clone plus block copy: **2.346x faster centered**,
+  **1.961x conservative**, and **57.38% lower centered time**, with disjoint intervals. RCH rebuilt despite the
+  preceding warm-up, but the complete foreground command returned in 127.8 seconds, below the five-minute cap.
+- Disposition: KEEP. Focused strict-remote `-D warnings` Clippy, owned-file rustfmt, and diff hygiene passed; targeted
+  UBS reported zero critical issues. No second benchmark, `release-perf` build, local Cargo fallback, or stash
+  mutation was used. Bead: `frankenscipy-sooje`.

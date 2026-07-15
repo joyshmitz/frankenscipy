@@ -281,6 +281,18 @@ fn fftshift_last_axis_scalar_reference(input: &[f64], rows: usize, cols: usize) 
     out
 }
 
+fn fftshift_last_axis_initial_clone_reference(input: &[f64], rows: usize, cols: usize) -> Vec<f64> {
+    let data = input.to_vec();
+    let split = cols - cols / 2;
+    let mut out = Vec::with_capacity(data.len());
+    for block in data.chunks_exact(cols) {
+        out.extend_from_slice(&block[split..]);
+        out.extend_from_slice(&block[..split]);
+    }
+    debug_assert_eq!(out.len(), rows * cols);
+    out
+}
+
 fn bench_fftshift_contiguous_axis(c: &mut Criterion) {
     const ROWS: usize = 1024;
     const COLS: usize = 1024;
@@ -311,6 +323,41 @@ fn bench_fftshift_contiguous_axis(c: &mut Criterion) {
                 black_box(ROWS),
                 black_box(COLS),
             ))
+        })
+    });
+    group.finish();
+}
+
+fn bench_fftshift_initial_clone_ab(c: &mut Criterion) {
+    const ROWS: usize = 1024;
+    const COLS: usize = 1024;
+    let input = make_real_input(ROWS * COLS);
+    let shape = [ROWS, COLS];
+    let axes = [1];
+    let candidate = fftshift(&input, &shape, Some(&axes)).expect("fftshift");
+    let original = fftshift_last_axis_initial_clone_reference(&input, ROWS, COLS);
+    assert_eq!(candidate, original);
+
+    let mut group = c.benchmark_group("fftshift_initial_clone_ab");
+    group.bench_function("original/1024x1024", |bencher| {
+        bencher.iter(|| {
+            black_box(fftshift_last_axis_initial_clone_reference(
+                black_box(&input),
+                black_box(ROWS),
+                black_box(COLS),
+            ))
+        })
+    });
+    group.bench_function("candidate/1024x1024", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                fftshift(
+                    black_box(&input),
+                    black_box(shape.as_slice()),
+                    Some(black_box(axes.as_slice())),
+                )
+                .expect("contiguous fftshift"),
+            )
         })
     });
     group.finish();
@@ -428,6 +475,7 @@ criterion_group!(
     bench_fft2,
     bench_cross_spectral_density,
     bench_fftshift_contiguous_axis,
+    bench_fftshift_initial_clone_ab,
     bench_plan_cache_hit
 );
 
