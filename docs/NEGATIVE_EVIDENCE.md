@@ -21812,3 +21812,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   Clippy gate was blocked before this crate by the three unrelated existing `fsci-opt` lints in `curvefit.rs:549`,
   `lib.rs:4367`, and `lib.rs:4371`. Those files and findings were left untouched. No second real measurement,
   `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-gevld`.
+
+## 2026-07-14 - cod - KEEP identity-cast elision before broadcast (1.944x, bit-identical)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced only the dense-linalg SYRK harness, which prior direct
+  attribution places below 1% of Cholesky wall time. This pass pivoted to the fresh, unledgered
+  `fsci-arrayapi::promote_and_broadcast` primitive. Direct source attribution found that already-promoted inputs were
+  first cloned by `astype` and then cloned again by `broadcast_to`, even when dtype and shape were already aligned.
+  Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever bypasses `astype` when the input dtype already equals the promoted dtype, removing one complete buffer
+  clone per aligned input while retaining the owned broadcast result and leaving mixed-dtype behavior unchanged. A
+  focused strict-remote test on `vmi1152480` compared the literal former cast-then-broadcast path with the candidate
+  across two 32x32 Float64 arrays, including signed zero and a payload NaN; shape, dtype, order, and every value bit
+  matched exactly.
+- The release bench binary was first built with an untimed strict-remote `--profile release --no-run` warm-up on
+  `vmi1152480`, without a timeout. The one and only measurement invocation used the same worker and worker-scoped
+  release target with two aligned 256x256 Float64 inputs, 10 samples, 100 ms warm-up, and 500 ms measurement per arm.
+  The dtype guard measured `[75.716, 80.465, 84.817]` us versus `[150.64, 156.44, 161.70]` us for the literal former
+  identity cast: **1.944x faster centered**, **1.776x conservative**, and **48.56% lower centered time**, with
+  disjoint intervals. RCH rebuilt in the measurement invocation despite the preceding warm-up, but the complete
+  foreground command still returned in 157.3 seconds, below the five-minute cap.
+- Disposition: KEEP. Focused strict-remote `-D warnings` Clippy, owned-file rustfmt, and diff hygiene passed; targeted
+  UBS reported zero critical issues. No second benchmark, `release-perf` build, local Cargo fallback, or stash
+  mutation was used. Bead: `frankenscipy-ryx27`.

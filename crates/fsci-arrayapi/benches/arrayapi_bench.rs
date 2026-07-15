@@ -1,8 +1,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_arrayapi::{
-    ArrayApiArray, ArrayApiBackend, CoreArray, CoreArrayBackend, CreationRequest, DType,
-    ExecutionMode, FullRequest, IndexExpr, IndexRequest, IndexingMode, MemoryOrder, ScalarValue,
-    Shape, SliceSpec, from_slice, full, getitem, promote_and_broadcast, zeros,
+    ArrayApiArray, ArrayApiBackend, ArrayApiResult, CoreArray, CoreArrayBackend, CreationRequest,
+    DType, ExecutionMode, FullRequest, IndexExpr, IndexRequest, IndexingMode, MemoryOrder,
+    ScalarValue, Shape, SliceSpec, broadcast_shapes, from_slice, full, getitem,
+    promote_and_broadcast, zeros,
 };
 use nalgebra::DMatrix;
 use std::hint::black_box;
@@ -159,6 +160,70 @@ fn bench_broadcast(c: &mut Criterion) {
         );
     }
 
+    group.finish();
+}
+
+fn promote_and_broadcast_identity_cast_original(
+    backend: &CoreArrayBackend,
+    arrays: &[&CoreArray],
+    force_floating: bool,
+) -> ArrayApiResult<Vec<CoreArray>> {
+    let dtypes = arrays
+        .iter()
+        .map(|array| backend.dtype_of(array))
+        .collect::<Vec<_>>();
+    let target_dtype = backend.result_type(&dtypes, force_floating)?;
+    let target_shape = broadcast_shapes(
+        &arrays
+            .iter()
+            .map(|array| backend.shape_of(array))
+            .collect::<Vec<_>>(),
+    )?;
+    arrays
+        .iter()
+        .map(|array| {
+            let cast = backend.astype(array, target_dtype)?;
+            backend.broadcast_to(&cast, &target_shape)
+        })
+        .collect()
+}
+
+fn bench_promote_identity_cast_ab(c: &mut Criterion) {
+    let backend = strict_backend();
+    let shape = Shape::new(vec![256, 256]);
+    let left = make_array(&backend, shape.clone(), DType::Float64, MemoryOrder::C);
+    let right = make_array(&backend, shape, DType::Float64, MemoryOrder::C);
+    let current = promote_and_broadcast(&backend, &[&left, &right], false)
+        .expect("optimized promotion should succeed");
+    let original = promote_and_broadcast_identity_cast_original(&backend, &[&left, &right], false)
+        .expect("original promotion should succeed");
+    assert_eq!(current, original);
+
+    let mut group = c.benchmark_group("arrayapi_promote_identity_cast_ab");
+    group.bench_function("original_identity_cast/256x256x2", |b| {
+        b.iter(|| {
+            black_box(
+                promote_and_broadcast_identity_cast_original(
+                    black_box(&backend),
+                    &[black_box(&left), black_box(&right)],
+                    false,
+                )
+                .expect("original promotion should succeed"),
+            )
+        })
+    });
+    group.bench_function("candidate_dtype_guard/256x256x2", |b| {
+        b.iter(|| {
+            black_box(
+                promote_and_broadcast(
+                    black_box(&backend),
+                    &[black_box(&left), black_box(&right)],
+                    false,
+                )
+                .expect("optimized promotion should succeed"),
+            )
+        })
+    });
     group.finish();
 }
 
@@ -376,6 +441,7 @@ criterion_group!(
     bench_to_dmatrix_ab,
     bench_creation,
     bench_broadcast,
+    bench_promote_identity_cast_ab,
     bench_indexing,
     bench_dtype_cast
 );

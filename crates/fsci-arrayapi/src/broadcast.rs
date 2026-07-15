@@ -72,6 +72,9 @@ pub fn promote_and_broadcast<B: ArrayApiBackend>(
     arrays
         .iter()
         .map(|array| {
+            if backend.dtype_of(array) == target_dtype {
+                return backend.broadcast_to(array, &target_shape);
+            }
             let cast = backend.astype(array, target_dtype)?;
             backend.broadcast_to(&cast, &target_shape)
         })
@@ -81,7 +84,7 @@ pub fn promote_and_broadcast<B: ArrayApiBackend>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{ArrayApiArray, ArrayApiBackend, CoreArrayBackend};
+    use crate::backend::{ArrayApiArray, ArrayApiBackend, CoreArray, CoreArrayBackend};
     use crate::types::{DType, ExecutionMode, MemoryOrder, ScalarValue};
 
     #[test]
@@ -202,6 +205,69 @@ mod tests {
             assert_eq!(array.shape(), &Shape::new(vec![2, 2]));
             assert_eq!(array.dtype(), DType::Complex128);
             assert_eq!(array.size(), 4);
+        }
+    }
+
+    fn promote_and_broadcast_identity_cast_original(
+        backend: &CoreArrayBackend,
+        arrays: &[&CoreArray],
+        force_floating: bool,
+    ) -> ArrayApiResult<Vec<CoreArray>> {
+        let dtypes = arrays
+            .iter()
+            .map(|array| backend.dtype_of(array))
+            .collect::<Vec<_>>();
+        let target_dtype = backend.result_type(&dtypes, force_floating)?;
+        let target_shape = broadcast_shapes(
+            &arrays
+                .iter()
+                .map(|array| backend.shape_of(array))
+                .collect::<Vec<_>>(),
+        )?;
+        arrays
+            .iter()
+            .map(|array| {
+                let cast = backend.astype(array, target_dtype)?;
+                backend.broadcast_to(&cast, &target_shape)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn promote_and_broadcast_identity_cast_elision_is_bit_identical() {
+        let backend = CoreArrayBackend::new(ExecutionMode::Strict);
+        let shape = Shape::new(vec![32, 32]);
+        let mut left_values = profile_sequence_values(32 * 32);
+        left_values[0] = ScalarValue::F64(-0.0);
+        left_values[1] = ScalarValue::F64(f64::from_bits(0x7ff8_0000_0000_0042));
+        let right_values = (0..32 * 32)
+            .map(|idx| ScalarValue::F64(-((idx as f64) * 0.25)))
+            .collect::<Vec<_>>();
+        let left = backend
+            .array_from_slice(&left_values, &shape, DType::Float64, MemoryOrder::C)
+            .expect("left array should build");
+        let right = backend
+            .array_from_slice(&right_values, &shape, DType::Float64, MemoryOrder::C)
+            .expect("right array should build");
+
+        let expected =
+            promote_and_broadcast_identity_cast_original(&backend, &[&left, &right], false)
+                .expect("original path should succeed");
+        let actual = promote_and_broadcast(&backend, &[&left, &right], false)
+            .expect("optimized path should succeed");
+
+        for (actual, expected) in actual.iter().zip(&expected) {
+            assert_eq!(actual.shape(), expected.shape());
+            assert_eq!(actual.dtype(), expected.dtype());
+            assert_eq!(actual.order(), expected.order());
+            for (actual, expected) in actual.values().iter().zip(expected.values()) {
+                match (*actual, *expected) {
+                    (ScalarValue::F64(actual), ScalarValue::F64(expected)) => {
+                        assert_eq!(actual.to_bits(), expected.to_bits());
+                    }
+                    _ => assert_eq!(actual, expected),
+                }
+            }
         }
     }
 
