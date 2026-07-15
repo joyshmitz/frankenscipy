@@ -4821,9 +4821,23 @@ pub fn riccati_yn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
     let len = n as usize + 1;
     let mut c = Vec::with_capacity(len);
     let mut cp = Vec::with_capacity(len);
-    for k in 0..=n {
-        let yk = spherical_yn_nonneg(k, x);
-        c.push(x * yk);
+    if x.is_finite() && x != 0.0 {
+        let mut y_prev = -x.cos() / x;
+        c.push(x * y_prev);
+        if n >= 1 {
+            let mut y_curr = -x.cos() / (x * x) - x.sin() / x;
+            c.push(x * y_curr);
+            for k in 1..n {
+                let next = (2.0 * k as f64 + 1.0) / x * y_curr - y_prev;
+                c.push(x * next);
+                y_prev = y_curr;
+                y_curr = next;
+            }
+        }
+    } else {
+        for k in 0..=n {
+            c.push(x * spherical_yn_nonneg(k, x));
+        }
     }
     cp.push(x.sin());
     for k in 1..=n as usize {
@@ -7892,6 +7906,52 @@ mod tests {
                 "C'_{n}({x}) = {}, expected {exp_cp}",
                 cp[last]
             );
+        }
+    }
+
+    #[test]
+    fn riccati_yn_recurrence_reuse_matches_repeated_reference() {
+        fn repeated_reference(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
+            let mut c = Vec::with_capacity(n as usize + 1);
+            let mut cp = Vec::with_capacity(n as usize + 1);
+            for k in 0..=n {
+                c.push(x * spherical_yn_nonneg(k, x));
+            }
+            cp.push(x.sin());
+            for k in 1..=n as usize {
+                let inv_x = if x.abs() < 1.0e-300 { 0.0 } else { 1.0 / x };
+                cp.push(-((k as f64) * c[k] * inv_x) + c[k - 1]);
+            }
+            (c, cp)
+        }
+
+        let cases = [
+            (0, 0.0),
+            (1, -0.0),
+            (8, 0.125),
+            (32, -10.0),
+            (128, 512.0),
+            (4, f64::INFINITY),
+            (4, f64::NEG_INFINITY),
+            (4, f64::NAN),
+        ];
+        for (n, x) in cases {
+            let actual = riccati_yn(n, x);
+            let expected = repeated_reference(n, x);
+            for (index, (&got, &want)) in actual.0.iter().zip(&expected.0).enumerate() {
+                assert_eq!(
+                    got.to_bits(),
+                    want.to_bits(),
+                    "C[{index}] for n={n}, x={x:?}"
+                );
+            }
+            for (index, (&got, &want)) in actual.1.iter().zip(&expected.1).enumerate() {
+                assert_eq!(
+                    got.to_bits(),
+                    want.to_bits(),
+                    "C'[{index}] for n={n}, x={x:?}"
+                );
+            }
         }
     }
 
