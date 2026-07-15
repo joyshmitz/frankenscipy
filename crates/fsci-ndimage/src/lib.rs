@@ -11870,9 +11870,10 @@ pub fn diff_array(input: &NdArray) -> NdArray {
         return NdArray::zeros(vec![0]);
     }
     let data: Vec<f64> = input.data.windows(2).map(|w| w[1] - w[0]).collect();
+    let len = data.len();
     NdArray {
-        data: data.clone(),
-        shape: vec![data.len()],
+        data,
+        shape: vec![len],
         strides: vec![1],
     }
 }
@@ -14967,6 +14968,39 @@ mod tests {
         assert_eq!(count_nonzero(&e), 2);
         let f = NdArray::new(vec![-1.0, 2.0, -3.0], vec![3]).unwrap();
         assert_eq!(abs_array(&f).data, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn diff_array_preserves_first_difference_bits() {
+        let input = NdArray::new(
+            vec![
+                f64::from_bits(0x7ff8_0000_0000_0042),
+                -0.0,
+                0.0,
+                f64::MIN_POSITIVE,
+                -3.5,
+                f64::INFINITY,
+            ],
+            vec![2, 3],
+        )
+        .unwrap();
+        let expected: Vec<u64> = input
+            .data
+            .windows(2)
+            .map(|window| (window[1] - window[0]).to_bits())
+            .collect();
+
+        let got = diff_array(&input);
+
+        assert_eq!(
+            got.data
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(got.shape, vec![5]);
+        assert_eq!(got.strides, vec![1]);
     }
 
     #[test]

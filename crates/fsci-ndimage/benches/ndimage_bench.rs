@@ -1,8 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_ndimage::{
     BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_opening,
-    maximum_filter, maximum_filter1d, mean, median_filter, minimum_filter, minimum_filter1d,
-    rank_filter, watershed_ift,
+    diff_array, maximum_filter, maximum_filter1d, mean, median_filter, minimum_filter,
+    minimum_filter1d, rank_filter, watershed_ift,
 };
 use std::hint::black_box;
 
@@ -196,6 +196,38 @@ fn bench_watershed_ift(c: &mut Criterion) {
         });
 }
 
+fn diff_array_clone_reference(input: &NdArray) -> NdArray {
+    let data: Vec<f64> = input
+        .data
+        .windows(2)
+        .map(|window| window[1] - window[0])
+        .collect();
+    NdArray {
+        data: data.clone(),
+        shape: vec![data.len()],
+        strides: vec![1],
+    }
+}
+
+fn bench_diff_array_ownership(c: &mut Criterion) {
+    let n = 1usize << 20;
+    let data: Vec<f64> = (0..n)
+        .map(|idx| {
+            let x = idx as f64;
+            (x * 0.0017).sin() * 31.0 + (x * 0.00013).cos() * 17.0
+        })
+        .collect();
+    let input = NdArray::new(data, vec![n]).expect("diff input");
+    let mut group = c.benchmark_group("diff_array_ownership");
+    group.bench_function("move_output", |b| {
+        b.iter(|| black_box(diff_array(black_box(&input))))
+    });
+    group.bench_function("clone_reference", |b| {
+        b.iter(|| black_box(diff_array_clone_reference(black_box(&input))))
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_minmax_filter,
@@ -205,6 +237,7 @@ criterion_group!(
     bench_correlate_gaussian,
     bench_label_mean,
     bench_watershed_ift,
+    bench_diff_array_ownership,
     bench_zoom,
     bench_rotate
 );

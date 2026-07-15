@@ -21951,3 +21951,30 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   strict-remote `-D warnings` Clippy gate were blocked only by the existing broad `fsci-stats`/`fsci-special`
   formatting and lint inventories outside this hunk, which were left untouched. No second benchmark,
   `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-q8yf6`.
+
+## 2026-07-14 - cod - KEEP ndimage `diff_array` ownership transfer (8.501x, bit-identical)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced the already-owned no-gaps umbrella and stale SYRK
+  harness. The four consecutive stats-normalizer keeps made that vein crowded; cluster and ODR were explicitly
+  ledgered as harvested, while the only unassigned sparse perf bead was already implemented on `main`. A fresh
+  `fsci-ndimage` source attribution found no prior `diff_array` row and showed that every call collected its
+  `n-1` first differences, cloned the complete output vector solely so its length remained readable for shape
+  construction, then dropped the original: two allocations plus an avoidable `8*(n-1)`-byte copy. Opportunity
+  score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever saves the output length before constructing `NdArray` and moves the already-computed vector into the
+  result. Subtraction order, window order, output order, shape, and strides are unchanged. A focused strict-remote
+  test on `vmi1153651` matched every output bit across a payload NaN, signed zero, minimum positive, finite, and
+  infinite inputs, and also checked shape and strides.
+- The changed existing bench binary was first built by an untimed strict-remote `--profile release --no-run`
+  warm-up on `vmi1153651`, with no timeout. The one and only measurement invocation used the same worker and
+  worker-scoped target path, although RCH rebuilt despite the warm-up. For 1,048,576 values, 10 samples, 100 ms
+  warm-up, and a requested 500 ms measurement per arm (Criterion extended the slower arm to 764.88 ms), moving
+  the output measured `[1.5585, 1.6047, 1.6441]` ms versus `[12.987, 13.642, 14.404]` ms for the clone reference:
+  **8.501x faster centered**, **7.899x conservative**, and **88.24% lower centered time**, with disjoint
+  intervals. The complete foreground command returned in 177.1 seconds, below the five-minute cap.
+- Disposition: KEEP. Diff hygiene passed. Exact-file rustfmt and strict-remote `-D warnings` Clippy were blocked
+  only by existing broad `fsci-ndimage` formatting and 36-lint inventories outside this hunk. Changed-file UBS
+  found three pre-existing test-only `panic!` calls; its only clone hit in the new benchmark is the intentional
+  old-path reference, and it reported formatting, Clippy, check, and test health clean in its shadow workspace.
+  No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used. Bead:
+  `frankenscipy-fz5yj`.
