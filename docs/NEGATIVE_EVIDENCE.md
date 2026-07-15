@@ -22157,3 +22157,30 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   automatically invoked shadow-workspace Cargo results are excluded from the remote proof. No second benchmark,
   `release-perf` build, manually invoked local Cargo fallback, stash mutation, or unrelated-file edit was used.
   Bead: `frankenscipy-05794`.
+
+## 2026-07-15 - cod - REJECT spatial `diameter` deferred square root (overlapping intervals)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced the peer-owned dense-linalg SYRK harness whose prior
+  attribution is below 1% of the Cholesky wall. The immediately preceding differential-evolution allocation seam
+  was closed, and the spatial ledger ruled out its mined distance-matrix, KD-tree, transform, and Voronoi families
+  before a direct public-kernel screen found no prior `diameter` entry. Source attribution showed that `diameter`
+  calls `sqrt` for every one of its `n*(n-1)/2` pairs even though it returns only their maximum. Opportunity score:
+  15.0 (impact 3 x confidence 5 / effort 1).
+- ONE candidate compared the existing `sqeuclidean` results, retained the same NaN-propagating maximum, and took
+  one final square root. Monotonicity preserves the selected squared distance and its final output bits. A focused
+  strict-remote proof on `vmi1153651` matched the literal pairwise-square-root path bit-for-bit for empty/singleton,
+  signed-zero, subnormal, infinity, NaN, ragged-row, finite serial, and above-parallel-gate cases.
+- The existing Criterion target received an untimed strict-remote `--profile release --no-run` warm-up on requested
+  worker `vmi1153651`, with no timeout. RCH ignored that worker pin for the one and only foreground measurement and
+  routed it to cold `vmi1152480`; its rebuild was allowed to finish untimed, and both scored arms still ran from the
+  same release binary. For 511 one-dimensional points (130,305 pairs), 10 samples, 100 ms warm-up, and 500 ms
+  requested measurement per arm, pairwise square roots measured `[718.11, 898.50, 1051.0]` us versus deferred
+  square root `[496.39, 623.88, 747.57]` us. The centered ratio was **1.440x** with **30.56%** lower centered time,
+  but the intervals overlapped and the conservative ratio was only **0.961x** (`718.11 / 747.57`).
+- Disposition: REJECT. The direction is favorable, but it does not clear the conservative same-worker confidence
+  gate in the single cheap measurement. Source, exact-bit proof, and benchmark A/B hunks were reverted; only this
+  evidence row and bead closeout remain. Targeted UBS reported zero critical findings. Exact-file rustfmt checking
+  reached only pre-existing unchanged drift outside the candidate, while strict-remote `-D warnings` Clippy stopped
+  before spatial on the pre-existing `fsci-linalg/src/lib.rs:9431` lint. No second benchmark, `release-perf` build,
+  manually invoked local Cargo fallback, stash mutation, or unrelated-file edit was used. Bead:
+  `frankenscipy-bneuc`.
