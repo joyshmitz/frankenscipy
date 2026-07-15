@@ -22080,3 +22080,29 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   false positives outside this hunk, while UBS shadow formatting, Clippy, check, and test gates were clean. No
   second benchmark, `release-perf` build, manually invoked local Cargo fallback, stash mutation, or unrelated-file
   edit was used. Bead: `frankenscipy-2i4fz`.
+
+## 2026-07-15 - cod - REJECT Radau streamed scaled RMS norms (no conservative separation)
+
+- Negative-ledger-first `bv --robot-triage` again advertised the assigned dense-linalg SYRK bead, whose prior
+  attribution places standalone SYRK below 1% of Cholesky wall time. The advertised integrate candidates were
+  already landed, so this pass pivoted to a fresh `fsci-integrate::Radau` seam. Direct source attribution found
+  one `3*n` scaled-vector allocation per Newton iteration and one `n` scaled-vector allocation per embedded
+  error estimate (potentially repeated after rejection), all used only to compute RMS norms. Opportunity score:
+  15.0 (impact 3 x confidence 5 / effort 1).
+- ONE lever streamed division, squaring, and summation in the original element order instead of materializing
+  those temporary vectors. Five focused strict-remote Radau tests passed on `vmi1152480`, including exact-bit
+  equality between collected and streamed norm helpers; the benchmark setup also asserted equality of the full
+  original/candidate `SolveIvpResult`, including state vectors and solver counters.
+- The cold target first received an untimed strict-remote `--profile release --no-run` warm-up on
+  `vmi1152480`, without a timeout. The one and only foreground measurement used that same requested worker and
+  same-binary A/B arms, a stiff scalar Radau solve with 0.01 fixed maximum step, 10 samples, 100 ms warm-up, and
+  500 ms requested measurement per arm. RCH rebuilt despite the warm-up. Original collected vectors measured
+  `[128.50, 161.50, 231.27]` us versus streamed norms `[111.65, 122.18, 129.46]` us. The centered ratio was
+  **1.322x**, but two severe high outliers widened the original interval enough to overlap the candidate; the
+  conservative ratio was only **0.993x** (`128.50 / 129.46`).
+- Disposition: REJECT. Removing the allocations is directionally useful but did not clear the conservative
+  same-worker confidence gate in this single cheap measurement. Source, exact-bit test, and benchmark A/B hunks
+  were reverted; only this evidence row and bead closeout remain. Exact-file UBS exited zero with no critical
+  issue. Strict-remote `-D warnings` Clippy reached `fsci-integrate` and stopped only on four pre-existing
+  unchanged lints in `api.rs`, `quad.rs`, and `rk.rs`. No second benchmark, `release-perf` build, manually invoked
+  local Cargo fallback, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-rndjp`.
