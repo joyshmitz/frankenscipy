@@ -22054,3 +22054,29 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   formatting drift and 64-lint inventory outside this hunk, which were left untouched. No second benchmark,
   `release-perf` build, manually invoked local Cargo fallback, stash mutation, or unrelated-file edit was used.
   Bead: `frankenscipy-r4rfr`.
+
+## 2026-07-15 - cod - KEEP `mminfo` streaming metadata tokens (1.563x)
+
+- Negative-ledger-first `bv --robot-triage` again advertised the stale dense-linalg SYRK bead, while direct
+  attribution places standalone SYRK below 1% of the Cholesky wall and showed the advertised Matrix Market,
+  loadtxt, cluster, and spatial candidates were already landed. This pass pivoted to the fresh `fsci-io`
+  `mminfo` success path. `mminfo` delegates entirely to `parse_mm_info`, whose valid parse allocated a header
+  token vector, four lowercase strings, an owned size-line string, and a size-token vector: seven allocations
+  per metadata query. Opportunity score: 15.0 (impact 3 x confidence 5 / effort 1).
+- ONE lever streams borrowed header and size tokens and compares ASCII grammar tokens case-insensitively, while
+  retaining the prior Unicode-lowercase fallback and exact lowercase unknown-token diagnostics. A focused
+  strict-remote test on `vmi1152480` preserved mixed-case parsing, comments, extra size tokens, all returned
+  metadata fields, and exact malformed/unknown diagnostics. Focused strict-remote `-D warnings` Clippy and
+  exact-file rustfmt also passed.
+- The cold release bench target first received an untimed strict-remote `--profile release --no-run` warm-up on
+  requested worker `vmi1152480`, with no timeout. RCH ignored the same requested worker pin for the one and only
+  foreground measurement and routed it to cold worker `vmi1153651`; the build was allowed to finish untimed,
+  and both Criterion arms still ran in the same release binary on that one worker. With 10 samples, 100 ms
+  warm-up, and 500 ms measurement per arm, the literal seven-allocation reference measured
+  `[618.54, 665.19, 722.10]` ns versus `[392.71, 425.72, 470.09]` ns for streaming tokens: **1.563x faster
+  centered**, **1.316x conservative**, and **36.00% lower centered time**, with disjoint intervals.
+- Disposition: KEEP. Diff hygiene passed. Changed-file UBS's new public-grammar comparison false positive was
+  documented with a narrow suppression; its remaining 45 findings are pre-existing token/format comparison
+  false positives outside this hunk, while UBS shadow formatting, Clippy, check, and test gates were clean. No
+  second benchmark, `release-perf` build, manually invoked local Cargo fallback, stash mutation, or unrelated-file
+  edit was used. Bead: `frankenscipy-2i4fz`.

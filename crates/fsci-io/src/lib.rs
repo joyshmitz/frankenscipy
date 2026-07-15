@@ -129,6 +129,12 @@ fn checked_mm_dense_read_len(rows: usize, cols: usize) -> Result<usize, IoError>
     Ok(dense_len)
 }
 
+#[inline]
+fn mm_token_eq(token: &str, expected: &str) -> bool {
+    // ubs:ignore — Matrix Market grammar metadata is public input, not secret material.
+    token.eq_ignore_ascii_case(expected) || (!token.is_ascii() && token.to_lowercase() == expected)
+}
+
 fn parse_mm_info(lines: &mut std::str::Lines<'_>) -> Result<MmInfo, IoError> {
     let header = lines
         .next()
@@ -139,75 +145,95 @@ fn parse_mm_info(lines: &mut std::str::Lines<'_>) -> Result<MmInfo, IoError> {
         ));
     }
 
-    let parts: Vec<&str> = header.split_whitespace().collect();
-    if parts.len() < 5 {
+    // Matrix Market metadata has four fixed tokens after the banner. Pull them
+    // directly from the iterator so the success path does not allocate a token
+    // vector or four lowercase Strings. The non-ASCII fallback preserves the
+    // former Unicode lowercase behavior outside the format's ASCII grammar.
+    let mut parts = header.split_whitespace();
+    let _banner = parts.next();
+    let (Some(object_token), Some(format_token), Some(field_token), Some(symmetry_token)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
         return Err(IoError::InvalidFormat("incomplete header line".to_string()));
-    }
-
-    let object = match parts[1].to_lowercase().as_str() {
-        "matrix" => MmObject::Matrix,
-        "vector" => MmObject::Vector,
-        other => {
-            return Err(IoError::InvalidFormat(format!(
-                "unknown object type: {other}"
-            )));
-        }
     };
 
-    let format = match parts[2].to_lowercase().as_str() {
-        "coordinate" => MmFormat::Coordinate,
-        "array" => MmFormat::Array,
-        other => return Err(IoError::InvalidFormat(format!("unknown format: {other}"))),
+    let object = if mm_token_eq(object_token, "matrix") {
+        MmObject::Matrix
+    } else if mm_token_eq(object_token, "vector") {
+        MmObject::Vector
+    } else {
+        let other = object_token.to_lowercase();
+        return Err(IoError::InvalidFormat(format!(
+            "unknown object type: {other}"
+        )));
     };
 
-    let field = match parts[3].to_lowercase().as_str() {
-        "real" => MmField::Real,
-        "integer" => MmField::Integer,
-        "complex" => MmField::Complex,
-        "pattern" => MmField::Pattern,
-        other => {
-            return Err(IoError::InvalidFormat(format!(
-                "unknown field type: {other}"
-            )));
-        }
+    let format = if mm_token_eq(format_token, "coordinate") {
+        MmFormat::Coordinate
+    } else if mm_token_eq(format_token, "array") {
+        MmFormat::Array
+    } else {
+        let other = format_token.to_lowercase();
+        return Err(IoError::InvalidFormat(format!("unknown format: {other}")));
     };
 
-    let symmetry = match parts[4].to_lowercase().as_str() {
-        "general" => MmSymmetry::General,
-        "symmetric" => MmSymmetry::Symmetric,
-        "skew-symmetric" => MmSymmetry::SkewSymmetric,
-        "hermitian" => MmSymmetry::Hermitian,
-        other => return Err(IoError::InvalidFormat(format!("unknown symmetry: {other}"))),
+    let field = if mm_token_eq(field_token, "real") {
+        MmField::Real
+    } else if mm_token_eq(field_token, "integer") {
+        MmField::Integer
+    } else if mm_token_eq(field_token, "complex") {
+        MmField::Complex
+    } else if mm_token_eq(field_token, "pattern") {
+        MmField::Pattern
+    } else {
+        let other = field_token.to_lowercase();
+        return Err(IoError::InvalidFormat(format!(
+            "unknown field type: {other}"
+        )));
     };
 
-    let mut size_line = None;
-    for line in lines.by_ref() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('%') {
-            continue;
-        }
-        size_line = Some(trimmed.to_string());
-        break;
-    }
+    let symmetry = if mm_token_eq(symmetry_token, "general") {
+        MmSymmetry::General
+    } else if mm_token_eq(symmetry_token, "symmetric") {
+        MmSymmetry::Symmetric
+    } else if mm_token_eq(symmetry_token, "skew-symmetric") {
+        MmSymmetry::SkewSymmetric
+    } else if mm_token_eq(symmetry_token, "hermitian") {
+        MmSymmetry::Hermitian
+    } else {
+        let other = symmetry_token.to_lowercase();
+        return Err(IoError::InvalidFormat(format!("unknown symmetry: {other}")));
+    };
 
-    let size_str =
-        size_line.ok_or_else(|| IoError::InvalidFormat("missing size line".to_string()))?;
-    let size_parts: Vec<&str> = size_str.split_whitespace().collect();
+    let size_str = lines
+        .by_ref()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('%') {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .ok_or_else(|| IoError::InvalidFormat("missing size line".to_string()))?;
+    let mut size_parts = size_str.split_whitespace();
 
     match format {
         MmFormat::Coordinate => {
-            if size_parts.len() < 3 {
+            let (Some(rows_token), Some(cols_token), Some(nnz_token)) =
+                (size_parts.next(), size_parts.next(), size_parts.next())
+            else {
                 return Err(IoError::InvalidFormat(
                     "coordinate format requires rows cols nnz".to_string(),
                 ));
-            }
-            let rows: usize = size_parts[0]
+            };
+            let rows: usize = rows_token
                 .parse()
                 .map_err(|e| IoError::InvalidFormat(format!("bad rows: {e}")))?;
-            let cols: usize = size_parts[1]
+            let cols: usize = cols_token
                 .parse()
                 .map_err(|e| IoError::InvalidFormat(format!("bad cols: {e}")))?;
-            let nnz: usize = size_parts[2]
+            let nnz: usize = nnz_token
                 .parse()
                 .map_err(|e| IoError::InvalidFormat(format!("bad nnz: {e}")))?;
 
@@ -222,15 +248,16 @@ fn parse_mm_info(lines: &mut std::str::Lines<'_>) -> Result<MmInfo, IoError> {
             })
         }
         MmFormat::Array => {
-            if size_parts.len() < 2 {
+            let (Some(rows_token), Some(cols_token)) = (size_parts.next(), size_parts.next())
+            else {
                 return Err(IoError::InvalidFormat(
                     "array format requires rows cols".to_string(),
                 ));
-            }
-            let rows: usize = size_parts[0]
+            };
+            let rows: usize = rows_token
                 .parse()
                 .map_err(|e| IoError::InvalidFormat(format!("bad rows: {e}")))?;
-            let cols: usize = size_parts[1]
+            let cols: usize = cols_token
                 .parse()
                 .map_err(|e| IoError::InvalidFormat(format!("bad cols: {e}")))?;
             let nnz = rows.checked_mul(cols).ok_or_else(|| {
@@ -5200,6 +5227,30 @@ mod tests {
         assert_eq!(info.rows, 2);
         assert_eq!(info.cols, 3);
         assert_eq!(info.nnz, 6);
+    }
+
+    #[test]
+    fn mminfo_streaming_tokens_preserve_case_and_diagnostics() {
+        let content = "%%MatrixMarket VeCtOr CoOrDiNaTe InTeGeR SkEw-SyMmEtRiC ignored\n\
+                       % metadata comment\n\
+                       3 3 2 ignored\n";
+        let info = mminfo(content).expect("mixed-case metadata should parse");
+        assert_eq!(info.object, MmObject::Vector);
+        assert_eq!(info.format, MmFormat::Coordinate);
+        assert_eq!(info.field, MmField::Integer);
+        assert_eq!(info.symmetry, MmSymmetry::SkewSymmetric);
+        assert_eq!((info.rows, info.cols, info.nnz), (3, 3, 2));
+
+        assert_eq!(
+            mminfo("%%MatrixMarket NoPe coordinate real general\n1 1 0\n")
+                .expect_err("unknown object should fail"),
+            IoError::InvalidFormat("unknown object type: nope".to_string())
+        );
+        assert_eq!(
+            mminfo("%%MatrixMarket matrix array real general\n1\n")
+                .expect_err("short size line should fail"),
+            IoError::InvalidFormat("array format requires rows cols".to_string())
+        );
     }
 
     #[test]

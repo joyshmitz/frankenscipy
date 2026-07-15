@@ -1,10 +1,11 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_io::{
-    MatArray, NetcdfDimension, NetcdfFile, NetcdfValue, NetcdfVariable, SAVEMAT_TEXT_FORCE_SERIAL,
-    SAVETXT_FORCE_SERIAL, WRITE_JSON_FORCE_SERIAL, WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING,
-    loadtxt, mmread, mmwrite, savemat_text, savetxt, write_csv, write_json_array,
-    write_netcdf_classic,
+    MatArray, MmField, MmFormat, MmInfo, MmObject, MmSymmetry, NetcdfDimension, NetcdfFile,
+    NetcdfValue, NetcdfVariable, SAVEMAT_TEXT_FORCE_SERIAL, SAVETXT_FORCE_SERIAL,
+    WRITE_JSON_FORCE_SERIAL, WRITE_NETCDF_FORCE_REDUNDANT_HEADER_ENCODING, loadtxt, mminfo, mmread,
+    mmwrite, savemat_text, savetxt, write_csv, write_json_array, write_netcdf_classic,
 };
+use std::hint::black_box;
 use std::sync::atomic::Ordering;
 
 fn matrix(rows: usize, cols: usize) -> Vec<f64> {
@@ -19,6 +20,91 @@ fn row_matrix(rows: usize, cols: usize) -> Vec<Vec<f64>> {
                 .collect()
         })
         .collect()
+}
+
+/// Literal pre-streaming metadata parser used only as the same-binary control.
+/// It intentionally retains the seven success-path allocations removed from
+/// `parse_mm_info`: two token Vecs, one size-line String, and four lowercase Strings.
+fn mminfo_allocating_reference(content: &str) -> MmInfo {
+    let mut lines = content.lines();
+    let header = lines.next().expect("Matrix Market header");
+    let parts = header.split_whitespace().collect::<Vec<_>>();
+    let object = match parts[1].to_lowercase().as_str() {
+        "matrix" => MmObject::Matrix,
+        "vector" => MmObject::Vector,
+        _ => panic!("benchmark metadata object"), // ubs:ignore — fixed valid benchmark input
+    };
+    let format = match parts[2].to_lowercase().as_str() {
+        "coordinate" => MmFormat::Coordinate,
+        "array" => MmFormat::Array,
+        _ => panic!("benchmark metadata format"), // ubs:ignore — fixed valid benchmark input
+    };
+    let field = match parts[3].to_lowercase().as_str() {
+        "real" => MmField::Real,
+        "integer" => MmField::Integer,
+        "complex" => MmField::Complex,
+        "pattern" => MmField::Pattern,
+        _ => panic!("benchmark metadata field"), // ubs:ignore — fixed valid benchmark input
+    };
+    let symmetry = match parts[4].to_lowercase().as_str() {
+        "general" => MmSymmetry::General,
+        "symmetric" => MmSymmetry::Symmetric,
+        "skew-symmetric" => MmSymmetry::SkewSymmetric,
+        "hermitian" => MmSymmetry::Hermitian,
+        _ => panic!("benchmark metadata symmetry"), // ubs:ignore — fixed valid benchmark input
+    };
+    let size_line = lines
+        .find_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty() && !trimmed.starts_with('%')).then(|| trimmed.to_string())
+        })
+        .expect("Matrix Market size line");
+    let size_parts = size_line.split_whitespace().collect::<Vec<_>>();
+    let rows = size_parts[0].parse::<usize>().expect("rows");
+    let cols = size_parts[1].parse::<usize>().expect("cols");
+    let nnz = match format {
+        MmFormat::Coordinate => size_parts[2].parse::<usize>().expect("nnz"),
+        MmFormat::Array => rows * cols,
+    };
+    MmInfo {
+        object,
+        format,
+        field,
+        symmetry,
+        rows,
+        cols,
+        nnz,
+    }
+}
+
+fn mm_info_key(info: &MmInfo) -> (MmObject, MmFormat, MmField, MmSymmetry, usize, usize, usize) {
+    (
+        info.object,
+        info.format,
+        info.field,
+        info.symmetry,
+        info.rows,
+        info.cols,
+        info.nnz,
+    )
+}
+
+fn bench_mminfo_metadata_parse_ab(c: &mut Criterion) {
+    let content = "%%MatrixMarket MATRIX COORDINATE REAL GENERAL ignored\n\
+                   % generated metadata\n\
+                   4096 4096 65536 ignored\n";
+    let current = mminfo(content).expect("streamed metadata");
+    let original = mminfo_allocating_reference(content);
+    assert_eq!(mm_info_key(&current), mm_info_key(&original));
+
+    let mut group = c.benchmark_group("mminfo_metadata_parse_ab");
+    group.bench_function("original_seven_allocations", |b| {
+        b.iter(|| black_box(mminfo_allocating_reference(black_box(content))))
+    });
+    group.bench_function("candidate_streaming_tokens", |b| {
+        b.iter(|| black_box(mminfo(black_box(content)).expect("streamed metadata")))
+    });
+    group.finish();
 }
 
 /// Literal pre-streaming general-array reader used only as the same-binary
@@ -246,6 +332,7 @@ fn bench_write_netcdf_header_size_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_mminfo_metadata_parse_ab,
     bench_text_io,
     bench_matrix_market,
     bench_mmread_general_array_stream_ab,
