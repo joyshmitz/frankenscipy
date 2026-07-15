@@ -8,7 +8,7 @@ use fsci_special::{
     mathieu_cem, mathieu_sem, ndtri, pbdv, pbdv_many, rgamma, riccati_jn, riccati_yn,
     spence_scalar, y0, zeta, zeta_scalar,
 };
-use std::f64::consts::PI;
+use std::f64::consts::{FRAC_2_PI, LN_2, PI};
 use std::hint::black_box;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -463,6 +463,57 @@ fn bench_bessel_y0(c: &mut Criterion) {
         );
     }
 
+    group.finish();
+}
+
+fn legacy_y0_series_small(x: f64) -> f64 {
+    const EULER_MASCHERONI: f64 = 0.577_215_664_901_532_9;
+    const MAX_TERMS: usize = 96;
+
+    let z = x * x * 0.25;
+    let mut j0_term = 1.0;
+    let mut j0 = 1.0;
+    for k in 1..=MAX_TERMS {
+        let kf = k as f64;
+        j0_term *= -z / (kf * kf);
+        j0 += j0_term;
+        if j0_term.abs() <= f64::EPSILON * j0.abs().max(1.0) {
+            break;
+        }
+    }
+
+    let mut harmonic = 0.0;
+    let mut term = 1.0;
+    let mut correction = 0.0;
+    for k in 1..=MAX_TERMS {
+        let kf = k as f64;
+        harmonic += 1.0 / kf;
+        term *= -z / (kf * kf);
+        let addend = -harmonic * term;
+        correction += addend;
+        if addend.abs() <= f64::EPSILON * correction.abs().max(1.0) {
+            break;
+        }
+    }
+    FRAC_2_PI * ((x.ln() - LN_2 + EULER_MASCHERONI) * j0 + correction)
+}
+
+fn bench_y0_small_cephes_ab(c: &mut Criterion) {
+    let xs: Vec<f64> = (0..4096).map(|i| 0.01 + 4.99 * i as f64 / 4095.0).collect();
+    let input = real_vec(&xs);
+    let mut group = c.benchmark_group("y0_small_cephes_ab");
+    group.bench_function("original_series", |b| {
+        b.iter(|| {
+            let out: Vec<f64> = xs
+                .iter()
+                .map(|&x| legacy_y0_series_small(black_box(x)))
+                .collect();
+            black_box(out)
+        });
+    });
+    group.bench_function("candidate_rational", |b| {
+        b.iter(|| black_box(y0(black_box(&input), RuntimeMode::Strict).expect("y0")));
+    });
     group.finish();
 }
 
@@ -1363,6 +1414,7 @@ criterion_group!(
     bench_bessel_jv_array,
     bench_bessel_j,
     bench_bessel_y0,
+    bench_y0_small_cephes_ab,
     bench_riccati_jn_recurrence,
     bench_riccati_yn_recurrence,
     bench_complete_elliptic,

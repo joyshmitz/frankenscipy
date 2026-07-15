@@ -22184,3 +22184,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   before spatial on the pre-existing `fsci-linalg/src/lib.rs:9431` lint. No second benchmark, `release-perf` build,
   manually invoked local Cargo fallback, stash mutation, or unrelated-file edit was used. Bead:
   `frankenscipy-bneuc`.
+
+## 2026-07-15 - cod - KEEP small-argument `y0` Cephes rational (1.795x centered)
+
+- Negative-ledger-first triage rejected the advertised Cholesky SYRK harness because its direct attribution remains
+  below 1%, then rejected `ellipj_many` because this ledger already records it as an optimal landed fan-out. The
+  remaining Bessel note was partially stale (`j1` is now rational), but `y0_core_positive` still sent every
+  `0 < x < 14` call through two convergence-controlled power/harmonic series, each bounded at 96 terms. For the
+  common `0 < x <= 5` regime, SciPy/Cephes instead uses one fixed 8/7 rational plus the same `ln(x) * j0(x)` term.
+  Opportunity score: 10.0 (impact 4 x confidence 5 / effort 2).
+- ONE lever ports the verbatim SciPy/Cephes `YP`/`YQ` coefficients and changes only the `0 < x <= 5` dispatch;
+  `5 < x < 14`, the large-x asymptotic, domain handling, and array scheduling are untouched. The strict-remote
+  SciPy-reference test passed across the tiny-x limiting branch, representative small inputs, the new `x=5`
+  boundary, and unchanged 5-14 points with absolute tolerance at or below `2e-13`.
+- An untimed strict-remote `--profile release --no-run` warm-up completed on `vmi1152480`. RCH then rerouted the one
+  foreground measurement to cold `vmi1153651`; that build was allowed to finish without a shell timeout, and both
+  arms still ran from the same release binary. On 4,096 evenly spaced inputs in `[0.01, 5]`, with 10 samples,
+  100 ms warm-up, and 500 ms requested measurement per arm, the literal former series measured
+  `[413.55, 433.55, 457.13]` us versus `[219.53, 241.46, 280.14]` us for the rational: **1.795x centered**,
+  **1.476x conservative** (`413.55 / 280.14`), and **44.31% lower centered time**, with disjoint intervals.
+- Disposition: KEEP. Exact-file rustfmt and diff hygiene passed. Strict-remote `-D warnings` Clippy stopped before
+  `fsci-special` on three pre-existing unchanged `fsci-opt` lints. UBS found no candidate-specific issue but stayed
+  nonzero on existing whole-file bench/test panic patterns. No second benchmark, `release-perf` build, local Cargo
+  fallback, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-hgsdj`.
