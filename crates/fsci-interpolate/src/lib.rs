@@ -8254,16 +8254,19 @@ pub fn pade(
 ///
 /// `p` and `q` are coefficient vectors [a0, a1, ...] (ascending powers).
 pub fn ratval(p: &[f64], q: &[f64], x: f64) -> f64 {
-    let num: f64 = p
-        .iter()
-        .enumerate()
-        .map(|(i, &c)| c * x.powi(i as i32))
-        .sum();
-    let den: f64 = q
-        .iter()
-        .enumerate()
-        .map(|(i, &c)| c * x.powi(i as i32))
-        .sum();
+    #[inline]
+    fn eval_ascending(coeffs: &[f64], x: f64) -> f64 {
+        let Some((&highest, remaining)) = coeffs.split_last() else {
+            return 0.0;
+        };
+        remaining
+            .iter()
+            .rev()
+            .fold(highest, |value, &coefficient| value * x + coefficient)
+    }
+
+    let num = eval_ascending(p, x);
+    let den = eval_ascending(q, x);
     if den.abs() < 1e-30 {
         return f64::NAN;
     }
@@ -13838,6 +13841,47 @@ mod tests {
         }
         // p(1)/q(1) approximates e.
         assert!((ratval(&p, &q, 1.0) - 2.714_285_714_285_714).abs() < 1e-12, "eval at 1");
+    }
+
+    #[test]
+    fn ratval_horner_matches_power_sum_reference() {
+        fn power_sum_reference(p: &[f64], q: &[f64], x: f64) -> f64 {
+            let num: f64 = p
+                .iter()
+                .enumerate()
+                .map(|(i, &coefficient)| coefficient * x.powi(i as i32))
+                .sum();
+            let den: f64 = q
+                .iter()
+                .enumerate()
+                .map(|(i, &coefficient)| coefficient * x.powi(i as i32))
+                .sum();
+            if den.abs() < 1e-30 {
+                return f64::NAN;
+            }
+            num / den
+        }
+
+        let p: Vec<f64> = (0..257)
+            .map(|i| ((i as f64 * 0.37).sin() + 1.5) / (i + 1) as f64)
+            .collect();
+        let q: Vec<f64> = (0..257)
+            .map(|i| ((i as f64 * 0.19).cos() + 2.0) / (i + 2) as f64)
+            .collect();
+        for x in [-1.125, -0.75, 0.0, 0.75, 0.999, 1.125] {
+            let expected = power_sum_reference(&p, &q, x);
+            let actual = ratval(&p, &q, x);
+            let tolerance = expected.abs().max(1.0) * 2e-11;
+            assert!(
+                (actual - expected).abs() <= tolerance,
+                "x={x}: actual={actual}, expected={expected}, tolerance={tolerance}"
+            );
+        }
+
+        assert_eq!(ratval(&[2.5], &[0.5], f64::NAN).to_bits(), 5.0f64.to_bits());
+        assert_eq!(ratval(&[], &[1.0], f64::INFINITY).to_bits(), 0.0f64.to_bits());
+        assert!(ratval(&[1.0], &[], 0.5).is_nan());
+        assert!(ratval(&[1.0, 2.0], &[1.0], f64::NAN).is_nan());
     }
 
     #[test]

@@ -21713,3 +21713,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Disposition: KEEP. Strict-remote all-target Clippy passed with `-D warnings`; rustfmt and diff hygiene passed; staged
   UBS reported zero critical findings. No second benchmark, `release-perf` build, local Cargo fallback, or stash
   mutation was used. Bead: `frankenscipy-34fv7`.
+
+## 2026-07-14 - cod - KEEP Horner rational-polynomial evaluation (14.623x)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced the dense-linalg SYRK harness, which prior direct
+  attribution places below 1% of Cholesky wall time. The most recent IO seam had already landed, so this pass pivoted
+  to the fresh, unledgered `fsci-interpolate::ratval` primitive. Direct source attribution found one `powi` call per
+  coefficient in both numerator and denominator, making the degree-dependent exponentiation the entire input-sized
+  evaluation cost. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever evaluates each ascending-power coefficient vector with a reverse Horner recurrence, reducing each
+  polynomial from repeated exponentiation to one multiply and add per remaining coefficient without allocating.
+  Initializing from the highest coefficient preserves the former single-coefficient behavior for NaN and infinite
+  inputs. A focused strict-remote proof on `vmi1152480` compared the literal former power-sum implementation across
+  257-term finite cases and covered empty, zero-denominator, NaN, and infinity behavior; it passed.
+- The release bench binary was first built with an untimed strict-remote `--profile release --no-run` warm-up on
+  `vmi1152480`, with no timeout. The one and only measurement invocation then compared Horner with the literal former
+  power sum in the same binary and worker-scoped target, using 4,096 coefficients, 10 samples, 100 ms warm-up, and
+  500 ms measurement per arm. Horner measured `[12.735, 16.533, 22.787]` us versus
+  `[235.32, 241.77, 254.30]` us for repeated `powi`: **14.623x** centered, **10.327x** conservative, and **93.16%**
+  lower centered time with disjoint intervals. The complete measurement command returned in 211.9 seconds, including
+  an RCH cache-miss rebuild, beneath the five-minute cap.
+- Disposition: KEEP. The strict-remote `-D warnings` Clippy gate was blocked before this crate by the unrelated
+  existing `fsci-linalg/src/lib.rs:9431` `needless_range_loop`; the repository formatter check likewise exposed broad
+  pre-existing interpolate formatting drift, while the owned diff passed whitespace hygiene. Targeted UBS found zero
+  critical issues. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation was used. Bead:
+  `frankenscipy-518eg`.

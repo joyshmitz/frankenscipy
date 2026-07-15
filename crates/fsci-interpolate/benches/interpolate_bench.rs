@@ -5,7 +5,7 @@ use fsci_interpolate::{
     RbfInterpolator, RbfKernel, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod,
     SmoothBivariateSpline, SmoothBivariateSplineOptions, SplineBc, barycentric_eval, bisplrep,
     griddata, interp1d_linear, lagrange, make_interp_spline, make_smoothing_spline, polyadd,
-    polyder, polyint_definite, polymul, polyroots, polysub, polyval_der,
+    polyder, polyint_definite, polymul, polyroots, polysub, polyval_der, ratval,
 };
 use fsci_runtime::RuntimeMode;
 use std::hint::black_box;
@@ -48,6 +48,23 @@ fn barycentric_eval_two_pass(nodes: &[f64], values: &[f64], weights: &[f64], x: 
         den += t;
     }
     if den == 0.0 {
+        return f64::NAN;
+    }
+    num / den
+}
+
+fn ratval_power_sum(p: &[f64], q: &[f64], x: f64) -> f64 {
+    let num: f64 = p
+        .iter()
+        .enumerate()
+        .map(|(i, &coefficient)| coefficient * x.powi(i as i32))
+        .sum();
+    let den: f64 = q
+        .iter()
+        .enumerate()
+        .map(|(i, &coefficient)| coefficient * x.powi(i as i32))
+        .sum();
+    if den.abs() < 1e-30 {
         return f64::NAN;
     }
     num / den
@@ -182,10 +199,17 @@ fn bench_polynomial(c: &mut Criterion) {
     let bary_values: Vec<f64> = (0..bary_n).map(|i| (i as f64 * 0.001).sin()).collect();
     let bary_weights: Vec<f64> = (0..bary_n).map(|i| 1.0 + (i % 17) as f64 * 0.001).collect();
     let bary_x = 1.125;
+    let rat_p: Vec<f64> = (0..4096).map(|i| 1.0 / (i + 1) as f64).collect();
+    let mut rat_q: Vec<f64> = (0..4096).map(|i| 0.75 / (i + 2) as f64).collect();
+    rat_q[0] += 1.0;
+    let rat_x = 0.999;
     assert_eq!(
         barycentric_eval(&bary_nodes, &bary_values, &bary_weights, bary_x).to_bits(),
         barycentric_eval_two_pass(&bary_nodes, &bary_values, &bary_weights, bary_x).to_bits()
     );
+    let rat_expected = ratval_power_sum(&rat_p, &rat_q, rat_x);
+    let rat_actual = ratval(&rat_p, &rat_q, rat_x);
+    assert!((rat_actual - rat_expected).abs() <= rat_expected.abs().max(1.0) * 2e-11);
 
     let mut group = c.benchmark_group("polynomial");
     group.bench_function("barycentric_eval_many/128x2048", |b| {
@@ -239,6 +263,24 @@ fn bench_polynomial(c: &mut Criterion) {
                 black_box(&sub_a),
                 black_box(-0.75),
                 black_box(0.875),
+            ))
+        })
+    });
+    group.bench_function("ratval_horner_ab/4096/candidate", |bench| {
+        bench.iter(|| {
+            black_box(ratval(
+                black_box(&rat_p),
+                black_box(&rat_q),
+                black_box(rat_x),
+            ))
+        })
+    });
+    group.bench_function("ratval_horner_ab/4096/original", |bench| {
+        bench.iter(|| {
+            black_box(ratval_power_sum(
+                black_box(&rat_p),
+                black_box(&rat_q),
+                black_box(rat_x),
             ))
         })
     });
