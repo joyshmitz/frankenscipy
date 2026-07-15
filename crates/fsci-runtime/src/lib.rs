@@ -283,28 +283,28 @@ impl SolverPortfolio {
             return [0.0, 0.0, 0.0, 1.0];
         }
 
-        let log_r = rcond.max(1e-25).log10();
-
         // Centers of states (log10 rcond):
         // Well: -2.0, Mod: -6.0, Ill: -11.0, NearSing: -16.0
         let centers = [-2.0, -6.0, -11.0, -16.0];
+        if rcond >= 1e-2 {
+            return [1.0, 0.0, 0.0, 0.0];
+        }
+        if rcond <= 1e-16 {
+            return [0.0, 0.0, 0.0, 1.0];
+        }
+
+        let log_r = rcond.log10();
         let mut p = [0.0; 4];
 
-        if log_r >= centers[0] {
-            p[0] = 1.0;
-        } else if log_r <= centers[3] {
-            p[3] = 1.0;
-        } else {
-            // Find the interval [centers[i+1], centers[i]] that contains log_r
-            for i in 0..3 {
-                let c_upper = centers[i];
-                let c_lower = centers[i + 1];
-                if log_r <= c_upper && log_r >= c_lower {
-                    let weight_upper = (log_r - c_lower) / (c_upper - c_lower);
-                    p[i] = weight_upper;
-                    p[i + 1] = 1.0 - weight_upper;
-                    break;
-                }
+        // Find the interval [centers[i+1], centers[i]] that contains log_r
+        for i in 0..3 {
+            let c_upper = centers[i];
+            let c_lower = centers[i + 1];
+            if log_r <= c_upper && log_r >= c_lower {
+                let weight_upper = (log_r - c_lower) / (c_upper - c_lower);
+                p[i] = weight_upper;
+                p[i + 1] = 1.0 - weight_upper;
+                break;
             }
         }
         p
@@ -592,6 +592,67 @@ pub fn within_tolerance(actual: f64, expected: f64, atol: f64, rtol: f64) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[inline(never)]
+    fn condition_posterior_former(rcond: f64) -> [f64; 4] {
+        if !rcond.is_finite() || rcond <= 0.0 {
+            return [0.0, 0.0, 0.0, 1.0];
+        }
+
+        let log_r = rcond.max(1e-25).log10();
+        let centers = [-2.0, -6.0, -11.0, -16.0];
+        let mut posterior = [0.0; 4];
+
+        if log_r >= centers[0] {
+            posterior[0] = 1.0;
+        } else if log_r <= centers[3] {
+            posterior[3] = 1.0;
+        } else {
+            for i in 0..3 {
+                let upper = centers[i];
+                let lower = centers[i + 1];
+                if log_r <= upper && log_r >= lower {
+                    let upper_weight = (log_r - lower) / (upper - lower);
+                    posterior[i] = upper_weight;
+                    posterior[i + 1] = 1.0 - upper_weight;
+                    break;
+                }
+            }
+        }
+        posterior
+    }
+
+    #[test]
+    fn condition_posterior_endpoint_fast_paths_match_former_bits() {
+        let well_boundary = 1e-2_f64.to_bits();
+        let singular_boundary = 1e-16_f64.to_bits();
+        let inputs = [
+            f64::NAN,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            1e-25,
+            f64::from_bits(singular_boundary - 1),
+            1e-16,
+            f64::from_bits(singular_boundary + 1),
+            1e-12,
+            1e-6,
+            f64::from_bits(well_boundary - 1),
+            1e-2,
+            f64::from_bits(well_boundary + 1),
+            1.0,
+            f64::MAX,
+        ];
+
+        for rcond in inputs {
+            let actual = SolverPortfolio::condition_posterior(rcond).map(f64::to_bits);
+            let former = condition_posterior_former(rcond).map(f64::to_bits);
+            assert_eq!(actual, former, "rcond={rcond:?}");
+        }
+    }
 
     #[test]
     fn strict_mode_fails_closed_on_incompatible_metadata() {

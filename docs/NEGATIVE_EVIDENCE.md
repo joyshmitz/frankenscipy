@@ -22298,3 +22298,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   Clippy were blocked solely by existing unrelated formatting and the known `lib.rs:1220` digit-grouping lint; the
   owned hunk and diff hygiene passed. No second benchmark, `release-perf` build, local Cargo fallback, forced-local
   execution, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-cgi99`.
+## 2026-07-15 - cod - KEEP raw-rcond endpoint condition classification (3.336x)
+
+- `bv --robot-triage` left only the peer-owned Cholesky SYRK harness as a perf quick win; prior attribution puts its
+  direct share below 1%, so negative-ledger-first routing excluded the harvested runtime serialization and FIFO
+  rollover rows and selected the distinct solver condition classifier. A one-second strict-remote Criterion profile
+  of the well-conditioned selector plus direct source attribution found its endpoint path paid an unconditional
+  `log10` even though raw `rcond` already determines both hard endpoint states. Opportunity score: 20.0 (impact 4 x
+  confidence 5 / effort 1).
+- ONE lever returns the exact well-conditioned posterior for `rcond >= 1e-2` and the exact near-singular posterior for
+  `rcond <= 1e-16` before logarithmic interpolation. Invalid/non-positive inputs, the three interior transitions,
+  posterior bits, loss computation, tie-breaking, structural fast paths, and calibration fallback are unchanged. A
+  focused strict-remote proof matched every posterior `to_bits()` against the literal former classifier for NaN,
+  infinities, signed zero, subnormals, both boundaries and their adjacent floats, interior centers, and extremes.
+- After an untimed `--profile release --no-run` warm-up, the one and only A/B invocation ran nine alternating pairs in
+  the same release test binary on strict-remote worker `vmi1152480`, with 8,000,000 calls per arm alternating the two
+  endpoint states. Raw-threshold classification measured a **29.910 ms median** versus **99.773 ms** for the literal
+  former logarithmic path: **3.3358x** centered, **1.8922x** conservative from the worst candidate and best former
+  samples, and **70.02%** lower centered time. All nine candidate samples beat all nine former samples.
+- Scoped rustfmt, diff hygiene, and UBS passed with zero critical findings. The timing-only ignored test was removed;
+  the bit-parity regression proof remains. No `release-perf`/LTO build, second A/B, local Cargo fallback, `force_local`,
+  or stash mutation was used. Bead: `frankenscipy-mgqf5`.
