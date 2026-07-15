@@ -22132,3 +22132,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   no critical issue; its warnings were the existing ODR/bench panic and indexing inventory plus the intentionally
   preserved original clone. No second benchmark, `release-perf` build, manually invoked local Cargo fallback,
   stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-o3dmz`.
+
+## 2026-07-15 - cod - KEEP fixed-array differential-evolution index selection (1.868x)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced only the peer-owned dense-linalg SYRK harness whose
+  direct attribution is below 1% of Cholesky wall time. The recent integrate, signal, and ODR veins were thinning,
+  so this pass pivoted to `fsci-opt` and honored the prior differential-evolution ledger's explicit profile-first
+  retry condition. A fresh unchanged-binary strict-remote profile of `differential_evolution/rosen_5d`, combined
+  with direct call attribution, confirmed that `select_three` remained the only per-trial heap allocation after the
+  earlier mutant/trial scratch keep: 100 generations x 75 trials = 7,500 three-element `Vec` allocations.
+  Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever stores the three selected indices in `[usize; 3]` plus a filled length. Random draws, excluded-index
+  rejection, duplicate rejection, sequential fallback, tuple order, mutation/crossover arithmetic, and all solver
+  behavior are unchanged. The existing seeded 5-D Rosenbrock release proof passed with the exact banked output bits,
+  `nfev=7575`, and `nit=100`; the A/B setup also asserted equality of all 7,500 original/candidate selections.
+- The candidate target received an untimed strict-remote `--profile release --no-run` build on `vmi1153651` before
+  the one and only foreground measurement. That same-worker, same-binary A/B used 10 samples, 100 ms warm-up, and
+  500 ms requested measurement per arm. Fixed-array selection measured `[259.60, 270.66, 284.32]` us versus
+  `[467.02, 505.72, 535.10]` us for the literal former `Vec::with_capacity(3)` path: **1.868x centered**,
+  **1.643x conservative** (`467.02 / 284.32`), and **46.48% lower centered time**, with disjoint intervals.
+- Disposition: KEEP. Bench-target rustfmt and diff hygiene passed. Strict-remote `-D warnings` Clippy stopped only
+  on the three pre-existing unchanged `fsci-opt` findings in `curvefit.rs:549` and `lib.rs:4370/4374`. UBS's static
+  scan found no candidate-specific issue but remained nonzero on eight unchanged test-only `panic!` fixtures; its
+  automatically invoked shadow-workspace Cargo results are excluded from the remote proof. No second benchmark,
+  `release-perf` build, manually invoked local Cargo fallback, stash mutation, or unrelated-file edit was used.
+  Bead: `frankenscipy-05794`.

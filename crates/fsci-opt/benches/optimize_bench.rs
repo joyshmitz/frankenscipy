@@ -14,6 +14,7 @@ use fsci_opt::{
     linear_sum_assignment, numerical_gradient, numerical_jacobian, powell, ridder,
 };
 use fsci_runtime::RuntimeMode;
+use rand::{Rng, RngExt, SeedableRng};
 
 // ── Test functions ────────────────────────────────────────────────────
 
@@ -386,6 +387,103 @@ fn bench_differential_evolution(c: &mut Criterion) {
     group.finish();
 }
 
+fn select_three_fixed(rng: &mut impl Rng, n: usize, exclude: usize) -> (usize, usize, usize) {
+    let mut indices = [0; 3];
+    let mut len = 0;
+    let mut attempts = 0;
+    while len < indices.len() {
+        let idx = rng.random_range(0..n);
+        if idx != exclude && !indices[..len].contains(&idx) {
+            indices[len] = idx;
+            len += 1;
+        }
+        attempts += 1;
+        if attempts > 1000 {
+            for k in 0..n {
+                if len >= indices.len() {
+                    break;
+                }
+                if !indices[..len].contains(&k) {
+                    indices[len] = k;
+                    len += 1;
+                }
+            }
+            break;
+        }
+    }
+    (indices[0], indices[1], indices[2])
+}
+
+fn select_three_allocating(rng: &mut impl Rng, n: usize, exclude: usize) -> (usize, usize, usize) {
+    let mut indices = Vec::with_capacity(3);
+    let mut attempts = 0;
+    while indices.len() < 3 {
+        let idx = rng.random_range(0..n);
+        if idx != exclude && !indices.contains(&idx) {
+            indices.push(idx);
+        }
+        attempts += 1;
+        if attempts > 1000 {
+            for k in 0..n {
+                if indices.len() >= 3 {
+                    break;
+                }
+                if !indices.contains(&k) {
+                    indices.push(k);
+                }
+            }
+            break;
+        }
+    }
+    (indices[0], indices[1], indices[2])
+}
+
+fn select_three_checksum(
+    mut rng: rand::rngs::StdRng,
+    select: fn(&mut rand::rngs::StdRng, usize, usize) -> (usize, usize, usize),
+) -> usize {
+    let mut checksum = 0usize;
+    for trial in 0..7_500 {
+        let (r0, r1, r2) = select(&mut rng, 75, trial % 75);
+        checksum = checksum
+            .wrapping_mul(31)
+            .wrapping_add(r0)
+            .wrapping_add(r1.wrapping_mul(3))
+            .wrapping_add(r2.wrapping_mul(7));
+    }
+    checksum
+}
+
+fn bench_select_three_ab(c: &mut Criterion) {
+    let mut fixed_rng = rand::rngs::StdRng::seed_from_u64(1);
+    let mut allocating_rng = rand::rngs::StdRng::seed_from_u64(1);
+    for trial in 0..7_500 {
+        assert_eq!(
+            select_three_fixed(&mut fixed_rng, 75, trial % 75),
+            select_three_allocating(&mut allocating_rng, 75, trial % 75),
+        );
+    }
+
+    let mut group = c.benchmark_group("select_three_ab");
+    group.bench_function("fixed_array/7500", |b| {
+        b.iter(|| {
+            black_box(select_three_checksum(
+                rand::rngs::StdRng::seed_from_u64(1),
+                select_three_fixed,
+            ))
+        });
+    });
+    group.bench_function("vec_capacity_3/7500", |b| {
+        b.iter(|| {
+            black_box(select_three_checksum(
+                rand::rngs::StdRng::seed_from_u64(1),
+                select_three_allocating,
+            ))
+        });
+    });
+    group.finish();
+}
+
 fn reference_clone_gradient<F>(f: F, x: &[f64], eps: f64) -> Vec<f64>
 where
     F: Fn(&[f64]) -> f64,
@@ -509,6 +607,7 @@ fn bench_finite_difference_helpers(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_select_three_ab,
     bench_finite_difference_helpers,
     bench_assignment,
     bench_differential_evolution,

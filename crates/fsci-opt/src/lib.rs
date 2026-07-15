@@ -2324,24 +2324,27 @@ where
 /// Requires `n >= 4` (3 picks + 1 excluded). If n < 4, picks are allowed to
 /// overlap with `exclude` to avoid an infinite loop.
 fn select_three(rng: &mut impl Rng, n: usize, exclude: usize) -> (usize, usize, usize) {
-    let mut indices = Vec::with_capacity(3);
+    let mut indices = [0; 3];
+    let mut len = 0;
     let strict = n >= 4; // Can we guarantee 3 distinct indices != exclude?
     let mut attempts = 0;
-    while indices.len() < 3 {
+    while len < indices.len() {
         let idx = rng.random_range(0..n);
         let skip_exclude = strict && idx == exclude;
-        if !skip_exclude && !indices.contains(&idx) {
-            indices.push(idx);
+        if !skip_exclude && !indices[..len].contains(&idx) {
+            indices[len] = idx;
+            len += 1;
         }
         attempts += 1;
         if attempts > 1000 {
             // Fallback: fill remaining with sequential indices
             for k in 0..n {
-                if indices.len() >= 3 {
+                if len >= indices.len() {
                     break;
                 }
-                if !indices.contains(&k) {
-                    indices.push(k);
+                if !indices[..len].contains(&k) {
+                    indices[len] = k;
+                    len += 1;
                 }
             }
             break;
