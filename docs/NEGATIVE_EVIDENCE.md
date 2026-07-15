@@ -21762,3 +21762,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `lib.rs:4371`; those files were left untouched. Targeted UBS only rediscovered two pre-existing benchmark-harness
   panic arms at lines 29 and 41. No second benchmark, `release-perf` build, local Cargo fallback, or stash mutation
   was used. Bead: `frankenscipy-ikw7j`.
+
+## 2026-07-14 - cod - KEEP shared Riccati-J recurrence across stable orders (68.425x, bit-identical)
+
+- Negative-ledger-first `bv --robot-triage` again surfaced only the dense-linalg SYRK perf quick win, which prior
+  direct attribution places below 1% of Cholesky wall time. The adjacent Riccati-Y keep exposed one unledgered sibling:
+  for `|x| >= n`, `fsci-special::riccati_jn` called `spherical_jn_nonneg(k, x)` for every order even though every call
+  selected the same stable forward recurrence and restarted it at zero. This made the complete order vector quadratic
+  in `n` and repeated the same trigonometric seeds. Opportunity score: 20.0 (impact 4 x confidence 5 / effort 1).
+- ONE lever carries `j_(k-1)` and `j_k` through a single forward recurrence when every requested order is in the
+  stable-forward region, reducing that path from O(n^2) to O(n). Small arguments, `|x| < n`, signed zero, and
+  non-finite inputs retain the literal former per-order route, including its half-integer and Miller algorithms. A
+  focused strict-remote proof on `vmi1227854` matched every value and derivative bit across both routes, the exact
+  stability boundary, positive and negative inputs, signed zero, infinities, and a payload NaN.
+- The changed release bench binary was first built with an untimed strict-remote `--profile release --no-run`
+  warm-up on `vmi1227854`, with no timeout. The one and only measurement invocation then used that same worker,
+  worker-scoped target, binary, order 512, and `x = 1024`, with 10 samples, 100 ms warm-up, and 500 ms measurement
+  per arm. Shared recurrence measured `[2.9426, 2.9970, 3.1066]` us versus `[202.00, 205.07, 209.37]` us for the
+  literal former repeated recurrence: **68.425x faster by centered estimate**, **65.023x conservative**, and
+  **98.54% lower centered time**, with disjoint intervals. The complete measurement command returned in 155.3
+  seconds, below the five-minute cap.
+- Disposition: KEEP. Owned-file rustfmt and diff hygiene passed. The strict-remote `-D warnings` Clippy gate was
+  blocked before this crate by the three unrelated existing `fsci-opt` lints in `curvefit.rs:549`, `lib.rs:4367`,
+  and `lib.rs:4371`; those files were left untouched. Targeted UBS only rediscovered the two pre-existing benchmark-
+  harness panic arms at lines 29 and 41. No second benchmark, `release-perf` build, local Cargo fallback, or stash
+  mutation was used. Bead: `frankenscipy-cp7vu`.

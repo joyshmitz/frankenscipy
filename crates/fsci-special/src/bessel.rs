@@ -4794,9 +4794,24 @@ pub fn riccati_jn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
     let len = n as usize + 1;
     let mut s = Vec::with_capacity(len);
     let mut sp = Vec::with_capacity(len);
-    for k in 0..=n {
-        let jk = spherical_jn_nonneg(k, x);
-        s.push(x * jk);
+    let ax = x.abs();
+    if x.is_finite() && ax >= 1.0e-15 && (n < 2 || ax >= n as f64) {
+        let mut j_prev = x.sin() / x;
+        s.push(x * j_prev);
+        if n >= 1 {
+            let mut j_curr = x.sin() / (x * x) - x.cos() / x;
+            s.push(x * j_curr);
+            for k in 1..n {
+                let next = (2.0 * k as f64 + 1.0) / x * j_curr - j_prev;
+                s.push(x * next);
+                j_prev = j_curr;
+                j_curr = next;
+            }
+        }
+    } else {
+        for k in 0..=n {
+            s.push(x * spherical_jn_nonneg(k, x));
+        }
     }
     sp.push(x.cos());
     for k in 1..=n as usize {
@@ -7862,6 +7877,55 @@ mod tests {
                 "S'_{k}({x}) = {} vs recurrence {predicted}",
                 sp[k]
             );
+        }
+    }
+
+    #[test]
+    fn riccati_jn_recurrence_reuse_matches_repeated_reference() {
+        fn repeated_reference(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
+            let mut s = Vec::with_capacity(n as usize + 1);
+            let mut sp = Vec::with_capacity(n as usize + 1);
+            for k in 0..=n {
+                s.push(x * spherical_jn_nonneg(k, x));
+            }
+            sp.push(x.cos());
+            for k in 1..=n as usize {
+                let inv_x = if x.abs() < 1.0e-300 { 0.0 } else { 1.0 / x };
+                sp.push(-((k as f64) * s[k] * inv_x) + s[k - 1]);
+            }
+            (s, sp)
+        }
+
+        let cases = [
+            (0, 0.0),
+            (1, -0.0),
+            (1, 1.0e-16),
+            (8, 0.125),
+            (16, 16.0),
+            (32, -10.0),
+            (64, -128.0),
+            (128, 512.0),
+            (4, f64::INFINITY),
+            (4, f64::NEG_INFINITY),
+            (4, f64::NAN),
+        ];
+        for (n, x) in cases {
+            let actual = riccati_jn(n, x);
+            let expected = repeated_reference(n, x);
+            for (index, (&got, &want)) in actual.0.iter().zip(&expected.0).enumerate() {
+                assert_eq!(
+                    got.to_bits(),
+                    want.to_bits(),
+                    "S[{index}] for n={n}, x={x:?}"
+                );
+            }
+            for (index, (&got, &want)) in actual.1.iter().zip(&expected.1).enumerate() {
+                assert_eq!(
+                    got.to_bits(),
+                    want.to_bits(),
+                    "S'[{index}] for n={n}, x={x:?}"
+                );
+            }
         }
     }
 

@@ -5,8 +5,8 @@ use fsci_special::{
     berp_zeros, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, factorialk, gamma,
     gammainc, gammaln, hyperu, hyperu_scalar, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv,
     kei_zeros, keip_zeros, kelvin_zeros, ker_zeros, kerp_zeros, log_ndtr, log_ndtr_scalar,
-    mathieu_cem, mathieu_sem, ndtri, pbdv, pbdv_many, rgamma, riccati_yn, spence_scalar, y0, zeta,
-    zeta_scalar,
+    mathieu_cem, mathieu_sem, ndtri, pbdv, pbdv_many, rgamma, riccati_jn, riccati_yn,
+    spence_scalar, y0, zeta, zeta_scalar,
 };
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -56,6 +56,34 @@ fn factorialk_product(n: i64, k: i64) -> f64 {
         step -= k;
     }
     result
+}
+
+fn spherical_jn_forward_reference(n: u32, x: f64) -> f64 {
+    let mut j_prev = x.sin() / x;
+    if n == 0 {
+        return j_prev;
+    }
+    let mut j_curr = x.sin() / (x * x) - x.cos() / x;
+    for k in 1..n {
+        let next = (2.0 * k as f64 + 1.0) / x * j_curr - j_prev;
+        j_prev = j_curr;
+        j_curr = next;
+    }
+    j_curr
+}
+
+fn riccati_jn_repeated_forward_reference(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
+    let mut s = Vec::with_capacity(n as usize + 1);
+    let mut sp = Vec::with_capacity(n as usize + 1);
+    for k in 0..=n {
+        s.push(x * spherical_jn_forward_reference(k, x));
+    }
+    sp.push(x.cos());
+    for k in 1..=n as usize {
+        let inv_x = if x.abs() < 1.0e-300 { 0.0 } else { 1.0 / x };
+        sp.push(-((k as f64) * s[k] * inv_x) + s[k - 1]);
+    }
+    (s, sp)
 }
 
 fn spherical_yn_repeated_reference(n: u32, x: f64) -> f64 {
@@ -459,6 +487,35 @@ fn bench_riccati_yn_recurrence(c: &mut Criterion) {
     group.bench_function("512/original", |bench| {
         bench.iter(|| {
             black_box(riccati_yn_repeated_reference(
+                black_box(order),
+                black_box(x),
+            ))
+        })
+    });
+    group.finish();
+}
+
+fn bench_riccati_jn_recurrence(c: &mut Criterion) {
+    let order = 512;
+    let x = 1024.0;
+    let candidate = riccati_jn(order, x);
+    let original = riccati_jn_repeated_forward_reference(order, x);
+    assert!(
+        candidate
+            .0
+            .iter()
+            .chain(&candidate.1)
+            .zip(original.0.iter().chain(&original.1))
+            .all(|(&got, &want)| got.to_bits() == want.to_bits())
+    );
+
+    let mut group = c.benchmark_group("riccati_jn_recurrence_ab");
+    group.bench_function("512/candidate", |bench| {
+        bench.iter(|| black_box(riccati_jn(black_box(order), black_box(x))))
+    });
+    group.bench_function("512/original", |bench| {
+        bench.iter(|| {
+            black_box(riccati_jn_repeated_forward_reference(
                 black_box(order),
                 black_box(x),
             ))
@@ -1306,6 +1363,7 @@ criterion_group!(
     bench_bessel_jv_array,
     bench_bessel_j,
     bench_bessel_y0,
+    bench_riccati_jn_recurrence,
     bench_riccati_yn_recurrence,
     bench_complete_elliptic,
     bench_incomplete_elliptic,
