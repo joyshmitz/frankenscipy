@@ -508,7 +508,21 @@ pub fn nu2lambda(nu: f64) -> f64 {
 ///
 /// Matches `scipy.constants.value(name)`.
 pub fn value(name: &str) -> Option<f64> {
-    match name.to_lowercase().as_str() {
+    let normalized;
+    let key = if name
+        .bytes()
+        .all(|byte| byte.is_ascii() && !byte.is_ascii_uppercase())
+    {
+        name
+    } else {
+        normalized = name.to_lowercase();
+        normalized.as_str()
+    };
+    value_normalized(key)
+}
+
+fn value_normalized(name: &str) -> Option<f64> {
+    match name {
         "speed of light" | "c" => Some(SPEED_OF_LIGHT),
         "planck" | "h" => Some(PLANCK),
         "hbar" => Some(HBAR),
@@ -787,6 +801,11 @@ mod tests {
         );
     }
 
+    fn former_value(name: &str) -> Option<f64> {
+        let normalized = name.to_lowercase();
+        value_normalized(&normalized)
+    }
+
     #[test]
     fn speed_of_light_exact() {
         assert_eq!(SPEED_OF_LIGHT, 299_792_458.0);
@@ -820,6 +839,43 @@ mod tests {
         assert_eq!(value("speed of light"), Some(SPEED_OF_LIGHT));
         assert_eq!(value("Planck"), Some(PLANCK));
         assert_eq!(value("nonexistent"), None);
+    }
+
+    #[test]
+    fn normalized_ascii_value_lookup_matches_former_bits() {
+        const QUERIES: &[&str] = &[
+            "speed of light",
+            "planck",
+            "hbar",
+            "gravitational constant",
+            "elementary charge",
+            "boltzmann",
+            "stefan-boltzmann",
+            "electron mass",
+            "fine-structure",
+            "bohr magneton",
+            "conductance quantum",
+            "characteristic impedance of vacuum",
+            "electron mass energy equivalent in mev",
+            "alpha particle-electron mass ratio",
+            "c",
+            "k_b",
+            "Planck",
+            "ELECTRON MASS",
+            "Molar Volume Of Ideal Gas (273.15 K, 101.325 KPa)",
+            "K",
+            "İ",
+            "é",
+            "",
+            "not a real constant",
+        ];
+        for query in QUERIES {
+            assert_eq!(
+                value(query).map(f64::to_bits),
+                former_value(query).map(f64::to_bits),
+                "value({query:?})"
+            );
+        }
     }
 
     #[test]

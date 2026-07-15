@@ -22274,3 +22274,27 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   reported zero critical findings, and exact-file rustfmt/diff hygiene passed. No second benchmark, `release-perf`
   build, manually invoked local Cargo fallback, stash mutation, or unrelated-file edit was used. Bead:
   `frankenscipy-2w69g`.
+
+## 2026-07-15 - cod - KEEP borrowed normalized-ASCII `constants::value` keys (1.759x median)
+
+- Negative-ledger-first `bv --robot-triage` again offered only the peer-owned Cholesky SYRK harness whose direct
+  attribution remains below 1%. The ndimage and ODR ledgers marked their accessible shapes harvested, so this pass
+  followed the prior `constants::find` rejection's explicit successor condition: use a distinct batched end-to-end
+  constants workload rather than retrying its noisy substring-search microbenchmark. Source attribution found exact
+  `value()` lookup unconditionally allocating `name.to_lowercase()` before its static match, including for already
+  normalized ASCII keys. Opportunity score: 7.5 (impact 3 x confidence 5 / effort 2).
+- ONE lever borrows an already-normalized ASCII input and retains the exact former Unicode `to_lowercase()` fallback
+  for mixed-case or non-ASCII input; static match dispatch and returned constants are unchanged. A literal former
+  lookup proved exact `Option<f64>` bit parity for canonical/alias keys, upper- and mixed-case inputs, misses, empty
+  input, and Unicode case-fold probes. The focused strict-remote proof passed on `vmi1152480`.
+- After an untimed strict-remote `--profile release --no-run` warm-up, the sole foreground A/B ran from the same
+  release test binary and worker. Ten alternating pairs of 524,288 lookups measured former median **11,411.258 us**
+  versus borrowed median **6,487.213 us**: **1.759x median** and **43.15% lower median time**. Every adjacent pair
+  favored borrowing; paired speedups ranged **1.005x-2.820x** with a **1.716x paired median**. Unmatched ranges were
+  `[9,694.843, 19,444.077]` and `[5,659.282, 10,093.407]` us, so the deliberately reported cross-edge ratio is only
+  **0.961x** despite the 10/10 paired wins.
+- Disposition: KEEP on the paired A/B. The temporary timing harness was removed; the exact former-bit proof remains.
+  Targeted UBS found only pre-existing test panic heuristics. Exact-file rustfmt and strict-remote `-D warnings`
+  Clippy were blocked solely by existing unrelated formatting and the known `lib.rs:1220` digit-grouping lint; the
+  owned hunk and diff hygiene passed. No second benchmark, `release-perf` build, local Cargo fallback, forced-local
+  execution, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-cgi99`.
