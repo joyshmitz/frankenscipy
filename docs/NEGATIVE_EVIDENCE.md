@@ -22227,3 +22227,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   untouched `fsci-opt` lints; UBS findings were likewise pre-existing whole-file patterns. No second benchmark,
   `release-perf` build, local Cargo fallback, stash mutation, or unrelated-file edit was used. Bead:
   `frankenscipy-4xbz6`.
+
+## 2026-07-15 - cod - REJECT affinity-propagation availability scratch reuse
+
+- Negative-ledger-first `bv --robot-triage` again surfaced only the peer-owned Cholesky SYRK harness whose direct
+  share remains below 1%. The signal ledger marked its accessible allocation/hoist seams exhausted; a direct fresh
+  kernel screen then found no prior row for the two `n`-element availability temporaries in
+  `affinity_propagation`. Source attribution showed `col_pos` and `pos_kk` allocated once per iteration, alongside
+  the dominant unchanged O(n^2) responsibility/availability scans. Opportunity score: 4.0 (impact 2 x confidence
+  4 / effort 2).
+- ONE candidate allocated both buffers once per call and reset/refilled them per iteration. The col-pos accumulation,
+  diagonal extraction, message updates, convergence checks, and every floating-point operation retained their
+  original order. A same-binary preflight matched labels, exemplars, and iteration count exactly; the focused strict-
+  remote affinity-propagation test also passed on `vmi1153651`.
+- An untimed strict-remote `--profile release --no-run` warm-up completed without a timeout on `vmi1153651`. The
+  first filtered invocation reached neither scored arm because an unrelated pre-existing linkage-bit assertion ran
+  during another Criterion group's setup and panicked; it is not measurement evidence. After isolating only the AP
+  group and warming that binary untimed, the one actual foreground measurement ran on the same worker and compared
+  both arms from one release binary at n=300, 10 samples, 100 ms warm-up, and 500 ms requested measurement per arm.
+  Allocate-each-iteration measured `[22.075, 22.963, 23.849]` ms versus `[22.311, 23.365, 24.501]` ms for reuse.
+  The intervals overlap heavily, and reuse was **1.75% slower centered** (`0.983x` original/reuse).
+- Disposition: REJECT. Source and benchmark instrumentation were removed, leaving this evidence row only. Targeted
+  UBS found zero critical issues; the bench file was rustfmt-clean, while exact-module formatting exposed only broad
+  pre-existing drift outside the candidate. Strict-remote `-D warnings` Clippy stopped before cluster on the known
+  untouched `fsci-linalg/src/lib.rs:9431` lint. No second actual measurement, `release-perf` build, local Cargo
+  fallback, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-q9k9x`.
