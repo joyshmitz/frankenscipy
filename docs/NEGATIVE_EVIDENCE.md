@@ -21858,3 +21858,27 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Disposition: KEEP. Focused strict-remote `-D warnings` Clippy, owned-file rustfmt, and diff hygiene passed; targeted
   UBS reported zero critical issues. No second benchmark, `release-perf` build, local Cargo fallback, or stash
   mutation was used. Bead: `frankenscipy-sooje`.
+
+## 2026-07-14 - cod - KEEP GenInvGauss batch Bessel-normalizer hoist (60.383x, bit-identical)
+
+- Negative-ledger-first `bv --robot-triage` surfaced the stale dense-linalg SYRK harness, which prior direct
+  attribution places below 1% of Cholesky wall time. A spatial screen found its dominant distance, KD-tree,
+  transform, and Voronoi lanes already mined, so this pass pivoted to the fresh, unledgered
+  `fsci-stats::GenInvGauss::logpdf` batch surface. Direct source attribution found that mapping the scalar function
+  recomputed the parameter-only scaled-Bessel normalizer `ln K_p(b)` for every sample. Opportunity score: 20.0
+  (impact 4 x confidence 5 / effort 1).
+- ONE lever adds `GenInvGauss::logpdf_many`, computing `ln K_p(b)` once and retaining the scalar expression and
+  operation order per sample. A focused strict-remote proof on `vmi1227854` matched every output bit for positive
+  and negative `p`, negative values, signed zero, the minimum positive normal, ordinary finite samples, infinities,
+  and a payload NaN.
+- The cold release bench target was first built by an untimed strict-remote `--profile release --no-run` warm-up on
+  `vmi1227854`, with no timeout. The one and only measurement invocation then used the same worker, worker-scoped
+  target, 4,096 positive samples, 10 samples, 100 ms warm-up, and 500 ms measurement per arm. The hoisted batch
+  measured `[23.557, 24.593, 26.134]` us versus `[1.4618, 1.4850, 1.5094]` ms for scalar mapping:
+  **60.383x faster centered**, **55.936x conservative**, and **98.34% lower centered time**, with disjoint
+  intervals. RCH rebuilt despite the untimed warm-up, but the complete foreground command returned in 177.4
+  seconds, below the five-minute cap.
+- Disposition: KEEP. Diff hygiene passed; targeted UBS reported zero critical issues. File-wide rustfmt and the
+  strict-remote `-D warnings` Clippy gate were blocked only by the existing broad `fsci-stats`/`fsci-special`
+  formatting and lint inventories outside this hunk, which were left untouched. No second benchmark,
+  `release-perf` build, local Cargo fallback, or stash mutation was used. Bead: `frankenscipy-s361o`.

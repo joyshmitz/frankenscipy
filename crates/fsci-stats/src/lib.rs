@@ -8741,6 +8741,20 @@ impl GenInvGauss {
         Self { p, b }
     }
 
+    /// Log-density at many positive samples, computing the parameter-only
+    /// `ln K_p(b)` normalizer once for the complete batch. Each output keeps
+    /// the scalar [`Self::logpdf`] operation order.
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let ln_kp = fsci_special::bessel::kve_scalar(self.p.abs(), self.b).ln() - self.b;
+        par_continuous_map_min(xs, 65536, |x| {
+            if x <= 0.0 {
+                return f64::NEG_INFINITY;
+            }
+            (self.p - 1.0) * x.ln() - self.b * (x + 1.0 / x) / 2.0 - 2.0_f64.ln() - ln_kp
+        })
+    }
+
     /// Log probability density at `x` (`-inf` for `x ≤ 0`):
     /// `(p−1)ln x − b(x+1/x)/2 − ln 2 − ln K_p(b)`.
     pub fn logpdf(&self, x: f64) -> f64 {
@@ -56563,6 +56577,29 @@ mod tests {
         let d2 = GenInvGauss::new(-1.0, 3.0);
         assert!((d2.pdf(0.8) - 0.8986268490341897).abs() < 1e-12);
         assert_eq!(d.logpdf(-1.0), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn geninvgauss_logpdf_many_matches_scalar_bits() {
+        let cases = [GenInvGauss::new(0.5, 2.0), GenInvGauss::new(-1.25, 3.5)];
+        let xs = [
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            0.25,
+            1.0,
+            4.0,
+            f64::INFINITY,
+            f64::from_bits(0x7ff8_0000_0000_0042),
+        ];
+        for distribution in cases {
+            let batched = distribution.logpdf_many(&xs);
+            for (&x, &actual) in xs.iter().zip(&batched) {
+                assert_eq!(actual.to_bits(), distribution.logpdf(x).to_bits());
+            }
+        }
     }
 
     #[test]

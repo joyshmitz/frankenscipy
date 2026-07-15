@@ -243,8 +243,8 @@ fn bench_rand_index(c: &mut Criterion) {
 fn bench_distribution_batch(c: &mut Criterion) {
     use fsci_stats::{
         BetaBinomial, BetaDist, Binomial, Chi, ChiSquared, ContinuousDistribution,
-        DiscreteDistribution, FDistribution, GammaDist, GenGamma, GenNorm, Hypergeometric,
-        InverseGamma, Nakagami, NegBinomial, Poisson, StudentT, VonMises,
+        DiscreteDistribution, FDistribution, GammaDist, GenGamma, GenInvGauss, GenNorm,
+        Hypergeometric, InverseGamma, Nakagami, NegBinomial, Poisson, StudentT, VonMises,
     };
     let n = 4096usize;
     let mut group = c.benchmark_group("distribution_batch");
@@ -356,6 +356,21 @@ fn bench_distribution_batch(c: &mut Criterion) {
     });
     group.bench_function("vonmises/map_pdf", |b| {
         b.iter(|| angles.iter().map(|&x| vonmises.pdf(x)).collect::<Vec<_>>())
+    });
+
+    // Generalized inverse Gaussian: the scaled Bessel K normalizer depends only
+    // on the distribution parameters and is shared across the batch.
+    let geninvgauss = GenInvGauss::new(-0.75, 3.0);
+    group.bench_function("geninvgauss/logpdf_many", |b| {
+        b.iter(|| geninvgauss.logpdf_many(&positive_x))
+    });
+    group.bench_function("geninvgauss/map_logpdf", |b| {
+        b.iter(|| {
+            positive_x
+                .iter()
+                .map(|&x| geninvgauss.logpdf(x))
+                .collect::<Vec<_>>()
+        })
     });
 
     // Binomial: 3 parameter-only terms hoisted over a full support sweep.
