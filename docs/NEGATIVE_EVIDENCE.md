@@ -22207,3 +22207,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `fsci-special` on three pre-existing unchanged `fsci-opt` lints. UBS found no candidate-specific issue but stayed
   nonzero on existing whole-file bench/test panic patterns. No second benchmark, `release-perf` build, local Cargo
   fallback, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-hgsdj`.
+
+## 2026-07-15 - cod - REJECT stack-backed Gauss-Kronrod panel samples
+
+- Negative-ledger-first triage found the advertised June allocation beads stale in current source and ledger, then
+  pivoted to `fsci-integrate`. Direct attribution found `gauss_kronrod_inner` materializing its fixed 15 panel
+  samples as a `Vec<f64>` once per recursively visited panel. The single candidate replaced only that temporary
+  with `[f64; 15]`; node evaluation, weighted-reduction, recursion, and error-test order were unchanged.
+- The benchmark embedded the literal former allocating routine and asserted bit-identical integral/error plus
+  identical `neval` and convergence before timing. Strict-remote focused Gauss-Kronrod tests passed 2/2. An untimed
+  `--profile release --no-run` warm-up completed on `vmi1153651`; RCH rerouted the sole foreground measurement to
+  cold `vmi1152480`, whose build completed without a timeout before both arms ran in the same binary.
+- On the oscillatory recursive workload, with 10 samples, 100 ms warm-up, and 500 ms requested measurement per arm,
+  the former heap samples measured `[20.248, 21.061, 21.805]` us versus `[23.743, 28.516, 32.754]` us for stack
+  samples. The intervals are disjoint in the wrong direction: centered time regressed **35.4%** and even the most
+  favorable edge is a **1.089x loss** (`23.743 / 21.805`).
+- Disposition: REJECT; source and benchmark instrumentation were removed, leaving this evidence row only. Exact-file
+  rustfmt/diff hygiene and focused tests passed. Strict-remote `-D warnings` Clippy stopped in three pre-existing
+  untouched `fsci-opt` lints; UBS findings were likewise pre-existing whole-file patterns. No second benchmark,
+  `release-perf` build, local Cargo fallback, stash mutation, or unrelated-file edit was used. Bead:
+  `frankenscipy-4xbz6`.
