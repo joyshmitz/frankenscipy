@@ -22621,3 +22621,33 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   branch. RCH repeatedly reaped pooled targets between jobs, so the scored invocation performed its untimed Cargo
   build and capped only the benchmark binary; no cross-worker timing, LTO/`release-perf`, local Cargo fallback,
   `force_local`, stash mutation, or unrelated-file edit entered the result. Bead: `frankenscipy-7k7ke`.
+
+## 2026-07-16 - BlackThrush (cod) - KEEP `brute` grid-point scratch reuse (1.430x median)
+
+- Negative-ledger-first `bv --robot-triage` (data hash `6701165a044718ea`) found no suitable current unclaimed
+  perf leaf: the concrete Cholesky and SphericalVoronoi retries were claimed thinning lanes, while the remaining
+  unclaimed leaves were stale-landed. This pass therefore pivoted from sparse to the fresh `fsci-opt::brute`
+  residual. An untouched strict-remote, non-LTO release profile on `vmi1293453` measured the existing 3-D,
+  `ns=80` (512,000-point) row at **8.514 ms/call**. The full harness retired **4.615 billion instructions** with
+  only **0.35% branch misses** and **0.30% L1-data misses**; direct source attribution found one
+  `vec![0.0; ndim]` construction for every objective evaluation despite fixed dimensionality within the call.
+- ONE lever replaced the allocating `point_at(idx) -> Vec<f64>` closure with `fill_point(idx, &mut [f64])`.
+  The serial path now owns one coordinate buffer and each parallel chunk owns one; the final argmin fills the
+  already-allocated result vector. Flattened-index decomposition, coordinate arithmetic order, objective order,
+  flat score storage, strict-`<` first-tie selection, counters, status, and result metadata are unchanged.
+- The sole scored foreground A/B ran a literal former implementation and the candidate from one non-LTO release
+  binary on strict-remote worker `vmi1264463`. Before timing, complete `OptimizeResult` parity passed bit-for-bit
+  for a serial 2-D grid, a parallel 3-D grid, and a parallel constant-objective first-tie grid. Eleven alternating
+  pairs on the 512,000-point row measured former median **11.227240 ms** versus reuse median **7.852440 ms**:
+  **1.429777x centered** and **30.06% lower median time**. Reuse won **9/11 pairs**, with a **1.340781x paired
+  median**. Thread-scheduling outliers leave the deliberately reported cross-edge ratio at **0.725891x**
+  (`9.067257 / 12.491218`), so the keep rests on the alternating paired evidence plus removal of 512,000
+  per-call heap allocations, not on disjoint raw ranges.
+- Disposition: KEEP. The temporary former-path timing harness was manually removed; the permanent regression test
+  covers parallel coordinate refill and first-tie preservation. Strict-remote focused release tests passed
+  **5/5**. Exact-diff hygiene passed; targeted non-build UBS exited zero, while its full-file mode surfaced only
+  the existing test-panic inventory. Crate rustfmt and strict-remote `-D warnings` Clippy remain blocked by broad
+  pre-existing formatting drift and the three untouched findings at `curvefit.rs:549` and `lib.rs:4372,4376`.
+  Repeated pooled-cache eviction triggered worker switching but did not enter the score. No second A/B,
+  LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was used.
+  Bead: `frankenscipy-89wmj`.

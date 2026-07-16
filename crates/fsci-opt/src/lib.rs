@@ -2714,17 +2714,15 @@ where
         })?;
     let nfev = total_points;
 
-    // Grid point for a flattened index (column-major over the per-dim steps).
-    let point_at = |idx: usize| -> Vec<f64> {
+    // Fill a grid point for a flattened index (column-major over the per-dim steps).
+    let fill_point = |idx: usize, x: &mut [f64]| {
         let mut current_idx = idx;
-        let mut x = vec![0.0; ndim];
         for (d, slot) in x.iter_mut().enumerate() {
             let step_idx = current_idx % ns;
             current_idx /= ns;
             let (lb, ub) = ranges[d];
             *slot = lb + (ub - lb) * (step_idx as f64) / ((ns - 1) as f64);
         }
-        x
     };
 
     // Every grid point's objective is independent, so evaluate them in parallel
@@ -2733,19 +2731,23 @@ where
     let mut fs = vec![f64::INFINITY; total_points];
     let nthreads = brute_thread_count(total_points);
     if nthreads <= 1 {
+        let mut x = vec![0.0; ndim];
         for (idx, slot) in fs.iter_mut().enumerate() {
-            *slot = func(&point_at(idx));
+            fill_point(idx, &mut x);
+            *slot = func(&x);
         }
     } else {
         let chunk = total_points.div_ceil(nthreads);
-        let point_at = &point_at;
+        let fill_point = &fill_point;
         let func = &func;
         std::thread::scope(|scope| {
             for (ci, block) in fs.chunks_mut(chunk).enumerate() {
                 let base = ci * chunk;
                 scope.spawn(move || {
+                    let mut x = vec![0.0; ndim];
                     for (li, slot) in block.iter_mut().enumerate() {
-                        *slot = func(&point_at(base + li));
+                        fill_point(base + li, &mut x);
+                        *slot = func(&x);
                     }
                 });
             }
@@ -2757,7 +2759,7 @@ where
     for (idx, &f) in fs.iter().enumerate() {
         if f < best_f {
             best_f = f;
-            best_x = point_at(idx);
+            fill_point(idx, &mut best_x);
         }
     }
 
@@ -7649,6 +7651,21 @@ mod tests {
             result.fun
         );
         assert_eq!(result.x, vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn brute_reused_grid_point_preserves_parallel_coordinates_and_first_tie() {
+        let ranges = [(-2.0, 2.0), (10.0, 14.0)];
+        let ns = 512;
+
+        let corner = crate::brute(|x| x[0] - x[1], &ranges, ns).expect("brute corner");
+        assert_eq!(corner.x[0].to_bits(), (-2.0_f64).to_bits());
+        assert_eq!(corner.x[1].to_bits(), 14.0_f64.to_bits());
+
+        let tie = crate::brute(|_| 1.0, &ranges, ns).expect("brute tie");
+        assert_eq!(tie.x[0].to_bits(), (-2.0_f64).to_bits());
+        assert_eq!(tie.x[1].to_bits(), 10.0_f64.to_bits());
+        assert_eq!(tie.nfev, ns * ns);
     }
 
     #[test]
