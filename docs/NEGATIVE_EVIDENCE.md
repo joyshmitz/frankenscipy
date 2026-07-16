@@ -22471,3 +22471,30 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   and a fail-closed `RCH-E410` preflight on `vmi1149989` are routing evidence, not the reject; the reject rests only
   on the returned same-binary A/B. No second A/B, `release-perf`/LTO build, local Cargo fallback, `force_local`,
   stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-ujs4s`.
+
+## 2026-07-16 - BlackThrush (cod) - REJECT fused mixed-dtype cast plus broadcast (2.788x slower)
+
+- Negative-ledger-first `bv --robot-triage` (data hash `7d9170fd4f09ef4b`) exposed only peer-owned or
+  stale-landed perf work, so this pass pivoted to the fresh `fsci-arrayapi` mixed-dtype broadcast handoff. The
+  adjacent ledger entries cover same-dtype `astype`, identity-cast elision, and rank-3 middle-singleton repetition;
+  none covers the `Float32 [n,1] -> Complex128 [n,2]` cast-plus-expansion path. An untouched strict-remote,
+  non-LTO release profile of `arrayapi_broadcast/promote_and_broadcast/10000` measured
+  **[163.92, 201.18, 232.87] us** on `vmi1153651`. Source attribution found a 10,000-value cast allocation and pass
+  immediately followed by the 20,000-value rank-2 broadcast allocation and emission.
+- ONE candidate added a backend cast-and-broadcast hook whose default retained the literal former sequence, with a
+  `CoreArrayBackend` rank-2 override that cast each distinct source value while emitting the final broadcast buffer.
+  Same-dtype inputs and all non-rank-2 shapes remained on their existing paths. Before timing, the same-binary A/B
+  harness asserted equality of both complete output arrays against the literal former cast-then-broadcast path.
+- The cold candidate target received an untimed strict-remote `--profile release --no-run` warm-up without a shell
+  timeout. `vmi1153651` then evicted the just-built release graph and restarted dependencies, so that attempt was
+  cancelled and produced no evidence. After switching both worker controls, the scored foreground A/B ran both arms
+  from one non-LTO release binary on `vmi1264463`; its cold compile completed outside Criterion timing. With 10
+  samples, 200 ms warm-up, and 1 s requested measurement per arm, the literal former path measured
+  **[111.36, 115.57, 123.95] us** versus **[319.33, 322.17, 325.62] us** for fused emission: candidate/former was
+  **2.7877x centered** (**178.77% slower**) and at least **2.5763x slower** at the favorable interval edges
+  (`319.33 / 123.95`), with disjoint intervals.
+- Disposition: REJECT. Production, regression-test, and benchmark hunks were manually restored; exact-file diff
+  confirms no `fsci-arrayapi` source or benchmark remains changed. The cache evictions and cancelled builds are
+  routing evidence, not the reject; the reject rests exclusively on the returned same-binary A/B ratio. No second
+  A/B, `release-perf`/LTO build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was
+  used. Bead: `frankenscipy-gv3mn`.
