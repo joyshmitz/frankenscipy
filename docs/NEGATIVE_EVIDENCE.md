@@ -22576,3 +22576,27 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   build, local Cargo fallback, `force_local`, or unrelated-file edit entered the decision. Retry only if `loadtxt`
   is restructured to a single content pass for serial inputs (parse-while-sizing) — the two-scan structure, not
   the `Vec`, is the real floor. Bead: `frankenscipy-317e5`.
+
+## 2026-07-16 - BlackThrush (cod) - REJECT duplicate solver-loss row reuse (1.180x centered)
+
+- Negative-ledger-first `bv --robot-triage` (data hash `632381f9c28dbb2b`) exposed only stale validation work at
+  the top of the graph, so this pass pivoted to the fresh `fsci-runtime` CASP selection path. An untouched
+  strict-remote, non-LTO release profile of `solver_select_ModerateCondition` on `vmi1293453` measured
+  **[26.532, 37.857, 52.079] ns**. Direct source attribution found five four-term expected-loss dot products per
+  selection even though the immutable default `DiagonalFastPath` and `TriangularFastPath` loss rows are identical.
+- ONE candidate computed rows 0 through 3 and copied the already-rounded row-3 result into row 4. That is
+  bit-preserving by construction: the former path multiplied and summed the same four values in the same order for
+  both rows, and no API permits mutation of the private matrix. A temporary runtime selector put candidate and
+  literal five-row reference paths in one binary; it and the candidate were removed after scoring.
+- The sole scored foreground A/B ran from one strict-remote, non-LTO release binary on `vmi1167313`. An untimed
+  `--no-run` warm-up completed first in the same remote job; only the subsequent Criterion measurement carried a
+  20-second cap. With 20 samples, 100 ms warm-up, and 750 ms requested measurement per arm, row reuse measured
+  **[66.064, 68.631, 71.348] ns** versus **[67.724, 80.986, 105.99] ns** for five rows: **1.1800x centered**, but
+  the intervals overlap and the conservative ratio envelope is **[0.9492x, 1.6043x]**
+  (`67.724 / 71.348` through `105.99 / 66.064`).
+- Disposition: REJECT below the confidence floor. Production, proof-test, and benchmark hunks were manually
+  restored; exact-file diff confirms no `fsci-runtime` source or harness remains changed. Inter-job cache eviction
+  on `vmi1293453` and `vmi1264463`, plus an inadmissible `hz1` request that attempted to reroute to `ovh-b`, are
+  routing evidence only; the reject rests exclusively on the returned same-binary A/B. No second scored A/B,
+  LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was used.
+  Bead: `frankenscipy-3gmtu`.
