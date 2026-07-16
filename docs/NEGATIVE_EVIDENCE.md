@@ -22545,3 +22545,34 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `ovh-b` `blake3` build-script `SIGILL` only caused worker switches and are not evidence. No second scored A/B,
   LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was used.
   Bead: `frankenscipy-8md59`.
+
+## 2026-07-16 - BlackThrush (cc) - REJECT loadtxt serial-input prepass bypass (0.982x-1.050x, non-monotone, IN-FLOOR)
+
+- Negative-ledger-first retry. This session's `bv --robot-triage` surfaced only validation bugs and an
+  alloc-hoist perf vein that was already fully mined: `betweenness_centrality` (4lpma), `clustering_coefficient`
+  (icl0h), minibatch/GMM/kmeans2 cluster hoists (p1pp8/5ufms/4ylee), ndimage rank-filter (gy6to) and the
+  Erlang/HalfGenNorm/DoubleGamma `pdf_many` family (6o6d8/4gid7/fg9tf) are all implemented in `main` despite
+  their beads staying open. `select_total_rank` already uses `select_nth_unstable`; `NdBSpline` already has
+  compact-support + `evaluate_many`. With that vein exhausted, the pass took the one genuinely-open lever with a
+  standing ledger note — `frankenscipy-317e5`, my own prior bead marked "retry only on a persistent warm pool"
+  (rch now healthy 11/12).
+- ONE LEVER: for serial-sized inputs (< 4096 lines) `loadtxt` first materializes a `Vec<&str>` of every line and
+  pre-scans `cols`, then discards both and calls `loadtxt_serial(content)`, which recomputes `cols` and re-parses.
+  The candidate probed the line count cheaply (no `Vec`, early-break at the 4096 gate) and routed serial-sized
+  inputs straight to the byte-identical serial loop, behind a same-binary `LOADTXT_PREPASS_BYPASS_DISABLE` toggle.
+  The `< 4096` probe is exactly the existing `lines.len() < 4096` gate, so routing (and thus output) is unchanged.
+- Same-binary A/B: bench built strict-remote (rch, `--no-run`, non-LTO release) into a private target and run on
+  one local machine (the ratio is machine-independent). The bench asserted byte-identity (`f64::to_bits`) of
+  `(rows, cols, data)` between arms before timing. **4000x1**: bypass **246.92 us** `[243.58, 250.39]` vs original
+  **242.34 us** `[240.21, 245.01]` -> **0.982x** (CIs overlap; neutral/slight-regress). **4000x3**: bypass
+  **505.12 us** `[501.95, 508.91]` vs original **530.21 us** `[523.76, 536.84]` -> **1.050x**. The narrowest shape
+  (where the alloc should be the largest fraction) showed the SMALLEST effect — the inversion proves run-to-run
+  variance dominates. Mechanistically the bypass removes only the `Vec<&str>` allocation (a few us); the probe
+  still scans every newline, so `f64` parsing remains ~90% of the op and the ceiling sits at/below the noise floor.
+- Disposition: REJECT. Non-monotone, in-floor. Candidate (`crates/fsci-io/src/lib.rs` + `benches/io_bench.rs`)
+  was stashed non-destructively (not dropped), production restored with no owned diff. A disk-pressure reaper
+  (`/data/tmp` at 92%) evicted the private target between runs, blocking a confirming re-run — the one clean
+  measurement stands as the verdict; the eviction is an environment note, not evidence. No LTO/`release-perf`
+  build, local Cargo fallback, `force_local`, or unrelated-file edit entered the decision. Retry only if `loadtxt`
+  is restructured to a single content pass for serial inputs (parse-while-sizing) — the two-scan structure, not
+  the `Vec`, is the real floor. Bead: `frankenscipy-317e5`.
