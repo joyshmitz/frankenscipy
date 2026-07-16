@@ -972,14 +972,26 @@ fn can_direct_transpose_compressed(
     indptr: &[usize],
     indices: &[usize],
 ) -> bool {
-    sorted_indices
+    let canonical_shape = sorted_indices
         && deduplicated
         && indices.len() == nnz
         && indptr.len() == major_len + 1
         && indptr.first() == Some(&0)
-        && indptr.last() == Some(&nnz)
-        && indptr.windows(2).all(|window| window[0] <= window[1])
-        && compressed_segments_are_strictly_sorted(minor_len, indptr, indices)
+        && indptr.last() == Some(&nnz);
+    if !canonical_shape {
+        return false;
+    }
+
+    // Public constructors establish these invariants before stamping canonical
+    // metadata, and every unchecked constructor is crate-private. Rewalking all
+    // rows and indices here duplicated an O(nnz) validation pass immediately
+    // before the O(nnz) count/scatter conversion. Keep the full check in debug
+    // builds so new internal constructors still fail close during development.
+    debug_assert!(indptr.windows(2).all(|window| window[0] <= window[1]));
+    debug_assert!(compressed_segments_are_strictly_sorted(
+        minor_len, indptr, indices
+    ));
+    true
 }
 
 fn compressed_segments_are_strictly_sorted(
@@ -2116,6 +2128,81 @@ mod tests {
         .expect("rhs csr");
         let sum = add_csr(&lhs, &rhs).expect("edge add");
         println!("{}", snapshot_add_csr("cancellation-and-nan", &sum));
+    }
+
+    #[test]
+    fn canonical_direct_conversion_matches_coo_fallback_bit_exact() {
+        fn assert_csc_bits(actual: &CscMatrix, expected: &CscMatrix) {
+            assert_eq!(actual.shape(), expected.shape());
+            assert_eq!(actual.indices(), expected.indices());
+            assert_eq!(actual.indptr(), expected.indptr());
+            assert_eq!(actual.canonical_meta(), expected.canonical_meta());
+            assert_eq!(
+                actual
+                    .data()
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+                    .data()
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        fn assert_csr_bits(actual: &CsrMatrix, expected: &CsrMatrix) {
+            assert_eq!(actual.shape(), expected.shape());
+            assert_eq!(actual.indices(), expected.indices());
+            assert_eq!(actual.indptr(), expected.indptr());
+            assert_eq!(actual.canonical_meta(), expected.canonical_meta());
+            assert_eq!(
+                actual
+                    .data()
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+                    .data()
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        let matrices = [
+            CsrMatrix::from_components(
+                Shape2D::new(4, 5),
+                vec![
+                    -0.0,
+                    f64::INFINITY,
+                    f64::from_bits(0x7ff8_0000_0000_1234),
+                    -3.5,
+                    0.0,
+                    f64::NEG_INFINITY,
+                ],
+                vec![0, 4, 1, 3, 2, 4],
+                vec![0, 2, 2, 4, 6],
+                false,
+            )
+            .expect("canonical rectangular csr"),
+            CsrMatrix::from_components(Shape2D::new(3, 4), vec![], vec![], vec![0; 4], true)
+                .expect("empty csr"),
+        ];
+
+        for csr in matrices {
+            let direct_csc = csr.to_csc().expect("direct csr->csc");
+            let fallback_csc = csr.to_coo().expect("csr->coo").to_csc().expect("coo->csc");
+            assert_csc_bits(&direct_csc, &fallback_csc);
+
+            let direct_csr = direct_csc.to_csr().expect("direct csc->csr");
+            let fallback_csr = direct_csc
+                .to_coo()
+                .expect("csc->coo")
+                .to_csr()
+                .expect("coo->csr");
+            assert_csr_bits(&direct_csr, &fallback_csr);
+        }
     }
 
     #[test]

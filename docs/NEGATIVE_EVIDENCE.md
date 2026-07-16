@@ -22421,3 +22421,29 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   and targeted UBS reported zero critical findings; strict-remote compilation surfaced only the crate's 12
   pre-existing warnings. No `release-perf`/LTO build, local Cargo fallback, `force_local`, stash mutation, or
   unrelated-file edit was used. Bead: `frankenscipy-b75mf`.
+
+## 2026-07-16 - BlackThrush (cod) - KEEP sparse canonical conversion metadata gate (1.759x)
+
+- `bv --robot-triage` exposed only peer-owned or stale-landed perf work, so negative-ledger-first routing selected
+  the fresh `fsci-sparse` canonical CSR/CSC conversion path. An untouched strict-remote, non-LTO release profile of
+  `sparse_format_conversion/10000x10000_d0_csr_to_csc/10000` measured **[477.76, 510.92, 542.26] us**. Source
+  attribution found that conversion first rescanned every compressed segment and index to re-prove invariants already
+  established by public constructors and recorded in private canonical metadata, immediately before the required
+  count/scatter pass.
+- ONE lever replaces that duplicate release-mode O(nnz) scan with an O(1) canonical-metadata and shape gate. The
+  complete monotonicity, bounds, and strict-order validation remains as a debug assertion for new crate-private
+  constructors; malformed/noncanonical inputs retain the existing fallback, and the count/scatter conversion is
+  unchanged. A focused strict-remote release proof compared direct CSR-to-CSC and CSC-to-CSR conversion with the COO
+  fallback bit-for-bit across rectangular and empty matrices, signed zero, infinities, and a NaN payload; it passed.
+- The cold target received untimed `--profile release --no-run` warm-ups without shell timeouts. Repeated release-cache
+  eviction caused worker switching; the scored foreground comparison then ran both arms from one non-LTO release
+  binary on `vmi1152480`, with 10 samples, 200 ms warm-up, and 1 s requested measurement per arm. The literal former
+  validation measured **[509.96, 536.45, 555.74] us** versus **[293.26, 304.98, 313.76] us** for the metadata gate:
+  **1.7590x centered** and **1.6253x conservative** (`509.96 / 313.76`), with disjoint intervals. The untouched-source
+  baseline versus candidate was 1.6753x centered; Criterion also classified the candidate as improved.
+- Disposition: KEEP. The temporary same-binary A/B harness was removed and the exact-bit regression remains. The
+  strict-remote release workspace check passed, and targeted UBS reported zero critical findings with its local Cargo
+  categories disabled. Targeted strict-remote Clippy was blocked before the owned crate by a pre-existing
+  `fsci-linalg` `needless_range_loop` at `crates/fsci-linalg/src/lib.rs:9431`; no unrelated lint was changed. No
+  `release-perf`/LTO build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was used. Bead:
+  `frankenscipy-c38ra`.
