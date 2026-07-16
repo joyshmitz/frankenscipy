@@ -22345,3 +22345,30 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   Exact-file rustfmt/diff hygiene passed, and staged-file UBS reported zero critical findings with its local Cargo
   categories disabled. No second A/B, `release-perf`/LTO build, shell timeout around a build, local Cargo fallback,
   `force_local`, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-7d50t`.
+
+## 2026-07-15 - cod - REJECT in-place `brenth` message relabel (0.901x centered)
+
+- Negative-ledger-first `bv --robot-triage` exposed only the peer-owned Cholesky SYRK harness; the apparently
+  unassigned older perf beads are stale-landed, and direct SYRK attribution remains below 1% of Cholesky wall time.
+  The previously suggested DCT-II route also has explicit rejects for fusing its Makhoul pack and extract passes, so
+  this pass pivoted to the distinct `fsci-opt::brenth` wrapper. An untouched-source strict-remote, non-LTO release
+  profile on `vmi1293453` measured `brenth/cubic` at **[328.16, 345.57, 369.55] ns**. Source attribution found the
+  wrapper allocating a second `String` solely to change the same-length ASCII token `brentq` to `brenth`.
+- ONE lever replaced every matching token in the existing message buffer with `String::replace_range`, retaining the
+  former replace-all semantics. Before timing, the same-binary harness asserted equality of the complete `RootResult`
+  against a literal former allocating wrapper, covering root bits, status, convergence, iteration/evaluation counts,
+  method, and message. That exact parity assertion passed.
+- The cold target received an untimed `--profile release --no-run` build without a shell timeout. Because
+  `vmi1293453` missed the warmed release cache twice, both worker controls were switched; RCH admitted
+  `vmi1227854` rather than the requested `hz2`, so the candidate received another untimed warm-up there. The sole
+  foreground A/B then ran both arms from one non-LTO release binary on `vmi1227854`, with 10 samples, 500 ms warm-up,
+  and 1 s requested measurement per arm. In-place relabeling measured **[409.13, 433.16, 466.56] ns** versus
+  **[376.59, 390.10, 398.82] ns** for the former allocation: **0.9006x centered**, **11.04% slower centered**, and
+  **0.9748x conservative** (`398.82 / 409.13`). Even the candidate's best interval edge was 2.585% slower than the
+  former path's worst edge, so the intervals are disjoint.
+- Disposition: REJECT. The production, test, and benchmark hunks were manually restored; exact-file `git diff`
+  confirms no `fsci-opt` source remains changed. The build cache misses are surfaced routing evidence, not the reject;
+  the reject is exclusively the returned same-binary A/B ratio. Agent Mail writes were unavailable because its
+  corruption circuit breaker reported a malformed SQLite database, so ownership continued from Beads and Git truth.
+  No second A/B, `release-perf`/LTO build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit
+  was used. Bead: `frankenscipy-cfizr`.
