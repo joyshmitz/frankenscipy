@@ -2535,17 +2535,25 @@ where
             }
         }
 
-        // Compute J^T J and J^T F
+        // Compute J^T J and J^T F. Single row-outer pass (jac read contiguously,
+        // jtj streamed row-major) mirroring `curvefit::jtj_matrix_into`, exploiting
+        // J^T J symmetry (upper triangle + mirror) to halve the products. BYTE-IDENTICAL
+        // to the naive `for i { for j { for row } }`: `row[i]*row[j] == row[j]*row[i]`
+        // (exact IEEE754 commutativity) and each cell still accumulates rows in ascending
+        // order. Replaces the strided column re-scan (n² cache-missing passes over jac).
         let mut jtj = vec![vec![0.0; n]; n];
         let mut jtf = vec![0.0; n];
-        for i in 0..n {
-            for j in 0..n {
-                for row in jac.iter().take(n) {
-                    jtj[i][j] += row[i] * row[j];
+        for (row, &fx_value) in jac.iter().zip(fx.iter()) {
+            for i in 0..n {
+                let ri = row[i];
+                for j in i..n {
+                    let v = ri * row[j];
+                    jtj[i][j] += v;
+                    if i != j {
+                        jtj[j][i] += v;
+                    }
                 }
-            }
-            for (row, fx_value) in jac.iter().zip(fx.iter()).take(n) {
-                jtf[i] += row[i] * *fx_value;
+                jtf[i] += ri * fx_value;
             }
         }
 

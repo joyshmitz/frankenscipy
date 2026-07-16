@@ -605,8 +605,87 @@ fn bench_finite_difference_helpers(c: &mut Criterion) {
     group.finish();
 }
 
+// ── lm_root J^T J + J^T F build: strided-original vs symmetric-row-outer A/B ──
+//
+// Same-process A/B isolating the per-iteration normal-equation build inside
+// `lm_root` (root.rs). The `original` arm is the shipped-before naive triple-nest
+// (row-reduction innermost = n² cache-missing strided passes over `jac`); the
+// `candidate` arm is the current lib code (single row-outer pass, J^T J symmetry).
+// Both produce bit-identical output (asserted), so this measures pure cache/flop win.
+
+fn jtj_jtf_original(jac: &[Vec<f64>], fx: &[f64]) -> (Vec<Vec<f64>>, Vec<f64>) {
+    let n = jac.len();
+    let mut jtj = vec![vec![0.0; n]; n];
+    let mut jtf = vec![0.0; n];
+    for i in 0..n {
+        for j in 0..n {
+            for row in jac.iter().take(n) {
+                jtj[i][j] += row[i] * row[j];
+            }
+        }
+        for (row, fx_value) in jac.iter().zip(fx.iter()).take(n) {
+            jtf[i] += row[i] * *fx_value;
+        }
+    }
+    (jtj, jtf)
+}
+
+fn jtj_jtf_candidate(jac: &[Vec<f64>], fx: &[f64]) -> (Vec<Vec<f64>>, Vec<f64>) {
+    let n = jac.len();
+    let mut jtj = vec![vec![0.0; n]; n];
+    let mut jtf = vec![0.0; n];
+    for (row, &fx_value) in jac.iter().zip(fx.iter()) {
+        for i in 0..n {
+            let ri = row[i];
+            for j in i..n {
+                let v = ri * row[j];
+                jtj[i][j] += v;
+                if i != j {
+                    jtj[j][i] += v;
+                }
+            }
+            jtf[i] += ri * fx_value;
+        }
+    }
+    (jtj, jtf)
+}
+
+fn bench_lm_jtj_build_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("lm_root_jtj_build_ab");
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+    for &n in &[64usize, 128, 256, 512] {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xB1AC_7 ^ n as u64);
+        let jac: Vec<Vec<f64>> = (0..n)
+            .map(|_| (0..n).map(|_| rng.random::<f64>() * 2.0 - 1.0).collect())
+            .collect();
+        let fx: Vec<f64> = (0..n).map(|_| rng.random::<f64>() * 2.0 - 1.0).collect();
+
+        // Byte-identical proof: candidate output matches original bit-for-bit.
+        let (o_jtj, o_jtf) = jtj_jtf_original(&jac, &fx);
+        let (c_jtj, c_jtf) = jtj_jtf_candidate(&jac, &fx);
+        for (ro, rc) in o_jtj.iter().zip(c_jtj.iter()) {
+            for (a, b) in ro.iter().zip(rc.iter()) {
+                assert_eq!(a.to_bits(), b.to_bits(), "jtj mismatch at n={n}");
+            }
+        }
+        for (a, b) in o_jtf.iter().zip(c_jtf.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits(), "jtf mismatch at n={n}");
+        }
+
+        group.bench_function(BenchmarkId::new("original_strided", n), |b| {
+            b.iter(|| black_box(jtj_jtf_original(black_box(&jac), black_box(&fx))));
+        });
+        group.bench_function(BenchmarkId::new("candidate_symmetric", n), |b| {
+            b.iter(|| black_box(jtj_jtf_candidate(black_box(&jac), black_box(&fx))));
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_lm_jtj_build_ab,
     bench_select_three_ab,
     bench_finite_difference_helpers,
     bench_assignment,
