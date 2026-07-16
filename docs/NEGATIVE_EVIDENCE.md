@@ -22319,3 +22319,29 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Scoped rustfmt, diff hygiene, and UBS passed with zero critical findings. The timing-only ignored test was removed;
   the bit-parity regression proof remains. No `release-perf`/LTO build, second A/B, local Cargo fallback, `force_local`,
   or stash mutation was used. Bead: `frankenscipy-mgqf5`.
+
+## 2026-07-15 - cod - KEEP rank-3 middle-singleton broadcast block repetition (14.477x)
+
+- Negative-ledger-first `bv --robot-triage` found the unassigned perf beads stale-landed and the advertised quick
+  wins peer-owned. The immediately preceding runtime vein then hit repeated RCH release-cache eviction before any
+  timed path, so it produced no reject row; this pass pivoted to the fresh `fsci-arrayapi` rank-3 broadcast fallback.
+  An unchanged-source strict-remote Criterion profile measured `[256,1,64] -> [256,16,64]` at
+  `[1.5223, 1.6087, 1.7047]` ms and source attribution showed per-output coordinate advancement plus a full input
+  stride reconstruction. No prior rank-3 or middle-singleton broadcast row exists in this ledger.
+- ONE lever detects only `[outer,1,inner] -> [outer,repeats,inner]` and repeats each already-contiguous `inner`
+  block directly. Broadcast validation, output allocation size, scalar bits, row-major logical ordering, dtype,
+  shape, and all four memory-order metadata variants are unchanged; every other rank/shape remains on the generic
+  fallback. The same-binary A/B setup asserted exact equality of shape, dtype, order, and all 262,144 output
+  `ScalarValue`s before timing.
+- The candidate received an untimed strict-remote `--profile release --no-run` warm-up without a timeout. Because
+  `vmi1152480` repeatedly evicted the release graph, both RCH worker controls were switched to `vmi1293453`; RCH
+  still rebuilt before the foreground measurement, but the scored arms ran from the same non-LTO release binary
+  and worker. With 10 samples, 500 ms warm-up, and 1 s requested measurement per arm, the literal former coordinate
+  walk measured `[1.2522, 1.2875, 1.3453]` ms versus `[86.573, 88.933, 91.448]` us for block repetition:
+  **14.477x centered**, **13.693x conservative** (`1.2522 ms / 91.448 us`), and **93.09% lower centered time**,
+  with disjoint intervals.
+- Disposition: KEEP. The permanent regression test covers exact block values plus shape/dtype/order preservation for
+  C, F, A, and K metadata; its focused strict-remote proof and targeted all-target `-D warnings` Clippy passed.
+  Exact-file rustfmt/diff hygiene passed, and staged-file UBS reported zero critical findings with its local Cargo
+  categories disabled. No second A/B, `release-perf`/LTO build, shell timeout around a build, local Cargo fallback,
+  `force_local`, stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-7d50t`.

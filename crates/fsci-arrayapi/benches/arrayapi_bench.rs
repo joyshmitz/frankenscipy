@@ -163,6 +163,101 @@ fn bench_broadcast(c: &mut Criterion) {
     group.finish();
 }
 
+fn row_major_strides_original(dims: &[usize]) -> Vec<usize> {
+    let mut strides = vec![0usize; dims.len()];
+    let mut stride = 1usize;
+    for pos in (0..dims.len()).rev() {
+        strides[pos] = stride;
+        stride = stride.saturating_mul(dims[pos].max(1));
+    }
+    strides
+}
+
+fn advance_row_major_coords_original(coords: &mut [usize], dims: &[usize]) {
+    for axis in (0..coords.len()).rev() {
+        coords[axis] += 1;
+        if coords[axis] < dims[axis] {
+            break;
+        }
+        coords[axis] = 0;
+    }
+}
+
+fn rank3_middle_singleton_broadcast_original(
+    array: &CoreArray,
+    shape: &Shape,
+) -> (Shape, DType, Vec<ScalarValue>, MemoryOrder) {
+    let target_shape = broadcast_shapes(&[array.shape().clone(), shape.clone()])
+        .expect("benchmark shapes should broadcast");
+    assert_eq!(target_shape, *shape);
+
+    let output_size = shape
+        .element_count()
+        .expect("benchmark target shape should not overflow");
+    let out_rank = shape.rank();
+    let in_rank = array.shape().rank();
+    let in_strides = row_major_strides_original(&array.shape().dims);
+    let mut out_coords = vec![0usize; out_rank];
+    let mut values = Vec::with_capacity(output_size);
+    for linear in 0..output_size {
+        let mut in_linear = 0usize;
+        for (in_dim_idx, in_dim) in array.shape().dims.iter().enumerate() {
+            let out_dim_idx = out_rank - in_rank + in_dim_idx;
+            let coord = if *in_dim == 1 {
+                0
+            } else {
+                out_coords[out_dim_idx]
+            };
+            in_linear += coord * in_strides[in_dim_idx];
+        }
+        values.push(array.values()[in_linear]);
+        if linear + 1 < output_size {
+            advance_row_major_coords_original(&mut out_coords, &shape.dims);
+        }
+    }
+
+    (shape.clone(), array.dtype(), values, array.order())
+}
+
+fn bench_rank3_middle_singleton_broadcast_ab(c: &mut Criterion) {
+    let backend = strict_backend();
+    let array = make_array(
+        &backend,
+        Shape::new(vec![256, 1, 64]),
+        DType::Float64,
+        MemoryOrder::C,
+    );
+    let target_shape = Shape::new(vec![256, 16, 64]);
+    let candidate = backend
+        .broadcast_to(&array, &target_shape)
+        .expect("rank-3 middle-singleton broadcast should succeed");
+    let original = rank3_middle_singleton_broadcast_original(&array, &target_shape);
+    assert_eq!(candidate.shape(), &original.0);
+    assert_eq!(candidate.dtype(), original.1);
+    assert_eq!(candidate.values(), original.2.as_slice());
+    assert_eq!(candidate.order(), original.3);
+
+    let mut group = c.benchmark_group("arrayapi_rank3_middle_singleton_broadcast_ab");
+    group.bench_function("original_coordinate_walk/256x1x64_to_256x16x64", |b| {
+        b.iter(|| {
+            black_box(rank3_middle_singleton_broadcast_original(
+                black_box(&array),
+                black_box(&target_shape),
+            ))
+        });
+    });
+    group.bench_function("candidate_block_repeat/256x1x64_to_256x16x64", |b| {
+        b.iter(|| {
+            black_box(
+                backend
+                    .broadcast_to(black_box(&array), black_box(&target_shape))
+                    .expect("rank-3 middle-singleton broadcast should succeed"),
+            )
+        });
+    });
+    group.finish();
+}
+
 fn promote_and_broadcast_identity_cast_original(
     backend: &CoreArrayBackend,
     arrays: &[&CoreArray],
@@ -441,6 +536,7 @@ criterion_group!(
     bench_to_dmatrix_ab,
     bench_creation,
     bench_broadcast,
+    bench_rank3_middle_singleton_broadcast_ab,
     bench_promote_identity_cast_ab,
     bench_indexing,
     bench_dtype_cast

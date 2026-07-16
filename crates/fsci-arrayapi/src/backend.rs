@@ -585,6 +585,14 @@ impl ArrayApiBackend for CoreArrayBackend {
                 order: array.order,
             });
         }
+        if let Some(values) = rank3_middle_singleton_broadcast_values(array, shape, output_size) {
+            return Ok(CoreArray {
+                shape: shape.clone(),
+                dtype: array.dtype,
+                values,
+                order: array.order,
+            });
+        }
 
         let out_rank = shape.rank();
         let in_rank = array.shape.rank();
@@ -766,6 +774,37 @@ fn rank2_broadcast_values(
     }
 
     None
+}
+
+fn rank3_middle_singleton_broadcast_values(
+    array: &CoreArray,
+    shape: &Shape,
+    output_size: usize,
+) -> Option<Vec<ScalarValue>> {
+    if array.shape.rank() != 3 || shape.rank() != 3 {
+        return None;
+    }
+
+    let in_outer = array.shape.dims[0];
+    let in_middle = array.shape.dims[1];
+    let in_inner = array.shape.dims[2];
+    let outer = shape.dims[0];
+    let middle = shape.dims[1];
+    let inner = shape.dims[2];
+    if in_outer != outer || in_middle != 1 || in_inner != inner {
+        return None;
+    }
+
+    let mut values = Vec::with_capacity(output_size);
+    for outer_idx in 0..outer {
+        let block_start = outer_idx * inner;
+        let block = &array.values[block_start..block_start + inner];
+        for _ in 0..middle {
+            values.extend_from_slice(block);
+        }
+    }
+    debug_assert_eq!(values.len(), output_size);
+    Some(values)
 }
 
 fn is_scoped_dtype(dtype: DType) -> bool {
@@ -1607,6 +1646,59 @@ mod tests {
             .broadcast_to(&scalar_2d, &Shape::new(vec![2, 3]))
             .expect("rank-2 scalar should broadcast");
         assert_eq!(scalar_broadcast.values(), &[ScalarValue::F64(7.0); 6]);
+    }
+
+    #[test]
+    fn broadcast_to_rank3_middle_singleton_repeats_contiguous_inner_blocks() {
+        let backend = strict_backend();
+        let values = [
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(2.0),
+            ScalarValue::F64(3.0),
+            ScalarValue::F64(4.0),
+            ScalarValue::F64(5.0),
+            ScalarValue::F64(6.0),
+        ];
+        let expected = [
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(2.0),
+            ScalarValue::F64(3.0),
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(2.0),
+            ScalarValue::F64(3.0),
+            ScalarValue::F64(4.0),
+            ScalarValue::F64(5.0),
+            ScalarValue::F64(6.0),
+            ScalarValue::F64(4.0),
+            ScalarValue::F64(5.0),
+            ScalarValue::F64(6.0),
+        ];
+
+        for order in [
+            MemoryOrder::C,
+            MemoryOrder::F,
+            MemoryOrder::A,
+            MemoryOrder::K,
+        ] {
+            let array = from_slice(
+                &backend,
+                &values,
+                &CreationRequest {
+                    shape: Shape::new(vec![2, 1, 3]),
+                    dtype: DType::Float64,
+                    order,
+                },
+            )
+            .expect("rank-3 source should build");
+            let broadcast = backend
+                .broadcast_to(&array, &Shape::new(vec![2, 2, 3]))
+                .expect("middle singleton should broadcast");
+
+            assert_eq!(broadcast.shape(), &Shape::new(vec![2, 2, 3]));
+            assert_eq!(broadcast.dtype(), DType::Float64);
+            assert_eq!(broadcast.order(), order);
+            assert_eq!(broadcast.values(), &expected);
+        }
     }
 
     #[test]
