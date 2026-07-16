@@ -22523,3 +22523,25 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   fail-closed routing, and cancelled builds are routing evidence, not the reject; the reject rests exclusively on
   the returned same-binary A/B ratio. No second A/B, `release-perf`/LTO build, local Cargo fallback, `force_local`,
   stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-b5m5b`.
+
+## 2026-07-16 - BlackThrush (cod) - REJECT parallel FFTLog bias maps (1.133x, IN-FLOOR)
+
+- Negative-ledger-first `bv --robot-triage` (data hash `4d0a4a5d89b88f07`) exposed no unclaimed perf
+  recommendation. The requested signal route was abandoned and restored without claiming its late result. The
+  already-worked ndimage and spatial targets then proved cold and were cancelled at about two minutes without
+  producing timings, so this pass moved to the smaller `fsci-fft` graph already built by the session's signal
+  dependency closure. No prior ledger row covered the biased FFTLog element maps.
+- An untouched strict-remote, non-LTO release profile of `fht` at `n=200,000`, `bias=0.3` on `vmi1264463`
+  measured **21.858 ms** versus **17.479 ms** with `bias=0`, attributing **4.378 ms (20.0%)** to the two serial
+  bias/unbias `exp` maps. ONE candidate split only those independent maps into scoped index chunks for both `fht`
+  and `ifht`; every element retained its original expression and the coefficient/FFT paths were unchanged.
+- The scored foreground A/B ran the literal serial and candidate maps from one non-LTO release binary on strict-
+  remote worker `vmi1293453`, with five alternating iterations and an A/A null control. Full `fht` output had
+  **0 bit mismatches**. The best observed arm times were **13.74 ms serial** and **12.83 ms parallel**, while the
+  paired-ratio median was **1.133x**; however, the A/A ratios spanned **[1.064x, 1.541x]** and arm CVs were
+  **9.4% / 5.3%**, so the candidate did not separate from the measured noise floor.
+- Disposition: REJECT. Production, test, export, and benchmark hunks were manually restored; exact-file diff
+  confirms no `fsci-fft` source or harness remains changed. A repeated `vmi1264463` release-cache eviction and an
+  `ovh-b` `blake3` build-script `SIGILL` only caused worker switches and are not evidence. No second scored A/B,
+  LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was used.
+  Bead: `frankenscipy-8md59`.
