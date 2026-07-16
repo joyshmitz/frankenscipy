@@ -18,8 +18,19 @@ use crate::validation::{
 };
 use fsci_runtime::RuntimeMode;
 use nalgebra::{Complex, DMatrix, DVector};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const NEWTON_MAXITER: usize = 6;
+
+/// When `true`, the simplified-Newton corrector re-allocates its `yi`/`rhs`/`dz_scaled`
+/// scratch (and zero-fills `fstage`) on EVERY iteration — the ORIG behaviour, kept only
+/// for the same-binary A/B. When `false` (default), those buffers are hoisted above the
+/// Newton loop and reused (every entry is overwritten before use, so the trajectory is
+/// bit-identical). Stiff correctors run thousands of times per integration and small-n
+/// stiff systems are malloc-bound, so eliminating the per-iteration allocations is a
+/// monotone win. `#[doc(hidden)]`.
+#[doc(hidden)]
+pub static RADAU_FORCE_PER_ITER_ALLOC: AtomicBool = AtomicBool::new(false);
 const MIN_FACTOR: f64 = 0.2;
 const MAX_FACTOR: f64 = 8.0;
 const ERR_EXP: f64 = -0.25; // embedded estimator is order 3 → 1/(3+1).
@@ -505,12 +516,33 @@ impl RadauSolver {
             let mut converged = false;
             let mut dz_norm_old: Option<f64> = None;
             let mut bad = false;
+            // Newton-corrector scratch hoisted out of the k-loop and reused: every entry
+            // of `yi`/`rhs`/`dz_scaled` is overwritten before it is read each iteration, so
+            // reuse is bit-identical while dropping ~(3·yi + rhs + dz_scaled + 3·fstage-init)
+            // allocations per Newton iteration. `RADAU_FORCE_PER_ITER_ALLOC` restores the
+            // per-iteration allocation for the same-binary A/B.
+            let force_alloc = RADAU_FORCE_PER_ITER_ALLOC.load(Ordering::Relaxed);
+            let mut yi = vec![0.0; n];
+            let mut rhs = DVector::<f64>::zeros(3 * n);
+            let mut dz_scaled = vec![0.0; 3 * n];
             for k in 0..NEWTON_MAXITER {
-                // Stage derivatives F_i = f(t + c_i h, y + Z_i).
-                let mut fstage = [vec![0.0; n], vec![0.0; n], vec![0.0; n]];
+                if force_alloc {
+                    yi = vec![0.0; n];
+                    rhs = DVector::<f64>::zeros(3 * n);
+                    dz_scaled = vec![0.0; 3 * n];
+                }
+                // Stage derivatives F_i = f(t + c_i h, y + Z_i). Each `fstage[i]` is replaced
+                // wholesale by the `fun` return below, so start empty (the zero-fill is dead).
+                let mut fstage: [Vec<f64>; 3] = if force_alloc {
+                    [vec![0.0; n], vec![0.0; n], vec![0.0; n]]
+                } else {
+                    [Vec::new(), Vec::new(), Vec::new()]
+                };
                 let mut finite = true;
                 for i in 0..3 {
-                    let yi: Vec<f64> = (0..n).map(|j| self.y[j] + z[i][j]).collect();
+                    for (j, yij) in yi.iter_mut().enumerate() {
+                        *yij = self.y[j] + z[i][j];
+                    }
                     let fi = fun(t_new - h + self.c[i] * h, &yi);
                     self.nfev += 1;
                     if !fi.iter().all(|v| v.is_finite()) {
@@ -523,7 +555,6 @@ impl RadauSolver {
                     break;
                 }
                 // Residual G_i = Z_i − h Σ_j A_ij F_j  (we solve M·ΔZ = −G).
-                let mut rhs = DVector::<f64>::zeros(3 * n);
                 for i in 0..3 {
                     for j in 0..n {
                         let mut acc = z[i][j];
@@ -544,7 +575,6 @@ impl RadauSolver {
                     bad = true;
                     break;
                 };
-                let mut dz_scaled = vec![0.0; 3 * n];
                 for i in 0..3 {
                     for j in 0..n {
                         let d = dz[i * n + j];
