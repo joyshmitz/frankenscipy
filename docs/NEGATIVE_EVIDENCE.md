@@ -22600,3 +22600,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   routing evidence only; the reject rests exclusively on the returned same-binary A/B. No second scored A/B,
   LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was used.
   Bead: `frankenscipy-3gmtu`.
+
+## 2026-07-16 - BlackThrush (cod) - WIN defer SpMV worker query below serial gate (40.44x)
+
+- Negative-ledger-first `bv --robot-triage` (data hash `bb1a588288ef8c14`) exposed only stale or already-landed
+  sparse perf beads, so this pass opened the fresh `frankenscipy-7k7ke` seam. The untouched non-LTO release
+  profile on strict-remote worker `vmi1153651` traced the existing 100x100/500-nnz Criterion row and observed
+  **1,202 `sched_getaffinity` calls**: `spmv_csr` queried `available_parallelism()` once per invocation before
+  checking the static `nnz < 1,048,576 || vector.len() < 65,536` serial gate.
+- ONE lever moved that query behind the gate. Below either threshold (or under the existing force-serial proof
+  switch), `cores` is now set to one directly; above both thresholds, the former query, row cap, and parallel
+  routing are unchanged. The serial row-dot arithmetic and result construction are untouched.
+- The sole scored foreground A/B ran both arms from one strict-remote, non-LTO release binary on `vmi1153651`.
+  The query-first arm reproduced the former `available_parallelism().unwrap_or(1).min(rows)` operation immediately
+  before the candidate call; the harness asserted `f64::to_bits` equality for every output before timing. With 10
+  samples, 100 ms warm-up, and 500 ms requested measurement per arm, skip-query measured
+  **[985.64 ns, 1.0880 us, 1.1775 us]** versus **[40.837 us, 43.996 us, 48.683 us]** query-first: **40.44x
+  centered**, with a conservative **[34.68x, 49.39x]** ratio envelope.
+- Disposition: KEEP. The optimization removes only an OS affinity query from inputs that cannot enter the parallel
+  branch. RCH repeatedly reaped pooled targets between jobs, so the scored invocation performed its untimed Cargo
+  build and capped only the benchmark binary; no cross-worker timing, LTO/`release-perf`, local Cargo fallback,
+  `force_local`, stash mutation, or unrelated-file edit entered the result. Bead: `frankenscipy-7k7ke`.

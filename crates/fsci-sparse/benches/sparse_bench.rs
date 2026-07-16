@@ -287,6 +287,45 @@ fn bench_spmv(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_spmv_query_gate_ab(c: &mut Criterion) {
+    let csr = make_random_csr(100, 0.05);
+    let vector = make_vector(100);
+
+    let candidate = spmv_csr(&csr, &vector).expect("candidate spmv");
+    let queried_cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(csr.shape().rows.max(1));
+    black_box(queried_cores);
+    let query_first = spmv_csr(&csr, &vector).expect("query-first spmv");
+    assert!(
+        candidate
+            .iter()
+            .zip(&query_first)
+            .all(|(a, b)| a.to_bits() == b.to_bits())
+    );
+
+    let mut group = c.benchmark_group("spmv_query_gate_ab");
+    group.bench_function("candidate_skip_query", |b| {
+        b.iter(|| {
+            let result = spmv_csr(black_box(&csr), black_box(&vector)).expect("candidate spmv");
+            black_box(result);
+        });
+    });
+    group.bench_function("baseline_query_first", |b| {
+        b.iter(|| {
+            let cores = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(csr.shape().rows.max(1));
+            black_box(cores);
+            let result = spmv_csr(black_box(&csr), black_box(&vector)).expect("query-first spmv");
+            black_box(result);
+        });
+    });
+    group.finish();
+}
+
 fn bench_format_conversion(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_format_conversion");
 
@@ -1122,6 +1161,7 @@ criterion_group!(
     bench_block_diag,
     bench_csr_construction,
     bench_spmv,
+    bench_spmv_query_gate_ab,
     bench_format_conversion,
     bench_arithmetic,
     bench_eye,

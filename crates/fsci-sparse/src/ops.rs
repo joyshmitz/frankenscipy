@@ -404,17 +404,22 @@ pub fn spmv_csr(matrix: &CsrMatrix, vector: &[f64]) -> SparseResult<Vec<f64>> {
         sum
     };
 
-    let cores = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(1)
-        .min(rows.max(1));
     let force_serial = SPMV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let serial_work = force_serial || data.len() < 1_048_576 || vector.len() < 65_536;
+    let cores = if serial_work {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(rows.max(1))
+    };
     // Fan out only when BOTH the total work is large (spmv is memory-bound, ~2
     // flops/nnz) AND the gathered `vector` is big enough to spill cache — that is when
     // the serial gather turns latency-bound and parallel MLP pays. Measured: nnz=160k
     // with a 160 KB (L2-resident) vector LOSES 0.2× (spawn dominates), while nnz≥1M
     // with a ≥800 KB vector WINS 1.4–2.6×. Below the gate: unchanged serial loop.
-    if cores <= 1 || force_serial || data.len() < 1_048_576 || vector.len() < 65_536 {
+    if cores <= 1 {
         for (row, r) in result.iter_mut().enumerate() {
             *r = row_dot(row);
         }
