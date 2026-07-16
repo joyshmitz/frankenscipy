@@ -22447,3 +22447,27 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `fsci-linalg` `needless_range_loop` at `crates/fsci-linalg/src/lib.rs:9431`; no unrelated lint was changed. No
   `release-perf`/LTO build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was used. Bead:
   `frankenscipy-c38ra`.
+
+## 2026-07-16 - BlackThrush (cod) - REJECT direct binary-erosion bit-pack input (1.005x centered)
+
+- Negative-ledger-first `bv --robot-triage` (data hash `96f3e9aa21774b98`) exposed only peer-owned or
+  stale-landed perf work. A first fresh cluster candidate reached no timed path because two workers repeatedly
+  evicted their release caches, so it produced no reject; this pass pivoted to the distinct `fsci-ndimage` binary
+  morphology subsystem. An untouched strict-remote, non-LTO release profile of
+  `binary_morph/erosion_256x256/7` measured **[377.95, 431.30, 469.42] us**. Source attribution found the zero-origin
+  2-D path materializing a full booleanized `NdArray` immediately before the existing bit-pack kernel reread every
+  value with the identical `!= 0.0` predicate.
+- ONE candidate fed the original array directly to `binary_erode_bitpack_2d` only for its existing 2-D,
+  `size < 64`, all-zero-origin gate; every fallback remained unchanged. Before timing, the same-binary harness
+  asserted exact output equality against the literal former booleanize-then-bitpack path.
+- The scored foreground A/B ran both arms from one non-LTO release binary on strict-remote worker `vmi1152480`.
+  Its cold compile completed untimed before Criterion applied a 200 ms warm-up and 1 s requested measurement to
+  each arm (10 samples). Direct input measured **[175.15, 188.28, 198.42] us** versus
+  **[179.34, 189.23, 199.47] us** for the former booleanized path: only **1.0050x centered** and **0.50% lower
+  centered time**, with heavily overlapping intervals and a **0.9038x conservative** edge ratio
+  (`179.34 / 198.42`).
+- Disposition: REJECT below the noise floor. Production, regression-test, and benchmark hunks were manually
+  restored; exact-file diff confirms no ndimage source remains changed. Earlier cache eviction on `vmi1227854`
+  and a fail-closed `RCH-E410` preflight on `vmi1149989` are routing evidence, not the reject; the reject rests only
+  on the returned same-binary A/B. No second A/B, `release-perf`/LTO build, local Cargo fallback, `force_local`,
+  stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-ujs4s`.
