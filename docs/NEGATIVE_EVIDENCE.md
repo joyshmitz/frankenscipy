@@ -22498,3 +22498,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   routing evidence, not the reject; the reject rests exclusively on the returned same-binary A/B ratio. No second
   A/B, `release-perf`/LTO build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was
   used. Bead: `frankenscipy-gv3mn`.
+
+## 2026-07-16 - BlackThrush (cod) - REJECT ordered sparse-distance triplet emission (1.014x centered)
+
+- Negative-ledger-first `bv --robot-triage` (data hash `d7db8840bd228ba2`) exposed only peer-owned or
+  stale-landed perf work, so this pass pivoted to the fresh residual left by the prior KDTree sparse-distance
+  parallel-collection keep. An untouched strict-remote, non-LTO release profile of
+  `sparse_distance_matrix/sdm/5000` measured **[59.726, 65.373, 73.818] ms** on `vmi1293453`. Source attribution
+  found heap-order row collection followed by a global `(row,col)` triplet sort; the existing ledger explicitly
+  identified that sort and DOK assembly as the post-parallelization residual.
+- ONE candidate remapped `self` nodes into original row-index order, traversed contiguous ordered chunks, retained
+  each `query_ball_point` result's existing sorted column order, and removed the final global sort. Distance
+  arithmetic and DOK construction were unchanged. Before timing, the same-binary harness reconstructed the literal
+  former heap-order-plus-sort path and asserted complete DOK output equality on the scored fixture.
+- The target received a successful untimed strict-remote `--profile release --no-run` warm-up without a shell
+  timeout. Repeated release-cache eviction and worker saturation triggered cancellation and worker switching; the
+  sole scored foreground A/B ultimately ran both arms from one non-LTO release binary on `vmi1153651`. With 10
+  samples, 200 ms warm-up, and 1 s requested measurement per arm, the former path measured
+  **[107.99, 119.93, 134.75] ms** versus **[108.45, 118.23, 131.46] ms** for ordered emission: only
+  **1.0144x centered** and **1.42% lower centered time**, with heavily overlapping intervals and a
+  **0.8215x conservative** edge ratio (`107.99 / 131.46`).
+- Disposition: REJECT below the noise floor. Production, regression-test, and benchmark hunks were manually
+  restored; exact-file diff confirms no `fsci-spatial` source or benchmark remains changed. Cache evictions,
+  fail-closed routing, and cancelled builds are routing evidence, not the reject; the reject rests exclusively on
+  the returned same-binary A/B ratio. No second A/B, `release-perf`/LTO build, local Cargo fallback, `force_local`,
+  stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-b5m5b`.
