@@ -53,7 +53,10 @@ fn main() {
             lam_c = eig[k];
         }
     }
-    println!("Radau A eigenvalues: real={lam_real:.6}, complex={:.6}{:+.6}i", lam_c.re, lam_c.im);
+    println!(
+        "Radau A eigenvalues: real={lam_real:.6}, complex={:.6}{:+.6}i",
+        lam_c.re, lam_c.im
+    );
 
     for &n in &[10usize, 20, 40, 80, 160] {
         let mut r = Lcg(0x1234 ^ n as u64);

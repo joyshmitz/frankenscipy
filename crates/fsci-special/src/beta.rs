@@ -893,7 +893,13 @@ fn invert_positive_param(target: f64, g: impl Fn(f64) -> f64) -> f64 {
     } else {
         (target - glo, target - ghi)
     };
-    let f = |x: f64| if increasing { g(x) - target } else { target - g(x) };
+    let f = |x: f64| {
+        if increasing {
+            g(x) - target
+        } else {
+            target - g(x)
+        }
+    };
     illinois_root(f, lo, hi, flo, fhi)
 }
 
@@ -995,7 +1001,9 @@ pub fn nctdtr(df: f64, nc: f64, t: f64) -> f64 {
     // the loop's early-exit), so the summed CDF stays exact to ~1e-14.
     let ln_x = x.ln();
     let ln_1mx = (-x).ln_1p();
-    let t_seed = |a: f64| (a * ln_x + half_df * ln_1mx - a.ln() - (lg(a) + lg(half_df) - lg(a + half_df))).exp();
+    let t_seed = |a: f64| {
+        (a * ln_x + half_df * ln_1mx - a.ln() - (lg(a) + lg(half_df) - lg(a + half_df))).exp()
+    };
     let ap0 = j0 + 0.5;
     let aq0 = j0 + 1.0;
     let ip0 = btdtr(ap0, half_df, x);
@@ -1197,8 +1205,10 @@ pub fn nctdtr_many(df: f64, nc: f64, t: &[f64]) -> Vec<f64> {
 /// See [`stdtrit_many`].
 #[must_use]
 pub fn ncfdtri_many(dfn: f64, dfd: f64, nc: f64, p: &[f64]) -> Vec<f64> {
-    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(ncfdtri(dfn, dfd, nc, p[i])))
-        .expect("ncfdtri is infallible")
+    par_map_indices(p.len(), |i| {
+        Ok::<f64, SpecialError>(ncfdtri(dfn, dfd, nc, p[i]))
+    })
+    .expect("ncfdtri is infallible")
 }
 
 /// Vectorized inverse noncentral-F CDF w.r.t. non-centrality,
@@ -1206,8 +1216,10 @@ pub fn ncfdtri_many(dfn: f64, dfd: f64, nc: f64, p: &[f64]) -> Vec<f64> {
 /// [`ncfdtri_many`].
 #[must_use]
 pub fn ncfdtrinc_many(dfn: f64, dfd: f64, p: &[f64], f: f64) -> Vec<f64> {
-    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(ncfdtrinc(dfn, dfd, p[i], f)))
-        .expect("ncfdtrinc is infallible")
+    par_map_indices(p.len(), |i| {
+        Ok::<f64, SpecialError>(ncfdtrinc(dfn, dfd, p[i], f))
+    })
+    .expect("ncfdtrinc is infallible")
 }
 
 /// Vectorized inverse noncentral-t CDF w.r.t. non-centrality,
@@ -1224,8 +1236,10 @@ pub fn nctdtrinc_many(df: f64, p: &[f64], t: f64) -> Vec<f64> {
 /// SciPy ufunc; the parallel fan wins. See [`stdtrit_many`].
 #[must_use]
 pub fn ncfdtridfd_many(dfn: f64, p: &[f64], nc: f64, f: f64) -> Vec<f64> {
-    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(ncfdtridfd(dfn, p[i], nc, f)))
-        .expect("ncfdtridfd is infallible")
+    par_map_indices(p.len(), |i| {
+        Ok::<f64, SpecialError>(ncfdtridfd(dfn, p[i], nc, f))
+    })
+    .expect("ncfdtridfd is infallible")
 }
 
 /// Vectorized inverse noncentral-F CDF w.r.t. numerator dof,
@@ -1233,8 +1247,10 @@ pub fn ncfdtridfd_many(dfn: f64, p: &[f64], nc: f64, f: f64) -> Vec<f64> {
 /// [`ncfdtridfd_many`].
 #[must_use]
 pub fn ncfdtridfn_many(p: &[f64], dfd: f64, nc: f64, f: f64) -> Vec<f64> {
-    par_map_indices(p.len(), |i| Ok::<f64, SpecialError>(ncfdtridfn(p[i], dfd, nc, f)))
-        .expect("ncfdtridfn is infallible")
+    par_map_indices(p.len(), |i| {
+        Ok::<f64, SpecialError>(ncfdtridfn(p[i], dfd, nc, f))
+    })
+    .expect("ncfdtridfn is infallible")
 }
 
 /// Vectorized inverse noncentral-t CDF w.r.t. dof, `nctdtridf(p, nc, t)`, over
@@ -2477,7 +2493,13 @@ fn invert_monotone_positive(cdf: impl Fn(f64) -> f64, target: f64, increasing: b
         (target - lo_value, target - hi_value)
     };
     illinois_root(
-        |x| if increasing { cdf(x) - target } else { target - cdf(x) },
+        |x| {
+            if increasing {
+                cdf(x) - target
+            } else {
+                target - cdf(x)
+            }
+        },
         lo,
         hi,
         glo,

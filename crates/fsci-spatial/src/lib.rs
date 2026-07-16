@@ -1660,7 +1660,11 @@ fn cdist_pack_bits(x: &[Vec<f64>], dim: usize) -> (Vec<Vec<u64>>, Vec<u32>) {
 /// `popcount(a∨b) = ones_a + ones_b − popcount(a∧b)`; 0 when the union is empty.
 #[inline]
 fn jaccard_bits_pair(a: &[u64], ones_a: u32, b: &[u64], ones_b: u32) -> f64 {
-    let ntt: u32 = a.iter().zip(b).map(|(&aw, &bw)| (aw & bw).count_ones()).sum();
+    let ntt: u32 = a
+        .iter()
+        .zip(b)
+        .map(|(&aw, &bw)| (aw & bw).count_ones())
+        .sum();
     let n_union = ones_a + ones_b - ntt;
     if n_union == 0 {
         0.0

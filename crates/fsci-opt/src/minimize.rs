@@ -201,23 +201,24 @@ where
 
     let chunk = nrows.div_ceil(nthreads);
     let solve_one = &solve_one;
-    let chunk_results: Vec<Vec<Result<OptimizeResult, OptError>>> = std::thread::scope(|scope| {
-        (0..nthreads)
-            .filter_map(|t| {
-                let lo = t * chunk;
-                if lo >= nrows {
-                    return None;
-                }
-                let hi = (lo + chunk).min(nrows);
-                Some(scope.spawn(move || {
-                    (lo..hi).map(|i| solve_one(&x0_rows[i])).collect::<Vec<_>>()
-                }))
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(|h| h.join().expect("minimize_many worker panicked"))
-            .collect()
-    });
+    let chunk_results: Vec<Vec<Result<OptimizeResult, OptError>>> =
+        std::thread::scope(|scope| {
+            (0..nthreads)
+                .filter_map(|t| {
+                    let lo = t * chunk;
+                    if lo >= nrows {
+                        return None;
+                    }
+                    let hi = (lo + chunk).min(nrows);
+                    Some(scope.spawn(move || {
+                        (lo..hi).map(|i| solve_one(&x0_rows[i])).collect::<Vec<_>>()
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("minimize_many worker panicked"))
+                .collect()
+        });
 
     let mut out = Vec::with_capacity(nrows);
     for cr in chunk_results {
@@ -3087,7 +3088,9 @@ where
                     }
                     let hi = (lo + chunk).min(nrows);
                     Some(scope.spawn(move || {
-                        (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                        (lo..hi)
+                            .map(|i| solve_one(&param_rows[i]))
+                            .collect::<Vec<_>>()
                     }))
                 })
                 .collect::<Vec<_>>()
@@ -4942,10 +4945,20 @@ mod tests {
             let single = minimize_scalar(|x| f(x, p), bracket, opts).expect("single");
             let many = batched[i].as_ref().expect("batched member");
             assert_eq!(many.x.to_bits(), single.x.to_bits(), "x mismatch param {i}");
-            assert_eq!(many.fun.to_bits(), single.fun.to_bits(), "fun mismatch param {i}");
+            assert_eq!(
+                many.fun.to_bits(),
+                single.fun.to_bits(),
+                "fun mismatch param {i}"
+            );
             assert_eq!(many.success, single.success, "success mismatch param {i}");
         }
-        assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.success).unwrap_or(false)).count() == nrows);
+        assert!(
+            batched
+                .iter()
+                .filter(|r| r.as_ref().map(|x| x.success).unwrap_or(false))
+                .count()
+                == nrows
+        );
         assert!(minimize_scalar_many(f, bracket, &[], opts).is_empty());
     }
 
@@ -4989,7 +5002,9 @@ mod tests {
             -2.0 + 4.0 * ((s >> 11) as f64 / (1u64 << 53) as f64)
         };
         let nrows = 10usize; // crosses the serial->parallel gate
-        let starts: Vec<Vec<f64>> = (0..nrows).map(|_| (0..4).map(|_| rng()).collect()).collect();
+        let starts: Vec<Vec<f64>> = (0..nrows)
+            .map(|_| (0..4).map(|_| rng()).collect())
+            .collect();
 
         let batched = minimize_many(&rosen, &starts, options);
         assert_eq!(batched.len(), nrows);

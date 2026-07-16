@@ -20,15 +20,13 @@ pub use linesearch::{
 pub use minimize::{
     MinimizeScalarOptions, MinimizeScalarResult, OptCaspDecision, OptCaspProblem, bfgs, cg_pr_plus,
     get_optimize_traces, lbfgsb, minimize, minimize_many, minimize_scalar, minimize_scalar_many,
-    minimize_with_audit,
-    nelder_mead, newton_cg, powell, select_minimize_method, trust_exact,
+    minimize_with_audit, nelder_mead, newton_cg, powell, select_minimize_method, trust_exact,
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, anderson,
-    root_many,
     bisect, brenth, brentq, brentq_many, broyden1, broyden2, df_sane, fsolve, halley, lm_root,
-    newton, newton_many,
-    newton_krylov, newton_scalar, ridder, root, root_scalar, secant, secant_many, toms748,
+    newton, newton_krylov, newton_many, newton_scalar, ridder, root, root_many, root_scalar,
+    secant, secant_many, toms748,
 };
 pub use types::{
     Bound, Bounds, ConvergenceStatus, GradientFunc, LinearConstraint, MinimizeOptions,
@@ -4052,7 +4050,13 @@ fn nnls_chol_refactor(gram: &[f64], n: usize, pidx: &[usize], lflat: &mut [f64])
 /// Extend the Cholesky factor `lflat` (currently `p×p` for `pidx`) by one column for the new
 /// passive index `jnew` (rank-1 update). Writes the new row `p` in place. Returns `false` if the
 /// new column is (numerically) dependent on the passive set (non-positive Schur pivot). O(p²).
-fn nnls_chol_add_col(gram: &[f64], n: usize, pidx: &[usize], jnew: usize, lflat: &mut [f64]) -> bool {
+fn nnls_chol_add_col(
+    gram: &[f64],
+    n: usize,
+    pidx: &[usize],
+    jnew: usize,
+    lflat: &mut [f64],
+) -> bool {
     let p = pidx.len();
     // Forward-solve L v = gram[pidx, jnew]; store v directly into the new row (row p).
     for k in 0..p {
@@ -6010,10 +6014,9 @@ mod tests {
         MinimizeOptions, NonlinearConstraint, OptError, OptimizeMethod, RootOptions, approx_fprime,
         basinhopping, bracket, brent_minimize, brute, check_grad, cobyla, derivative,
         differential_evolution, differential_evolution_constrained, dual_annealing, fixed_point,
-        fixed_point_many,
-        golden, gradient_descent, hessian, isotonic_regression, jacobian, linear_sum_assignment,
-        linprog, milp, minimize_scalar_bounded, minimize_trisection, nnls, numerical_gradient,
-        numerical_hessian, numerical_jacobian, projected_gradient_descent, pso,
+        fixed_point_many, golden, gradient_descent, hessian, isotonic_regression, jacobian,
+        linear_sum_assignment, linprog, milp, minimize_scalar_bounded, minimize_trisection, nnls,
+        numerical_gradient, numerical_hessian, numerical_jacobian, projected_gradient_descent, pso,
         quadratic_assignment, rosen, rosen_der, rosen_hess, rosen_hess_prod, shgo,
         transpose_matrix,
     };

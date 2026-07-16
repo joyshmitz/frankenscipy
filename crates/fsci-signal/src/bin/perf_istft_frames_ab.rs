@@ -5,7 +5,7 @@
 // transform is a faithful proxy of the private ifft_func_onesided via the public
 // fsci_fft::fft. BYTE-IDENTICAL: deterministic per-frame transform + unchanged
 // OLA order. Same process / same worker => no cross-worker noise; outputs equal.
-use fsci_fft::{fft, Complex64, FftOptions};
+use fsci_fft::{Complex64, FftOptions, fft};
 use std::time::Instant;
 
 fn iframe(col: &[Complex64]) -> Vec<f64> {
@@ -38,17 +38,23 @@ fn istft_parallel(
     let n = if p > 0 { (p - 1) * hop + m } else { 0 };
     let chunk = p.div_ceil(nthreads);
     let chunks: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..nthreads)
-            .filter_map(|t| {
-                let c0 = t * chunk;
-                if c0 >= p {
-                    return None;
-                }
-                let c1 = (c0 + chunk).min(p);
-                Some(scope.spawn(move || frames[c0..c1].iter().map(|c| iframe(c)).collect::<Vec<_>>()))
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().expect("worker")).collect()
+        let handles: Vec<_> =
+            (0..nthreads)
+                .filter_map(|t| {
+                    let c0 = t * chunk;
+                    if c0 >= p {
+                        return None;
+                    }
+                    let c1 = (c0 + chunk).min(p);
+                    Some(scope.spawn(move || {
+                        frames[c0..c1].iter().map(|c| iframe(c)).collect::<Vec<_>>()
+                    }))
+                })
+                .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("worker"))
+            .collect()
     });
     let mut segs = Vec::with_capacity(p);
     for c in chunks {

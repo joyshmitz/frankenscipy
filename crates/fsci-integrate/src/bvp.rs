@@ -250,7 +250,9 @@ where
                 }
                 let hi = (lo + chunk).min(nrows);
                 Some(scope.spawn(move || {
-                    (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                    (lo..hi)
+                        .map(|i| solve_one(&param_rows[i]))
+                        .collect::<Vec<_>>()
                 }))
             })
             .collect::<Vec<_>>()
@@ -425,10 +427,19 @@ mod tests {
         for (i, p) in params.iter().enumerate() {
             let mut local_f = |t: f64, y: &[f64]| f(t, y, p);
             let local_bc = |ya: &[f64], yb: &[f64]| bc(ya, yb, p);
-            let single = solve_bvp(&mut local_f, &local_bc, (0.0, 1.0), &[0.0, 0.0], opts.clone())
-                .expect("single solve");
+            let single = solve_bvp(
+                &mut local_f,
+                &local_bc,
+                (0.0, 1.0),
+                &[0.0, 0.0],
+                opts.clone(),
+            )
+            .expect("single solve");
             let many = batched[i].as_ref().expect("batched member");
-            assert_eq!(many.converged, single.converged, "converged mismatch param {i}");
+            assert_eq!(
+                many.converged, single.converged,
+                "converged mismatch param {i}"
+            );
             assert_eq!(many.t.len(), single.t.len(), "mesh size mismatch param {i}");
             for (a, b) in many.t.iter().zip(&single.t) {
                 assert_eq!(a.to_bits(), b.to_bits(), "t mismatch param {i}");
@@ -440,7 +451,13 @@ mod tests {
             }
         }
         // The sweep exercises genuine converging solves.
-        assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() >= nrows / 2);
+        assert!(
+            batched
+                .iter()
+                .filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false))
+                .count()
+                >= nrows / 2
+        );
         assert!(solve_bvp_many(f, bc, (0.0, 1.0), &[0.0, 0.0], &[], opts).is_empty());
     }
 
@@ -530,14 +547,8 @@ mod tests {
         for bad_y0 in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let mut f = |_t: f64, _y: &[f64]| vec![0.0];
             let bc = |ya: &[f64], _yb: &[f64]| vec![ya[0]];
-            let err = solve_bvp(
-                &mut f,
-                &bc,
-                (0.0, 1.0),
-                &[bad_y0],
-                BvpOptions::default(),
-            )
-            .expect_err("non-finite y_guess");
+            let err = solve_bvp(&mut f, &bc, (0.0, 1.0), &[bad_y0], BvpOptions::default())
+                .expect_err("non-finite y_guess");
             assert!(matches!(err, BvpError::InvalidArgument(msg) if msg.contains("y_guess")));
         }
     }
@@ -593,8 +604,7 @@ mod tests {
             max_iter: 0,
             ..BvpOptions::default()
         };
-        let err = solve_bvp(&mut f, &bc, (0.0, 1.0), &[0.0], options)
-            .expect_err("zero max_iter");
+        let err = solve_bvp(&mut f, &bc, (0.0, 1.0), &[0.0], options).expect_err("zero max_iter");
         assert!(matches!(
             err,
             BvpError::InvalidArgument(msg) if msg.contains("max_iter")
@@ -605,34 +615,18 @@ mod tests {
     fn bvp_rejects_short_boundary_residual() {
         let mut f = |_t: f64, _y: &[f64]| vec![0.0, 0.0];
         let bc = |_ya: &[f64], _yb: &[f64]| vec![0.0];
-        let err = solve_bvp(
-            &mut f,
-            &bc,
-            (0.0, 1.0),
-            &[0.0, 0.0],
-            BvpOptions::default(),
-        )
-        .expect_err("short boundary residual");
-        assert!(
-            matches!(err, BvpError::InvalidArgument(msg) if msg.contains("expected 2, got 1"))
-        );
+        let err = solve_bvp(&mut f, &bc, (0.0, 1.0), &[0.0, 0.0], BvpOptions::default())
+            .expect_err("short boundary residual");
+        assert!(matches!(err, BvpError::InvalidArgument(msg) if msg.contains("expected 2, got 1")));
     }
 
     #[test]
     fn bvp_rejects_long_boundary_residual() {
         let mut f = |_t: f64, _y: &[f64]| vec![0.0, 0.0];
         let bc = |_ya: &[f64], _yb: &[f64]| vec![0.0, 0.0, 0.0];
-        let err = solve_bvp(
-            &mut f,
-            &bc,
-            (0.0, 1.0),
-            &[0.0, 0.0],
-            BvpOptions::default(),
-        )
-        .expect_err("long boundary residual");
-        assert!(
-            matches!(err, BvpError::InvalidArgument(msg) if msg.contains("expected 2, got 3"))
-        );
+        let err = solve_bvp(&mut f, &bc, (0.0, 1.0), &[0.0, 0.0], BvpOptions::default())
+            .expect_err("long boundary residual");
+        assert!(matches!(err, BvpError::InvalidArgument(msg) if msg.contains("expected 2, got 3")));
     }
 
     #[test]
@@ -640,14 +634,8 @@ mod tests {
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let mut f = |_t: f64, _y: &[f64]| vec![0.0, 0.0];
             let bc = move |_ya: &[f64], _yb: &[f64]| vec![0.0, bad];
-            let err = solve_bvp(
-                &mut f,
-                &bc,
-                (0.0, 1.0),
-                &[0.0, 0.0],
-                BvpOptions::default(),
-            )
-            .expect_err("non-finite boundary residual");
+            let err = solve_bvp(&mut f, &bc, (0.0, 1.0), &[0.0, 0.0], BvpOptions::default())
+                .expect_err("non-finite boundary residual");
             assert!(
                 matches!(err, BvpError::InvalidArgument(msg) if msg.contains("residual values"))
             );

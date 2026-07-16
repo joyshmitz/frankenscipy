@@ -1988,7 +1988,10 @@ pub fn lgmres(
         });
     }
     let x0_has_non_finite = x0.is_some_and(|initial| initial.iter().any(|v| !v.is_finite()));
-    if a.data().iter().any(|v| !v.is_finite()) || b.iter().any(|v| !v.is_finite()) || x0_has_non_finite {
+    if a.data().iter().any(|v| !v.is_finite())
+        || b.iter().any(|v| !v.is_finite())
+        || x0_has_non_finite
+    {
         return Err(SparseError::NonFiniteInput {
             message: "matrix/rhs/initial guess contains NaN or Inf".to_string(),
         });
@@ -3578,8 +3581,7 @@ fn set_or_check_stencil_value(reference: &mut Option<f64>, value: f64) -> bool {
 
 fn square_side(n: usize) -> Option<usize> {
     let root = (n as f64).sqrt() as usize;
-    (root.saturating_sub(1)..=root.saturating_add(1))
-        .find(|&side| side.saturating_mul(side) == n)
+    (root.saturating_sub(1)..=root.saturating_add(1)).find(|&side| side.saturating_mul(side) == n)
 }
 
 fn spsolve_square_grid_dirichlet_pattern(
@@ -3595,10 +3597,9 @@ fn spsolve_square_grid_dirichlet_pattern(
     if side < SPSOLVE_SQUARE_GRID_DIRICHLET_MIN_SIDE || bandwidth != side {
         return None;
     }
-    let expected_nnz = n
-        + 4usize
-            .saturating_mul(side)
-            .saturating_mul(side.saturating_sub(1));
+    let expected_nnz = n + 4usize
+        .saturating_mul(side)
+        .saturating_mul(side.saturating_sub(1));
     if a.nnz() != expected_nnz {
         return None;
     }
@@ -4434,7 +4435,14 @@ pub fn structural_rank(graph: &CsrMatrix) -> usize {
         for u in 0..n {
             if pair_u[u] == NIL {
                 hopcroft_karp_dfs(
-                    u, indptr, indices, m, &mut pair_u, &mut pair_v, &mut dist, dist_nil,
+                    u,
+                    indptr,
+                    indices,
+                    m,
+                    &mut pair_u,
+                    &mut pair_v,
+                    &mut dist,
+                    dist_nil,
                 );
             }
         }
@@ -5867,10 +5875,7 @@ pub fn betweenness_centrality(graph: &CsrMatrix) -> Vec<f64> {
     // scratch (each thread allocates n predecessor lists): measured crossover ~n=384
     // at avg degree 5-6 (n=300/deg5 lost 0.9×, n=384/deg6 won 2.3×, rising to 4.3× at
     // n=2000). The avg-degree floor keeps ultra-sparse large-n graphs on the serial path.
-    let go_parallel = cores > 1
-        && !force_serial
-        && n >= 384
-        && graph.data().len() >= 2 * n;
+    let go_parallel = cores > 1 && !force_serial && n >= 384 && graph.data().len() >= 2 * n;
     let mut bc = if !go_parallel {
         brandes_chunk(0, n)
     } else {
@@ -6569,7 +6574,10 @@ mod tests {
         );
         // betweenness: only the center lies on the 0-2 shortest path; endpoints 0.
         let bc = betweenness_centrality(&g);
-        assert!(bc[0].abs() < 1e-12 && bc[2].abs() < 1e-12, "endpoints 0: {bc:?}");
+        assert!(
+            bc[0].abs() < 1e-12 && bc[2].abs() < 1e-12,
+            "endpoints 0: {bc:?}"
+        );
         assert!(bc[1] > 0.0, "center > 0: {bc:?}");
     }
 
@@ -6641,9 +6649,15 @@ mod tests {
         // add -> [[2,1],[2,4]], sum 9.
         assert!((sparse_sum(&sparse_add(&a, &b)) - 9.0).abs() < 1e-12, "add");
         // element-wise power 2 -> [1,4,9], sum 14.
-        assert!((sparse_sum(&sparse_power(&a, 2.0)) - 14.0).abs() < 1e-12, "power");
+        assert!(
+            (sparse_sum(&sparse_power(&a, 2.0)) - 14.0).abs() < 1e-12,
+            "power"
+        );
         // frobenius inner = sum(a_ij*b_ij) = 1*1 + 3*1 = 4.
-        assert!((sparse_frobenius_inner(&a, &b) - 4.0).abs() < 1e-12, "frobenius inner");
+        assert!(
+            (sparse_frobenius_inner(&a, &b) - 4.0).abs() < 1e-12,
+            "frobenius inner"
+        );
     }
 
     #[test]
@@ -6661,7 +6675,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(clustering_coefficient(&k3), vec![1.0, 1.0, 1.0]);
-        assert!((average_clustering(&k3) - 1.0).abs() < 1e-12, "avg clustering K3 = 1");
+        assert!(
+            (average_clustering(&k3) - 1.0).abs() < 1e-12,
+            "avg clustering K3 = 1"
+        );
     }
 
     #[test]
@@ -6709,7 +6726,10 @@ mod tests {
             .zip(parallel.iter())
             .filter(|(a, b)| a.to_bits() != b.to_bits())
             .count();
-        assert_eq!(mism, 0, "parallel clustering must be byte-identical to serial");
+        assert_eq!(
+            mism, 0,
+            "parallel clustering must be byte-identical to serial"
+        );
     }
 
     #[test]
@@ -6751,7 +6771,10 @@ mod tests {
         assert_eq!(sparse_col_sums(&m), vec![3.0, 3.0]);
         assert!((sparse_density(&m) - 0.75).abs() < 1e-12, "density 3/4");
         assert_eq!(sparse_row_max(&m), vec![1.0, 3.0]);
-        assert!((sparse_sum(&sparse_scale(&m, 2.0)) - 12.0).abs() < 1e-12, "scale");
+        assert!(
+            (sparse_sum(&sparse_scale(&m, 2.0)) - 12.0).abs() < 1e-12,
+            "scale"
+        );
         // abs of [[-1,0],[2,-3]] sums to 6.
         let n = CsrMatrix::from_components(
             Shape2D::new(2, 2),
@@ -8140,8 +8163,7 @@ mod tests {
             tol: -1e-6,
             ..IterativeSolveOptions::default()
         };
-        let err =
-            pcg(&a, &b, &preconditioner, None, negative_tol).expect_err("negative tolerance");
+        let err = pcg(&a, &b, &preconditioner, None, negative_tol).expect_err("negative tolerance");
         assert!(matches!(err, SparseError::InvalidArgument { .. }));
     }
 
@@ -8419,13 +8441,8 @@ mod tests {
         .to_csr()
         .expect("csr");
         let b = vec![0.0, 0.0, 0.0];
-        let err = minres(
-            &a,
-            &b,
-            None,
-            hardened_unchecked_iterative_options(),
-        )
-        .expect_err("hardened finite guard");
+        let err = minres(&a, &b, None, hardened_unchecked_iterative_options())
+            .expect_err("hardened finite guard");
         assert!(matches!(err, SparseError::NonFiniteInput { .. }));
     }
 
@@ -9712,7 +9729,10 @@ mod tests {
                         .count()
                 })
                 .sum();
-            assert_eq!(mism, 0, "normed={normed}: parallel laplacian must be byte-identical");
+            assert_eq!(
+                mism, 0,
+                "normed={normed}: parallel laplacian must be byte-identical"
+            );
         }
     }
 
@@ -9955,8 +9975,13 @@ mod tests {
         assert!(matches!(rhs_err, SparseError::NonFiniteInput { .. }));
 
         let x0 = vec![0.0, f64::INFINITY, 0.0];
-        let x0_err = lgmres(&finite, &[7.0, 7.0, 7.0], Some(&x0), LgmresOptions::default())
-            .expect_err("non-finite initial guess");
+        let x0_err = lgmres(
+            &finite,
+            &[7.0, 7.0, 7.0],
+            Some(&x0),
+            LgmresOptions::default(),
+        )
+        .expect_err("non-finite initial guess");
         assert!(matches!(x0_err, SparseError::NonFiniteInput { .. }));
 
         let non_finite_matrix = CooMatrix::from_triplets(
@@ -10287,7 +10312,9 @@ mod tests {
             .expect("csr");
         let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 7) as f64).collect();
 
-        let x = spsolve(&a, &b, SolveOptions::default()).expect("spsolve").solution;
+        let x = spsolve(&a, &b, SolveOptions::default())
+            .expect("spsolve")
+            .solution;
         // Residual ‖A·x − b‖ must be tiny.
         let mut resid = 0.0f64;
         for row in 0..n {
@@ -12316,7 +12343,11 @@ pub fn dijkstra_multi_source(
             .collect();
         handles
             .into_iter()
-            .flat_map(|handle| handle.join().expect("dijkstra_multi_source worker panicked"))
+            .flat_map(|handle| {
+                handle
+                    .join()
+                    .expect("dijkstra_multi_source worker panicked")
+            })
             .collect()
     });
 
@@ -12542,7 +12573,11 @@ pub fn bellman_ford_multi_source(
             .collect();
         handles
             .into_iter()
-            .map(|handle| handle.join().expect("bellman_ford_multi_source worker panicked"))
+            .map(|handle| {
+                handle
+                    .join()
+                    .expect("bellman_ford_multi_source worker panicked")
+            })
             .collect()
     });
 
@@ -12674,7 +12709,13 @@ pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>>
     // identical to the build-then-scale loops. Non-dedup graphs keep the dense post-scan.
     let d_inv_sqrt: Vec<f64> = if normed {
         (0..n)
-            .map(|i| if degree[i] > 0.0 { 1.0 / degree[i].sqrt() } else { 0.0 })
+            .map(|i| {
+                if degree[i] > 0.0 {
+                    1.0 / degree[i].sqrt()
+                } else {
+                    0.0
+                }
+            })
             .collect()
     } else {
         Vec::new()
@@ -12722,7 +12763,9 @@ pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>>
                         return None;
                     }
                     let i1 = (i0 + chunk).min(n);
-                    Some(scope.spawn(move || (i0..i1).map(build_row_ref).collect::<Vec<Vec<f64>>>()))
+                    Some(
+                        scope.spawn(move || (i0..i1).map(build_row_ref).collect::<Vec<Vec<f64>>>()),
+                    )
                 })
                 .collect();
             handles

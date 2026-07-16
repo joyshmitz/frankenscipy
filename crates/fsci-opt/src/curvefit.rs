@@ -438,11 +438,7 @@ where
 
 /// Numerically-stable `ln(1 + e^u)` (softplus); for `u` above ~30 it collapses to `u`.
 fn softplus(u: f64) -> f64 {
-    if u > 30.0 {
-        u
-    } else {
-        u.exp().ln_1p()
-    }
+    if u > 30.0 { u } else { u.exp().ln_1p() }
 }
 
 /// Inverse softplus `ln(e^y - 1)` for `y > 0`; for large `y` it collapses to `y`.
@@ -568,7 +564,14 @@ where
     let r_p = residuals(&popt);
     let mut jac_p = Vec::new();
     let mut scratch = popt.clone();
-    finite_diff_jacobian_parallel_into(&residuals, &popt, &r_p, options.diff_step, &mut jac_p, &mut scratch);
+    finite_diff_jacobian_parallel_into(
+        &residuals,
+        &popt,
+        &r_p,
+        options.diff_step,
+        &mut jac_p,
+        &mut scratch,
+    );
     ls.cost = 0.5 * dot_vec(&r_p, &r_p);
     ls.x = popt;
     ls.fun = r_p;
@@ -791,8 +794,9 @@ where
     }
     let f_ref = &f;
     let opts_ref = &options;
-    let fit_one =
-        move |row: &[f64]| curve_fit_bounded(f_ref, xdata, row, lower, upper, opts_ref.clone()).map(|r| r.popt);
+    let fit_one = move |row: &[f64]| {
+        curve_fit_bounded(f_ref, xdata, row, lower, upper, opts_ref.clone()).map(|r| r.popt)
+    };
 
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
@@ -1298,17 +1302,35 @@ mod tests {
 
         let mut jac_serial = Vec::new();
         let mut scratch_s = Vec::new();
-        finite_diff_jacobian_into(&residuals, &params, &r0, eps, &mut jac_serial, &mut scratch_s);
+        finite_diff_jacobian_into(
+            &residuals,
+            &params,
+            &r0,
+            eps,
+            &mut jac_serial,
+            &mut scratch_s,
+        );
 
         let mut jac_par = Vec::new();
         let mut scratch_p = Vec::new();
-        finite_diff_jacobian_parallel_into(&residuals, &params, &r0, eps, &mut jac_par, &mut scratch_p);
+        finite_diff_jacobian_parallel_into(
+            &residuals,
+            &params,
+            &r0,
+            eps,
+            &mut jac_par,
+            &mut scratch_p,
+        );
 
         assert_eq!(jac_serial.len(), jac_par.len());
         for (rs, rp) in jac_serial.iter().zip(&jac_par) {
             assert_eq!(rs.len(), rp.len());
             for (a, b) in rs.iter().zip(rp) {
-                assert_eq!(a.to_bits(), b.to_bits(), "parallel Jacobian must be byte-identical");
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "parallel Jacobian must be byte-identical"
+                );
             }
         }
     }
@@ -1483,7 +1505,9 @@ mod tests {
         let rows: Vec<Vec<f64>> = (0..nrows)
             .map(|_| {
                 let (a, b, c) = (1.0 + 2.0 * rng(), 0.3 + rng(), rng());
-                x.iter().map(|&xi| a * (-b * xi).exp() + c + 0.02 * (rng() - 0.5)).collect()
+                x.iter()
+                    .map(|&xi| a * (-b * xi).exp() + c + 0.02 * (rng() - 0.5))
+                    .collect()
             })
             .collect();
         let opts = || CurveFitOptions {
@@ -1509,9 +1533,15 @@ mod tests {
         let hi = [6.0, 4.0, 2.0];
         let bb = curve_fit_bounded_many(model, &x, &rows, &lo, &hi, opts()).expect("batched bnd");
         for (i, row) in rows.iter().enumerate() {
-            let single = curve_fit_bounded(model, &x, row, &lo, &hi, opts()).expect("single bnd").popt;
+            let single = curve_fit_bounded(model, &x, row, &lo, &hi, opts())
+                .expect("single bnd")
+                .popt;
             for k in 0..3 {
-                assert_eq!(bb[i][k].to_bits(), single[k].to_bits(), "bnd row {i} param {k}");
+                assert_eq!(
+                    bb[i][k].to_bits(),
+                    single[k].to_bits(),
+                    "bnd row {i} param {k}"
+                );
             }
         }
         assert!(curve_fit_many(model, &x, &[], opts()).unwrap().is_empty());

@@ -1158,7 +1158,8 @@ mod tests {
         // result must equal looping solve_ivp per row, bit-for-bit (each solve is an
         // independent deterministic adaptive integration).
         let (a, b, c, d) = (1.5_f64, 1.0, 3.0, 1.0);
-        let rhs = |_t: f64, y: &[f64]| vec![a * y[0] - b * y[0] * y[1], -c * y[1] + d * y[0] * y[1]];
+        let rhs =
+            |_t: f64, y: &[f64]| vec![a * y[0] - b * y[0] * y[1], -c * y[1] + d * y[0] * y[1]];
         let t_eval: Vec<f64> = (0..60).map(|i| i as f64 * 10.0 / 59.0).collect();
         let mut s = 99u64;
         let mut rng = || {
@@ -1632,7 +1633,10 @@ mod tests {
             err,
             IntegrateValidationError::EventMaxEventsMustBePositive { index: 0 }
         );
-        assert_eq!(rhs_calls, 0, "invalid event metadata must fail before RHS calls");
+        assert_eq!(
+            rhs_calls, 0,
+            "invalid event metadata must fail before RHS calls"
+        );
     }
 
     #[test]
@@ -1661,7 +1665,10 @@ mod tests {
             err,
             IntegrateValidationError::NonFiniteEventValue { index: 0 }
         );
-        assert_eq!(rhs_calls, 0, "initial event validation must run before stepping");
+        assert_eq!(
+            rhs_calls, 0,
+            "initial event validation must run before stepping"
+        );
     }
 
     #[test]

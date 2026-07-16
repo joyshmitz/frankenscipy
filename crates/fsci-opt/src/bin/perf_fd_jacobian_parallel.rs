@@ -59,7 +59,13 @@ fn serial_jac(params: &[f64], xs: &[f64], r0: &[f64], eps: f64) -> Vec<Vec<f64>>
 
 /// Candidate: independent per-column perturbed-residual eval on a worker pool,
 /// then a serial fill. Byte-identical to `serial_jac`.
-fn parallel_jac(params: &[f64], xs: &Arc<Vec<f64>>, r0: &[f64], eps: f64, nthreads: usize) -> Vec<Vec<f64>> {
+fn parallel_jac(
+    params: &[f64],
+    xs: &Arc<Vec<f64>>,
+    r0: &[f64],
+    eps: f64,
+    nthreads: usize,
+) -> Vec<Vec<f64>> {
     let n = params.len();
     let m = r0.len();
     let per = n.div_ceil(nthreads);
@@ -107,8 +113,17 @@ fn parallel_jac(params: &[f64], xs: &Arc<Vec<f64>>, r0: &[f64], eps: f64, nthrea
 
 fn main() {
     let eps = 1.4901161193847656e-8;
-    let threads = std::thread::available_parallelism().map(|v| v.get()).unwrap_or(8);
-    for &(n, m) in &[(4usize, 2000usize), (6, 5000), (8, 20000), (12, 50000), (20, 50000), (40, 20000)] {
+    let threads = std::thread::available_parallelism()
+        .map(|v| v.get())
+        .unwrap_or(8);
+    for &(n, m) in &[
+        (4usize, 2000usize),
+        (6, 5000),
+        (8, 20000),
+        (12, 50000),
+        (20, 50000),
+        (40, 20000),
+    ] {
         let params: Vec<f64> = (0..n).map(|k| 0.3 + 0.1 * k as f64).collect();
         let xs: Arc<Vec<f64>> = Arc::new((0..m).map(|i| i as f64 * 0.001).collect());
         let mut r0 = Vec::new();

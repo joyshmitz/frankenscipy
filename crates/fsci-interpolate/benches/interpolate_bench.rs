@@ -340,7 +340,9 @@ fn bench_make_interp_spline(c: &mut Criterion) {
     let mut group = c.benchmark_group("make_interp_spline");
     group.sample_size(10);
     for &n in &[1000usize, 3000] {
-        let x: Vec<f64> = (0..n).map(|i| i as f64 + ((i * 2654435761usize) % 97) as f64 * 0.001).collect();
+        let x: Vec<f64> = (0..n)
+            .map(|i| i as f64 + ((i * 2654435761usize) % 97) as f64 * 0.001)
+            .collect();
         let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.01).sin()).collect();
         group.bench_function(criterion::BenchmarkId::new("k3", n), |b| {
             b.iter(|| make_interp_spline(black_box(&x), black_box(&y), 3).expect("spline"))
@@ -355,17 +357,28 @@ fn bench_rbf_scattered(c: &mut Criterion) {
     // (scipy ~1205 ms).
     let n = 2000usize;
     let pts: Vec<Vec<f64>> = (0..n)
-        .map(|i| vec![((i * 2654435761usize) % 10007) as f64 / 10007.0, ((i * 40503usize + 7) % 10007) as f64 / 10007.0])
+        .map(|i| {
+            vec![
+                ((i * 2654435761usize) % 10007) as f64 / 10007.0,
+                ((i * 40503usize + 7) % 10007) as f64 / 10007.0,
+            ]
+        })
         .collect();
     let vals: Vec<f64> = (0..n).map(|i| (i as f64 * 0.01).sin()).collect();
     let q: Vec<Vec<f64>> = (0..20000)
-        .map(|i| vec![((i * 92821usize) % 9973) as f64 / 9973.0, ((i * 13usize + 3) % 9973) as f64 / 9973.0])
+        .map(|i| {
+            vec![
+                ((i * 92821usize) % 9973) as f64 / 9973.0,
+                ((i * 13usize + 3) % 9973) as f64 / 9973.0,
+            ]
+        })
         .collect();
     let mut group = c.benchmark_group("rbf_scattered");
     group.sample_size(10);
     group.bench_function("tps_build_eval_2k_to_20k", |b| {
         b.iter(|| {
-            let rbf = RbfInterpolator::new(&pts, &vals, RbfKernel::ThinPlateSpline, 1.0).expect("rbf");
+            let rbf =
+                RbfInterpolator::new(&pts, &vals, RbfKernel::ThinPlateSpline, 1.0).expect("rbf");
             rbf.eval_many(&q)
         })
     });
@@ -433,7 +446,9 @@ fn bench_batch_eval(c: &mut Criterion) {
             vec![t * 2.0, t * 3.0]
         })
         .collect();
-    group.bench_function("ndppoly/evaluate_many", |b| b.iter(|| np.evaluate_many(&pts)));
+    group.bench_function("ndppoly/evaluate_many", |b| {
+        b.iter(|| np.evaluate_many(&pts))
+    });
     group.bench_function("ndppoly/map_evaluate", |b| {
         b.iter(|| pts.iter().map(|p| np.evaluate(p)).collect::<Vec<_>>())
     });
@@ -455,7 +470,9 @@ fn bench_batch_eval_large(c: &mut Criterion) {
         .map(|i| vec![i as f64, (i + 1) as f64, 0.5, 1.5])
         .collect();
     let bp = BPoly::new(bc, bx).expect("bpoly");
-    let qs: Vec<f64> = (0..m).map(|i| (i as f64) * n_pieces as f64 / m as f64).collect();
+    let qs: Vec<f64> = (0..m)
+        .map(|i| (i as f64) * n_pieces as f64 / m as f64)
+        .collect();
     group.bench_function("bpoly/200k", |b| b.iter(|| bp.evaluate_many(&qs)));
 
     let c_tensor: Vec<f64> = (1..=36).map(|v| v as f64).collect();
@@ -493,11 +510,27 @@ fn bench_smoothing_spline(c: &mut Criterion) {
 fn bench_smooth_bivariate(c: &mut Criterion) {
     let mut group = c.benchmark_group("smooth_bivariate_spline");
     for &m in &[400usize, 1000, 2500] {
-        let x: Vec<f64> = (0..m).map(|i| ((i as f64 * 12.9898).sin() * 43758.5).fract()).collect();
-        let y: Vec<f64> = (0..m).map(|i| ((i as f64 * 78.233).sin() * 12345.6).fract()).collect();
-        let z: Vec<f64> = x.iter().zip(&y).map(|(&xi, &yi)| (6.0 * xi).sin() * (6.0 * yi).cos()).collect();
+        let x: Vec<f64> = (0..m)
+            .map(|i| ((i as f64 * 12.9898).sin() * 43758.5).fract())
+            .collect();
+        let y: Vec<f64> = (0..m)
+            .map(|i| ((i as f64 * 78.233).sin() * 12345.6).fract())
+            .collect();
+        let z: Vec<f64> = x
+            .iter()
+            .zip(&y)
+            .map(|(&xi, &yi)| (6.0 * xi).sin() * (6.0 * yi).cos())
+            .collect();
         group.bench_with_input(BenchmarkId::from_parameter(m), &m, |b, _| {
-            b.iter(|| SmoothBivariateSpline::new(black_box(&x), black_box(&y), black_box(&z), SmoothBivariateSplineOptions::default()).unwrap())
+            b.iter(|| {
+                SmoothBivariateSpline::new(
+                    black_box(&x),
+                    black_box(&y),
+                    black_box(&z),
+                    SmoothBivariateSplineOptions::default(),
+                )
+                .unwrap()
+            })
         });
     }
     group.finish();
@@ -506,12 +539,30 @@ fn bench_smooth_bivariate(c: &mut Criterion) {
 fn bench_bisplrep(c: &mut Criterion) {
     let mut group = c.benchmark_group("bisplrep");
     for &m in &[400usize, 1000, 2500] {
-        let x: Vec<f64> = (0..m).map(|i| ((i as f64 * 12.9898).sin() * 43758.5).fract()).collect();
-        let y: Vec<f64> = (0..m).map(|i| ((i as f64 * 78.233).sin() * 12345.6).fract()).collect();
-        let z: Vec<f64> = x.iter().zip(&y).map(|(&xi, &yi)| (6.0 * xi).sin() * (6.0 * yi).cos()).collect();
+        let x: Vec<f64> = (0..m)
+            .map(|i| ((i as f64 * 12.9898).sin() * 43758.5).fract())
+            .collect();
+        let y: Vec<f64> = (0..m)
+            .map(|i| ((i as f64 * 78.233).sin() * 12345.6).fract())
+            .collect();
+        let z: Vec<f64> = x
+            .iter()
+            .zip(&y)
+            .map(|(&xi, &yi)| (6.0 * xi).sin() * (6.0 * yi).cos())
+            .collect();
         let s = m as f64;
         group.bench_with_input(BenchmarkId::from_parameter(m), &m, |b, _| {
-            b.iter(|| bisplrep(black_box(&x), black_box(&y), black_box(&z), 3, 3, black_box(s)).unwrap())
+            b.iter(|| {
+                bisplrep(
+                    black_box(&x),
+                    black_box(&y),
+                    black_box(&z),
+                    3,
+                    3,
+                    black_box(s),
+                )
+                .unwrap()
+            })
         });
     }
     group.finish();
@@ -528,7 +579,9 @@ fn bench_make_lsq(c: &mut Criterion) {
         // interior knots from quantiles + clamped boundary
         let n_int = nk - 2;
         let mut t: Vec<f64> = vec![0.0; k + 1];
-        for j in 1..=n_int { t.push(j as f64 / (n_int + 1) as f64); }
+        for j in 1..=n_int {
+            t.push(j as f64 / (n_int + 1) as f64);
+        }
         t.extend(std::iter::repeat(1.0).take(k + 1));
         group.bench_with_input(BenchmarkId::from_parameter(nk), &nk, |b, _| {
             b.iter(|| make_interp_spline_lsq_probe(black_box(&x), black_box(&y), black_box(&t), k))
@@ -537,7 +590,9 @@ fn bench_make_lsq(c: &mut Criterion) {
     group.finish();
 }
 fn make_interp_spline_lsq_probe(x: &[f64], y: &[f64], t: &[f64], k: usize) -> usize {
-    fsci_interpolate::make_lsq_spline(x, y, t, k).map(|_| 1usize).unwrap_or(0)
+    fsci_interpolate::make_lsq_spline(x, y, t, k)
+        .map(|_| 1usize)
+        .unwrap_or(0)
 }
 
 criterion_group!(

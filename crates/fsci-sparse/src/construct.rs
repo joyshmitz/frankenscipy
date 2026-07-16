@@ -1941,7 +1941,9 @@ mod tests {
         fn canonical_csr(rows: usize, cols: usize, per_row: usize, seed: u64) -> CsrMatrix {
             let mut state = seed;
             let mut next = || {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 (state >> 33) as usize
             };
             let mut data = Vec::new();
@@ -1992,7 +1994,11 @@ mod tests {
         assert_eq!(result.indptr(), ref_indptr.as_slice(), "indptr mismatch");
         assert_eq!(result.indices(), ref_indices.as_slice(), "indices mismatch");
         assert!(
-            result.data().iter().zip(&ref_data).all(|(x, y)| x.to_bits() == y.to_bits()),
+            result
+                .data()
+                .iter()
+                .zip(&ref_data)
+                .all(|(x, y)| x.to_bits() == y.to_bits()),
             "data not bit-identical to reference"
         );
         let meta = result.canonical_meta();
@@ -2352,7 +2358,9 @@ mod tests {
         fn canonical_csr(rows: usize, cols: usize, per_row: usize, seed: u64) -> CsrMatrix {
             let mut state = seed;
             let mut next = || {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 (state >> 33) as usize
             };
             let mut data = Vec::new();
@@ -2376,7 +2384,10 @@ mod tests {
         let a = canonical_csr(220, 60, 6, 0x1234_5678);
         let b = canonical_csr(40, 40, 6, 0x9abc_def0);
         // out_rows = 220*40 = 8800 ≥ 1024; nnz_a*nnz_b comfortably ≥ 64K.
-        assert!(a.nnz() * b.nnz() >= 1 << 16, "operands too small to hit gate");
+        assert!(
+            a.nnz() * b.nnz() >= 1 << 16,
+            "operands too small to hit gate"
+        );
 
         let result = kron(&a, &b).expect("kron");
 
@@ -2405,7 +2416,11 @@ mod tests {
         assert_eq!(result.indices(), ref_indices.as_slice(), "indices mismatch");
         // Byte-identical values (same multiply/emit order), not just approx-equal.
         assert!(
-            result.data().iter().zip(&ref_data).all(|(x, y)| x.to_bits() == y.to_bits()),
+            result
+                .data()
+                .iter()
+                .zip(&ref_data)
+                .all(|(x, y)| x.to_bits() == y.to_bits()),
             "data not bit-identical to serial reference"
         );
         let meta = result.canonical_meta();

@@ -268,7 +268,9 @@ where
                 }
                 let hi = (lo + chunk).min(nrows);
                 Some(scope.spawn(move || {
-                    (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                    (lo..hi)
+                        .map(|i| solve_one(&param_rows[i]))
+                        .collect::<Vec<_>>()
                 }))
             })
             .collect::<Vec<_>>()
@@ -1765,7 +1767,9 @@ where
                     }
                     let hi = (lo + chunk).min(nrows);
                     Some(scope.spawn(move || {
-                        (lo..hi).map(|i| solve_one(&param_rows[i])).collect::<Vec<_>>()
+                        (lo..hi)
+                            .map(|i| solve_one(&param_rows[i]))
+                            .collect::<Vec<_>>()
                     }))
                 })
                 .collect::<Vec<_>>()
@@ -3567,12 +3571,20 @@ mod tests {
         // total residual evaluations stay well under `iterations * n` (which a
         // full-FD-every-iteration solver would exceed).
         let n = 12usize;
-        let f = |x: &[f64]| (0..x.len()).map(|i| x[i] * x[i] - (i as f64 + 1.0)).collect();
+        let f = |x: &[f64]| {
+            (0..x.len())
+                .map(|i| x[i] * x[i] - (i as f64 + 1.0))
+                .collect()
+        };
         let result = fsolve(f, &vec![0.5; n]).expect("fsolve should converge");
         assert!(result.converged, "fsolve failed: {}", result.message);
         for i in 0..n {
             let want = ((i + 1) as f64).sqrt();
-            assert!((result.x[i] - want).abs() < 1e-4, "x[{i}]={}, want {want}", result.x[i]);
+            assert!(
+                (result.x[i] - want).abs() < 1e-4,
+                "x[{i}]={}, want {want}",
+                result.x[i]
+            );
         }
         // Full-FD-every-iteration would need >= iterations*n Jacobian evals alone;
         // Broyden's bound is one FD Jacobian plus O(1) evals per iteration.
@@ -3700,10 +3712,23 @@ mod tests {
         for (i, p) in params.iter().enumerate() {
             let single = brentq(|x| f(x, p), bracket, opts).expect("single");
             let many = batched[i].as_ref().expect("batched member");
-            assert_eq!(many.root.to_bits(), single.root.to_bits(), "root mismatch param {i}");
-            assert_eq!(many.converged, single.converged, "converged mismatch param {i}");
+            assert_eq!(
+                many.root.to_bits(),
+                single.root.to_bits(),
+                "root mismatch param {i}"
+            );
+            assert_eq!(
+                many.converged, single.converged,
+                "converged mismatch param {i}"
+            );
         }
-        assert!(batched.iter().filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false)).count() == nrows);
+        assert!(
+            batched
+                .iter()
+                .filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false))
+                .count()
+                == nrows
+        );
         assert!(brentq_many(f, bracket, &[], opts).is_empty());
     }
 
@@ -3819,7 +3844,10 @@ mod tests {
             .iter()
             .filter(|r| r.as_ref().map(|x| x.converged).unwrap_or(false))
             .count();
-        assert!(n_conv >= nrows / 2, "expected most to converge, got {n_conv}/{nrows}");
+        assert!(
+            n_conv >= nrows / 2,
+            "expected most to converge, got {n_conv}/{nrows}"
+        );
         assert!(root_many(&sys, &x0, &[], opts).is_empty());
     }
 

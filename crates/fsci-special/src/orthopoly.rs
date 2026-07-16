@@ -1239,10 +1239,7 @@ fn mathieu_mod(m: u32, q: f64, z: f64, even: bool, second_kind: bool) -> (f64, f
     };
     // `J_a(u1)·Z_b(u2)` and its z-derivative (du1/dz = −u1, du2/dz = u2).
     let prod = |a: usize, b: usize| -> (f64, f64) {
-        (
-            j1[a] * z2[b],
-            -u1 * j1d[a] * z2[b] + u2 * j1[a] * z2d[b],
-        )
+        (j1[a] * z2[b], -u1 * j1d[a] * z2[b] + u2 * j1[a] * z2d[b])
     };
     let mut value = 0.0_f64;
     let mut deriv = 0.0_f64;
@@ -1815,7 +1812,9 @@ pub fn eval_sh_jacobi(n: u32, p: f64, q: f64, x: f64) -> f64 {
 /// stay bit-identical. (Parameterless rules key on `n`; parameterized ones on
 /// `(n, alpha.to_bits(), ...)`.)
 fn cached_roots<K: std::hash::Hash + Eq>(
-    cache: &'static std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<K, (Vec<f64>, Vec<f64>)>>>,
+    cache: &'static std::sync::OnceLock<
+        std::sync::RwLock<std::collections::HashMap<K, (Vec<f64>, Vec<f64>)>>,
+    >,
     key: K,
     compute: impl FnOnce() -> (Vec<f64>, Vec<f64>),
 ) -> (Vec<f64>, Vec<f64>) {
@@ -2986,8 +2985,8 @@ pub fn sph_harm_y_all(n: u32, m: u32, theta: f64, phi: f64) -> Vec<Vec<Complex64
             for k in (li - am as i32 + 1)..=(li + am as i32) {
                 log_ratio -= (k as f64).ln();
             }
-            let norm = ((2.0 * j as f64 + 1.0) / (4.0 * std::f64::consts::PI) * log_ratio.exp())
-                .sqrt();
+            let norm =
+                ((2.0 * j as f64 + 1.0) / (4.0 * std::f64::consts::PI) * log_ratio.exp()).sqrt();
             for &(kc, order, sign) in &cols {
                 let angle = order as f64 * phi;
                 table[j as usize][kc] = Complex64 {
@@ -3525,7 +3524,13 @@ fn lame_solution(h2: f64, k2: f64, n: u32, p: u32, signm: i32, signn: i32) -> Op
             for value in &mut b {
                 *value /= last; // monic: highest coefficient = 1
             }
-            return Some(LameSolution { coeffs: b, e1, e2, sigma, class_sign });
+            return Some(LameSolution {
+                coeffs: b,
+                e1,
+                e2,
+                sigma,
+                class_sign,
+            });
         }
         index += count;
     }
@@ -4747,8 +4752,16 @@ mod tests {
             assert_eq!(roots_jacobi(n, 0.3, -0.2), jac_direct, "jacobi hit n={n}");
 
             // roots_legendre routes through the now-cached roots_jacobi.
-            assert_eq!(roots_legendre(n), roots_jacobi_compute(n, 0.0, 0.0), "legendre n={n}");
-            assert_eq!(roots_legendre(n), roots_legendre(n), "legendre repeat n={n}");
+            assert_eq!(
+                roots_legendre(n),
+                roots_jacobi_compute(n, 0.0, 0.0),
+                "legendre n={n}"
+            );
+            assert_eq!(
+                roots_legendre(n),
+                roots_legendre(n),
+                "legendre repeat n={n}"
+            );
 
             let her = golub_welsch(n, PI.sqrt(), |_k| 0.0, |k| ((k as f64) / 2.0).sqrt(), true);
             assert_eq!(roots_hermite(n), her, "hermite n={n}");
@@ -4756,7 +4769,11 @@ mod tests {
 
             let lag = golub_welsch(n, 1.0, |k| 2.0 * k as f64 + 1.0, |k| k as f64, false);
             assert_eq!(roots_laguerre(n), lag, "laguerre n={n}");
-            assert_eq!(roots_laguerre(n), roots_laguerre(n), "laguerre repeat n={n}");
+            assert_eq!(
+                roots_laguerre(n),
+                roots_laguerre(n),
+                "laguerre repeat n={n}"
+            );
 
             let glag = golub_welsch(
                 n,
@@ -5110,8 +5127,16 @@ mod tests {
                 for k in 0..=2 * m {
                     let direct = assoc_legendre_p(j, legendre_all_order(k, m), z, false);
                     let (f, mp) = (fused[j as usize][k as usize], map[j as usize][k as usize]);
-                    assert_eq!(f.to_bits(), mp.to_bits(), "fused!=map at n={n} m={m} j={j} k={k}");
-                    assert_eq!(f.to_bits(), direct.to_bits(), "fused!=direct at n={n} m={m} j={j} k={k}");
+                    assert_eq!(
+                        f.to_bits(),
+                        mp.to_bits(),
+                        "fused!=map at n={n} m={m} j={j} k={k}"
+                    );
+                    assert_eq!(
+                        f.to_bits(),
+                        direct.to_bits(),
+                        "fused!=direct at n={n} m={m} j={j} k={k}"
+                    );
                 }
             }
         }
@@ -5142,13 +5167,37 @@ mod tests {
                     let o = legendre_all_order(k, m);
                     let (ju, ku) = (j as usize, k as usize);
                     let ld = sph_legendre_p(j, o, theta);
-                    assert_eq!(lfused[ju][ku].to_bits(), lmap[ju][ku].to_bits(), "L f!=m {n},{m},{j},{k}");
-                    assert_eq!(lfused[ju][ku].to_bits(), ld.to_bits(), "L f!=direct {n},{m},{j},{k}");
+                    assert_eq!(
+                        lfused[ju][ku].to_bits(),
+                        lmap[ju][ku].to_bits(),
+                        "L f!=m {n},{m},{j},{k}"
+                    );
+                    assert_eq!(
+                        lfused[ju][ku].to_bits(),
+                        ld.to_bits(),
+                        "L f!=direct {n},{m},{j},{k}"
+                    );
                     let yd = sph_harm_y(j, o, theta, phi);
-                    assert_eq!(yfused[ju][ku].re.to_bits(), ymap[ju][ku].re.to_bits(), "Y.re f!=m {n},{m},{j},{k}");
-                    assert_eq!(yfused[ju][ku].im.to_bits(), ymap[ju][ku].im.to_bits(), "Y.im f!=m {n},{m},{j},{k}");
-                    assert_eq!(yfused[ju][ku].re.to_bits(), yd.re.to_bits(), "Y.re f!=direct {n},{m},{j},{k}");
-                    assert_eq!(yfused[ju][ku].im.to_bits(), yd.im.to_bits(), "Y.im f!=direct {n},{m},{j},{k}");
+                    assert_eq!(
+                        yfused[ju][ku].re.to_bits(),
+                        ymap[ju][ku].re.to_bits(),
+                        "Y.re f!=m {n},{m},{j},{k}"
+                    );
+                    assert_eq!(
+                        yfused[ju][ku].im.to_bits(),
+                        ymap[ju][ku].im.to_bits(),
+                        "Y.im f!=m {n},{m},{j},{k}"
+                    );
+                    assert_eq!(
+                        yfused[ju][ku].re.to_bits(),
+                        yd.re.to_bits(),
+                        "Y.re f!=direct {n},{m},{j},{k}"
+                    );
+                    assert_eq!(
+                        yfused[ju][ku].im.to_bits(),
+                        yd.im.to_bits(),
+                        "Y.im f!=direct {n},{m},{j},{k}"
+                    );
                 }
             }
         }

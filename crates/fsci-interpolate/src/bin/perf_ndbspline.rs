@@ -1,6 +1,6 @@
 // A/B probe: NdBSpline compact-support contraction vs full ∏ns[d] tensor sweep.
 // Toggle via NDBSPLINE_COMPACT_DISABLE; verifies byte-identical output (maxdiff=0.0).
-use fsci_interpolate::{NdBSpline, NDBSPLINE_COMPACT_DISABLE};
+use fsci_interpolate::{NDBSPLINE_COMPACT_DISABLE, NdBSpline};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -22,7 +22,9 @@ fn lcg_fill(len: usize) -> Vec<f64> {
     let mut s: u64 = 0x9E3779B97F4A7C15;
     (0..len)
         .map(|_| {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
         })
         .collect()

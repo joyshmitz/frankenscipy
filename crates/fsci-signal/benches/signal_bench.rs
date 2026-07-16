@@ -600,13 +600,8 @@ fn bench_upfirdn(c: &mut Criterion) {
     for &(up, down) in &[(1usize, 4usize), (1, 10), (7, 4), (3, 8)] {
         group.bench_function(BenchmarkId::new(format!("u{up}_d{down}"), x.len()), |b| {
             b.iter(|| {
-                upfirdn(
-                    black_box(&h),
-                    black_box(&x),
-                    black_box(up),
-                    black_box(down),
-                )
-                .expect("upfirdn")
+                upfirdn(black_box(&h), black_box(&x), black_box(up), black_box(down))
+                    .expect("upfirdn")
             })
         });
     }

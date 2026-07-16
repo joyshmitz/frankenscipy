@@ -1167,7 +1167,11 @@ fn coo_to_canonical_csr_counting(coo: &CooMatrix) -> CsrMatrix {
         let mut indptr = Vec::with_capacity(nrow + 1);
         indptr.push(0usize);
         for r in 0..nrow {
-            dedup_sorted_row(&mut pairs[row_ptr[r]..row_ptr[r + 1]], &mut out_indices, &mut out_data);
+            dedup_sorted_row(
+                &mut pairs[row_ptr[r]..row_ptr[r + 1]],
+                &mut out_indices,
+                &mut out_data,
+            );
             indptr.push(out_indices.len());
         }
         (out_data, out_indices, indptr)
@@ -1285,7 +1289,11 @@ fn coo_to_canonical_csc_counting(coo: &CooMatrix) -> CscMatrix {
         let mut indptr = Vec::with_capacity(ncol + 1);
         indptr.push(0usize);
         for c in 0..ncol {
-            dedup_sorted_row(&mut pairs[col_ptr[c]..col_ptr[c + 1]], &mut out_indices, &mut out_data);
+            dedup_sorted_row(
+                &mut pairs[col_ptr[c]..col_ptr[c + 1]],
+                &mut out_indices,
+                &mut out_data,
+            );
             indptr.push(out_indices.len());
         }
         (out_data, out_indices, indptr)
@@ -1360,7 +1368,11 @@ fn coo_to_canonical_csc_counting(coo: &CooMatrix) -> CscMatrix {
 /// std's allocation-free insertion sort; equal columns keep encounter order so the
 /// duplicate sums are deterministic.
 #[inline]
-fn dedup_sorted_row(seg: &mut [(usize, f64)], out_indices: &mut Vec<usize>, out_data: &mut Vec<f64>) {
+fn dedup_sorted_row(
+    seg: &mut [(usize, f64)],
+    out_indices: &mut Vec<usize>,
+    out_data: &mut Vec<f64>,
+) {
     seg.sort_by_key(|&(c, _)| c);
     let mut j = 0;
     while j < seg.len() {
@@ -1478,7 +1490,10 @@ mod tests {
             .unwrap()
             .to_csr()
             .unwrap();
-        assert!(m.data().len() >= 1_048_576, "matrix must exceed the fan-out gate");
+        assert!(
+            m.data().len() >= 1_048_576,
+            "matrix must exceed the fan-out gate"
+        );
         let x: Vec<f64> = (0..n)
             .map(|_| (nextu() >> 11) as f64 / (1u64 << 53) as f64)
             .collect();
@@ -1527,8 +1542,8 @@ mod tests {
             data.push(v);
             ref_dense[r][c] += v;
         }
-        let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
-            .expect("coo");
+        let coo =
+            CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false).expect("coo");
         let csr = coo.to_csr().expect("to_csr");
         let meta = csr.canonical_meta();
         assert!(meta.sorted_indices && meta.deduplicated);
@@ -1583,8 +1598,8 @@ mod tests {
             data.push(v);
             ref_dense[r][c] += v;
         }
-        let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
-            .expect("coo");
+        let coo =
+            CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false).expect("coo");
         let csc = coo.to_csc().expect("to_csc");
         let meta = csc.canonical_meta();
         assert!(meta.sorted_indices && meta.deduplicated);
@@ -1595,7 +1610,10 @@ mod tests {
             let mut last: Option<usize> = None;
             for idx in csc.indptr()[c]..csc.indptr()[c + 1] {
                 let r = csc.indices()[idx];
-                assert!(last.is_none_or(|l| l < r), "rows not strictly sorted in column {c}");
+                assert!(
+                    last.is_none_or(|l| l < r),
+                    "rows not strictly sorted in column {c}"
+                );
                 last = Some(r);
                 got[r][c] = csc.data()[idx];
             }

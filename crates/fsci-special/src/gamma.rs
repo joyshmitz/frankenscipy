@@ -2323,8 +2323,8 @@ pub fn chndtr(x: f64, df: f64, nc: f64) -> f64 {
     let y = x / 2.0;
     let a0 = 0.5 * df + j0;
     let p0 = chdtr(df + 2.0 * j0, x); // = P(a0, y)
-    let t0 = (a0 * y.ln() - y - gammaln_scalar(a0 + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN))
-        .exp();
+    let t0 =
+        (a0 * y.ln() - y - gammaln_scalar(a0 + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN)).exp();
 
     let mut total = 0.0_f64;
     // Upward from the mode.

@@ -4,7 +4,7 @@
 // is embarrassingly parallel and BYTE-IDENTICAL (distinct output columns, no
 // reduction). Same process / same worker => no cross-worker noise; the serial
 // and parallel column sets must be exactly equal.
-use fsci_fft::{fft, Complex64, FftOptions};
+use fsci_fft::{Complex64, FftOptions, fft};
 use std::time::Instant;
 
 fn build_window(m: usize) -> Vec<f64> {
@@ -40,7 +40,13 @@ fn one_frame(x: &[f64], win: &[f64], hop: usize, m: usize, pi: usize) -> Vec<Com
     fft(&seg, &FftOptions::default()).expect("fft")
 }
 
-fn frames_serial(x: &[f64], win: &[f64], hop: usize, m: usize, p_num: usize) -> Vec<Vec<Complex64>> {
+fn frames_serial(
+    x: &[f64],
+    win: &[f64],
+    hop: usize,
+    m: usize,
+    p_num: usize,
+) -> Vec<Vec<Complex64>> {
     (0..p_num).map(|pi| one_frame(x, win, hop, m, pi)).collect()
 }
 
@@ -62,11 +68,16 @@ fn frames_parallel(
                 }
                 let c1 = (c0 + chunk).min(p_num);
                 Some(scope.spawn(move || {
-                    (c0..c1).map(|pi| one_frame(x, win, hop, m, pi)).collect::<Vec<_>>()
+                    (c0..c1)
+                        .map(|pi| one_frame(x, win, hop, m, pi))
+                        .collect::<Vec<_>>()
                 }))
             })
             .collect();
-        handles.into_iter().map(|h| h.join().expect("worker")).collect()
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("worker"))
+            .collect()
     });
     let mut out = Vec::with_capacity(p_num);
     for c in chunks {
@@ -75,7 +86,10 @@ fn frames_parallel(
     out
 }
 
-fn best_of(reps: usize, mut f: impl FnMut() -> Vec<Vec<Complex64>>) -> (std::time::Duration, usize) {
+fn best_of(
+    reps: usize,
+    mut f: impl FnMut() -> Vec<Vec<Complex64>>,
+) -> (std::time::Duration, usize) {
     let mut best = std::time::Duration::MAX;
     let mut nf = 0;
     for _ in 0..reps {

@@ -106,8 +106,8 @@ fn erf_real_vec_simd(values: &[f64]) -> Vec<f64> {
     while i + LANES <= values.len() {
         let x = Simd::<f64, LANES>::from_slice(&values[i..i + LANES]);
         let z = x * x;
-        let rat =
-            (x * simd_horner(z, &CEPHES_ERF_T, 0.0) / simd_horner(z, &CEPHES_ERF_U, 1.0)).to_array();
+        let rat = (x * simd_horner(z, &CEPHES_ERF_T, 0.0) / simd_horner(z, &CEPHES_ERF_U, 1.0))
+            .to_array();
         let ez = simd_exp(-z).to_array(); // exp(−x²)
         let cx = erfcx_cephes_real_simd(x.abs()); // erfcx_cephes(|x|)
         for j in 0..LANES {
@@ -180,11 +180,7 @@ pub(crate) fn erfc_full_simd_chunk(u: Simd<f64, 8>) -> [f64; 8] {
             1.0 - erf_rat[j]
         } else if uaj < 25.0 {
             let tail = ez[j] * cx[j];
-            if uj > 0.0 {
-                tail
-            } else {
-                2.0 - tail
-            }
+            if uj > 0.0 { tail } else { 2.0 - tail }
         } else {
             erfc_scalar(uj)
         };
@@ -596,8 +592,10 @@ fn simd_exp(x: Simd<f64, 8>) -> Simd<f64, 8> {
 /// pick is a scalar lane loop, returned as an array.
 pub(crate) fn erfcx_cephes_real_simd(x: Simd<f64, 8>) -> [f64; 8] {
     let xa = x.abs();
-    let pq = (simd_horner(xa, &CEPHES_ERFC_P, 0.0) / simd_horner(xa, &CEPHES_ERFC_Q, 1.0)).to_array();
-    let rs = (simd_horner(xa, &CEPHES_ERFC_R, 0.0) / simd_horner(xa, &CEPHES_ERFC_S, 1.0)).to_array();
+    let pq =
+        (simd_horner(xa, &CEPHES_ERFC_P, 0.0) / simd_horner(xa, &CEPHES_ERFC_Q, 1.0)).to_array();
+    let rs =
+        (simd_horner(xa, &CEPHES_ERFC_R, 0.0) / simd_horner(xa, &CEPHES_ERFC_S, 1.0)).to_array();
     let xa = xa.to_array();
     let mut out = [0.0f64; 8];
     for k in 0..8 {
@@ -944,8 +942,12 @@ mod tests {
     #[test]
     fn erf_simd_matches_scalar_within_tol() {
         // erf's SIMD vector path vs the scalar kernel across every branch/sign boundary.
-        let mut xs: Vec<f64> = (0..2000).map(|i| -28.0 + 56.0 * (i as f64) / 2000.0).collect();
-        for b in [-1.0, 1.0, -25.0, 25.0, 0.9999999, -0.9999999, 0.0, 2.0, -2.0] {
+        let mut xs: Vec<f64> = (0..2000)
+            .map(|i| -28.0 + 56.0 * (i as f64) / 2000.0)
+            .collect();
+        for b in [
+            -1.0, 1.0, -25.0, 25.0, 0.9999999, -0.9999999, 0.0, 2.0, -2.0,
+        ] {
             xs.push(b);
         }
         let simd = match erf(&SpecialTensor::RealVec(xs.clone()), RuntimeMode::Strict).unwrap() {
@@ -956,13 +958,18 @@ mod tests {
         for (k, &x) in xs.iter().enumerate() {
             max_abs = max_abs.max((simd[k] - erf_scalar(x)).abs());
         }
-        assert!(max_abs < 1e-14, "erf simd max abs diff vs scalar = {max_abs:e}");
+        assert!(
+            max_abs < 1e-14,
+            "erf simd max abs diff vs scalar = {max_abs:e}"
+        );
     }
 
     #[test]
     fn erfc_simd_matches_scalar_within_tol() {
         // erfc's SIMD vector path vs the scalar kernel across every branch boundary.
-        let mut xs: Vec<f64> = (0..2000).map(|i| -1.0 + 27.0 * (i as f64) / 2000.0).collect();
+        let mut xs: Vec<f64> = (0..2000)
+            .map(|i| -1.0 + 27.0 * (i as f64) / 2000.0)
+            .collect();
         for b in [1.0, 8.0, 25.0, 0.9999999, 24.9999999, -3.0, 2.0, 0.0] {
             xs.push(b);
         }
@@ -980,7 +987,10 @@ mod tests {
             };
             max_rel = max_rel.max(rel);
         }
-        assert!(max_rel < 1e-14, "erfc simd max rel diff vs scalar = {max_rel:e}");
+        assert!(
+            max_rel < 1e-14,
+            "erfc simd max rel diff vs scalar = {max_rel:e}"
+        );
     }
 
     #[test]
