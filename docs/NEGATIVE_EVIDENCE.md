@@ -22397,3 +22397,27 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   switching and the combined warm-plus-measure job; those build events are routing evidence, not the reject. The
   reject rests only on the returned same-binary A/B. No `release-perf`/LTO build, local Cargo fallback, `force_local`,
   stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-cyklc`.
+
+## 2026-07-16 - cod - KEEP serial sorted PCHIP interval cursor (2.619x)
+
+- `bv --robot-triage` exposed only peer-owned or stale-landed perf work, while the recent dense-linalg vein was
+  already harvested, so negative-ledger-first routing selected the fresh `fsci-interpolate::PchipInterpolator`
+  sorted-batch path. An untouched strict-remote non-LTO release profile of
+  `splines/pchip_eval_many/1024x4096` measured **[52.999, 57.240, 60.875] us**. Source attribution ranked the 4,096
+  independent binary interval searches ahead of the fixed cubic evaluations and output allocation. Opportunity
+  score: 15.0 (impact 3 x confidence 5 / effort 1).
+- ONE lever recognizes only the existing serial path with finite nondecreasing queries and advances one interval
+  cursor across the batch. Exact-knot upper-interval selection, endpoint extrapolation, coefficient lookup, cubic
+  arithmetic order, output allocation, and every unsorted, non-finite, or parallel batch path are unchanged. A
+  focused strict-remote release proof matched every output `to_bits()` against scalar `eval`, including duplicate
+  knots, both extrapolation sides, unsorted inputs, NaN, and infinities.
+- The cold target received an untimed `--profile release --no-run` build without a timeout. Repeated release-cache
+  eviction triggered worker switching; the scored foreground A/B ran both arms from one non-LTO release binary on
+  `vmi1227854`, with 10 samples, 200 ms warm-up, and 1 s requested measurement per arm. The literal former
+  binary-search loop measured **[36.531, 39.634, 43.388] us** versus **[14.460, 15.135, 15.775] us** for the cursor:
+  **2.6187x centered**, **2.3158x conservative** (`36.531 / 15.775`), and **61.81% lower centered time**, with
+  disjoint intervals.
+- Disposition: KEEP. The temporary A/B harness was removed; the exact-bit regression remains. Diff hygiene passed,
+  and targeted UBS reported zero critical findings; strict-remote compilation surfaced only the crate's 12
+  pre-existing warnings. No `release-perf`/LTO build, local Cargo fallback, `force_local`, stash mutation, or
+  unrelated-file edit was used. Bead: `frankenscipy-b75mf`.

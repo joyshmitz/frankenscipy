@@ -724,6 +724,29 @@ impl PchipInterpolator {
     }
 
     pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
+        let work = (x_new.len() as u64).saturating_mul(24);
+        let serial_path = work < PAR_QUERY_MIN_WORK || x_new.len() < 4;
+        let sorted_finite =
+            x_new.iter().all(|x| x.is_finite()) && x_new.windows(2).all(|w| w[0] <= w[1]);
+        if serial_path && sorted_finite {
+            let n = self.x.len();
+            let mut i = 0usize;
+            return x_new
+                .iter()
+                .map(|&xi| {
+                    if xi >= self.x[n - 1] {
+                        i = n - 2;
+                    } else {
+                        while i + 1 < n - 1 && self.x[i + 1] <= xi {
+                            i += 1;
+                        }
+                    }
+                    let dx = xi - self.x[i];
+                    let [a, b, c, d] = self.coeffs[i];
+                    a + dx * (b + dx * (c + dx * d))
+                })
+                .collect();
+        }
         par_query_map(x_new, 24, |&xi| self.eval(xi))
     }
 }
@@ -12046,6 +12069,29 @@ mod tests {
         assert!(interp.eval(f64::NAN).is_nan());
         assert!(interp.eval(f64::INFINITY).is_nan());
         assert!(interp.eval(f64::NEG_INFINITY).is_nan());
+    }
+
+    #[test]
+    fn pchip_eval_many_sorted_cursor_matches_scalar_bits() {
+        let x = [0.0, 1.0, 2.0, 4.0, 7.0];
+        let y = [1.0, -2.0, 3.5, 0.25, 8.0];
+        let interp = PchipInterpolator::new(&x, &y).expect("pchip");
+        let cases: &[&[f64]] = &[
+            &[-2.0, 0.0, 0.0, 0.25, 1.0, 1.0, 2.0, 3.0, 4.0, 7.0, 9.0],
+            &[0.5, 3.0, 1.5],
+            &[0.5, f64::NAN, 2.5],
+            &[f64::NEG_INFINITY, 0.5, f64::INFINITY],
+        ];
+        for queries in cases {
+            let batch = interp.eval_many(queries);
+            for (&query, value) in queries.iter().zip(batch.iter()) {
+                assert_eq!(
+                    value.to_bits(),
+                    interp.eval(query).to_bits(),
+                    "eval_many mismatch at {query:?}"
+                );
+            }
+        }
     }
 
     #[test]
