@@ -22372,3 +22372,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   corruption circuit breaker reported a malformed SQLite database, so ownership continued from Beads and Git truth.
   No second A/B, `release-perf`/LTO build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit
   was used. Bead: `frankenscipy-cfizr`.
+
+## 2026-07-15 - cod - REJECT borrowed policy-evidence JSONL reason (0.974x centered)
+
+- Negative-ledger-first `bv --robot-triage` again found only the peer-owned Cholesky SYRK harness as a perf quick
+  win; its direct attribution remains below 1%, while the unassigned June perf beads are stale-landed. The prior
+  policy-evidence streaming keep explicitly left decision conversion and `reason` cloning unchanged, so this pass
+  profiled that distinct residual. An untouched-source strict-remote, non-LTO release profile of 1,024 records
+  measured `policy_evidence_jsonl/stream` at **[822.29, 862.09, 901.83] us**. Source attribution ranked JSON field
+  emission first and the 1,024 per-record `String::clone` allocations second. Opportunity score: 10.0 (impact 2 x
+  confidence 5 / effort 1).
+- ONE lever serialized a private borrowed decision view only from `to_alien_artifact_jsonl`; the public owned
+  conversion, record order, field order and values, compact JSON spelling, escaping, skipped-error behavior, and
+  artifact bytes were unchanged. The focused strict-remote release proof compared the borrowed output with the
+  literal owned path across escaped text and non-finite signals and passed exactly on `vmi1293453`.
+- The final foreground A/B ran both arms from one non-LTO release binary on `vmi1293453`. Its remote job first ran
+  the required untimed `--profile release --no-run` warm-up and only then applied the cap to the Criterion phase.
+  With 10 samples, 200 ms warm-up, and 1 s requested measurement per arm, borrowed streaming measured
+  **[813.42, 843.54, 881.27] us** versus **[799.81, 821.43, 855.03] us** for literal owned streaming:
+  **0.9738x centered**, **2.692% slower centered**, and **0.9076x conservative** (`799.81 / 881.27`). The intervals
+  overlap, and even the center moves in the wrong direction.
+- Disposition: REJECT. Production and benchmark hunks were manually restored; exact-file diff confirms no runtime
+  source remains changed. Earlier release-cache eviction on `vmi1152480` and then `vmi1227854` triggered worker
+  switching and the combined warm-plus-measure job; those build events are routing evidence, not the reject. The
+  reject rests only on the returned same-binary A/B. No `release-perf`/LTO build, local Cargo fallback, `force_local`,
+  stash mutation, or unrelated-file edit was used. Bead: `frankenscipy-cyklc`.
