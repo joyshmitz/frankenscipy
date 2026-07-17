@@ -1,14 +1,16 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_interpolate::{
-    BarycentricInterpolator, CloughTocher2DInterpolator, CubicSplineStandalone, GriddataMethod,
-    Interp1d, Interp1dOptions, InterpKind, LinearNDInterpolator, PchipInterpolator,
-    RbfInterpolator, RbfKernel, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod,
-    SmoothBivariateSpline, SmoothBivariateSplineOptions, SplineBc, barycentric_eval, bisplrep,
-    griddata, interp1d_linear, lagrange, make_interp_spline, make_smoothing_spline, polyadd,
-    polyder, polyint_definite, polymul, polyroots, polysub, polyval_der, ratval,
+    Akima1DInterpolator, BarycentricInterpolator, CloughTocher2DInterpolator, CubicHermiteSpline,
+    CubicSplineStandalone, GriddataMethod, INTERP_CUBIC_CURSOR_DISABLE, Interp1d, Interp1dOptions,
+    InterpKind, LinearNDInterpolator, PchipInterpolator, RbfInterpolator, RbfKernel,
+    RectBivariateSpline, RegularGridInterpolator, RegularGridMethod, SmoothBivariateSpline,
+    SmoothBivariateSplineOptions, SplineBc, barycentric_eval, bisplrep, griddata, interp1d_linear,
+    lagrange, make_interp_spline, make_smoothing_spline, polyadd, polyder, polyint_definite,
+    polymul, polyroots, polysub, polyval_der, ratval,
 };
 use fsci_runtime::RuntimeMode;
 use std::hint::black_box;
+use std::sync::atomic::Ordering;
 
 fn grid_1d(n: usize) -> Vec<f64> {
     (0..n).map(|i| i as f64 / (n - 1) as f64).collect()
@@ -181,6 +183,93 @@ fn bench_splines(c: &mut Criterion) {
     group.bench_function("cubic_construct/1024", |b| {
         b.iter(|| CubicSplineStandalone::new(&x, &y, SplineBc::Natural).expect("cubic construct"))
     });
+    group.finish();
+}
+
+/// Same-binary A/B for the sorted-batch interval cursor extended from PchipInterpolator
+/// to the sibling piecewise-cubic interpolators (frankenscipy-b75mf pattern). The cursor
+/// advances monotonically over a sorted finite batch (O(N+M)) instead of binary-searching
+/// each query (O(M·log N)). Both arms asserted byte-identical before timing.
+fn bench_cubic_cursor_eval_many_ab(c: &mut Criterion) {
+    let x = grid_1d(1024);
+    let y = values_1d(&x);
+    let dydx = vec![0.0f64; x.len()];
+    let cubic = CubicSplineStandalone::new(&x, &y, SplineBc::Natural).expect("cubic");
+    let akima = Akima1DInterpolator::new(&x, &y).expect("akima");
+    let hermite = CubicHermiteSpline::new(&x, &y, &dydx).expect("hermite");
+
+    let mut group = c.benchmark_group("cubic_cursor_eval_many_ab");
+    for &m in &[4096usize, 100_000usize] {
+        let x_new = query_1d(m);
+
+        // Byte-identity: cursor arm vs par_query_map arm, for each interpolator.
+        for (name, cursor, orig) in [
+            (
+                "cubic",
+                {
+                    INTERP_CUBIC_CURSOR_DISABLE.store(false, Ordering::Relaxed);
+                    cubic.eval_many(&x_new)
+                },
+                {
+                    INTERP_CUBIC_CURSOR_DISABLE.store(true, Ordering::Relaxed);
+                    cubic.eval_many(&x_new)
+                },
+            ),
+            (
+                "akima",
+                {
+                    INTERP_CUBIC_CURSOR_DISABLE.store(false, Ordering::Relaxed);
+                    akima.eval_many(&x_new)
+                },
+                {
+                    INTERP_CUBIC_CURSOR_DISABLE.store(true, Ordering::Relaxed);
+                    akima.eval_many(&x_new)
+                },
+            ),
+            (
+                "hermite",
+                {
+                    INTERP_CUBIC_CURSOR_DISABLE.store(false, Ordering::Relaxed);
+                    hermite.eval_many(&x_new)
+                },
+                {
+                    INTERP_CUBIC_CURSOR_DISABLE.store(true, Ordering::Relaxed);
+                    hermite.eval_many(&x_new)
+                },
+            ),
+        ] {
+            assert!(
+                cursor.iter().zip(&orig).all(|(a, b)| a.to_bits() == b.to_bits()),
+                "cursor eval_many must be byte-identical to par_query_map for {name} m={m}"
+            );
+        }
+
+        group.bench_function(format!("cubic_current_cursor/{m}"), |b| {
+            b.iter(|| {
+                INTERP_CUBIC_CURSOR_DISABLE.store(false, Ordering::Relaxed);
+                black_box(cubic.eval_many(black_box(&x_new)))
+            })
+        });
+        group.bench_function(format!("cubic_orig_binsearch/{m}"), |b| {
+            b.iter(|| {
+                INTERP_CUBIC_CURSOR_DISABLE.store(true, Ordering::Relaxed);
+                black_box(cubic.eval_many(black_box(&x_new)))
+            })
+        });
+        group.bench_function(format!("akima_current_cursor/{m}"), |b| {
+            b.iter(|| {
+                INTERP_CUBIC_CURSOR_DISABLE.store(false, Ordering::Relaxed);
+                black_box(akima.eval_many(black_box(&x_new)))
+            })
+        });
+        group.bench_function(format!("akima_orig_binsearch/{m}"), |b| {
+            b.iter(|| {
+                INTERP_CUBIC_CURSOR_DISABLE.store(true, Ordering::Relaxed);
+                black_box(akima.eval_many(black_box(&x_new)))
+            })
+        });
+    }
+    INTERP_CUBIC_CURSOR_DISABLE.store(false, Ordering::Relaxed);
     group.finish();
 }
 
@@ -599,6 +688,7 @@ criterion_group!(
     benches,
     bench_interp1d,
     bench_splines,
+    bench_cubic_cursor_eval_many_ab,
     bench_polynomial,
     bench_regular_grid,
     bench_scattered,

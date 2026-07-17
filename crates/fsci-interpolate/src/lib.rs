@@ -847,6 +847,9 @@ impl CubicSplineStandalone {
     }
 
     pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
+        if let Some(v) = cubic_cursor_eval_many(&self.x, &self.coeffs, x_new) {
+            return v;
+        }
         par_query_map(x_new, 24, |&xi| self.eval(xi))
     }
 
@@ -998,6 +1001,9 @@ impl Akima1DInterpolator {
     }
 
     pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
+        if let Some(v) = cubic_cursor_eval_many(&self.x, &self.coeffs, x_new) {
+            return v;
+        }
         par_query_map(x_new, 24, |&xi| self.eval(xi))
     }
 }
@@ -1074,6 +1080,9 @@ impl CubicHermiteSpline {
     }
 
     pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
+        if let Some(v) = cubic_cursor_eval_many(&self.x, &self.coeffs, x_new) {
+            return v;
+        }
         par_query_map(x_new, 24, |&xi| self.eval(xi))
     }
 }
@@ -5366,6 +5375,56 @@ where
 /// (65k), 3.1x (131k); the break-even is ~350k queries (work ≈ 1<<23). Gate there so cheap batch
 /// evals stay serial up to the point parallelism actually amortizes the spawn/alloc overhead.
 const PAR_QUERY_MIN_WORK: u64 = 1 << 23;
+
+/// Runtime switch to force the original `par_query_map` (per-point binary search)
+/// path for the piecewise-cubic `eval_many`s, for same-binary A/B benchmarks.
+/// Defaults off — sorted finite batches take the O(N+M) interval cursor.
+#[doc(hidden)]
+pub static INTERP_CUBIC_CURSOR_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Sorted-batch interval cursor shared by the piecewise-cubic interpolators
+/// (`CubicSplineStandalone`, `Akima1DInterpolator`, `CubicHermiteSpline`) whose
+/// per-segment value is `a + dx·(b + dx·(c + dx·d))` with `dx = xi − x[i]` and
+/// `i` the interval `find_interval_helper` returns (largest `i` with `x[i] ≤ xi`,
+/// clamped to `[0, n−2]`). Returns `Some(values)` — BYTE-IDENTICAL to mapping the
+/// per-point `eval` — only for a small-enough, all-finite, ascending `x_new`: the
+/// cursor advances monotonically (O(N+M)) instead of binary-searching each point
+/// (O(M·log N)), and the serial gate keeps the parallel spawn/alloc cost off cheap
+/// batches. Any NaN/∞/unsorted/huge batch returns `None` so the caller keeps its
+/// existing `par_query_map` path. Mirrors `PchipInterpolator::eval_many`
+/// (frankenscipy-b75mf); `n ≥ 2` holds for every constructed interpolator.
+fn cubic_cursor_eval_many(x: &[f64], coeffs: &[[f64; 4]], x_new: &[f64]) -> Option<Vec<f64>> {
+    if INTERP_CUBIC_CURSOR_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let work = (x_new.len() as u64).saturating_mul(24);
+    let serial_path = work < PAR_QUERY_MIN_WORK || x_new.len() < 4;
+    let sorted_finite =
+        x_new.iter().all(|v| v.is_finite()) && x_new.windows(2).all(|w| w[0] <= w[1]);
+    if !(serial_path && sorted_finite) {
+        return None;
+    }
+    let n = x.len();
+    let mut i = 0usize;
+    Some(
+        x_new
+            .iter()
+            .map(|&xi| {
+                if xi >= x[n - 1] {
+                    i = n - 2;
+                } else {
+                    while i + 1 < n - 1 && x[i + 1] <= xi {
+                        i += 1;
+                    }
+                }
+                let dx = xi - x[i];
+                let [a, b, c, d] = coeffs[i];
+                a + dx * (b + dx * (c + dx * d))
+            })
+            .collect(),
+    )
+}
 
 /// Like `par_query_map` but for fallible per-query evaluation. Returns the first error in
 /// query order (matching the serial `queries.iter().map(f).collect::<Result<Vec<_>, _>>()`):

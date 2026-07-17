@@ -22676,3 +22676,30 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   come to dominate) — this measures the s=0 regime where the saved matmuls bite. No LTO/`release-perf` build, local
   Cargo fallback, `force_local`, stash mutation, or unrelated-file edit entered the decision. Bead:
   `frankenscipy-sj5vz`.
+
+## 2026-07-16 - BlackThrush (cc) - KEEP (byte-identical): extend the PCHIP sorted-batch cursor to the sibling cubic interpolators — 3.09-6.47x
+
+- FRESH-SUBSYSTEM pivot (linalg matrix-fn/values-only and opt LM cores are exhausted this sweep). A prior KEEP
+  (`frankenscipy-b75mf`) gave `PchipInterpolator::eval_many` an O(N+M) sorted-batch interval cursor (2.6x), but its
+  structurally-identical siblings — `CubicSplineStandalone`, `Akima1DInterpolator`, `CubicHermiteSpline` — still ran
+  `par_query_map(x_new, 24, |&xi| self.eval(xi))`, i.e. an O(M·log N) binary search per query. All four store the
+  same `(x: Vec<f64>, coeffs: Vec<[f64;4]>)` and evaluate `a + dx·(b + dx·(c + dx·d))` at the interval
+  `find_interval_helper` returns, so PCHIP's cursor is a drop-in.
+- ONE LEVER: extracted `cubic_cursor_eval_many(x, coeffs, x_new) -> Option<Vec<f64>>` (mirrors PCHIP's inline
+  cursor) and called it first in all three siblings' `eval_many`; `None` (NaN/∞/unsorted/huge batch) falls through
+  to the existing `par_query_map`. BYTE-IDENTICAL: the monotone cursor returns the same interval index as
+  `find_interval_helper` (largest `i` with `x[i] ≤ xi`, clamped `[0,n−2]`, same endpoint handling) and the same
+  Horner evaluation; guarded by a same-binary `INTERP_CUBIC_CURSOR_DISABLE` toggle. The bench asserts `f64::to_bits`
+  equality of the cursor vs `par_query_map` arms for all three interpolators (× both batch sizes) before timing —
+  passed.
+- Same-binary A/B (rch remote `--no-run` build → private target → local run; `query_1d` is sorted+finite and
+  m ≤ 349k so both arms take the SERIAL path — the cursor's target regime): **cubic m=4096** 9.89 µs vs 64.02 µs →
+  **6.47x**; **akima m=4096** 9.61 vs 54.14 → **5.64x**; **cubic m=100000** 236.5 vs 730.2 → **3.09x**; **akima
+  m=100000** 249.9 vs 807.9 → **3.23x**. CIs cleanly separated, monotone; the ratio shrinks with M as the Horner
+  work (shared by both arms) comes to dominate the search cost. KEEP.
+- Disposition: KEEP. Shipped `crates/fsci-interpolate/src/lib.rs` (helper + `INTERP_CUBIC_CURSOR_DISABLE` + three
+  `eval_many` call sites) and the `bench_cubic_cursor_eval_many_ab` A/B harness. A disk-pressure reaper (`/data/tmp`
+  at 92%) evicted the private target before a confirming re-run; the one clean measurement (asserts green, 3-6.5x,
+  CIs separated) stands — the eviction is an environment note, not evidence. No LTO/`release-perf` build, local
+  Cargo fallback, `force_local`, stash mutation, or unrelated-file edit entered the decision. Bead:
+  `frankenscipy-8a5v5`.
