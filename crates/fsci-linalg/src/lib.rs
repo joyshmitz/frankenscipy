@@ -8850,6 +8850,13 @@ pub fn coshm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
     Ok(rows_from_dmatrix(&result))
 }
 
+/// Runtime switch to force the original two-independent-`expm` `tanhm` path for
+/// same-binary A/B benchmarks. Defaults off — `tanhm` shares the Padé polynomials
+/// between `expm(A)` and `expm(-A)` via `expm_pm`. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static TANHM_SHARED_PADE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Matrix hyperbolic tangent.
 ///
 /// Matches `scipy.linalg.tanhm(A) = solve(coshm(A), sinhm(A))`.
@@ -8858,8 +8865,21 @@ pub fn tanhm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
     if m.nrows() == 0 {
         return Ok(Vec::new());
     }
-    let ep = expm_pade_scaling_squaring(&m);
-    let en = expm_pade_scaling_squaring(&(-&m));
+    // `coshm = (expm(A)+expm(-A))/2`, `sinhm = (expm(A)-expm(-A))/2`. The [13/13]
+    // Padé even/odd polynomials depend only on A², so they are identical for A and
+    // −A; `expm_pm` forms them ONCE (6 matmuls) and adds a second LU solve, instead
+    // of two independent `expm` runs (~12 matmuls). Bit-identical: negation is exact
+    // in IEEE-754 and the matmul reduction order is unchanged, so `expm_pm`'s `e_neg`
+    // equals `expm_pade_scaling_squaring(&(-A))` bit-for-bit (same path sinhm/coshm
+    // already take). Same-binary A/B via `TANHM_SHARED_PADE_DISABLE`.
+    let (ep, en) = if TANHM_SHARED_PADE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        (
+            expm_pade_scaling_squaring(&m),
+            expm_pade_scaling_squaring(&(-&m)),
+        )
+    } else {
+        expm_pm(&m)
+    };
     let cosh = (&ep + &en) * 0.5;
     let sinh = (&ep - &en) * 0.5;
     let x = cosh.lu().solve(&sinh).ok_or(LinalgError::SingularMatrix)?;

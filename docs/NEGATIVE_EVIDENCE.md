@@ -22651,3 +22651,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   Repeated pooled-cache eviction triggered worker switching but did not enter the score. No second A/B,
   LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit was used.
   Bead: `frankenscipy-89wmj`.
+
+## 2026-07-16 - BlackThrush (cc) - KEEP (byte-identical): linalg `tanhm` shares the Padé polynomials via `expm_pm` — 1.30-1.36x
+
+- FRESH-SUBSYSTEM pivot (the alloc-hoist/parallelize/batch veins are swept — see the loadtxt REJECT above). Audited
+  the matrix-function family for an ALGORITHMIC gap: expm uses Padé+scaling-squaring, logm/sqrtm/Lyapunov/Sylvester/
+  Riccati already use the right algorithms (Bartels-Stewart, SDA, sign-function — Kronecker O(n⁶) long gone). The one
+  redundant site: `tanhm = solve(coshm, sinhm)` computed `expm(A)` and `expm(-A)` as TWO independent
+  `expm_pade_scaling_squaring` runs (~12 matmuls), while `sinhm`/`coshm` already route through `expm_pm`, which
+  forms the [13/13] even/odd Padé polynomials ONCE (they depend only on A², identical for A and −A) and adds one
+  extra LU solve (~6 matmuls + 2 solves).
+- ONE LEVER: `tanhm` now takes `(ep, en) = expm_pm(&m)` instead of two `expm_pade_scaling_squaring` calls, behind a
+  same-binary `TANHM_SHARED_PADE_DISABLE` toggle (default off = shared). BIT-IDENTICAL: IEEE-754 negation is exact
+  and `par_dmatmul`'s reduction order is unchanged, so `expm_pm`'s `e_neg` equals `expm_pade_scaling_squaring(&(-A))`
+  bit-for-bit — the same path sinhm/coshm already take. The bench asserts `f64::to_bits` equality of both arms
+  before timing (passed).
+- Same-binary A/B: bench built strict-remote (rch, `cargo bench --no-run`, non-LTO release) into a PRIVATE target,
+  run on one local machine (ratio machine-independent). Matrices scaled to 1-norm ≪ θ₁₃ so s=0 (no squarings
+  dilute the shared-matmul win). Two runs, sample_size 10: **n=48** shared **182.0/181.4 µs** vs orig
+  **236.8/237.6 µs** → **1.30-1.31x**; **n=96** shared **976/992 µs** vs orig **1328/1291 µs** → **1.30-1.36x**.
+  CIs cleanly separated in both, monotone across sizes. KEEP.
+- Disposition: KEEP. Shipped `crates/fsci-linalg/src/lib.rs` (tanhm + `TANHM_SHARED_PADE_DISABLE`) and the
+  `bench_tanhm_shared_pade_ab` A/B harness. The win dilutes toward 1.0x as ‖A‖₁ grows (squarings, which are shared,
+  come to dominate) — this measures the s=0 regime where the saved matmuls bite. No LTO/`release-perf` build, local
+  Cargo fallback, `force_local`, stash mutation, or unrelated-file edit entered the decision. Bead:
+  `frankenscipy-sj5vz`.

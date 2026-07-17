@@ -9,9 +9,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
     DecompOptions, HELMERT_FORCE_SERIAL, IS_DIAGONAL_FORCE_SERIAL, InvOptions,
     KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions,
-    SolveOptions, TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, frobenius_norm,
-    inv, is_diagonal, lstsq, lu_factor, lu_solve, mat_flatten, matmul, orthogonal_procrustes,
-    pascal, pinv, randomized_eigh, solve, solve_banded, solve_triangular, svd, vdot,
+    SolveOptions, TANHM_SHARED_PADE_DISABLE, TriangularSolveOptions, cho_factor, cho_solve, det,
+    dft, eigh, frobenius_norm, inv, is_diagonal, lstsq, lu_factor, lu_solve, mat_flatten, matmul,
+    orthogonal_procrustes, pascal, pinv, randomized_eigh, solve, solve_banded, solve_triangular,
+    svd, tanhm, vdot,
 };
 #[cfg(feature = "chol-wall-bench")]
 use fsci_linalg::{cholesky_wall_mr4_nr4_candidate, cholesky_wall_mr4_nr8_orig};
@@ -1549,6 +1550,53 @@ fn bench_khatri_rao_parallel_ab(c: &mut Criterion) {
     group.finish();
 }
 
+/// Same-binary A/B for `tanhm` sharing the [13/13] Padé polynomials between
+/// `expm(A)` and `expm(-A)` via `expm_pm` (6 matmuls + 2 solves) versus two
+/// independent `expm` runs (~12 matmuls). Matrices are scaled to 1-norm well
+/// under theta13 so the scaling-squaring exponent s=0 (no squarings dilute the
+/// shared-matmul win). Both arms asserted byte-identical before timing.
+fn bench_tanhm_shared_pade_ab(c: &mut Criterion) {
+    fn small_norm_matrix(n: usize, seed: usize) -> Vec<Vec<f64>> {
+        let base = make_matmul_matrix(n, n, seed);
+        let scale = 1.0 / n as f64; // 1-norm ~ 0.48 => s = 0
+        base.iter()
+            .map(|r| r.iter().map(|&v| v * scale).collect())
+            .collect()
+    }
+    let mut group = c.benchmark_group("tanhm_shared_pade_ab");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    for &n in &[48usize, 96usize] {
+        let a = small_norm_matrix(n, 0x5b3d);
+        TANHM_SHARED_PADE_DISABLE.store(false, Ordering::Relaxed);
+        let shared = tanhm(&a, DecompOptions::default()).unwrap();
+        TANHM_SHARED_PADE_DISABLE.store(true, Ordering::Relaxed);
+        let orig = tanhm(&a, DecompOptions::default()).unwrap();
+        assert!(
+            shared
+                .iter()
+                .zip(&orig)
+                .all(|(rs, ro)| rs.iter().zip(ro).all(|(x, y)| x.to_bits() == y.to_bits())),
+            "tanhm shared-Pade must be byte-identical to the two-expm path"
+        );
+        group.bench_function(format!("current_shared_n{n}"), |bencher| {
+            bencher.iter(|| {
+                TANHM_SHARED_PADE_DISABLE.store(false, Ordering::Relaxed);
+                black_box(tanhm(black_box(&a), DecompOptions::default()).unwrap())
+            });
+        });
+        group.bench_function(format!("orig_two_expm_n{n}"), |bencher| {
+            bencher.iter(|| {
+                TANHM_SHARED_PADE_DISABLE.store(true, Ordering::Relaxed);
+                black_box(tanhm(black_box(&a), DecompOptions::default()).unwrap())
+            });
+        });
+    }
+    TANHM_SHARED_PADE_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_helmert_parallel_ab(c: &mut Criterion) {
     let mut group = c.benchmark_group("helmert_parallel_ab");
     group.sample_size(10);
@@ -1724,6 +1772,7 @@ criterion_group!(
     bench_det_gauntlet,
     bench_orthogonal_procrustes_gauntlet,
     bench_khatri_rao_parallel_ab,
+    bench_tanhm_shared_pade_ab,
     bench_helmert_parallel_ab,
     bench_pascal_symmetric_ab,
     bench_lu_factor_solve_gauntlet,
