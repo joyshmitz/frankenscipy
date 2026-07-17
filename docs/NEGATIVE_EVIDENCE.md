@@ -22703,3 +22703,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   CIs separated) stands — the eviction is an environment note, not evidence. No LTO/`release-perf` build, local
   Cargo fallback, `force_local`, stash mutation, or unrelated-file edit entered the decision. Bead:
   `frankenscipy-8a5v5`.
+
+## 2026-07-16 - BlackThrush (cc) - KEEP (~1e-13 tolerance): N-D GaussianKde batches the kernel exp through the 1-D SIMD path — 1.18-1.33x
+
+- FRESH-SUBSYSTEM pivot continued (the interpolate cursor, linalg matrix-fn, and opt LM veins are worked). The
+  1-D `GaussianKde` already runs its always-`≤0` kernel exponent through an 8-lane polynomial `kde_simd_exp_nonpos`
+  (plus a tail-window), but its sibling `GaussianKdeNd::evaluate` summed `Σ_i exp(-½‖wq−wᵢ‖²)` with a SCALAR `exp`
+  per pre-whitened point — the `exp` is the O(M·N·d) bottleneck. Same "sibling missing the sibling's optimization"
+  shape as tanhm (sj5vz) and the cubic cursor (8a5v5).
+- ONE LEVER: factored `evaluate_whitened(wq)`; when the dataset is finite and `n ≥ 64` and the query is finite, the
+  per-point squared distances are computed with the IDENTICAL scalar reduction, buffered 8 at a time, and
+  exponentiated as one `kde_simd_exp_nonpos` SIMD op (2-accumulator style mirrored from the 1-D
+  `gaussian_kde_evaluate_window_simd`); a precomputed `data_finite` flag keeps the gate O(1). `evaluate_many`
+  (already parallel across queries) inherits it. Guarded by `GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE`.
+- NOT byte-identical (the polynomial exp + lane-group summation differ from scalar `exp` by ~1e-13, well inside the
+  KDE tolerance — the same trade-off the 1-D path already ships). The bench asserts the SIMD vs scalar arms agree to
+  `< 1e-11` max relative before timing (passed at d=2,3,6).
+- Same-binary A/B (rch remote `--no-run` build → private target → local run; n=2000, m=4000): two runs, the second
+  under lower machine contention. **d=2** 1.04x (noisy) → **1.25x** (clean); **d=3** 1.33x → 1.22x; **d=6** 1.27x →
+  1.18x. Consistent **~1.18-1.33x** with CIs separated on the clean run, no regression at any d. KEEP.
+- Disposition: KEEP. Shipped `crates/fsci-stats/src/lib.rs` (`evaluate_whitened` SIMD path + `data_finite` +
+  `GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE` + `KDE_ND_SIMD_MIN_POINTS`) and the `bench_kde_nd_simd_ab` harness. No
+  LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit entered the
+  decision. The reaper did not strike this run. Bead: `frankenscipy-bk651`.

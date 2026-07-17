@@ -41879,6 +41879,20 @@ pub static GAUSSIAN_KDE_ND_WHITEN_FORCE_SERIAL: std::sync::atomic::AtomicBool =
 pub static GAUSSIAN_KDE_ND_COV_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, [`GaussianKdeNd`] evaluates its per-query kernel sum with the scalar
+/// `exp` loop (the ORIG behaviour); default `false` batches the `exp` (always applied to
+/// a `≤0` argument) through the 8-lane `kde_simd_exp_nonpos` polynomial — the same SIMD
+/// exp the 1-D KDE already uses. Result matches the scalar loop to ~1e-13 (polynomial
+/// exp + lane-group summation), well inside the KDE tolerance. `#[doc(hidden)]` — the
+/// same-binary A/B knob.
+#[doc(hidden)]
+pub static GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Minimum dataset size for the N-D KDE SIMD-exp path (below it the per-block setup
+/// isn't worth it; the scalar loop runs instead).
+const KDE_ND_SIMD_MIN_POINTS: usize = 64;
+
 pub struct GaussianKdeNd {
     /// Pre-whitened data points: `n` rows of `L⁻¹ xᵢ` (`d` coords each). Whitening
     /// each point ONCE (in `new`) turns a query's Mahalanobis quadratic form
@@ -41893,6 +41907,11 @@ pub struct GaussianKdeNd {
     chol: Vec<Vec<f64>>,
     /// `(2π)^(-d/2) / Π L_ii / n` — the per-kernel normalizer times `1/n`.
     norm: f64,
+    /// Whether every whitened coordinate is finite — precomputed so the SIMD-exp
+    /// evaluate path can gate in O(1) (the polynomial `kde_simd_exp_nonpos` does
+    /// not reproduce scalar `exp`'s NaN/∞ propagation, so a non-finite dataset
+    /// falls back to the scalar loop).
+    data_finite: bool,
 }
 
 /// Forward-substitution solve `L w = x` for lower-triangular `L` (`d×d`), i.e.
@@ -42059,11 +42078,13 @@ impl GaussianKdeNd {
             out
         };
 
+        let data_finite = whitened.iter().all(|w| w.iter().all(|v| v.is_finite()));
         Some(Self {
             whitened,
             d,
             chol,
             norm,
+            data_finite,
         })
     }
 
@@ -42082,16 +42103,63 @@ impl GaussianKdeNd {
         // solve). Mathematically identical to the forward-sub form; differs only
         // by floating-point reassociation (~1e-13, well within KDE tolerance).
         let wq = kde_whiten_lower(&self.chol, q, d);
-        let mut acc = 0.0f64;
-        for wx in &self.whitened {
+        self.evaluate_whitened(&wq)
+    }
+
+    /// Kernel sum `Σ_i exp(-½‖wq - wᵢ‖²) · norm` for a pre-whitened query `wq`.
+    /// The exponent is always `≤ 0`, so — like the 1-D KDE — the `exp` can run through
+    /// the 8-lane `kde_simd_exp_nonpos` polynomial: the squared distances are computed
+    /// with the identical scalar reduction, buffered 8 at a time, and exponentiated as
+    /// one SIMD op. Matches the scalar loop to ~1e-13 (polynomial exp + lane-group sum).
+    /// Falls back to scalar for a small/non-finite dataset or a non-finite query.
+    fn evaluate_whitened(&self, wq: &[f64]) -> f64 {
+        let d = self.d;
+        let n = self.whitened.len();
+        let use_simd = !GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+            && self.data_finite
+            && n >= KDE_ND_SIMD_MIN_POINTS
+            && wq.iter().all(|v| v.is_finite());
+        if !use_simd {
+            let mut acc = 0.0f64;
+            for wx in &self.whitened {
+                let mut quad = 0.0f64;
+                for i in 0..d {
+                    let diff = wq[i] - wx[i];
+                    quad += diff * diff;
+                }
+                acc += (-0.5 * quad).exp();
+            }
+            return acc * self.norm;
+        }
+
+        use std::simd::{Simd, num::SimdFloat};
+        let minus_half = Simd::<f64, KDE_SIMD_LANES>::splat(-0.5);
+        let mut acc = Simd::<f64, KDE_SIMD_LANES>::splat(0.0);
+        let mut buf = [0.0f64; KDE_SIMD_LANES];
+        let mut i = 0;
+        while i + KDE_SIMD_LANES <= n {
+            for (k, slot) in buf.iter_mut().enumerate() {
+                let wx = &self.whitened[i + k];
+                let mut quad = 0.0f64;
+                for j in 0..d {
+                    let diff = wq[j] - wx[j];
+                    quad += diff * diff;
+                }
+                *slot = quad;
+            }
+            acc += kde_simd_exp_nonpos(minus_half * Simd::from_array(buf));
+            i += KDE_SIMD_LANES;
+        }
+        let mut sum = acc.reduce_sum();
+        for wx in &self.whitened[i..n] {
             let mut quad = 0.0f64;
-            for i in 0..d {
-                let diff = wq[i] - wx[i];
+            for j in 0..d {
+                let diff = wq[j] - wx[j];
                 quad += diff * diff;
             }
-            acc += (-0.5 * quad).exp();
+            sum += (-0.5 * quad).exp();
         }
-        acc * self.norm
+        sum * self.norm
     }
 
     /// Evaluate at many query points. Each point is an independent

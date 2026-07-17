@@ -635,6 +635,67 @@ fn bench_kde_nd(c: &mut Criterion) {
     group.finish();
 }
 
+/// Same-binary A/B for the N-D KDE SIMD-exp path (batches the always-≤0 kernel exponent
+/// through `kde_simd_exp_nonpos`, the 8-lane exp the 1-D KDE already uses). The scalar and
+/// SIMD arms agree to ~1e-13 (polynomial exp + lane-group summation, well inside the KDE
+/// tolerance); the A/B measures the exp-batching win at several dimensionalities.
+fn bench_kde_nd_simd_ab(c: &mut Criterion) {
+    use fsci_stats::{GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE, GaussianKdeNd};
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("gaussian_kde_nd_simd_ab");
+    let n = 2000usize;
+    let m = 4000usize;
+    for &d in &[2usize, 3, 6] {
+        let data: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                let t = i as f64;
+                (0..d)
+                    .map(|j| (t * (0.013 + 0.004 * j as f64) + j as f64).sin() * (1.0 + j as f64))
+                    .collect()
+            })
+            .collect();
+        let kde = GaussianKdeNd::new(&data).expect("kde nd");
+        let q: Vec<Vec<f64>> = (0..m)
+            .map(|i| {
+                let t = i as f64;
+                (0..d)
+                    .map(|j| (t * (0.019 + 0.003 * j as f64)).cos() * (1.0 + j as f64))
+                    .collect()
+            })
+            .collect();
+
+        // Tolerance check: SIMD-exp arm vs scalar arm (NOT byte-identical — polynomial exp).
+        GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE.store(false, Ordering::Relaxed);
+        let simd = kde.evaluate_many(&q);
+        GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE.store(true, Ordering::Relaxed);
+        let scalar = kde.evaluate_many(&q);
+        let maxrel = simd
+            .iter()
+            .zip(&scalar)
+            .map(|(a, b)| (a - b).abs() / b.abs().max(1e-300))
+            .fold(0.0f64, f64::max);
+        assert!(
+            maxrel < 1e-11,
+            "N-D KDE SIMD-exp vs scalar max reldiff {maxrel:e} exceeds 1e-11 (d={d})"
+        );
+
+        group.bench_function(BenchmarkId::new("current_simd", d), |b| {
+            b.iter(|| {
+                GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE.store(false, Ordering::Relaxed);
+                black_box(kde.evaluate_many(black_box(&q)))
+            })
+        });
+        group.bench_function(BenchmarkId::new("orig_scalar", d), |b| {
+            b.iter(|| {
+                GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE.store(true, Ordering::Relaxed);
+                black_box(kde.evaluate_many(black_box(&q)))
+            })
+        });
+    }
+    GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_kde(c: &mut Criterion) {
     use fsci_stats::{
         GAUSSIAN_KDE_SIMD_EXP_DISABLE, GAUSSIAN_KDE_TAIL_WINDOW_DISABLE, GaussianKde,
@@ -1323,6 +1384,7 @@ criterion_group!(
     bench_distribution_batch,
     bench_kde,
     bench_kde_nd,
+    bench_kde_nd_simd_ab,
     bench_mvn_pdf,
     bench_mvt_pdf,
     bench_rank_tests
