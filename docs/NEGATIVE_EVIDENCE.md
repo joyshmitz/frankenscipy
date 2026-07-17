@@ -22792,3 +22792,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   and the `bench_bdf_newton_alloc_ab` harness. Modest but zero-risk (byte-identical + monotone), and the ratio grows
   with Newton iteration count. No LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or
   unrelated-file edit entered the decision. Bead: `frankenscipy-dte8a`.
+
+## 2026-07-16 - BlackThrush (cc) - KEEP (byte-identical): odr dense LM hoists the JᵀJ build out of the damping-retry loop — neutral→1.25x
+
+- Shared-predictor lever. ODR's dense reference LM path (`solve_least_squares`, used for non-scalar-separable
+  models) has an inner `for _ in 0..8` damping-retry loop that called `solve_lm_step(&jac, &r, damping)` for EACH
+  try. `jac`/`r` are FIXED across the retries (an accepted step recomputes them and breaks to the next outer
+  iteration), but `solve_lm_step` rebuilt the entire `JᵀJ`/`Jᵀr` normal equations every call — and `JᵀJ` is the
+  O(n²·nrows) "per-iteration hot spot" (for coupled ODR models n≈nrows≈n_data, so ~O(n_data³) per build). The
+  normal equations are damping-independent, so on every rejected retry that rebuild was pure redundancy.
+- ONE LEVER: split `solve_lm_step` into `build_normal_equations(jac, r) → (JᵀJ, −Jᵀr)` and
+  `solve_damped_normal(&JᵀJ, &rhs, damping)` (clone the diagonal, add `damping`, Gauss-Jordan solve). The loop now
+  builds ONCE per Jacobian and calls `solve_damped_normal` per retry. BYTE-IDENTICAL: the cached `JᵀJ` equals the
+  freshly-rebuilt one, and `solve_damped_normal`'s (`JᵀJ + damping·I`, `rhs`, `gaussian_solve`) matches the ORIG
+  in-place add + solve exactly. `ODR_LMSTEP_HOIST_DISABLE` restores the per-retry rebuild; the bench asserts fitted
+  `beta` + `sum_square` `to_bits`-equal between arms.
+- Same-binary A/B (rch remote build+run, `run_dense_reference`, sample_size 10): the win scales with the damping
+  REJECTION count. **Well-conditioned (near init)**: n200 **1.003x**, n400 **1.011x** — NEUTRAL (steps accept
+  first-try ⇒ ~1 build/iter ⇒ nothing to save; the extra O(n²) diagonal-copy is negligible vs the O(n²·nrows)
+  build). **Ill-conditioned (far init `[6,-4,3,3.5]`, many damping retries — realistic for errors-in-variables)**:
+  n200 **1.21-1.25x**, n400 **1.11-1.13x**, CIs cleanly separated both runs. KEEP: byte-identical, neutral floor
+  (never regresses), real win exactly where ODR spends its time on hard fits.
+- Disposition: KEEP. Shipped `crates/fsci-odr/src/lib.rs` (`build_normal_equations`/`solve_damped_normal` split +
+  hoisted loop + `ODR_LMSTEP_HOIST_DISABLE`) and the `bench_odr_dense_hoist_ab` harness (near + far init). No
+  LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit entered the
+  decision. Bead: `frankenscipy-5jyeg`.

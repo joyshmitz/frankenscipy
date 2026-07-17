@@ -992,9 +992,23 @@ where
             });
         }
 
+        // JᵀJ/Jᵀr are damping-independent, so build them ONCE per Jacobian and reuse them
+        // across the ≤8 damping retries below (each retry only re-adds `damping` to a copy
+        // of the diagonal). `jac`/`r` are fixed for the whole inner loop — an accepted step
+        // recomputes them and `break`s to the next outer iteration. `ODR_LMSTEP_HOIST_DISABLE`
+        // restores the per-retry rebuild (the A/B baseline). Byte-identical.
+        let cached_normal = if ODR_LMSTEP_HOIST_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            None
+        } else {
+            Some(build_normal_equations(&jac, &r))
+        };
+
         let mut accepted = false;
         for _ in 0..8 {
-            let step = solve_lm_step(&jac, &r, damping)?;
+            let step = match &cached_normal {
+                Some((normal, rhs)) => solve_damped_normal(normal, rhs, damping)?,
+                None => solve_lm_step(&jac, &r, damping)?,
+            };
             if max_abs(&step) <= options.partol * (1.0 + max_abs(&x)) {
                 return Ok(LocalLeastSquaresResult {
                     x,
@@ -1530,11 +1544,20 @@ where
 pub static ODR_LMSTEP_FORCE_SERIAL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-fn solve_lm_step(
-    jacobian: &[Vec<f64>],
-    residuals: &[f64],
-    damping: f64,
-) -> Result<Vec<f64>, OdrError> {
+/// When `true`, the dense LM loop rebuilds the `JᵀJ`/`Jᵀr` normal equations on EVERY
+/// damping retry (the ORIG behaviour); default `false` builds them ONCE per Jacobian and
+/// only re-adds `damping` to a copy of the diagonal for each retry — the normal equations
+/// are damping-independent, so within a Levenberg-Marquardt iteration (`jac`/`r` fixed
+/// across the ≤8 damping tries) the rebuild was redundant. `JᵀJ` is the O(n²·nrows)
+/// per-iteration hot spot; the copy is O(n²). Byte-identical. `#[doc(hidden)]` — A/B knob.
+#[doc(hidden)]
+pub static ODR_LMSTEP_HOIST_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Build the damping-independent LM normal equations `(JᵀJ, −Jᵀr)` from the Jacobian and
+/// residuals. Split out of [`solve_lm_step`] so the dense LM loop can build them ONCE per
+/// Jacobian and reuse them across the damping retries (see [`solve_damped_normal`]).
+fn build_normal_equations(jacobian: &[Vec<f64>], residuals: &[f64]) -> (Vec<Vec<f64>>, Vec<f64>) {
     let n = jacobian.first().map_or(0, Vec::len);
     let nrows = jacobian.len();
     let mut normal = vec![vec![0.0; n]; n];
@@ -1591,15 +1614,39 @@ fn solve_lm_step(
             }
         });
     }
+    (normal, rhs)
+}
+
+/// Solve `(JᵀJ + damping·I)·step = −Jᵀr` from the cached normal equations, re-adding
+/// `damping` to a COPY of `normal`'s diagonal (so the cached `normal`/`rhs` stay reusable
+/// across the damping retries). Byte-identical to [`solve_lm_step`]'s in-place add + solve
+/// — same matrix `JᵀJ + damping·I`, same `rhs`, same [`gaussian_solve`].
+fn solve_damped_normal(
+    normal: &[Vec<f64>],
+    rhs: &[f64],
+    damping: f64,
+) -> Result<Vec<f64>, OdrError> {
+    let mut m: Vec<Vec<f64>> = normal.iter().map(Clone::clone).collect();
+    for (idx, row) in m.iter_mut().enumerate() {
+        row[idx] += damping;
+    }
+    gaussian_solve(m, rhs.to_vec()).ok_or_else(|| OdrError::SolverFailure {
+        detail: String::from("normal equations are singular"),
+    })
+}
+
+/// Build `JᵀJ + damping·I` and solve `·step = −Jᵀr` in one shot (rebuilding the normal
+/// equations each call — the ORIG per-damping-retry path, kept as the A/B baseline).
+/// A direct Gauss-Jordan solve does ~half the O(n³) work of inverting-then-multiplying.
+fn solve_lm_step(
+    jacobian: &[Vec<f64>],
+    residuals: &[f64],
+    damping: f64,
+) -> Result<Vec<f64>, OdrError> {
+    let (mut normal, rhs) = build_normal_equations(jacobian, residuals);
     for (idx, row) in normal.iter_mut().enumerate() {
         row[idx] += damping;
     }
-    // Solve `normal · step = rhs` directly instead of forming the full inverse
-    // and multiplying: the LM step needs only the one solution vector, and a
-    // direct Gauss-Jordan solve does ~half the O(n^3) work (it transforms the
-    // single RHS column, not an n-column identity) while being the numerically
-    // preferable route. For ODR the solve dimension is n_params + n_free_delta
-    // (one delta per data point), so this is the per-iteration bottleneck.
     gaussian_solve(normal, rhs).ok_or_else(|| OdrError::SolverFailure {
         detail: String::from("normal equations are singular"),
     })
