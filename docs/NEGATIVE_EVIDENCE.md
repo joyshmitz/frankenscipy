@@ -22747,3 +22747,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   not clear the clean-KEEP bar. Candidate stashed non-destructively (NOT dropped), production restored no owned
   diff. Retry only with a TRANSPOSED-point layout that also SIMDs the distance (helps high d) or a proven
   memory-bandwidth headroom on the parallel path. Bead: `frankenscipy-0o0mr`.
+
+## 2026-07-16 - BlackThrush (cc) - KEEP (byte-identical): kmedoids fuses the M×M distance row-sum into direct cost accumulation — 2.4-3.8x
+
+- FRESH byte-identical structural lever (after the mean_shift SIMD-exp reject). `kmedoids`'s medoid-update step,
+  per cluster per iteration, materialized the full symmetric M×M intra-cluster distance matrix (a `Vec<Vec<f64>>`)
+  and then row-summed it in a SEPARATE O(M²) pass to score each candidate. For a 500-member cluster that's a ~2 MB
+  matrix (spills L2) plus a second full memory sweep over it — pure overhead: the matrix is used ONLY for the row
+  sums.
+- ONE LEVER: accumulate each candidate's total distance directly from the M(M-1)/2 pair distances
+  (`cost[i]+=dist; cost[j]+=dist`), dropping the M×M matrix and the second pass. BYTE-IDENTICAL: `cost[i]` receives
+  the same `dist(i,j)` terms in the same order as `dmat[i].iter().sum()` — the `<i` terms during earlier outer
+  iterations (ascending), the `>i` terms during outer iteration `i`; the only difference is the skipped diagonal,
+  a `+0.0` no-op on the non-negative running sum — and the strict-`<` first-wins min-selection is unchanged.
+  `sq_dist` is symmetric bit-for-bit (`(a−b)²==(b−a)²`), so the shared `dist` matches the matrix arm exactly.
+  Guarded by `KMEDOIDS_COST_FUSE_DISABLE`; the bench asserts the FULL result (labels, `inertia.to_bits()`,
+  centroids `to_bits`) is bit-equal between arms across all 50 iterations before timing (passed).
+- Same-binary A/B (rch remote build + run, `cargo bench` one-shot so the reaper can't evict mid-measure): two
+  runs. **n=2000 k=4 d=4** fused **3.14/3.10 ms** vs matrix **11.23/11.68 ms** → **3.57-3.76x**; **n=3000 k=6 d=8**
+  fused **7.65/7.76 ms** vs matrix **18.47/19.24 ms** → **2.41-2.48x**. CIs cleanly separated, stable. The win is
+  dominated by eliminating the cache-thrashing M×M matrix + its second sweep, so it grows with cluster size. KEEP.
+- Disposition: KEEP. Shipped `crates/fsci-cluster/src/lib.rs` (fused path + `KMEDOIDS_COST_FUSE_DISABLE`) and the
+  `bench_kmedoids_fuse_ab` harness. A pre-existing FMA-codegen 1-ULP failure in the unrelated linkage bench's
+  byte-exact assert (rch avx2+fma build) was worked around by temporarily dropping that bench from the group to
+  run mine; restored before commit (exact-diff confirmed). No LTO/`release-perf` build, local Cargo fallback,
+  `force_local`, stash mutation, or unrelated-file edit entered the decision. Bead: `frankenscipy-nc75k`.

@@ -387,9 +387,50 @@ fn bench_silhouette(c: &mut Criterion) {
     group.finish();
 }
 
+/// Same-binary A/B for fusing kmedoids' intra-cluster distance row-sum directly into
+/// per-candidate cost accumulation (dropping the M×M matrix + its second O(M²) pass).
+/// Byte-identical — the full result (labels/centroids/inertia) is asserted bit-equal
+/// between the fused and matrix arms before timing.
+fn bench_kmedoids_fuse_ab(c: &mut Criterion) {
+    use fsci_cluster::{KMEDOIDS_COST_FUSE_DISABLE, kmedoids};
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("kmedoids_fuse_ab");
+    for &(n, k, d) in &[(2000usize, 4usize, 4usize), (3000, 6, 8)] {
+        let data = blobs(n, d);
+        KMEDOIDS_COST_FUSE_DISABLE.store(false, Ordering::Relaxed);
+        let f = kmedoids(&data, k, 50, 42).expect("kmedoids fused");
+        KMEDOIDS_COST_FUSE_DISABLE.store(true, Ordering::Relaxed);
+        let o = kmedoids(&data, k, 50, 42).expect("kmedoids orig");
+        assert_eq!(f.labels, o.labels, "kmedoids fuse labels mismatch (n={n} k={k})");
+        assert_eq!(f.inertia.to_bits(), o.inertia.to_bits(), "kmedoids fuse inertia mismatch");
+        assert!(
+            f.centroids
+                .iter()
+                .zip(&o.centroids)
+                .all(|(a, b)| a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())),
+            "kmedoids fuse centroids not byte-identical (n={n} k={k})"
+        );
+        group.bench_function(BenchmarkId::new("current_fused", format!("n{n}_k{k}_d{d}")), |b| {
+            b.iter(|| {
+                KMEDOIDS_COST_FUSE_DISABLE.store(false, Ordering::Relaxed);
+                kmedoids(&data, k, 50, 42).expect("km")
+            })
+        });
+        group.bench_function(BenchmarkId::new("orig_matrix", format!("n{n}_k{k}_d{d}")), |b| {
+            b.iter(|| {
+                KMEDOIDS_COST_FUSE_DISABLE.store(true, Ordering::Relaxed);
+                kmedoids(&data, k, 50, 42).expect("km")
+            })
+        });
+    }
+    KMEDOIDS_COST_FUSE_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_kmeans,
+    bench_kmedoids_fuse_ab,
     bench_gmm,
     bench_hierarchical,
     bench_va60h_linkage_gauntlet,

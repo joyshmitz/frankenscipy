@@ -7341,6 +7341,14 @@ pub fn gap_statistic(data: &[Vec<f64>], max_k: usize, n_ref: usize, seed: u64) -
 /// K-medoids (PAM) clustering.
 ///
 /// Similar to K-means but uses actual data points as centers.
+/// When `true`, `kmedoids` builds the full M×M intra-cluster distance matrix and
+/// row-sums it (the ORIG behaviour); default `false` accumulates each candidate's
+/// total distance directly from the pair distances (no M×M matrix, no second O(M²)
+/// pass) — byte-identical. `#[doc(hidden)]` — same-binary A/B knob.
+#[doc(hidden)]
+pub static KMEDOIDS_COST_FUSE_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn kmedoids(
     data: &[Vec<f64>],
     k: usize,
@@ -7442,28 +7450,56 @@ pub fn kmedoids(
                 member_flat.extend_from_slice(row(mi));
             }
 
-            // Symmetric M×M intra-cluster distance matrix over the contiguous buffer.
-            let mut dmat = vec![vec![0.0_f64; m]; m];
-            for i in 0..m {
-                let mi = &member_flat[i * d..i * d + d];
-                for j in (i + 1)..m {
-                    let dist = sq_dist(mi, &member_flat[j * d..j * d + d]).sqrt();
-                    dmat[i][j] = dist;
-                    dmat[j][i] = dist;
+            // Each candidate's total distance to the other members — the minimizing
+            // member is the new medoid. Fused (default): accumulate the per-candidate
+            // cost directly from the M(M-1)/2 pair distances instead of materializing the
+            // M×M matrix and row-summing it in a SECOND O(M²) pass. BYTE-IDENTICAL:
+            // `cost[i]` receives the same `dist(i,j)` terms in the same order as
+            // `dmat[i].iter().sum()` (the `<i` terms during earlier outer iterations in
+            // ascending order, the `>i` terms during outer iteration `i`; the dropped
+            // diagonal is a `+0.0` no-op on the non-negative running sum), and the
+            // strict-`<` first-wins min-selection is unchanged.
+            let best_local = if KMEDOIDS_COST_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                let mut dmat = vec![vec![0.0_f64; m]; m];
+                for i in 0..m {
+                    let mi = &member_flat[i * d..i * d + d];
+                    for j in (i + 1)..m {
+                        let dist = sq_dist(mi, &member_flat[j * d..j * d + d]).sqrt();
+                        dmat[i][j] = dist;
+                        dmat[j][i] = dist;
+                    }
                 }
-            }
-
-            // For each candidate row, sum the distances to all other
-            // members. The minimizing row is the new medoid.
-            let mut best_local = 0usize;
-            let mut best_cost = dmat[0].iter().sum::<f64>();
-            for (i, row) in dmat.iter().enumerate().skip(1) {
-                let cost: f64 = row.iter().sum();
-                if cost < best_cost {
-                    best_cost = cost;
-                    best_local = i;
+                let mut best_local = 0usize;
+                let mut best_cost = dmat[0].iter().sum::<f64>();
+                for (i, row) in dmat.iter().enumerate().skip(1) {
+                    let cost: f64 = row.iter().sum();
+                    if cost < best_cost {
+                        best_cost = cost;
+                        best_local = i;
+                    }
                 }
-            }
+                best_local
+            } else {
+                let mut cost = vec![0.0f64; m];
+                for i in 0..m {
+                    let mi = &member_flat[i * d..i * d + d];
+                    for j in (i + 1)..m {
+                        let dist = sq_dist(mi, &member_flat[j * d..j * d + d]).sqrt();
+                        cost[i] += dist;
+                        cost[j] += dist;
+                    }
+                }
+                let mut best_local = 0usize;
+                let mut best_cost = cost[0];
+                for (i, &c) in cost.iter().enumerate().skip(1) {
+                    if c < best_cost {
+                        best_cost = c;
+                        best_local = i;
+                    }
+                }
+                best_local
+            };
             let best_med = members[best_local];
 
             if best_med != *medoid_index {
