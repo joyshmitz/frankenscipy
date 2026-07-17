@@ -683,8 +683,51 @@ fn bench_lm_jtj_build_ab(c: &mut Criterion) {
     group.finish();
 }
 
+/// Same-binary A/B for folding the `+λI` shift directly into the exact trust-region
+/// subproblem solve (dropping the redundant `shifted_matrix` copy per λ trial). Rosenbrock
+/// from the origin drives many constrained subproblem steps (each a bracketing + bisection
+/// sweep of `(H+λI)` solves). Byte-identical — final `x` and `fun` asserted bit-equal.
+fn bench_trust_exact_fold_shift_ab(c: &mut Criterion) {
+    use fsci_opt::{TRUST_EXACT_FOLD_SHIFT_DISABLE, trust_exact};
+    use std::sync::atomic::Ordering;
+    let mut group = c.benchmark_group("trust_exact_fold_shift_ab");
+    group.sample_size(20);
+    for &dim in &[5usize, 10, 20] {
+        let x0: Vec<f64> = vec![0.0; dim];
+        TRUST_EXACT_FOLD_SHIFT_DISABLE.store(false, Ordering::Relaxed);
+        let folded = trust_exact(&rosenbrock, &x0, opts(OptimizeMethod::TrustExact)).unwrap();
+        TRUST_EXACT_FOLD_SHIFT_DISABLE.store(true, Ordering::Relaxed);
+        let orig = trust_exact(&rosenbrock, &x0, opts(OptimizeMethod::TrustExact)).unwrap();
+        assert!(
+            folded.x.len() == orig.x.len()
+                && folded
+                    .x
+                    .iter()
+                    .zip(&orig.x)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+                && folded.fun.unwrap().to_bits() == orig.fun.unwrap().to_bits(),
+            "trust_exact fold-shift not byte-identical (dim={dim})"
+        );
+        group.bench_with_input(BenchmarkId::new("current_folded", dim), &x0, |b, x0| {
+            b.iter(|| {
+                TRUST_EXACT_FOLD_SHIFT_DISABLE.store(false, Ordering::Relaxed);
+                black_box(trust_exact(&rosenbrock, x0, opts(OptimizeMethod::TrustExact)))
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("orig_shifted_copy", dim), &x0, |b, x0| {
+            b.iter(|| {
+                TRUST_EXACT_FOLD_SHIFT_DISABLE.store(true, Ordering::Relaxed);
+                black_box(trust_exact(&rosenbrock, x0, opts(OptimizeMethod::TrustExact)))
+            });
+        });
+    }
+    TRUST_EXACT_FOLD_SHIFT_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_trust_exact_fold_shift_ab,
     bench_lm_jtj_build_ab,
     bench_select_three_ab,
     bench_finite_difference_helpers,

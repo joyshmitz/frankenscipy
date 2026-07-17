@@ -18,9 +18,10 @@ pub use linesearch::{
     line_search_wolfe2,
 };
 pub use minimize::{
-    MinimizeScalarOptions, MinimizeScalarResult, OptCaspDecision, OptCaspProblem, bfgs, cg_pr_plus,
-    get_optimize_traces, lbfgsb, minimize, minimize_many, minimize_scalar, minimize_scalar_many,
-    minimize_with_audit, nelder_mead, newton_cg, powell, select_minimize_method, trust_exact,
+    MinimizeScalarOptions, MinimizeScalarResult, OptCaspDecision, OptCaspProblem,
+    TRUST_EXACT_FOLD_SHIFT_DISABLE, bfgs, cg_pr_plus, get_optimize_traces, lbfgsb, minimize,
+    minimize_many, minimize_scalar, minimize_scalar_many, minimize_with_audit, nelder_mead,
+    newton_cg, powell, select_minimize_method, trust_exact,
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, anderson,

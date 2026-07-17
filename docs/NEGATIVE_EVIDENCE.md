@@ -22817,3 +22817,25 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   hoisted loop + `ODR_LMSTEP_HOIST_DISABLE`) and the `bench_odr_dense_hoist_ab` harness (near + far init). No
   LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit entered the
   decision. Bead: `frankenscipy-5jyeg`.
+
+## 2026-07-16 - BlackThrush (cc) - KEEP (byte-identical): trust-exact folds the +λI shift into the subproblem solve — 1.24-1.37x
+
+- `minimize(method='trust-exact')`'s exact trust-region subproblem (`trust_region_exact_step`) solves `(H+λI)s=−g`
+  for MANY λ (a bracketing + up-to-60-step bisection) via `solve_linear_system(&shifted_matrix(H, λ), rhs)`. Since
+  `trust_exact` already uses a BFGS Hessian (free — no per-iter FD Hessian evals), this subproblem is now the
+  DOMINANT cost. `shifted_matrix(H, λ)` is a `matrix.to_vec()` — a full NESTED `Vec<Vec<f64>>` clone (n heap
+  allocations of size-n rows) — built on EVERY λ trial, on top of the `aug` the solver already allocates. So each
+  λ paid TWO n-allocation matrix copies.
+- ONE LEVER: `solve_shifted_system(H, λ, rhs)` folds the `+λ` diagonal shift directly into the solver's augmented
+  `[H | rhs]` build (`aug[i][i] += λ`), dropping the intermediate `shifted_matrix` clone entirely (`solve_augmented`
+  extracted so both share the Gauss-Jordan elimination). BYTE-IDENTICAL: the augmented matrix `[H+λI | rhs]` is
+  identical, so the pivoting + elimination + back-substitution produce the same bits. Guarded by
+  `TRUST_EXACT_FOLD_SHIFT_DISABLE`; the bench asserts final `x` + `fun` `to_bits`-equal between arms.
+- Same-binary A/B (rch remote build+run, Rosenbrock from the origin — many constrained subproblem steps), two runs:
+  **dim=10** folded **2.99 ms** vs orig **4.08-4.11 ms** → **1.37x**; **dim=20** folded **17.4-17.8 ms** vs orig
+  **21.9-22.1 ms** → **1.24-1.26x**. CIs separated, stable. The win is allocation-bound (nested-`Vec` clone per λ),
+  so it holds across sizes. KEEP.
+- Disposition: KEEP. Shipped `crates/fsci-opt/src/minimize.rs` (`solve_augmented`/`solve_shifted_system` split +
+  gated subproblem + `TRUST_EXACT_FOLD_SHIFT_DISABLE`), `crates/fsci-opt/src/lib.rs` (re-export), and the
+  `bench_trust_exact_fold_shift_ab` harness. No LTO/`release-perf` build, local Cargo fallback, `force_local`,
+  stash mutation, or unrelated-file edit entered the decision. Bead: `frankenscipy-dw8xh`.

@@ -2116,8 +2116,13 @@ fn trust_region_exact_step(grad: &[f64], hessian: &[Vec<f64>], delta: f64) -> Ve
     let mut boundary_step = None;
 
     for _ in 0..60 {
-        let shifted = shifted_matrix(hessian, upper);
-        if let Some(candidate) = solve_linear_system(&shifted, &rhs) {
+        let candidate_opt = if TRUST_EXACT_FOLD_SHIFT_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            solve_linear_system(&shifted_matrix(hessian, upper), &rhs)
+        } else {
+            solve_shifted_system(hessian, upper, &rhs)
+        };
+        if let Some(candidate) = candidate_opt {
             let norm = l2_norm(&candidate);
             if norm <= delta {
                 boundary_step = Some((upper, candidate));
@@ -2134,8 +2139,14 @@ fn trust_region_exact_step(grad: &[f64], hessian: &[Vec<f64>], delta: f64) -> Ve
         let mut lo_lambda = lower;
         for _ in 0..60 {
             let mid_lambda = 0.5 * (lo_lambda + hi_lambda);
-            let shifted = shifted_matrix(hessian, mid_lambda);
-            let Some(candidate) = solve_linear_system(&shifted, &rhs) else {
+            let candidate_opt = if TRUST_EXACT_FOLD_SHIFT_DISABLE
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                solve_linear_system(&shifted_matrix(hessian, mid_lambda), &rhs)
+            } else {
+                solve_shifted_system(hessian, mid_lambda, &rhs)
+            };
+            let Some(candidate) = candidate_opt else {
                 lo_lambda = mid_lambda;
                 continue;
             };
@@ -2181,20 +2192,18 @@ fn shifted_matrix(matrix: &[Vec<f64>], lambda: f64) -> Vec<Vec<f64>> {
     shifted
 }
 
-fn solve_linear_system(matrix: &[Vec<f64>], rhs: &[f64]) -> Option<Vec<f64>> {
-    let n = matrix.len();
-    if rhs.len() != n || matrix.iter().any(|row| row.len() != n) {
-        return None;
-    }
+/// When `true`, the exact trust-region subproblem builds the shifted matrix `H + λI` into a
+/// fresh `Vec<Vec<f64>>` (via [`shifted_matrix`]) before solving (the ORIG behaviour); default
+/// `false` folds the `+λ` diagonal shift directly into the solver's augmented matrix, dropping
+/// one O(n²) copy of the Hessian per λ trial (the subproblem does up to ~120 solves per step).
+/// Byte-identical — the augmented matrix is the same. `#[doc(hidden)]` — same-binary A/B knob.
+#[doc(hidden)]
+pub static TRUST_EXACT_FOLD_SHIFT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
-    let mut aug = vec![vec![0.0; n + 1]; n];
-    for row in 0..n {
-        for column in 0..n {
-            aug[row][column] = matrix[row][column];
-        }
-        aug[row][n] = rhs[row];
-    }
-
+/// Gauss-Jordan solve of a prebuilt `n × (n+1)` augmented `[A | b]` (partial pivoting +
+/// back-substitution). Shared by [`solve_linear_system`] and [`solve_shifted_system`].
+fn solve_augmented(mut aug: Vec<Vec<f64>>, n: usize) -> Option<Vec<f64>> {
     for pivot in 0..n {
         let mut pivot_row = pivot;
         let mut pivot_abs = aug[pivot][pivot].abs();
@@ -2244,6 +2253,36 @@ fn solve_linear_system(matrix: &[Vec<f64>], rhs: &[f64]) -> Option<Vec<f64>> {
     }
 
     Some(solution)
+}
+
+fn solve_linear_system(matrix: &[Vec<f64>], rhs: &[f64]) -> Option<Vec<f64>> {
+    let n = matrix.len();
+    if rhs.len() != n || matrix.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    let mut aug = vec![vec![0.0; n + 1]; n];
+    for row in 0..n {
+        aug[row][..n].copy_from_slice(&matrix[row][..n]);
+        aug[row][n] = rhs[row];
+    }
+    solve_augmented(aug, n)
+}
+
+/// Solve `(matrix + lambda·I)·x = rhs` by folding the diagonal shift into the augmented
+/// matrix directly — byte-identical to `solve_linear_system(&shifted_matrix(matrix, lambda),
+/// rhs)` (same `[matrix + lambda·I | rhs]`) but without the extra full-matrix copy.
+fn solve_shifted_system(matrix: &[Vec<f64>], lambda: f64, rhs: &[f64]) -> Option<Vec<f64>> {
+    let n = matrix.len();
+    if rhs.len() != n || matrix.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    let mut aug = vec![vec![0.0; n + 1]; n];
+    for row in 0..n {
+        aug[row][..n].copy_from_slice(&matrix[row][..n]);
+        aug[row][row] += lambda;
+        aug[row][n] = rhs[row];
+    }
+    solve_augmented(aug, n)
 }
 
 pub fn get_optimize_traces() -> Vec<OptimizeTraceEntry> {
