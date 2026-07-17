@@ -22726,3 +22726,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   `GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE` + `KDE_ND_SIMD_MIN_POINTS`) and the `bench_kde_nd_simd_ab` harness. No
   LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or unrelated-file edit entered the
   decision. The reaper did not strike this run. Bead: `frankenscipy-bk651`.
+
+## 2026-07-16 - BlackThrush (cc) - REJECT mean_shift SIMD-exp — 1.40x@d2-serial but NEUTRAL@d6-parallel (dist-bound, concentrated)
+
+- Followed the KDE SIMD-exp lead (bk651): `mean_shift`'s Gaussian weight `exp(-dist²/(2·bw²))` has an always-≤0
+  exponent, so its `update_center` inner loop was a candidate to batch through an 8-lane `ms_simd_exp_nonpos`
+  (a local copy of the KDE polynomial — fsci-runtime is policy-only and cluster/stats/special already keep
+  per-crate SIMD-exp copies). Computed 8 distances (identical scalar reduction), divided by `two_bw2` (bit-
+  identical SIMD division ⇒ exponent bit-exact), exped 8 at once, accumulated the 8 weights IN POINT ORDER (only
+  the per-weight `exp` differs from scalar, ~1e-15; the one-step bench tolerance asserted <1e-11 and passed).
+- Same-binary A/B (`MEAN_SHIFT_SIMD_EXP_DISABLE`, rch remote build, run local, max_iter=5): **n=1000 d=2 (SERIAL
+  path)** SIMD **35.6 ms** vs scalar **49.7 ms** → **1.40x** (CIs cleanly separated); **n=1200 d=6 (PARALLEL
+  path)** SIMD **21.0 ms** vs scalar **20.9 ms** → **0.997x** (CIs overlap, NEUTRAL).
+- WHY REJECT: the win is confined to the exp-bound regime (low d). As d grows the per-point distance reduction
+  (`Σ_j (c_j−p_j)²`) comes to dominate the ~40-flop `exp`, so SIMD-exp-only dilutes to neutral by d=6 — and d=6
+  already crosses the parallel work-gate, i.e. the EXPENSIVE mean_shift cases (large n·d, parallel) get nothing
+  while the cheap low-d/serial cases get 1.40x. A win concentrated where it matters least, bought with ~40 lines
+  of duplicated SIMD-exp and a tolerance relaxation, with untested-higher-d regression risk (buffering overhead
+  once memory-bound) and only one measurable run (the disk reaper evicts the private target between runs). Does
+  not clear the clean-KEEP bar. Candidate stashed non-destructively (NOT dropped), production restored no owned
+  diff. Retry only with a TRANSPOSED-point layout that also SIMDs the distance (helps high d) or a proven
+  memory-bandwidth headroom on the parallel path. Bead: `frankenscipy-0o0mr`.
