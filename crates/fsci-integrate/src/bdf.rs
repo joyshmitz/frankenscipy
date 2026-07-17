@@ -17,6 +17,16 @@ use crate::validation::{
 };
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Runtime switch that restores the per-Newton-iteration scratch allocation in
+/// [`BdfSolver::newton_bdf`] (a fresh `rhs` `DVector` plus a `lu.solve` result Vec per
+/// iteration — the ORIG behaviour) for same-binary A/B benchmarks. Defaults off — the
+/// `rhs` buffer is hoisted above the Newton loop and the linear solve runs in place
+/// (`solve_mut`), which is bit-identical (`solve(b) == { let mut r=b.clone();
+/// solve_mut(&mut r); r }`). Mirrors `RADAU_FORCE_PER_ITER_ALLOC`. `#[doc(hidden)]`.
+#[doc(hidden)]
+pub static BDF_FORCE_PER_ITER_ALLOC: AtomicBool = AtomicBool::new(false);
 
 /// Maximum BDF order.
 const MAX_ORDER: usize = 5;
@@ -584,14 +594,32 @@ impl BdfSolver {
         let mut y = y_predict.to_vec();
         let mut dy_norm_old: Option<f64> = None;
         let lu = self.lu.as_ref()?;
+        let force_alloc = BDF_FORCE_PER_ITER_ALLOC.load(Ordering::Relaxed);
+        // Per-Newton-iteration linear-solve scratch, hoisted (default): `rhs` is filled in
+        // place and solved in place each iteration instead of allocating a fresh `DVector`
+        // and a `lu.solve` result Vec. Bit-identical: same RHS values in the same order, and
+        // `solve(b) == { let mut r = b.clone(); solve_mut(&mut r); r }`.
+        let mut rhs = DVector::<f64>::zeros(n);
         for k in 0..NEWTON_MAXITER {
             let f = fun(t_new, &y);
             self.nfev += 1;
             if !f.iter().all(|v| v.is_finite()) {
                 return None;
             }
-            let rhs = DVector::from_iterator(n, (0..n).map(|j| c * f[j] - psi[j] - d[j]));
-            let dy = lu.solve(&rhs)?;
+            let dy_owned;
+            let dy: &DVector<f64> = if force_alloc {
+                let rhs_a = DVector::from_iterator(n, (0..n).map(|j| c * f[j] - psi[j] - d[j]));
+                dy_owned = lu.solve(&rhs_a)?;
+                &dy_owned
+            } else {
+                for j in 0..n {
+                    rhs[j] = c * f[j] - psi[j] - d[j];
+                }
+                if !lu.solve_mut(&mut rhs) {
+                    return None;
+                }
+                &rhs
+            };
             let dy_norm = rms_norm_scaled(dy.iter().copied(), scale);
 
             let rate = dy_norm_old.map(|old| if old > 0.0 { dy_norm / old } else { 0.0 });

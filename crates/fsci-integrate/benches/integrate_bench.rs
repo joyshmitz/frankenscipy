@@ -4,6 +4,7 @@ use fsci_integrate::{
     ToleranceWarning, ValidatedTolerance, solve_ivp, trapezoid_irregular, trapezoid_richardson,
     validate_tol,
 };
+use fsci_integrate::bdf::BDF_FORCE_PER_ITER_ALLOC;
 use fsci_integrate::radau::RADAU_FORCE_PER_ITER_ALLOC;
 use fsci_runtime::RuntimeMode;
 use std::hint::black_box;
@@ -394,9 +395,63 @@ fn bench_radau_newton_alloc_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_bdf_newton_alloc_ab(c: &mut Criterion) {
+    let y0 = [2.0, 0.0];
+    let opts = SolveIvpOptions {
+        t_span: (0.0, 30.0),
+        y0: &y0,
+        method: SolverKind::Bdf,
+        rtol: 1e-6,
+        atol: ToleranceValue::Scalar(1e-9),
+        max_step: f64::INFINITY,
+        mode: RuntimeMode::Strict,
+        ..Default::default()
+    };
+
+    // Byte-identical proof: hoisted-scratch (default) vs per-iteration-alloc trajectories
+    // must match bit-for-bit.
+    BDF_FORCE_PER_ITER_ALLOC.store(true, Ordering::Relaxed);
+    let base = {
+        let mut rhs = van_der_pol_stiff;
+        solve_ivp(&mut rhs, &opts).expect("bdf baseline")
+    };
+    BDF_FORCE_PER_ITER_ALLOC.store(false, Ordering::Relaxed);
+    let cand = {
+        let mut rhs = van_der_pol_stiff;
+        solve_ivp(&mut rhs, &opts).expect("bdf candidate")
+    };
+    assert_eq!(base.y.len(), cand.y.len(), "bdf step count differs");
+    for (rb, rc) in base.y.iter().zip(cand.y.iter()) {
+        for (a, b) in rb.iter().zip(rc.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits(), "bdf trajectory mismatch");
+        }
+    }
+
+    let mut group = c.benchmark_group("bdf_newton_alloc_ab");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(5));
+    group.bench_function("original_per_iter_alloc", |b| {
+        BDF_FORCE_PER_ITER_ALLOC.store(true, Ordering::Relaxed);
+        b.iter(|| {
+            let mut rhs = van_der_pol_stiff;
+            black_box(solve_ivp(&mut rhs, black_box(&opts)))
+        });
+    });
+    group.bench_function("current_hoisted", |b| {
+        BDF_FORCE_PER_ITER_ALLOC.store(false, Ordering::Relaxed);
+        b.iter(|| {
+            let mut rhs = van_der_pol_stiff;
+            black_box(solve_ivp(&mut rhs, black_box(&opts)))
+        });
+    });
+    BDF_FORCE_PER_ITER_ALLOC.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_radau_newton_alloc_ab,
+    bench_bdf_newton_alloc_ab,
     bench_solve_ivp_exponential,
     bench_solve_ivp_lorenz,
     bench_solve_ivp_t_eval_validation,

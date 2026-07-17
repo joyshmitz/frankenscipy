@@ -22772,3 +22772,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   byte-exact assert (rch avx2+fma build) was worked around by temporarily dropping that bench from the group to
   run mine; restored before commit (exact-diff confirmed). No LTO/`release-perf` build, local Cargo fallback,
   `force_local`, stash mutation, or unrelated-file edit entered the decision. Bead: `frankenscipy-nc75k`.
+
+## 2026-07-16 - BlackThrush (cc) - KEEP (byte-identical): BDF newton corrector hoists per-iteration solve scratch — 1.09x
+
+- The Radau alloc-hoist (frankenscipy-bag55, 1.044x) flagged the BDF corrector as the same shape. Confirmed:
+  `BdfSolver::newton_bdf`'s Newton loop allocated a fresh `rhs` `DVector` (`DVector::from_iterator`) AND a
+  `lu.solve` result `DVector` on EVERY iteration. The BDF step already reuses the LU factorization (lazy Jacobian),
+  so these per-iteration allocations were the remaining churn.
+- ONE LEVER: hoist a single `rhs` buffer above the loop, fill it in place each iteration, and solve in place with
+  `lu.solve_mut(&mut rhs)` (no result Vec). BYTE-IDENTICAL: the RHS values are the same in the same order, and
+  nalgebra's `solve(b)` is literally `{ let mut r = b.clone(); solve_mut(&mut r); r }`, so `solve_mut` on the
+  hoisted buffer yields the same solution bit-for-bit. Guarded by `BDF_FORCE_PER_ITER_ALLOC` (mirrors
+  `RADAU_FORCE_PER_ITER_ALLOC`); the bench asserts the full stiff-solve trajectory `y` is `to_bits`-identical
+  between arms before timing (passed).
+- Same-binary A/B (rch remote build+run, stiff Van der Pol μ=1000, n=2 — malloc-bound Newton, the regime where
+  the per-iter alloc is the largest fraction): two runs. original **57.82/58.73 µs** vs hoisted **53.06/53.58 µs**
+  → **1.09-1.10x**, CIs separated both runs, MONOTONE (removing allocations cannot regress). KEEP.
+- Disposition: KEEP. Shipped `crates/fsci-integrate/src/bdf.rs` (hoisted `rhs` + `solve_mut` + `BDF_FORCE_PER_ITER_ALLOC`)
+  and the `bench_bdf_newton_alloc_ab` harness. Modest but zero-risk (byte-identical + monotone), and the ratio grows
+  with Newton iteration count. No LTO/`release-perf` build, local Cargo fallback, `force_local`, stash mutation, or
+  unrelated-file edit entered the decision. Bead: `frankenscipy-dte8a`.
