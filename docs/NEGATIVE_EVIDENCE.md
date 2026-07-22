@@ -22994,3 +22994,28 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   self-time gate ~4%, or pinned-core / larger-n runs where the relative floor shrinks); or (c) if a future
   contract change drops the output upper-zero guarantee, rebundle with eliminating the 8 MB `lower` memset
   (8.4% — the bigger half). Do NOT re-run the identical n=1000 wall-clock A/B expecting a different answer.
+
+## 2026-07-22 - CopperFalcon (cc) - REJECT (in-floor at n=1000 AND n=2048, bit-identical): jc-blocked SYRK B-panel sweep — L3 + hardware prefetch absorb the packed-l21ᵀ stream
+
+- Dense-BLAS wall lane lever 4, profile-directed: SYRK = 35.03% self (biggest frame, candidate profile in
+  artifact 2026-07-22-chol-scratch-hoist). Hypothesis: the unblocked tile sweep streams the whole packed
+  `l21ᵀ` (~0.9 MB n=1000 / ~3.4 MB n=2048 first panel) through each thread's 512 KB L2 once per 4-row block
+  (~50× re-read); JC_COLS=128 column blocks keep each 128 KB B-block L2-resident across the row sweep.
+- ONE LEVER: `cholesky_syrk_flat_rows_mr4_nr8_fma_jc` — pure tile-order swap (jc outer, row blocks inner,
+  exact-dot tail pass unchanged as phase 2). BIT-IDENTICAL proven (unit test at 6 sizes incl. 1-3 jc blocks;
+  full-factor equality gates at n=1000 and n=2048 in the bench).
+- MEASUREMENT (thinkstation1, one binary, interleaved, per-size A/A nulls): n=1000 **paired median 1.0071**
+  [null 0.9475, 1.0670] NOT DECIDED (PROD 10.963 → CAND 10.899 ms p50, 30.4 GF/s); n=2048 **paired median
+  0.9877** [null 0.9258, 1.0552] NOT DECIDED (PROD 64.708 → CAND 65.724 ms p50, 44.3 GF/s). The effect does
+  NOT grow with n — the streaming-B hypothesis is wrong: the sweep is sequential-stride with ~128 FMA-YMM of
+  compute per 8 KB B-tile, so Zen3's L3 (128 MB) + hardware prefetcher hide the traffic entirely. Same
+  mechanism class as the banked `perf_fft_cache_blocking_negative` and the ndimage "cache-blocking, not more
+  SIMD" boundary — from the OTHER side: enough arithmetic intensity ⇒ blocking is neutral.
+  Artifact: `tests/artifacts/perf/2026-07-22-chol-syrk-jc-blocked/bench_stdout_stderr.txt`.
+- DISPOSITION: candidate STASHED (recoverable); tree back to 8fc2443d2 production; 19/19 cholesky tests
+  green post-revert. Bead `frankenscipy-segbe` closed as rejected. Second consecutive in-floor REJECT.
+- RETRY PREDICATE: only on hardware where the trailing update is measurably bandwidth-bound (aggregate
+  thread count × stream size ≫ L3, e.g. n ≥ 8192 multi-socket, or a low-L3 part), demonstrated by a
+  perf-stat L3-miss delta FIRST — do not re-run on 5975WX-class L3 at n ≤ 2048. The KEY takeaway for the
+  lane: SYRK's remaining gap is not cache traffic; the tile is near FMA-port-bound — further SYRK wins must
+  come from reducing NON-tile time (tails, in-panel factorization, serial TRSM phase — the Amdahl side).

@@ -1,0 +1,55 @@
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+    Finished `bench` profile [optimized] target(s) in 21.79s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-65eebc4797541807)
+Gnuplot not found, using plotters backend
+Gnuplot not found, using plotters backend
+FSCI_CHOL_SYRK_JC_PROFILE factors=160 mean_ms=13.233388 digest=0x8ec8660f731ff985
+[ perf record: Woken up 2 times to write data ]
+[ perf record: Captured and wrote 1.074 MB /dev/shm/fsc-chol-syrk-jc-3435098-1784748800957873229.perf (15966 samples) ]
+FSCI_CHOL_SYRK_JC_REPORT_BEGIN
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 15K of event 'cycles:u'
+# Event count (approx.): 5089465369
+#
+# Overhead  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               IPC   [IPC Coverage]
+# ........  ...................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................  ....................
+#
+    34.08%  [.] fsci_linalg::cholesky_panel_trsm_blocked_fma                                                                                                                                                                                                                                                                                                                                                                                                                                                     -      -            
+    30.09%  [.] fsci_linalg::cholesky_syrk_flat_rows_mr4_nr8_fma_jc                                                                                                                                                                                                                                                                                                                                                                                                                                              -      -            
+    17.71%  [.] __memset_avx2_unaligned_erms                                                                                                                                                                                                                                                                                                                                                                                                                                                                     -      -            
+     6.27%  [.] fsci_linalg::cholesky_wall_syrk_jc_candidate                                                                                                                                                                                                                                                                                                                                                                                                                                                     -      -            
+     4.69%  [.] __memmove_avx_unaligned_erms                                                                                                                                                                                                                                                                                                                                                                                                                                                                     -      -            
+     4.24%  [.] fsci_linalg::copy_l21_and_pack_transpose                                                                                                                                                                                                                                                                                                                                                                                                                                                         -      -            
+     1.27%  [.] fsci_linalg::cholesky_syrk_row_tail                                                                                                                                                                                                                                                                                                                                                                                                                                                              -      -            
+     0.13%  [.] _dl_allocate_tls_init                                                                                                                                                                                                                                                                                                                                                                                                                                                                            -      -            
+     0.13%  [.] _int_malloc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      -      -            
+     0.12%  [.] pthread_create@GLIBC_2.2.5                                                                                                                                                                                                                                                                                                                                                                                                                                                                       -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#
+FSCI_CHOL_SYRK_JC_REPORT_END
+FSCI_CHOL_SYRK_JC_AB n=1000 bit_identical=true
+FSCI_CHOL_SYRK_JC_AB n=1000 NULL median=1.002369 min=0.947453 max=1.066956 cv_pct=2.942
+FSCI_CHOL_SYRK_JC_AB n=1000 PROD mean_ms=11.063539 cv_pct=3.941 p50_ms=10.963466 p95_ms=11.759775 p99_ms=11.759775 gflops_p50=30.40
+FSCI_CHOL_SYRK_JC_AB n=1000 CAND mean_ms=10.940940 cv_pct=3.546 p50_ms=10.899139 p95_ms=11.755105 p99_ms=11.755105 gflops_p50=30.58
+FSCI_CHOL_SYRK_JC_AB n=1000 paired_median=1.007051 paired_mean=1.011340 paired_cv_pct=2.383 null=[0.947453,1.066956] DECIDED=false samples=20 factors_per_sample=32
+FSCI_CHOL_SYRK_JC_AB n=2048 bit_identical=true
+FSCI_CHOL_SYRK_JC_AB n=2048 NULL median=0.996951 min=0.925831 max=1.055213 cv_pct=3.344
+FSCI_CHOL_SYRK_JC_AB n=2048 PROD mean_ms=65.562904 cv_pct=3.492 p50_ms=64.708074 p95_ms=67.833305 p99_ms=67.833305 gflops_p50=44.25
+FSCI_CHOL_SYRK_JC_AB n=2048 CAND mean_ms=65.614642 cv_pct=2.937 p50_ms=65.723836 p95_ms=67.223992 p99_ms=67.223992 gflops_p50=43.57
+FSCI_CHOL_SYRK_JC_AB n=2048 paired_median=0.987657 paired_mean=0.999454 paired_cv_pct=2.916 null=[0.925831,1.055213] DECIDED=false samples=12 factors_per_sample=6
+Benchmarking cholesky_wall_syrk_jc_ab/1000x1000_paired_alternating
+Benchmarking cholesky_wall_syrk_jc_ab/1000x1000_paired_alternating: Warming up for 1.0000 s
+Benchmarking cholesky_wall_syrk_jc_ab/1000x1000_paired_alternating: Collecting 10 samples in estimated 3.4940 s (165 iterations)
+Benchmarking cholesky_wall_syrk_jc_ab/1000x1000_paired_alternating: Analyzing
+cholesky_wall_syrk_jc_ab/1000x1000_paired_alternating
+                        time:   [21.488 ms 21.714 ms 21.905 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
