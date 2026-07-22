@@ -3623,8 +3623,7 @@ fn minmax_along_axis_hgw<F: Fn(f64, f64) -> f64 + Copy + Sync>(
     // then a contiguous inner-strip, so the reads/writes are contiguous (and the block ops
     // auto-vectorize). Byte-identical: for a fixed column the boundary resolution, prefix/suffix and
     // combine are the exact same ops in the same order. stride==1 keeps the per-column memcpy path.
-    let use_vec = stride > 1
-        && !MINMAX_HGW_FORCE_SCALAR.load(std::sync::atomic::Ordering::Relaxed);
+    let use_vec = stride > 1 && !MINMAX_HGW_FORCE_SCALAR.load(std::sync::atomic::Ordering::Relaxed);
     let interior_start = lo as usize; // t where coord == 0 (lo >= 0 always)
     let interior_end = interior_start + mid; // t where coord == mid (exclusive)
     let process = |in_chunk: &[f64], out_chunk: &mut [f64]| {
@@ -3713,8 +3712,7 @@ fn minmax_along_axis_hgw<F: Fn(f64, f64) -> f64 + Copy + Sync>(
                     };
                 }
                 if stride == 1 {
-                    ext[interior_start..interior_end]
-                        .copy_from_slice(&in_chunk[base..base + mid]);
+                    ext[interior_start..interior_end].copy_from_slice(&in_chunk[base..base + mid]);
                 } else {
                     for t in interior_start..interior_end {
                         ext[t] = in_chunk[base + (t - interior_start) * stride];
@@ -6720,7 +6718,8 @@ fn measurement_label_groups(
         Some(index) => {
             let mut m = std::collections::HashMap::with_capacity(index.len());
             for (pos, &wanted_label) in index.iter().enumerate() {
-                m.entry(measurement_label_key(wanted_label as f64)).or_insert(pos);
+                m.entry(measurement_label_key(wanted_label as f64))
+                    .or_insert(pos);
             }
             Some(m)
         }
@@ -7315,7 +7314,8 @@ fn measurement_label_value_positions(
         Some(index) => {
             let mut m = std::collections::HashMap::with_capacity(index.len());
             for (pos, &wanted_label) in index.iter().enumerate() {
-                m.entry(measurement_label_key(wanted_label as f64)).or_insert(pos);
+                m.entry(measurement_label_key(wanted_label as f64))
+                    .or_insert(pos);
             }
             Some(m)
         }
@@ -7659,7 +7659,8 @@ pub fn variance(
             }
         }
     }
-    if labels.is_none() && !NDIMAGE_VARIANCE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+    if labels.is_none() && !NDIMAGE_VARIANCE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
         // Global variance (labels=None): compute over `input.data` directly, skipping the
         // `measurement_label_groups` full-data clone. BYTE-IDENTICAL: same `mean_of_values`, same
         // increasing-flat-index Σ(x-mean)² order (float ops are non-associative → single serial pass).
@@ -7766,7 +7767,11 @@ pub static NDIMAGE_MINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
 /// reduction (min/max are associative + NaN propagates through the combine → BYTE-IDENTICAL to the
 /// sequential fold). `is_max` selects max (init `-inf`) vs min (init `+inf`).
 fn global_minmax_reduce(data: &[f64], is_max: bool) -> f64 {
-    let init = if is_max { f64::NEG_INFINITY } else { f64::INFINITY };
+    let init = if is_max {
+        f64::NEG_INFINITY
+    } else {
+        f64::INFINITY
+    };
     let n = data.len();
     let nthreads = ndimage_filter_thread_count(n, 4);
     if nthreads <= 1 {
@@ -7831,9 +7836,7 @@ pub fn minimum(
             }
         }
     }
-    if labels.is_none()
-        && !NDIMAGE_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-    {
+    if labels.is_none() && !NDIMAGE_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         // Global min (labels=None): fold the whole array directly, skipping the
         // `measurement_label_groups` full-data clone. Byte-identical (associative + NaN-propagating).
         if input.data.is_empty() {
@@ -7882,9 +7885,7 @@ pub fn maximum(
             }
         }
     }
-    if labels.is_none()
-        && !NDIMAGE_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-    {
+    if labels.is_none() && !NDIMAGE_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         // Global max (labels=None): fold the whole array directly, skipping the
         // `measurement_label_groups` full-data clone. Byte-identical (associative + NaN-propagating).
         if input.data.is_empty() {
@@ -7933,7 +7934,8 @@ pub fn median(
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<Vec<f64>, NdimageError> {
-    if labels.is_none() && !NDIMAGE_MEDIAN_GLOBAL_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    if labels.is_none()
+        && !NDIMAGE_MEDIAN_GLOBAL_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
     {
         // Global median (labels=None): `median_of_values(input.data)` directly, skipping the
         // `measurement_label_groups` full-data clone (median double-clones: the group clone AND
@@ -7956,7 +7958,10 @@ pub fn median(
         ndimage_filter_thread_count(total, 8).min(groups.len())
     };
     if nthreads <= 1 {
-        return Ok(groups.iter().map(|values| median_of_values(values)).collect());
+        return Ok(groups
+            .iter()
+            .map(|values| median_of_values(values))
+            .collect());
     }
     let mut out = vec![0.0f64; groups.len()];
     let chunk = groups.len().div_ceil(nthreads);
@@ -8117,7 +8122,8 @@ pub fn extrema(
     labels: Option<&NdArray>,
     index: Option<&[usize]>,
 ) -> Result<ExtremaResult, NdimageError> {
-    if labels.is_none() && !NDIMAGE_EXTREMA_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+    if labels.is_none() && !NDIMAGE_EXTREMA_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
         // Global extrema (labels=None): a single fused pass over `input.data` tracking min/max +
         // their positions, skipping the `measurement_label_value_positions` (value, position) pair
         // allocation AND fusing the two separate scans. BYTE-IDENTICAL to `minimum_value_position` /
@@ -10925,8 +10931,20 @@ pub fn otsu_threshold(input: &NdArray) -> f64 {
     // NaN-propagating min/max combine — matches the ORIG two folds exactly (result is NaN iff any
     // element is NaN, else the true extremum). Both are associative + commutative, so the chunked
     // parallel reductions below are BYTE-IDENTICAL to the sequential folds.
-    let nan_min = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) };
-    let nan_max = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) };
+    let nan_min = |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.min(b)
+        }
+    };
+    let nan_max = |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    };
 
     let nthreads = if NDIMAGE_OTSU_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         1
@@ -11380,7 +11398,9 @@ pub fn sqrt_array(input: &NdArray) -> NdArray {
         shape: input.shape.clone(),
         strides: input.strides.clone(),
     };
-    fill_pixels_parallel(&mut output, 4, |flat, _scratch| input.data[flat].max(0.0).sqrt());
+    fill_pixels_parallel(&mut output, 4, |flat, _scratch| {
+        input.data[flat].max(0.0).sqrt()
+    });
     output
 }
 
@@ -11451,7 +11471,9 @@ where
         shape: a.shape.clone(),
         strides: a.strides.clone(),
     };
-    fill_pixels_parallel(&mut output, 1, |flat, _scratch| op(a.data[flat], b.data[flat]));
+    fill_pixels_parallel(&mut output, 1, |flat, _scratch| {
+        op(a.data[flat], b.data[flat])
+    });
     output
 }
 
@@ -12597,9 +12619,9 @@ pub fn spline_filter1d(
     // per-line walk below): the strided stride>1 case sweeps the IIR in place over the contiguous
     // inner dim (cache-friendly instead of a per-column strided gather) and both cases fan the
     // independent outer blocks / rows across cores. Other kernels keep the serial per-line walk.
-    let use_reflect =
-        mode == BoundaryMode::Reflect && (2..=5).contains(&order) && axis_len > order;
-    if use_reflect && !NDIMAGE_SPLINE_FILTER1D_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+    let use_reflect = mode == BoundaryMode::Reflect && (2..=5).contains(&order) && axis_len > order;
+    if use_reflect
+        && !NDIMAGE_SPLINE_FILTER1D_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
     {
         if stride > 1 {
             let block = axis_len * stride;
@@ -12613,7 +12635,11 @@ pub fn spline_filter1d(
                         let chunk_outer = chunk.len() / block;
                         scope.spawn(move || {
                             bspline_reflect_axis_inplace(
-                                chunk, chunk_outer, axis_len, stride, order,
+                                chunk,
+                                chunk_outer,
+                                axis_len,
+                                stride,
+                                order,
                             );
                         });
                     }
@@ -13224,10 +13250,10 @@ mod tests {
         MINMAX_FILTER_HGW.store(true, Ordering::Relaxed); // van Herk path
         MINMAX_HGW_FORCE_SERIAL.store(true, Ordering::Relaxed); // isolate the kernel (no threads)
         let shapes: &[Vec<usize>] = &[
-            vec![9, 11],       // inner=11 (< tile)
-            vec![13, 100],     // inner=100 (> tile)
-            vec![7, 8, 9],     // axis-0 inner=72, axis-1 inner=9
-            vec![6, 5, 200],   // axis-0 inner=1000, axis-1 inner=200 (both > tile)
+            vec![9, 11],     // inner=11 (< tile)
+            vec![13, 100],   // inner=100 (> tile)
+            vec![7, 8, 9],   // axis-0 inner=72, axis-1 inner=9
+            vec![6, 5, 200], // axis-0 inner=1000, axis-1 inner=200 (both > tile)
         ];
         for shape in shapes {
             let total: usize = shape.iter().product();
@@ -16434,7 +16460,11 @@ mod tests {
             let par = median(&input, Some(&labels), Some(&index)).unwrap();
             assert_eq!(ser.len(), par.len());
             for (i, (a, b)) in ser.iter().zip(&par).enumerate() {
-                assert_eq!(a.to_bits(), b.to_bits(), "npix={npix} nlabels={nlabels} label {i}");
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "npix={npix} nlabels={nlabels} label {i}"
+                );
             }
         }
         NDIMAGE_MEDIAN_LABELS_FORCE_SERIAL.store(false, Ordering::Relaxed);
@@ -17436,7 +17466,9 @@ mod tests {
         for shape in shapes {
             let total: usize = shape.iter().product();
             let data: Vec<f64> = (0..total)
-                .map(|k| ((k as f64 * 0.421).sin() * 7.0 - 1.3) * if k % 3 == 0 { 100.0 } else { 1.0 })
+                .map(|k| {
+                    ((k as f64 * 0.421).sin() * 7.0 - 1.3) * if k % 3 == 0 { 100.0 } else { 1.0 }
+                })
                 .collect();
             let input = NdArray::new(data, shape.clone()).unwrap();
             for order in 2..=5usize {
@@ -17625,7 +17657,11 @@ mod tests {
                 let par = zoom(&input, &[1.0, 1.0], order, mode, 0.0).unwrap();
                 assert_eq!(ser.shape, par.shape);
                 for (i, (a, b)) in ser.data.iter().zip(&par.data).enumerate() {
-                    assert_eq!(a.to_bits(), b.to_bits(), "order={order} mode={mode:?} idx={i}");
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "order={order} mode={mode:?} idx={i}"
+                    );
                 }
             }
         }
@@ -20445,7 +20481,12 @@ mod tests {
         for shape in shapes {
             let total: usize = shape.iter().product();
             let input: Vec<Complex64> = (0..total)
-                .map(|k| ((k as f64 * 0.13).sin() * 3.0 - 0.4, (k as f64 * 0.07).cos() * 2.0))
+                .map(|k| {
+                    (
+                        (k as f64 * 0.13).sin() * 3.0 - 0.4,
+                        (k as f64 * 0.07).cos() * 2.0,
+                    )
+                })
                 .collect();
             let param: Vec<f64> = shape
                 .iter()
@@ -20465,8 +20506,16 @@ mod tests {
                 let parallel = filt(&input, shape, &param);
                 assert_eq!(serial.len(), parallel.len());
                 for (i, (a, b)) in serial.iter().zip(&parallel).enumerate() {
-                    assert_eq!(a.0.to_bits(), b.0.to_bits(), "{name} shape={shape:?} re idx={i}");
-                    assert_eq!(a.1.to_bits(), b.1.to_bits(), "{name} shape={shape:?} im idx={i}");
+                    assert_eq!(
+                        a.0.to_bits(),
+                        b.0.to_bits(),
+                        "{name} shape={shape:?} re idx={i}"
+                    );
+                    assert_eq!(
+                        a.1.to_bits(),
+                        b.1.to_bits(),
+                        "{name} shape={shape:?} im idx={i}"
+                    );
                 }
             }
         }

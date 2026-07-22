@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fsci_linalg::{
-    DecompOptions, LinalgError, SolveOptions as DenseSolveOptions, expm as dense_expm,
-    simd_dot, simd_sum, solve_banded as dense_solve_banded,
-    solveh_banded as dense_solveh_banded,
+    DecompOptions, LinalgError, SolveOptions as DenseSolveOptions, expm as dense_expm, simd_dot,
+    simd_sum, solve_banded as dense_solve_banded, solveh_banded as dense_solveh_banded,
 };
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
@@ -4633,16 +4632,15 @@ pub fn sparse_nnz(a: &CsrMatrix) -> usize {
     // sequential count exactly. Fan it across threads for large nnz. `SPARSE_NNZ_FORCE_SERIAL` A/B.
     let data = a.data();
     let n = data.len();
-    let nthreads = if SPARSE_NNZ_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < 65_536
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n)
-    };
+    let nthreads =
+        if SPARSE_NNZ_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < 65_536 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n)
+        };
     if nthreads <= 1 {
         return data.iter().filter(|&&v| v != 0.0).count();
     }
@@ -5022,16 +5020,15 @@ pub fn sparse_scale(a: &CsrMatrix, alpha: f64) -> CsrMatrix {
     // `indices` copy (bandwidth) — dominate; the `indptr` clone is O(rows+1). Fanning both big
     // arrays across cores aggregates memory bandwidth. Each output slot is written exactly once,
     // in ascending flat order, from the matching source slot → BYTE-IDENTICAL to the serial build.
-    let nthreads = if SPARSE_SCALE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || nnz < 65_536
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(nnz)
-    };
+    let nthreads =
+        if SPARSE_SCALE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || nnz < 65_536 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nnz)
+        };
     let (scaled_data, cloned_indices) = if nthreads <= 1 {
         (
             data.iter().map(|&v| v * alpha).collect::<Vec<f64>>(),
@@ -5042,10 +5039,7 @@ pub fn sparse_scale(a: &CsrMatrix, alpha: f64) -> CsrMatrix {
         let mut ci = vec![0usize; nnz];
         let chunk = nnz.div_ceil(nthreads);
         std::thread::scope(|scope| {
-            for (ci_idx, (dblk, iblk)) in sd
-                .chunks_mut(chunk)
-                .zip(ci.chunks_mut(chunk))
-                .enumerate()
+            for (ci_idx, (dblk, iblk)) in sd.chunks_mut(chunk).zip(ci.chunks_mut(chunk)).enumerate()
             {
                 let base = ci_idx * chunk;
                 let src_d = &data[base..base + dblk.len()];
@@ -5184,10 +5178,7 @@ pub fn sparse_frobenius_inner(a: &CsrMatrix, b: &CsrMatrix) -> f64 {
 
     let a_meta = a.canonical_meta();
     let b_meta = b.canonical_meta();
-    if a_meta.sorted_indices
-        && a_meta.deduplicated
-        && b_meta.sorted_indices
-        && b_meta.deduplicated
+    if a_meta.sorted_indices && a_meta.deduplicated && b_meta.sorted_indices && b_meta.deduplicated
     {
         for row in 0..n {
             let mut a_idx = a.indptr()[row];
@@ -5976,16 +5967,15 @@ where
     // nnz-length and dominate (indptr clone is O(rows+1)). Fanning BOTH big arrays across nnz-chunks
     // aggregates memory bandwidth. Each output slot is written exactly once, in ascending flat order,
     // from the matching source slot → BYTE-IDENTICAL to the serial `.map(f).collect()` build.
-    let nthreads = if SPARSE_MAP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || nnz < 65_536
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(nnz)
-    };
+    let nthreads =
+        if SPARSE_MAP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || nnz < 65_536 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nnz)
+        };
     let (mapped_data, cloned_indices) = if nthreads <= 1 {
         (
             data.iter().map(|&v| f(v)).collect::<Vec<f64>>(),
@@ -5997,11 +5987,7 @@ where
         let chunk = nnz.div_ceil(nthreads);
         let fref = &f;
         std::thread::scope(|scope| {
-            for (k, (dblk, iblk)) in md
-                .chunks_mut(chunk)
-                .zip(ci.chunks_mut(chunk))
-                .enumerate()
-            {
+            for (k, (dblk, iblk)) in md.chunks_mut(chunk).zip(ci.chunks_mut(chunk)).enumerate() {
                 let base = k * chunk;
                 let src_d = &data[base..base + dblk.len()];
                 let src_i = &indices[base..base + iblk.len()];
@@ -10414,14 +10400,9 @@ mod tests {
         .expect("infinite CSR");
         assert_eq!(sparse_norm(&infinite, "fro"), f64::INFINITY);
 
-        let empty = CsrMatrix::from_components(
-            Shape2D::new(0, 0),
-            Vec::new(),
-            Vec::new(),
-            vec![0],
-            false,
-        )
-        .expect("empty CSR");
+        let empty =
+            CsrMatrix::from_components(Shape2D::new(0, 0), Vec::new(), Vec::new(), vec![0], false)
+                .expect("empty CSR");
         assert_eq!(sparse_norm(&empty, "fro"), 0.0);
     }
 
@@ -10474,14 +10455,9 @@ mod tests {
         .expect("mixed infinity CSR");
         assert!(sparse_sum(&mixed_infinity).is_nan());
 
-        let empty = CsrMatrix::from_components(
-            Shape2D::new(0, 0),
-            Vec::new(),
-            Vec::new(),
-            vec![0],
-            false,
-        )
-        .expect("empty CSR");
+        let empty =
+            CsrMatrix::from_components(Shape2D::new(0, 0), Vec::new(), Vec::new(), vec![0], false)
+                .expect("empty CSR");
         assert_eq!(sparse_sum(&empty).to_bits(), 0.0f64.to_bits());
     }
 

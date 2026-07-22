@@ -1947,8 +1947,16 @@ mod tests {
             assert_eq!(actual.row_indices(), expected.row_indices());
             assert_eq!(actual.col_indices(), expected.col_indices());
             assert_eq!(
-                actual.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                expected.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                actual
+                    .data()
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+                    .data()
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>()
             );
         }
 
@@ -1956,7 +1964,13 @@ mod tests {
         // any reordering or value mangling would surface.
         let csr = CsrMatrix::from_components(
             Shape2D::new(4, 5),
-            vec![-0.0, f64::INFINITY, f64::from_bits(0x7ff8_0000_0000_1234), -3.5, 0.0],
+            vec![
+                -0.0,
+                f64::INFINITY,
+                f64::from_bits(0x7ff8_0000_0000_1234),
+                -3.5,
+                0.0,
+            ],
             vec![0, 4, 2, 1, 3],
             vec![0, 2, 2, 4, 5],
             false,

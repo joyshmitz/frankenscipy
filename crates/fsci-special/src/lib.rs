@@ -14,8 +14,8 @@ pub mod orthopoly;
 pub mod types;
 
 pub use airy::{
-    AIRY_DISPATCH_PLAN, AIRY_ZEROS_FORCE_SERIAL, AIRYE_DISPATCH_PLAN, AiryResult, ai, ai_zeros, airy,
-    airye, bi, bi_zeros,
+    AIRY_DISPATCH_PLAN, AIRY_ZEROS_FORCE_SERIAL, AIRYE_DISPATCH_PLAN, AiryResult, ai, ai_zeros,
+    airy, airye, bi, bi_zeros,
 };
 pub use audit::{
     SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger,
@@ -40,6 +40,8 @@ pub use beta::{
 };
 pub use convenience::{
     CONVENIENCE_DISPATCH_PLAN,
+    ERF_ZEROS_FORCE_SERIAL,
+    FRESNEL_ZEROS_FORCE_SERIAL,
     // Numerical differentiation and AGM
     agm,
     arccosh,
@@ -97,7 +99,6 @@ pub use convenience::{
     elu,
     entr,
     erf_zeros,
-    ERF_ZEROS_FORCE_SERIAL,
     erfc_conv,
     erfcinv_conv,
     erfcx,
@@ -121,7 +122,6 @@ pub use convenience::{
     fresnel_complex,
     fresnel_many,
     fresnel_zeros,
-    FRESNEL_ZEROS_FORCE_SERIAL,
     fresnelc_zeros,
     fresnels_zeros,
     frexp,

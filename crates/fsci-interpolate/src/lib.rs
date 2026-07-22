@@ -9101,7 +9101,9 @@ impl RectBivariateSpline {
         };
         let pairs: Vec<(f64, f64)> = xi.iter().zip(yi).map(|(&x, &y)| (x, y)).collect();
         let work_per_query = self.coeffs.len().max(1);
-        Ok(par_query_map(&pairs, work_per_query, |&(x, y)| eval_one(x, y)))
+        Ok(par_query_map(&pairs, work_per_query, |&(x, y)| {
+            eval_one(x, y)
+        }))
     }
 
     /// Evaluate the spline on a grid and return a 2D array.
@@ -9502,7 +9504,11 @@ impl SmoothBivariateSpline {
         if x.is_empty()
             || SMOOTHBISPLINE_EVAL_MANY_FORCE_SCALAR.load(std::sync::atomic::Ordering::Relaxed)
         {
-            return Ok(x.iter().zip(y).map(|(&xv, &yv)| self.eval(xv, yv)).collect());
+            return Ok(x
+                .iter()
+                .zip(y)
+                .map(|(&xv, &yv)| self.eval(xv, yv))
+                .collect());
         }
         let x_splines: Option<Vec<BSpline>> = self
             .coeffs
@@ -9510,7 +9516,11 @@ impl SmoothBivariateSpline {
             .map(|row| BSpline::new(self.tx.clone(), row.to_vec(), self.kx).ok())
             .collect();
         let Some(x_splines) = x_splines else {
-            return Ok(x.iter().zip(y).map(|(&xv, &yv)| self.eval(xv, yv)).collect());
+            return Ok(x
+                .iter()
+                .zip(y)
+                .map(|(&xv, &yv)| self.eval(xv, yv))
+                .collect());
         };
         let eval_one = |xv: f64, yv: f64| -> f64 {
             if !xv.is_finite() || !yv.is_finite() {
@@ -11088,7 +11098,11 @@ mod tests {
         let serial: Vec<f64> = xs.iter().map(|&x| a.eval(x)).collect();
         assert_eq!(parallel.len(), serial.len());
         for (i, (p, s)) in parallel.iter().zip(serial.iter()).enumerate() {
-            assert_eq!(p.to_bits(), s.to_bits(), "aaa eval_many mismatch at query {i}");
+            assert_eq!(
+                p.to_bits(),
+                s.to_bits(),
+                "aaa eval_many mismatch at query {i}"
+            );
         }
     }
 
@@ -14084,7 +14098,12 @@ mod tests {
                 1.0 + 5.0e-16,
             ),
             (&[0.0, 1.0], &[f64::INFINITY, 2.0], &[1.0, 1.0], 0.5),
-            (&[0.0, f64::NAN, 2.0], &[1.0, 2.0, 3.0], &[1.0, 1.0, 1.0], 0.5),
+            (
+                &[0.0, f64::NAN, 2.0],
+                &[1.0, 2.0, 3.0],
+                &[1.0, 1.0, 1.0],
+                0.5,
+            ),
             (&[0.0, 1.0], &[1.0], &[1.0, 1.0], 0.5),
             (&[0.0, 1.0], &[1.0, 2.0], &[1.0, 1.0], f64::NAN),
             (&[], &[], &[], 0.5),
@@ -14175,11 +14194,7 @@ mod tests {
             (vec![3.0, 2.0, 1.0], 0.0, 2.0),
             (vec![-0.0, 0.0, -1.5, 2.25], -0.75, 0.875),
             (vec![f64::INFINITY, -0.0], -0.5, 0.25),
-            (
-                vec![f64::from_bits(0x7ff8_0000_0000_0042), 1.0],
-                -0.5,
-                0.25,
-            ),
+            (vec![f64::from_bits(0x7ff8_0000_0000_0042), 1.0], -0.5, 0.25),
             (vec![1.0, -2.0, 3.0], f64::NEG_INFINITY, f64::INFINITY),
         ];
 
@@ -14312,7 +14327,10 @@ mod tests {
         }
 
         assert_eq!(ratval(&[2.5], &[0.5], f64::NAN).to_bits(), 5.0f64.to_bits());
-        assert_eq!(ratval(&[], &[1.0], f64::INFINITY).to_bits(), 0.0f64.to_bits());
+        assert_eq!(
+            ratval(&[], &[1.0], f64::INFINITY).to_bits(),
+            0.0f64.to_bits()
+        );
         assert!(ratval(&[1.0], &[], 0.5).is_nan());
         assert!(ratval(&[1.0, 2.0], &[1.0], f64::NAN).is_nan());
     }
