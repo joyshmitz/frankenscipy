@@ -1492,8 +1492,11 @@ fn bench_cholesky_wall_trsm_par_ab(c: &mut Criterion) {
         (mean, cv_pct, percentile(50), percentile(95), percentile(99))
     };
 
+    // Under the size-adaptive NB staircase (2026-07-22), n=1000 runs nb=192 whose
+    // first panels carry ~14.9M TRSM MACs — ABOVE the 8M gate — so both sizes now
+    // expect the fan-out (the old zero-spawn expectation held only at nb=128).
     for &(n, samples, factors_per_sample, expect_spawn) in
-        &[(1000usize, 20usize, 32usize, false), (2048, 12, 6, true)]
+        &[(1000usize, 20usize, 32usize, true), (2048, 12, 6, true)]
     {
         let a = make_symmetric_eigh_matrix(n);
 
@@ -1511,8 +1514,8 @@ fn bench_cholesky_wall_trsm_par_ab(c: &mut Criterion) {
         let parallel_factor =
             cholesky_wall_trsm_blocked_fma_candidate(black_box(&a)).expect("parallel factor");
         let spawned_panels = CHOL_PANEL_TRSM_PAR_PANELS.load(Ordering::Relaxed) - parallel_before;
-        // Gate proof: n=1000's largest TRSM panel (7.1M MACs) sits BELOW the 8M gate
-        // (measured 0.945x regression with a 2M gate), n=2048's largest (15.7M) above.
+        // Gate proof: at adaptive NB both sizes' largest TRSM panels exceed 8M MACs
+        // (n=1000@nb=192: 14.9M; n=2048@nb=256: 31M+).
         if expect_spawn {
             assert!(
                 spawned_panels > 0,
