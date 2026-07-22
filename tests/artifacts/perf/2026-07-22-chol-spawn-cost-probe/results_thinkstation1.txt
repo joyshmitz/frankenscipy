@@ -1,0 +1,16 @@
+T= 4 work_us=  0 scope_median_us=   134.5 pool_median_us=    16.7 overhead_scope_us=  134.5 overhead_pool_us=   16.7
+T= 4 work_us=100 scope_median_us=   240.1 pool_median_us=   116.9 overhead_scope_us=  140.1 overhead_pool_us=   16.9
+T= 4 work_us=500 scope_median_us=   642.9 pool_median_us=   518.2 overhead_scope_us=  142.9 overhead_pool_us=   18.2
+T= 6 work_us=  0 scope_median_us=   181.9 pool_median_us=    16.4 overhead_scope_us=  181.9 overhead_pool_us=   16.4
+T= 6 work_us=100 scope_median_us=   294.3 pool_median_us=   123.9 overhead_scope_us=  194.3 overhead_pool_us=   23.9
+T= 6 work_us=500 scope_median_us=   698.5 pool_median_us=   521.9 overhead_scope_us=  198.5 overhead_pool_us=   21.9
+T= 8 work_us=  0 scope_median_us=   216.0 pool_median_us=    20.9 overhead_scope_us=  216.0 overhead_pool_us=   20.9
+T= 8 work_us=100 scope_median_us=   326.2 pool_median_us=   125.3 overhead_scope_us=  226.2 overhead_pool_us=   25.3
+T= 8 work_us=500 scope_median_us=   738.8 pool_median_us=   524.2 overhead_scope_us=  238.8 overhead_pool_us=   24.2
+T=13 work_us=  0 scope_median_us=   308.4 pool_median_us=    34.7 overhead_scope_us=  308.4 overhead_pool_us=   34.7
+T=13 work_us=100 scope_median_us=   448.2 pool_median_us=   150.9 overhead_scope_us=  348.2 overhead_pool_us=   50.9
+T=13 work_us=500 scope_median_us=   860.6 pool_median_us=   549.4 overhead_scope_us=  360.6 overhead_pool_us=   49.4
+T=16 work_us=  0 scope_median_us=   399.7 pool_median_us=    54.3 overhead_scope_us=  399.7 overhead_pool_us=   54.3
+T=16 work_us=100 scope_median_us=   520.6 pool_median_us=   154.3 overhead_scope_us=  420.6 overhead_pool_us=   54.3
+T=16 work_us=500 scope_median_us=   890.6 pool_median_us=   557.3 overhead_scope_us=  390.6 overhead_pool_us=   57.3
+sink=11073665425284876027
