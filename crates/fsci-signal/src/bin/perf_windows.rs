@@ -22,7 +22,11 @@ fn measure(name: &str, m: usize, iters: usize, genfn: impl Fn(usize) -> Vec<f64>
     let a = genfn(m);
     WINDOW_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = genfn(m);
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
         + usize::from(a.len() != b.len());
 
     let bench = |force_serial: bool| -> f64 {
@@ -64,7 +68,10 @@ fn measure(name: &str, m: usize, iters: usize, genfn: impl Fn(usize) -> Vec<f64>
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let m: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let m: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
     measure("nuttall_window", m, iters, nuttall_window);
     measure("bohman_window", m, iters, bohman_window);

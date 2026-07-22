@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let numtaps: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2_000_001);
+    let numtaps: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2_000_001);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     // Bandpass (two bands) with a trivial window so the sinc build dominates.
@@ -30,9 +33,16 @@ fn main() {
     let a = firwin(numtaps, &cutoff, win, false).expect("firwin");
     FIRWIN_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = firwin(numtaps, &cutoff, win, false).expect("firwin");
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
         + usize::from(a.len() != b.len());
-    println!("# signal::firwin numtaps={numtaps} h[1]={} bitmism={bitmism}", a[1]);
+    println!(
+        "# signal::firwin numtaps={numtaps} h[1]={} bitmism={bitmism}",
+        a[1]
+    );
 
     let bench = |serial: bool| -> f64 {
         FIRWIN_FORCE_SERIAL.store(serial, Ordering::Relaxed);

@@ -33,7 +33,9 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
     };
-    let x: Vec<Vec<f64>> = (0..rows).map(|_| (0..cols).map(|_| r()).collect()).collect();
+    let x: Vec<Vec<f64>> = (0..rows)
+        .map(|_| (0..cols).map(|_| r()).collect())
+        .collect();
 
     // Parity: hoisted must be byte-identical to per-row.
     RESAMPLE_POLY_FORCE_PERROW.store(true, Ordering::Relaxed);

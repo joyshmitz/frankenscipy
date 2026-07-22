@@ -49,7 +49,10 @@ fn main() {
     GROUP_DELAY_FROM_BA_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let (fb, db) = group_delay_from_ba(&b, &a, n_freqs);
     let bit = |x: &[f64], y: &[f64]| -> usize {
-        x.iter().zip(y).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+        x.iter()
+            .zip(y)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count()
             + usize::from(x.len() != y.len())
     };
     let bitmism = bit(&fa, &fb) + bit(&da, &db);

@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0x94d0_49bbu64;
@@ -34,9 +37,16 @@ fn main() {
     let a = normalize_minmax(&x);
     NORMALIZE_MINMAX_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = normalize_minmax(&x);
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
         + usize::from(a.len() != b.len());
-    println!("# signal::normalize_minmax n={n} a[1]={} b[1]={} bitmism={bitmism}", a[1], b[1]);
+    println!(
+        "# signal::normalize_minmax n={n} a[1]={} b[1]={} bitmism={bitmism}",
+        a[1], b[1]
+    );
 
     let bench = |serial: bool| -> f64 {
         NORMALIZE_MINMAX_FORCE_SERIAL.store(serial, Ordering::Relaxed);

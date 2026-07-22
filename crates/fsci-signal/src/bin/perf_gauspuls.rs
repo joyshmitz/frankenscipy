@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
     let fc: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1000.0);
     let (bw, bwr) = (0.5, -6.0);
@@ -39,7 +42,10 @@ fn main() {
     GAUSPULS_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = gauspuls(&t, fc, bw, bwr).unwrap();
     let bit = |x: &[f64], y: &[f64]| {
-        x.iter().zip(y).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+        x.iter()
+            .zip(y)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count()
             + usize::from(x.len() != y.len())
     };
     let bitmism = bit(&a.i, &b.i) + bit(&a.q, &b.q) + bit(&a.envelope, &b.envelope);
