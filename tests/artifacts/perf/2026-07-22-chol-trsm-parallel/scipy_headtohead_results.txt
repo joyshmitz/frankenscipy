@@ -1,0 +1,9 @@
+2026-07-22 thinkstation1 (Zen3 5975WX, 64c), scipy 1.17.1/numpy 2.4.3, fsci @ fb2396023 (+avx2,+fma build)
+scipy cho_factor default: n=1000 p50=4.591ms (72.60 GF/s) | n=2048 p50=62.359ms (45.92 GF/s)
+scipy cho_factor 1-thread(OMP/OPENBLAS=1): n=1000 p50=8.922ms (37.36 GF/s) | n=2048 p50=103.339ms (27.71 GF/s)
+fsci cho_factor (own scoped threads, default; from the 8M-gate A/B same host ~15min earlier):
+  n=1000 p50=10.808-10.939ms (30.5-30.8 GF/s) | n=2048 p50=61.041ms (46.91 GF/s)
+=> n=2048: fsci FASTER than scipy-default (61.04 vs 62.36ms) and 1.69x vs scipy-1-thread. CROSSED.
+=> n=1000: fsci 1.21x behind scipy-1-thread, 2.36x behind scipy-default (small-n threaded efficiency).
+CAVEATS: fsci and scipy runs adjacent (same host/hour) but not interleaved in one process; scipy SPD input
+random MTM+nI vs fsci eigh-style fixture (cholesky flops value-independent); box shared with cod.

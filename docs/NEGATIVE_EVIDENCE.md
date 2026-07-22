@@ -23051,3 +23051,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   now 61 ms = FASTER than that banked scipy number; needs a fresh same-host head-to-head with thread parity
   before claiming a flip). Gate fine-tuning 4-8M and mid-n (1200-1800) sweep are cheap follow-ons.
 - Bead: `frankenscipy-l30nd`.
+
+## 2026-07-22 - CopperFalcon (cc) - RE-BASELINE: n=2048 dense Cholesky CROSSES SciPy — fsci 61.04 ms vs scipy-default 62.36 ms, same host, pure safe Rust
+
+- Post-lever-5 head-to-head (thread-parity rule honored: both arms' threading recorded). thinkstation1,
+  scipy 1.17.1 / numpy 2.4.3 fresh timings vs fsci's minutes-old 8M-gate A/B PROD/CAND numbers (same host):
+  | n | fsci default (scoped threads) | scipy default | scipy 1-thread |
+  |---|---|---|---|
+  | 1000 | 10.81-10.94 ms (30.5-30.8 GF/s) | 4.591 ms (72.6) | 8.922 ms (37.4) |
+  | 2048 | **61.04 ms (46.9 GF/s)** | 62.359 ms (45.9) | 103.339 ms (27.7) |
+- **n=2048: fsci is FASTER than OpenBLAS-backed SciPy at default threading (1.02x) and 1.69x faster than
+  SciPy pinned to one thread.** The 2026-07-04 banked picture (fsci 105-114 ms vs scipy 77.5, "1.47x behind
+  both-multicore") is obsolete: five landed levers later (ISA flag by prior session; FMA SYRK 23355d1c5;
+  blocked TRSM c7e9062bf; parallel TRSM fb2396023) fsci n=2048 went 105-114 → 61.0 ms.
+- n=1000 residual: 2.36x behind scipy-default, 1.21x behind scipy-1-thread. The gap is small-n THREADING
+  efficiency (scipy's threaded LAPACK hits 72.6 GF/s at n=1000; fsci's per-panel scoped spawn model reaches
+  30.8) — NOT kernel arithmetic (per-core fsci≈scipy-1-thread within 1.21x). Next structural lever for the
+  lane: amortized worker reuse across panels/factors (persistent pool semantics) or panel-pipelining;
+  per-panel `thread::scope` spawn/join is the measured obstacle below ~15M MACs (see lever-5 gate tuning).
+- Caveats recorded in the artifact (adjacent same-host runs, not one-process interleaved; value-independent
+  flop count makes fixture differences immaterial). Artifact:
+  `tests/artifacts/perf/2026-07-22-chol-trsm-parallel/scipy_headtohead_results.txt` (+ script).
