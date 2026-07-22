@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 1u64;
@@ -38,8 +41,15 @@ fn main() {
     let a = nanquantile(&data, &q);
     NANQUANTILE_FORCE_SORT.store(false, Ordering::Relaxed);
     let b = nanquantile(&data, &q);
-    let bitmism = a.iter().zip(&b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-    println!("# stats::nanquantile n={n} q={q:?} (sort[2]={} select[2]={}) bitmism={bitmism}", a[2], b[2]);
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
+    println!(
+        "# stats::nanquantile n={n} q={q:?} (sort[2]={} select[2]={}) bitmism={bitmism}",
+        a[2], b[2]
+    );
 
     let run = || nanquantile(black_box(&data), black_box(&q));
     let bench = |force_sort: bool| -> f64 {

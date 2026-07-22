@@ -35,8 +35,15 @@ fn main() {
     let a = rsh(&data, None);
     RSH_FORCE_QUADRATIC.store(false, Ordering::Relaxed);
     let b = rsh(&data, None);
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    println!("# stats::rsh n={n} (d[1] quad={} sorted={}) bitmism={bitmism}", a[1], b[1]);
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    println!(
+        "# stats::rsh n={n} (d[1] quad={} sorted={}) bitmism={bitmism}",
+        a[1], b[1]
+    );
 
     let run = || rsh(black_box(&data), None);
     let bench = |quad: bool| -> f64 {

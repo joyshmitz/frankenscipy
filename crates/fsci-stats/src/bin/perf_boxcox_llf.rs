@@ -20,7 +20,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
     let lmb: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0.5);
 

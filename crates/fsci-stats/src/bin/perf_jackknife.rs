@@ -56,7 +56,11 @@ fn main() {
     let bitmism = bitf(a.statistic, b.statistic)
         + bitf(a.bias, b.bias)
         + bitf(a.se, b.se)
-        + a.replicates.iter().zip(&b.replicates).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+        + a.replicates
+            .iter()
+            .zip(&b.replicates)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count()
         + usize::from(a.replicates.len() != b.replicates.len());
 
     let bench = |force_serial: bool| -> f64 {

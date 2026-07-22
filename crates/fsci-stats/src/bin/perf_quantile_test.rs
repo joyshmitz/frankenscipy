@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(32_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(32_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 1u64;
@@ -38,7 +41,10 @@ fn main() {
     let b = quantile_test(&x, q, p);
     let bitmism = usize::from(a.statistic != b.statistic)
         + usize::from(a.pvalue.to_bits() != b.pvalue.to_bits());
-    println!("# stats::quantile_test n={n} (stat 2pass={} fused={}) bitmism={bitmism}", a.statistic, b.statistic);
+    println!(
+        "# stats::quantile_test n={n} (stat 2pass={} fused={}) bitmism={bitmism}",
+        a.statistic, b.statistic
+    );
 
     let run = || quantile_test(black_box(&x), black_box(q), black_box(p));
     let bench = |disable: bool| -> f64 {

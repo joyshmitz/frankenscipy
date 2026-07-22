@@ -92,9 +92,8 @@ fn main() {
     let pp: &dyn Fn() -> Vec<f64> = &|| ppcc_plot(&data, -2.0, 2.0, nshapes).unwrap().1;
 
     println!("# stats::normplot sweep  n_data={n} n_shapes={nshapes} iters={iters}");
-    let bitmism = parity("boxcox_normplot", bx)
-        + parity("yeojohnson_normplot", yj)
-        + parity("ppcc_plot", pp);
+    let bitmism =
+        parity("boxcox_normplot", bx) + parity("yeojohnson_normplot", yj) + parity("ppcc_plot", pp);
     println!("# total bitmism across all three families = {bitmism}");
 
     gate("boxcox_normplot", bx, iters);

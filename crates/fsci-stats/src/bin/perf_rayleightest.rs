@@ -20,7 +20,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
 
     let mut s = 1u64;
@@ -37,7 +40,8 @@ fn main() {
     let (za, pa) = rayleightest(&samples);
     CIRC_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let (zb, pb) = rayleightest(&samples);
-    let bitmism = usize::from(za.to_bits() != zb.to_bits()) + usize::from(pa.to_bits() != pb.to_bits());
+    let bitmism =
+        usize::from(za.to_bits() != zb.to_bits()) + usize::from(pa.to_bits() != pb.to_bits());
 
     let bench = |force_serial: bool| -> f64 {
         CIRC_FORCE_SERIAL.store(force_serial, Ordering::Relaxed);

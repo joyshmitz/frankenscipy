@@ -29,7 +29,9 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64 * 4.0 - 2.0
     };
-    let dataset: Vec<Vec<f64>> = (0..npts).map(|_| (0..dims).map(|_| r()).collect()).collect();
+    let dataset: Vec<Vec<f64>> = (0..npts)
+        .map(|_| (0..dims).map(|_| r()).collect())
+        .collect();
     let queries: Vec<Vec<f64>> = (0..64).map(|_| (0..dims).map(|_| r()).collect()).collect();
 
     GAUSSIAN_KDE_ND_WHITEN_FORCE_SERIAL.store(true, Ordering::Relaxed);
@@ -38,8 +40,15 @@ fn main() {
     let kb = GaussianKdeNd::new(&dataset).expect("kde b");
     let ea = ka.evaluate_many(&queries);
     let eb = kb.evaluate_many(&queries);
-    let bitmism = ea.iter().zip(&eb).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-    println!("# stats::GaussianKdeNd::new npts={npts} dims={dims} eval[0]={} bitmism={bitmism}", ea[0]);
+    let bitmism = ea
+        .iter()
+        .zip(&eb)
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
+    println!(
+        "# stats::GaussianKdeNd::new npts={npts} dims={dims} eval[0]={} bitmism={bitmism}",
+        ea[0]
+    );
 
     let bench = |serial: bool| -> f64 {
         GAUSSIAN_KDE_ND_WHITEN_FORCE_SERIAL.store(serial, Ordering::Relaxed);

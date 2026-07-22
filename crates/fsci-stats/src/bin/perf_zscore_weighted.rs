@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0x243f_6a88u64;
@@ -35,8 +38,15 @@ fn main() {
     let a = zscore_weighted(&data, &w);
     ZSCORE_W_FUSE_DISABLE.store(false, Ordering::Relaxed);
     let b = zscore_weighted(&data, &w);
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    println!("# stats::zscore_weighted n={n} orig[1]={} fused[1]={} bitmism={bitmism}", a[1], b[1]);
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    println!(
+        "# stats::zscore_weighted n={n} orig[1]={} fused[1]={} bitmism={bitmism}",
+        a[1], b[1]
+    );
 
     let bench = |disable: bool| -> f64 {
         ZSCORE_W_FUSE_DISABLE.store(disable, Ordering::Relaxed);

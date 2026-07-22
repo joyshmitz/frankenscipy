@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let npts: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1_500_000);
+    let npts: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1_500_000);
     let p: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
 
@@ -37,8 +40,15 @@ fn main() {
     let (ba, _, _, _) = multiple_regression(&x, &y);
     NORMAL_EQ_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let (bb, _, _, _) = multiple_regression(&x, &y);
-    let bitmism = ba.iter().zip(&bb).filter(|(u, v)| u.to_bits() != v.to_bits()).count();
-    println!("# stats::multiple_regression npts={npts} p={p} beta[0]={} bitmism={bitmism}", ba[0]);
+    let bitmism = ba
+        .iter()
+        .zip(&bb)
+        .filter(|(u, v)| u.to_bits() != v.to_bits())
+        .count();
+    println!(
+        "# stats::multiple_regression npts={npts} p={p} beta[0]={} bitmism={bitmism}",
+        ba[0]
+    );
 
     let bench = |serial: bool| -> f64 {
         NORMAL_EQ_FORCE_SERIAL.store(serial, Ordering::Relaxed);

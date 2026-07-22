@@ -38,7 +38,10 @@ fn main() {
     let b = logrank(&x, &y, "two-sided");
     let bitmism = usize::from(a.statistic.to_bits() != b.statistic.to_bits())
         + usize::from(a.pvalue.to_bits() != b.pvalue.to_bits());
-    println!("# stats::logrank n={n} (stat quad={} sorted={}) bitmism={bitmism}", a.statistic, b.statistic);
+    println!(
+        "# stats::logrank n={n} (stat quad={} sorted={}) bitmism={bitmism}",
+        a.statistic, b.statistic
+    );
 
     let run = || logrank(black_box(&x), black_box(&y), "two-sided");
     let bench = |quad: bool| -> f64 {

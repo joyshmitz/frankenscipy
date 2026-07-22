@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0x9e37_79b9u64;
@@ -34,10 +37,18 @@ fn main() {
     let a = histogram_bin_edges(&data, "sqrt");
     HIST_EDGES_FUSE_DISABLE.store(false, Ordering::Relaxed);
     let b = histogram_bin_edges(&data, "sqrt");
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
         + usize::from(a.len() != b.len());
-    println!("# stats::histogram_bin_edges n={n} edges={} first={} last={} bitmism={bitmism}",
-        a.len(), a.first().copied().unwrap_or(0.0), a.last().copied().unwrap_or(0.0));
+    println!(
+        "# stats::histogram_bin_edges n={n} edges={} first={} last={} bitmism={bitmism}",
+        a.len(),
+        a.first().copied().unwrap_or(0.0),
+        a.last().copied().unwrap_or(0.0)
+    );
 
     let bench = |disable: bool| -> f64 {
         HIST_EDGES_FUSE_DISABLE.store(disable, Ordering::Relaxed);
