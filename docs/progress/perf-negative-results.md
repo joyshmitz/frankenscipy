@@ -4,6 +4,53 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-16 - catch-up sync through current measured-frontier ancestry
+
+- This routing ledger had stopped at 2026-07-12 while the code and the detailed
+  `docs/NEGATIVE_EVIDENCE.md` ledger had advanced through 2026-07-16. The table
+  below refreshes the high-EV `opt`/`integrate`/`stats`/`sparse`/`interpolate`
+  frontier before another candidate is selected. The detailed ledger remains
+  authoritative for fingerprints, confidence intervals, exact proof commands,
+  and full environment notes.
+
+| Domain / lever | Disposition and measured effect | Retry boundary |
+| --- | --- | --- |
+| sparse SpMV: defer `available_parallelism()` until after the serial gate (`6d63244e4`) | **KEEP**, same-binary `43.996 us -> 1.0880 us`, **40.44x** centered | Reprofile above both existing parallel thresholds; the below-gate affinity-query family is closed. |
+| interpolate PCHIP sorted-query cursor (`1e801d63e`) | **KEEP**, same-worker former/cursor **39.634 us -> 15.135 us**, **2.619x** centered, bit-identical | Only revisit with a different primitive on unsorted/non-finite or parallel batches. |
+| interpolate cubic/Akima/Hermite sibling cursors (`36a5f9e1c`) | **KEEP**, same-binary **3.09-6.47x**, bit-identical | Binary-search removal for finite sorted serial batches is closed; require a newly profiled non-cursor path. |
+| stats N-D KDE SIMD exponential batch (`570e5bbf7`) | **KEEP**, same-binary **1.18-1.33x**, maximum relative drift below `1e-11` | Scalar-exp batching is closed; require a different measured primitive such as distance-layout work. |
+| cluster mean-shift SIMD exponential batch (`9dc541734`) | **REJECT / IN-FLOOR** on the expensive parallel regime: **1.40x** at serial `d=2`, **0.997x** at parallel `d=6` | Retry only with a transposed point layout that also vectorizes distance, or measured bandwidth headroom on the parallel path. |
+| integrate Radau streamed scaled RMS norms (`ba4bac274`) | **REJECT**, centered interval overlap; no conservative separation | Retry only when profiling shows scaled-vector allocation above the null floor on a higher-dimensional stiff fixture. |
+| integrate Radau Newton allocation hoist (`a769dc102`) | **KEEP**, same-binary **1.044x**, byte-identical | The per-iteration Radau allocation family is closed; choose a different measured stage. |
+| integrate BDF Newton allocation hoist (`49d6d2c97`) | **KEEP**, same-binary **1.09-1.10x**, byte-identical | The per-iteration BDF RHS/solve allocation family is closed; choose a different measured stage. |
+| opt `approx_derivative` per-chunk perturbation scratch (`cdea332cc`) | **REJECT / IN-FLOOR**, **1.498x** centered but overlapping intervals | Retry only with a same-worker fixture whose null band is narrower than the observed candidate/control separation. |
+| opt `brute` grid-point scratch reuse (`fc4189190`) | **KEEP**, alternating same-worker A/B **1.430x** median, bit-identical | Per-point coordinate allocation is closed; require a different profiled primitive. |
+| opt trust-exact folded diagonal shift (`5b1441b13`) | **KEEP**, same-binary **1.24-1.37x**, byte-identical | Intermediate shifted-matrix allocation is closed; require a different measured trust-subproblem primitive. |
+
+- Fresh work must screen both this catch-up and the detailed ledger. In
+  particular, a rejected streak is not evidence of a ceiling: route to a
+  different alien primitive whose retry predicate is presently true.
+
+## 2026-07-22 - frankenscipy-8l8r1.161 - KEEP: flat trust-exact augmented storage (bit-identical, 1.10-1.18x)
+
+- Recent history and both ledgers were screened before editing. The earlier trust-exact keep closed only the
+  redundant shifted-Hessian copy; no flat augmented-system attempt existed. Alien §5.10 contiguous-region storage
+  and §7.2 cache locality were selected as a different primitive.
+- Untouched strict-remote profile: dimension-20 p50/p95/p99 **27.076/27.638/28.448 ms**, CV **3.03%** on
+  `ovh-a`; `hz1` perf captured **3,962** cycle samples with **79.88%** in `solve_augmented` and **4.93%** in
+  allocator/free symbols.
+- One lever stores `[A|b]` in one row-major `Vec<f64>` instead of `Vec<Vec<f64>>`. Arithmetic and traversal order
+  are unchanged. At n=20 the 3,360-byte payload is unchanged, while augmented storage allocations fall **21 -> 1**
+  and 480 bytes of row headers disappear.
+- Strict same-binary `ovh-a` A/B/A (13 rounds): nested p50/p95/p99 **15.996/16.933/16.933 ms**, CV **2.066%**;
+  flat **14.387/15.097/15.097 ms**, CV **1.724%**; paired **1.103247x** versus null range
+  **[0.970255, 1.044896]**. Criterion: dimension 10 **1.18x**, dimension 20 **1.10x**. Not in-floor: **KEEP**.
+- Exact full-result benchmark parity, direct solver `to_bits()` parity (including pivot swap and singular verdict),
+  and strict-remote trust-exact differential conformance **1/1** passed. RCH surfaces and pre-existing Clippy/fmt
+  debt are detailed in `docs/NEGATIVE_EVIDENCE.md`; no local Cargo fallback was used.
+- Retry only after a fresh profile admits a different algorithmic primitive (factor reuse/secular equation) with a
+  new tolerance-conformance proof and null-controlled A/B. The contiguous augmented-storage family is closed.
+
 ## 2026-07-11 - frankenscipy-8l8r1.159 - KEEP: skip redundant `eye` CSR validation (bit-identical, median -82.95%)
 
 - Agent: cod / ScarletChapel. Domain: `fsci-sparse`; cc-owned `ndimage` and `interpolate` were excluded. The current

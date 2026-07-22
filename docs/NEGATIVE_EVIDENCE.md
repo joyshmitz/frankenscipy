@@ -6,6 +6,44 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-22 - cod / BlackThrush - KEEP (bit-identical): contiguous trust-exact augmented solve - 1.10-1.18x
+
+- **LEDGER/LOG SCREEN:** the 2026-07-16 trust-exact folded-shift keep closed the redundant
+  `shifted_matrix` copy, but neither ledger nor recent history contained a flat augmented-system attempt. The
+  selected alien primitive is §5.10 region-style contiguous storage plus §7.2 cache-local layout; it is distinct
+  from the closed shifted-copy family and does not touch dense linalg kernels.
+- **PROFILE FIRST:** the untouched dimension-20 Rosenbrock control on strict-remote `ovh-a` had p50/p95/p99
+  **27.076/27.638/28.448 ms**, mean **26.863 ms**, and CV **3.03%**. A 160-solve cycle profile on named worker
+  `hz1` captured **3,962 samples, 0 lost** and attributed two `solve_augmented` symbols **57.20% + 22.68% =
+  79.88%** self cycles; `malloc`/`cfree`/`calloc` added **4.93%**. This admitted the storage lever.
+- **ONE LEVER:** replace the hot `Vec<Vec<f64>>` augmented matrix with one row-major `Vec<f64>`. Pivot candidate,
+  row, elimination-column, and back-substitution traversal order are unchanged; row swaps copy the same complete
+  row. At n=20, augmented payload remains **3,360 bytes**, while its storage goes from **21 allocations to 1** and
+  drops **480 bytes** of row headers (plus allocator metadata). `TRUST_EXACT_FLAT_AUGMENTED_DISABLE` preserves the
+  original path for same-binary proof and measurement.
+- **STRICT SAME-WORKER A/B/A, `ovh-a`, 13 interleaved rounds:** original p50/p95/p99
+  **15.996/16.933/16.933 ms**, CV **2.066%**; flat **14.387/15.097/15.097 ms**, CV **1.724%**. The paired median
+  is **1.103247x**, outside the original/original null band **[0.970255, 1.044896]** (null median **1.008651x**,
+  CV **1.902%**). Criterion independently measured dimension 10 at **2.183 vs 2.579 ms (1.18x)** and dimension
+  20 at **14.475 vs 15.925 ms (1.10x)**. This is above the null floor: **KEEP**.
+- **BEHAVIOR ISOMORPHISM:** the benchmark compared the complete `OptimizeResult` and explicit `x`/`fun` bits.
+  A focused unit proof passed exact `to_bits()` parity for ordinary, pivot-swap, and singular augmented systems.
+  Strict-remote trust-exact differential conformance passed **1/1** on `hz1`. No tolerance, pivot threshold,
+  arithmetic expression, or solver fallback changed.
+- **GATES/SURFACES:** fail-closed RCH refused early attempts for insufficient slots and a worker-specific missing
+  ignored source entrypoint; `ovh-a` also forbids perf with `perf_event_paranoid=4`. No local Cargo fallback was
+  used for authoritative evidence. Full `-D warnings` Clippy first reached only pre-existing findings in
+  `curvefit.rs:545`, `lib.rs:4377/4381`, and `src/bin/perf_approx_derivative.rs:48/50/62`; the targeted lib+bench
+  gate then passed remotely with only those pre-existing lib categories plus the benchmark's older seed-grouping
+  lint allowed. Workspace `--all-targets` check
+  reached the opt target, then surfaced an unrelated absent `fsci-special/src/bin/diff_hypterm.rs` entrypoint.
+  Direct rustfmt reports only pre-existing drift outside this lever, and `git diff --check` passes. UBS's installed
+  runner unexpectedly launched Cargo inside a local shadow workspace; those subcheck results were discarded, while
+  its static findings were pre-existing/test-only heuristics with no production finding in the new solver.
+- **RETRY BOUNDARY:** contiguous augmented storage is closed. Revisit trust-exact only after a new profile admits a
+  different algorithmic primitive, such as factor reuse/secular-equation iteration, with tolerance-level SciPy
+  conformance and a fresh null-controlled A/B. Bead: `frankenscipy-8l8r1.161`.
+
 ## 2026-07-10 - cod - REJECT (bit-identical): sparse square-grid `spsolve` row-forward threading regresses median 136.59%
 
 - PROFILE-FIRST: after excluding closed linalg/Mathieu/CSR-add/SpMM families, the live open row was
@@ -22839,3 +22877,49 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   gated subproblem + `TRUST_EXACT_FOLD_SHIFT_DISABLE`), `crates/fsci-opt/src/lib.rs` (re-export), and the
   `bench_trust_exact_fold_shift_ab` harness. No LTO/`release-perf` build, local Cargo fallback, `force_local`,
   stash mutation, or unrelated-file edit entered the decision. Bead: `frankenscipy-dw8xh`.
+
+## 2026-07-22 - CopperFalcon (cc) - KEEP (1e-10 factor contract): AVX2+FMA MR4×NR8 trailing-SYRK micro-kernel — 1.143x DECIDED on the n=1000 Cholesky factor
+
+- Dense-BLAS wall lane. The retry predicate from the 2026-07-10 dense-dot register-blocking REJECT held: that
+  REJECT measured FMA+multi-accumulator at 1.098-1.14x but killed it ONLY on the `simd_dot` bit-identity
+  contract, noting "FMA only pays WITH multiple accumulators" (single-chain FMA was 0.76-0.90x). The trailing
+  SYRK broadcast tile is the one dense hotspot with a documented NON-bit-exact contract (factor uniqueness,
+  1e-10 vs the unblocked reference), so FMA is admissible exactly there. Second predicate also held: the
+  production MR4×NR4 half-panel split existed only to fit the SSE2 XMM budget (2026-07-10 WIN entry), and the
+  workspace has been `+avx2,+fma` since `d89ca19f6` — under YMM the full MR4×NR8 tile is 8 accumulator YMM +
+  operands ≤ ~12/16, spill-free, with 8 independent FMA chains ≥ 2 pipes × 4-cycle latency, saturating.
+- ONE LEVER: `cholesky_syrk_flat_rows_mr4_nr8_fma` — the MR4×NR8 packed-broadcast tile with
+  `c = bvec.mul_add(splat(a[p]), c)` (`std::simd::StdFloat`), i.e. the register-blocked FMA structure of
+  OpenBLAS's `dgemm_kernel_HASWELL` in portable `std::simd`. Diagonal-block/tail columns keep the exact
+  `simd_dot4`/`simd_dot` path (bit-identical there); only the register-tiled region is single-rounded. The
+  kernel selector became `const SYRK_KERNEL: u8` (NR8-orig / NR4 / NR8-FMA); production
+  `cholesky_lower_blocked` now dispatches NR8-FMA.
+- MEASUREMENT (thinkstation1 — the canonical banked host — one binary, interleaved per factor inside one
+  routine, A/A null first, `chol-wall-bench` feature): NULL(prod/prod) median 1.0036 [0.9427, 1.0688]
+  cv 3.32%; CAND(prod/FMA) **paired median 1.1433**, mean 1.1463, cv 2.79% — **outside the null range,
+  DECIDED** (also passes the legacy cv<5% gate). n=1000 factor p50 **15.068 → 13.218 ms**
+  (**22.12 → 25.22 GF/s**, both arms multi-threaded trailing update, same thread structure; banked SciPy
+  same-host context: 4.319 ms default / 8.539 ms 1-thread ⇒ gap ~3.5x → ~3.06x default, ~1.90x → ~1.55x
+  vs 1-thread). Criterion cross-check (paired alternating, both arms per iter): 29.76 ms ≈ 15.07+13.22 + noise,
+  agrees. Artifact: `tests/artifacts/perf/2026-07-22-chol-syrk-fma-mr4nr8/bench_stdout_stderr.txt`.
+- PROVENANCE (the rules that killed the 07-10 SYRK rows are satisfied): perf child profiles the CANDIDATE
+  binary running the CANDIDATE factor path — `cholesky_syrk_flat_rows_mr4_nr8_fma` **26.92% self** (live, hot;
+  was 59-61% for NR4 in cod's 07-10 profiles — the kernel shrank its own share), `cholesky_panel_trsm_rows2`
+  41.43%, `copy_l21_and_pack_transpose` 4.07%. EXECUTION PROOF: 46/1,000,000 factor elements differ in bits
+  vs production, max_rel **1.084e-19** (FMA single-rounding floor; 1e-10 contract has ~9 orders of headroom).
+- CONFORMANCE: new inline test `cholesky_syrk_mr4_nr8_fma_within_factor_tolerance` (tile+tail+multi-panel n's,
+  asserts ≤1e-10 AND differing-bits execution proof); fsci-linalg lib suite 513/0; conformance
+  `diff_linalg_inv_pinv_cholesky` 37/0, `diff_linalg` 1/0, `diff_linalg_structured_solvers` 1/0. ubs 0 critical.
+- NEXT LEVER (measured, not guessed): panel TRSM is now the dominant frame at **41.43% self** vs SYRK 26.92 —
+  the "GEMM-speed flat panel TRSM" half of the banked joint-primitive retry predicate is where the wall moved.
+  copy+pack is 4.07% (down from the banked 21% — already partially amortised at this shape).
+- HAZARDS surfaced this session (beads filed): `frankenscipy-hhr7j` rch worker ovh-b SIGILLs on the
+  `+avx2,+fma` workspace build (fleet heterogeneous below AVX2, NOT in the 07-10 CPU sample);
+  `frankenscipy-q9nxz` floating `nightly` picked up clippy 0.1.99 (2026-07-21) whose new lints fail committed
+  code under `-D warnings` (cossin.rs float-precision ×~40, lib.rs:9481, lib.rs:22024-5 + rustfmt drift) — G1
+  breaks on next CI run; my diff verified zero findings in its own regions.
+- Disposition: KEEP. Shipped `crates/fsci-linalg/src/lib.rs` (FMA kernel + u8 kernel selector + production
+  flip + inline test) and `crates/fsci-linalg/benches/linalg_bench.rs` (`bench_cholesky_wall_nr8_fma_ab`
+  one-binary A/B with null gate, exec proof, perf self-time child; opt-in `FSCI_CHOL_MR4_NR4_AB_SKIP` guard on
+  the older preamble). Local thinkstation1 build/bench (rch worker ovh-b SIGILL forced fail-open; measurement
+  host = the banked-baseline host, deliberately). Bead: `frankenscipy-o90ln`.

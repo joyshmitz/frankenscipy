@@ -2201,9 +2201,17 @@ fn shifted_matrix(matrix: &[Vec<f64>], lambda: f64) -> Vec<Vec<f64>> {
 pub static TRUST_EXACT_FOLD_SHIFT_DISABLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// When `true`, linear solves retain the original row-segmented `Vec<Vec<f64>>` augmented
+/// matrix. The default stores the same row-major values in one contiguous allocation, avoiding
+/// `n` row allocations and pointer-chasing while preserving every arithmetic operation.
+/// `#[doc(hidden)]` — same-binary A/B knob.
+#[doc(hidden)]
+pub static TRUST_EXACT_FLAT_AUGMENTED_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Gauss-Jordan solve of a prebuilt `n × (n+1)` augmented `[A | b]` (partial pivoting +
 /// back-substitution). Shared by [`solve_linear_system`] and [`solve_shifted_system`].
-fn solve_augmented(mut aug: Vec<Vec<f64>>, n: usize) -> Option<Vec<f64>> {
+fn solve_augmented_nested(mut aug: Vec<Vec<f64>>, n: usize) -> Option<Vec<f64>> {
     for pivot in 0..n {
         let mut pivot_row = pivot;
         let mut pivot_abs = aug[pivot][pivot].abs();
@@ -2255,17 +2263,88 @@ fn solve_augmented(mut aug: Vec<Vec<f64>>, n: usize) -> Option<Vec<f64>> {
     Some(solution)
 }
 
+/// Contiguous-storage twin of [`solve_augmented_nested`]. Rows, pivot candidates, elimination
+/// columns, and back-substitution columns are visited in exactly the same order.
+fn solve_augmented_flat(mut aug: Vec<f64>, n: usize) -> Option<Vec<f64>> {
+    let stride = n + 1;
+    debug_assert_eq!(aug.len(), n * stride);
+
+    for pivot in 0..n {
+        let mut pivot_row = pivot;
+        let mut pivot_abs = aug[pivot * stride + pivot].abs();
+        for row in pivot + 1..n {
+            let candidate = aug[row * stride + pivot].abs();
+            if candidate > pivot_abs {
+                pivot_abs = candidate;
+                pivot_row = row;
+            }
+        }
+
+        if pivot_abs <= 1.0e-12 {
+            return None;
+        }
+
+        if pivot_row != pivot {
+            let pivot_base = pivot * stride;
+            let pivot_row_base = pivot_row * stride;
+            for column in 0..stride {
+                aug.swap(pivot_base + column, pivot_row_base + column);
+            }
+        }
+
+        let pivot_base = pivot * stride;
+        let pivot_value = aug[pivot_base + pivot];
+        for row in pivot + 1..n {
+            let row_base = row * stride;
+            let factor = aug[row_base + pivot] / pivot_value;
+            aug[row_base + pivot] = 0.0;
+            for column in pivot + 1..stride {
+                let pivot_entry = aug[pivot_base + column];
+                aug[row_base + column] -= factor * pivot_entry;
+            }
+        }
+    }
+
+    let mut solution = vec![0.0; n];
+    for row in (0..n).rev() {
+        let row_base = row * stride;
+        let mut value = aug[row_base + n];
+        for column in row + 1..n {
+            value -= aug[row_base + column] * solution[column];
+        }
+        let denom = aug[row_base + row];
+        if denom.abs() <= 1.0e-12 {
+            return None;
+        }
+        solution[row] = value / denom;
+    }
+
+    Some(solution)
+}
+
 fn solve_linear_system(matrix: &[Vec<f64>], rhs: &[f64]) -> Option<Vec<f64>> {
     let n = matrix.len();
     if rhs.len() != n || matrix.iter().any(|row| row.len() != n) {
         return None;
     }
-    let mut aug = vec![vec![0.0; n + 1]; n];
-    for row in 0..n {
-        aug[row][..n].copy_from_slice(&matrix[row][..n]);
-        aug[row][n] = rhs[row];
+
+    if TRUST_EXACT_FLAT_AUGMENTED_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut aug = vec![vec![0.0; n + 1]; n];
+        for row in 0..n {
+            aug[row][..n].copy_from_slice(&matrix[row][..n]);
+            aug[row][n] = rhs[row];
+        }
+        return solve_augmented_nested(aug, n);
     }
-    solve_augmented(aug, n)
+
+    let stride = n + 1;
+    let mut aug = vec![0.0; n * stride];
+    for row in 0..n {
+        let row_base = row * stride;
+        aug[row_base..row_base + n].copy_from_slice(&matrix[row][..n]);
+        aug[row_base + n] = rhs[row];
+    }
+    solve_augmented_flat(aug, n)
 }
 
 /// Solve `(matrix + lambda·I)·x = rhs` by folding the diagonal shift into the augmented
@@ -2276,13 +2355,25 @@ fn solve_shifted_system(matrix: &[Vec<f64>], lambda: f64, rhs: &[f64]) -> Option
     if rhs.len() != n || matrix.iter().any(|row| row.len() != n) {
         return None;
     }
-    let mut aug = vec![vec![0.0; n + 1]; n];
-    for row in 0..n {
-        aug[row][..n].copy_from_slice(&matrix[row][..n]);
-        aug[row][row] += lambda;
-        aug[row][n] = rhs[row];
+    if TRUST_EXACT_FLAT_AUGMENTED_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut aug = vec![vec![0.0; n + 1]; n];
+        for row in 0..n {
+            aug[row][..n].copy_from_slice(&matrix[row][..n]);
+            aug[row][row] += lambda;
+            aug[row][n] = rhs[row];
+        }
+        return solve_augmented_nested(aug, n);
     }
-    solve_augmented(aug, n)
+
+    let stride = n + 1;
+    let mut aug = vec![0.0; n * stride];
+    for row in 0..n {
+        let row_base = row * stride;
+        aug[row_base..row_base + n].copy_from_slice(&matrix[row][..n]);
+        aug[row_base + row] += lambda;
+        aug[row_base + n] = rhs[row];
+    }
+    solve_augmented_flat(aug, n)
 }
 
 pub fn get_optimize_traces() -> Vec<OptimizeTraceEntry> {
@@ -5817,6 +5908,55 @@ mod tests {
         assert!((result.x[1] + 2.0).abs() < 1.0e-6, "x={:?}", result.x);
         assert!(result.fun.unwrap_or(f64::INFINITY) < 1.0e-10);
         assert!(result.nhev > 0);
+    }
+
+    #[test]
+    fn flat_augmented_solver_is_bit_identical() {
+        let cases = [
+            (vec![vec![4.0, 1.0], vec![2.0, 3.0]], vec![1.0, -2.0]),
+            (
+                vec![
+                    vec![0.0, 2.0, -1.0],
+                    vec![3.0, -1.0, 2.0],
+                    vec![1.0, 4.0, 5.0],
+                ],
+                vec![1.0, 7.0, -3.0],
+            ),
+            (vec![vec![1.0, 2.0], vec![2.0, 4.0]], vec![3.0, 6.0]),
+        ];
+
+        for (matrix, rhs) in cases {
+            let n = matrix.len();
+            let stride = n + 1;
+            let mut nested = vec![vec![0.0; stride]; n];
+            let mut flat = vec![0.0; n * stride];
+            for row in 0..n {
+                nested[row][..n].copy_from_slice(&matrix[row]);
+                nested[row][n] = rhs[row];
+                let row_base = row * stride;
+                flat[row_base..row_base + n].copy_from_slice(&matrix[row]);
+                flat[row_base + n] = rhs[row];
+            }
+
+            let expected = super::solve_augmented_nested(nested, n);
+            let actual = super::solve_augmented_flat(flat, n);
+            assert_eq!(
+                expected.is_some(),
+                actual.is_some(),
+                "flat solve changed singularity verdict"
+            );
+            if let (Some(expected), Some(actual)) = (expected, actual) {
+                assert_eq!(expected.len(), actual.len());
+                for (index, (&expected, &actual)) in expected.iter().zip(actual.iter()).enumerate()
+                {
+                    assert_eq!(
+                        expected.to_bits(),
+                        actual.to_bits(),
+                        "flat solve changed solution bits at index {index}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

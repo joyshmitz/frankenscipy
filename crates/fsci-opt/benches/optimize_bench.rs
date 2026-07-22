@@ -4,6 +4,7 @@
 //! Groups: bfgs, lbfgsb, cg, powell, brentq, brenth, bisect, ridder
 
 use std::hint::black_box;
+use std::process::Command;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -690,6 +691,88 @@ fn bench_lm_jtj_build_ab(c: &mut Criterion) {
 fn bench_trust_exact_fold_shift_ab(c: &mut Criterion) {
     use fsci_opt::{TRUST_EXACT_FOLD_SHIFT_DISABLE, trust_exact};
     use std::sync::atomic::Ordering;
+
+    const PROFILE_PARENT: &str = "FSCI_TRUST_EXACT_PROFILE";
+    const PROFILE_CHILD: &str = "FSCI_TRUST_EXACT_PROFILE_CHILD";
+    if std::env::var_os(PROFILE_CHILD).is_some() {
+        let x0 = vec![0.0; 20];
+        TRUST_EXACT_FOLD_SHIFT_DISABLE.store(false, Ordering::Relaxed);
+        for _ in 0..4 {
+            let _ = black_box(trust_exact(
+                &rosenbrock,
+                black_box(&x0),
+                opts(OptimizeMethod::TrustExact),
+            ));
+        }
+        let started = std::time::Instant::now();
+        let mut digest = 0xcbf2_9ce4_8422_2325u64;
+        for _ in 0..160 {
+            let result = trust_exact(
+                &rosenbrock,
+                black_box(&x0),
+                opts(OptimizeMethod::TrustExact),
+            )
+            .expect("profiled trust-exact solve");
+            for value in result.x {
+                digest ^= value.to_bits();
+                digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            black_box(result.fun);
+        }
+        eprintln!(
+            "FSCI_TRUST_EXACT_PROFILE solves=160 mean_ms={:.6} digest={digest:#018x}",
+            started.elapsed().as_secs_f64() * 1000.0 / 160.0
+        );
+        std::process::exit(0);
+    }
+    if std::env::var_os(PROFILE_PARENT).is_some() {
+        let exe = std::env::current_exe().expect("current release benchmark binary");
+        let perf_path = format!(
+            "/dev/shm/fsci-trust-exact-{}-{}.perf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        );
+        let profile_status = Command::new("perf")
+            .args([
+                "record", "-e", "cycles:u", "-F", "997", "-o", &perf_path, "--",
+            ])
+            .arg(&exe)
+            .args(["trust_exact_fold_shift_ab", "--noplot"])
+            .env(PROFILE_CHILD, "1")
+            .status()
+            .expect("spawn trust-exact perf child");
+        assert!(
+            profile_status.success(),
+            "trust-exact perf child failed: {profile_status}"
+        );
+        let report = Command::new("perf")
+            .args([
+                "report",
+                "--stdio",
+                "--no-children",
+                "--percent-limit",
+                "0.5",
+                "--sort",
+                "symbol",
+                "-i",
+                &perf_path,
+            ])
+            .output()
+            .expect("run trust-exact perf report");
+        assert!(
+            report.status.success(),
+            "trust-exact perf report failed: {}",
+            String::from_utf8_lossy(&report.stderr)
+        );
+        eprintln!(
+            "FSCI_TRUST_EXACT_REPORT_BEGIN\n{}FSCI_TRUST_EXACT_REPORT_END",
+            String::from_utf8(report.stdout).expect("utf8 trust-exact perf report")
+        );
+    }
+
     let mut group = c.benchmark_group("trust_exact_fold_shift_ab");
     group.sample_size(20);
     for &dim in &[5usize, 10, 20] {
@@ -725,8 +808,166 @@ fn bench_trust_exact_fold_shift_ab(c: &mut Criterion) {
     group.finish();
 }
 
+fn sample_stats(samples: &[f64]) -> (f64, f64, f64, f64) {
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
+    let variance = sorted
+        .iter()
+        .map(|value| (value - mean) * (value - mean))
+        .sum::<f64>()
+        / sorted.len() as f64;
+    let percentile = |numerator: usize| {
+        let rank = (numerator * sorted.len()).div_ceil(100).saturating_sub(1);
+        sorted[rank]
+    };
+    (
+        percentile(50),
+        percentile(95),
+        percentile(99),
+        variance.sqrt() / mean * 100.0,
+    )
+}
+
+/// Same-binary A/B for storing the hot trust-exact augmented system in one contiguous region.
+/// The opt-in probe runs strict A/B/A triplets so the two original measurements form a null
+/// control around every candidate sample.
+fn bench_trust_exact_flat_augmented_ab(c: &mut Criterion) {
+    use fsci_opt::{TRUST_EXACT_FLAT_AUGMENTED_DISABLE, trust_exact};
+    use std::sync::atomic::Ordering;
+
+    let x0 = vec![0.0; 20];
+    TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(false, Ordering::Relaxed);
+    let flat = trust_exact(&rosenbrock, &x0, opts(OptimizeMethod::TrustExact)).unwrap();
+    TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(true, Ordering::Relaxed);
+    let nested = trust_exact(&rosenbrock, &x0, opts(OptimizeMethod::TrustExact)).unwrap();
+    assert_eq!(
+        flat, nested,
+        "flat augmented solve changed trust-exact result"
+    );
+    for (index, (&flat, &nested)) in flat.x.iter().zip(nested.x.iter()).enumerate() {
+        assert_eq!(
+            flat.to_bits(),
+            nested.to_bits(),
+            "flat augmented solve changed x[{index}] bits"
+        );
+    }
+    assert_eq!(
+        flat.fun.map(f64::to_bits),
+        nested.fun.map(f64::to_bits),
+        "flat augmented solve changed objective bits"
+    );
+
+    if std::env::var_os("FSCI_TRUST_EXACT_FLAT_PROBE").is_some() {
+        for _ in 0..3 {
+            TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(true, Ordering::Relaxed);
+            let _ = black_box(trust_exact(
+                &rosenbrock,
+                black_box(&x0),
+                opts(OptimizeMethod::TrustExact),
+            ));
+            TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(false, Ordering::Relaxed);
+            let _ = black_box(trust_exact(
+                &rosenbrock,
+                black_box(&x0),
+                opts(OptimizeMethod::TrustExact),
+            ));
+        }
+
+        let mut original_before_ms = Vec::with_capacity(13);
+        let mut flat_ms = Vec::with_capacity(13);
+        let mut original_after_ms = Vec::with_capacity(13);
+        for _ in 0..13 {
+            TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(true, Ordering::Relaxed);
+            let started = std::time::Instant::now();
+            let _ = black_box(trust_exact(
+                &rosenbrock,
+                black_box(&x0),
+                opts(OptimizeMethod::TrustExact),
+            ));
+            original_before_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+
+            TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(false, Ordering::Relaxed);
+            let started = std::time::Instant::now();
+            let _ = black_box(trust_exact(
+                &rosenbrock,
+                black_box(&x0),
+                opts(OptimizeMethod::TrustExact),
+            ));
+            flat_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+
+            TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(true, Ordering::Relaxed);
+            let started = std::time::Instant::now();
+            let _ = black_box(trust_exact(
+                &rosenbrock,
+                black_box(&x0),
+                opts(OptimizeMethod::TrustExact),
+            ));
+            original_after_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        let candidate_ratios = original_before_ms
+            .iter()
+            .zip(original_after_ms.iter())
+            .zip(flat_ms.iter())
+            .map(|((&before, &after), &flat)| ((before + after) * 0.5) / flat)
+            .collect::<Vec<_>>();
+        let null_ratios = original_before_ms
+            .iter()
+            .zip(original_after_ms.iter())
+            .map(|(&before, &after)| before / after)
+            .collect::<Vec<_>>();
+        let (original_p50, original_p95, original_p99, original_cv) =
+            sample_stats(&original_before_ms);
+        let (flat_p50, flat_p95, flat_p99, flat_cv) = sample_stats(&flat_ms);
+        let (candidate_ratio, _, _, _) = sample_stats(&candidate_ratios);
+        let (null_ratio, _, _, null_cv) = sample_stats(&null_ratios);
+        let null_low = null_ratios.iter().copied().fold(f64::INFINITY, f64::min);
+        let null_high = null_ratios
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        eprintln!(
+            "FSCI_TRUST_EXACT_FLAT_INTERLEAVED dim=20 rounds=13 \
+             original_ms[p50={original_p50:.6},p95={original_p95:.6},p99={original_p99:.6},cv={original_cv:.3}%] \
+             flat_ms[p50={flat_p50:.6},p95={flat_p95:.6},p99={flat_p99:.6},cv={flat_cv:.3}%] \
+             candidate_median={candidate_ratio:.6}x \
+             null_median={null_ratio:.6}x null_range=[{null_low:.6},{null_high:.6}] null_cv={null_cv:.3}%"
+        );
+    }
+
+    let mut group = c.benchmark_group("trust_exact_flat_augmented_ab");
+    group.sample_size(20);
+    for &dim in &[10usize, 20] {
+        let x0 = vec![0.0; dim];
+        group.bench_with_input(BenchmarkId::new("flat", dim), &x0, |b, x0| {
+            b.iter(|| {
+                TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(false, Ordering::Relaxed);
+                black_box(trust_exact(
+                    &rosenbrock,
+                    x0,
+                    opts(OptimizeMethod::TrustExact),
+                ))
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("nested", dim), &x0, |b, x0| {
+            b.iter(|| {
+                TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(true, Ordering::Relaxed);
+                black_box(trust_exact(
+                    &rosenbrock,
+                    x0,
+                    opts(OptimizeMethod::TrustExact),
+                ))
+            });
+        });
+    }
+    TRUST_EXACT_FLAT_AUGMENTED_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_trust_exact_flat_augmented_ab,
     bench_trust_exact_fold_shift_ab,
     bench_lm_jtj_build_ab,
     bench_select_three_ab,
