@@ -4465,18 +4465,17 @@ pub fn clarkson_woodruff_transform(
     // and buckets/signs are unchanged); above it the per-bucket float accumulation reassociates in the
     // merge → within per-op ULP tolerance. `CWT_FORCE_SERIAL` restores the serial scatter for A/B.
     let work = (m as u64).saturating_mul(n as u64);
-    let nthreads = if CWT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || work < (1 << 22)
-        || m < 2
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(m / (1 << 15))
-            .max(1)
-    };
+    let nthreads =
+        if CWT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || work < (1 << 22) || m < 2
+        {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(m / (1 << 15))
+                .max(1)
+        };
     if nthreads <= 1 {
         for (row, &(bucket, sign)) in input_matrix.iter().zip(&plans) {
             for (o, &v) in out[bucket].iter_mut().zip(row.iter()) {
@@ -5107,14 +5106,22 @@ fn cholesky_lower_blocked_with_panel_trsm<const PAIR_PANEL_TRSM_ROWS: bool>(
     a_in: &[Vec<f64>],
     n: usize,
 ) -> Option<Vec<f64>> {
-    cholesky_lower_blocked_with_kernels::<PAIR_PANEL_TRSM_ROWS, true>(a_in, n)
+    // Production kernel: AVX2+FMA MR4×NR8 (measured 2026-07-22, thinkstation1, one-binary
+    // interleaved A/B vs MR4×NR4 with A/A null: paired median 1.143x, null [0.943, 1.069],
+    // DECIDED; n=1000 factor p50 15.07 -> 13.22 ms, 22.1 -> 25.2 GF/s; candidate-binary
+    // self-time 26.92%; factor within 1.1e-19 rel of the mul+add kernel, 1e-10 contract).
+    cholesky_lower_blocked_with_kernels::<PAIR_PANEL_TRSM_ROWS, SYRK_KERNEL_MR4_NR8_FMA>(a_in, n)
 }
 
+/// Trailing-SYRK kernel selector for [`cholesky_lower_blocked_with_kernels`]:
+/// the original MR4×NR8 mul+add tile, the SSE2-era MR4×NR4 half-panel split,
+/// or the AVX2+FMA MR4×NR8 `mul_add` tile.
+const SYRK_KERNEL_MR4_NR8: u8 = 0;
+const SYRK_KERNEL_MR4_NR4: u8 = 1;
+const SYRK_KERNEL_MR4_NR8_FMA: u8 = 2;
+
 #[allow(clippy::needless_range_loop)]
-fn cholesky_lower_blocked_with_kernels<
-    const PAIR_PANEL_TRSM_ROWS: bool,
-    const HALF_PANEL_SYRK: bool,
->(
+fn cholesky_lower_blocked_with_kernels<const PAIR_PANEL_TRSM_ROWS: bool, const SYRK_KERNEL: u8>(
     a_in: &[Vec<f64>],
     n: usize,
 ) -> Option<Vec<f64>> {
@@ -5176,22 +5183,38 @@ fn cholesky_lower_blocked_with_kernels<
             let nthreads = matmul_thread_count(m2, nb, m2);
             let trailing = &mut lower[kb * n..];
             if nthreads <= 1 {
-                if HALF_PANEL_SYRK {
-                    cholesky_syrk_flat_rows_mr4_nr4(trailing, 0, n, l21_ref, l21t_ref, nb, kb);
-                } else {
-                    cholesky_syrk_flat_rows_mr4_nr8_orig(trailing, 0, n, l21_ref, l21t_ref, nb, kb);
+                match SYRK_KERNEL {
+                    SYRK_KERNEL_MR4_NR4 => {
+                        cholesky_syrk_flat_rows_mr4_nr4(trailing, 0, n, l21_ref, l21t_ref, nb, kb);
+                    }
+                    SYRK_KERNEL_MR4_NR8_FMA => {
+                        cholesky_syrk_flat_rows_mr4_nr8_fma(
+                            trailing, 0, n, l21_ref, l21t_ref, nb, kb,
+                        );
+                    }
+                    _ => {
+                        cholesky_syrk_flat_rows_mr4_nr8_orig(
+                            trailing, 0, n, l21_ref, l21t_ref, nb, kb,
+                        );
+                    }
                 }
             } else {
                 let chunk = m2.div_ceil(nthreads);
                 std::thread::scope(|scope| {
                     for (t, rows) in trailing.chunks_mut(chunk * n).enumerate() {
                         let row_offset = t * chunk;
-                        scope.spawn(move || {
-                            if HALF_PANEL_SYRK {
+                        scope.spawn(move || match SYRK_KERNEL {
+                            SYRK_KERNEL_MR4_NR4 => {
                                 cholesky_syrk_flat_rows_mr4_nr4(
                                     rows, row_offset, n, l21_ref, l21t_ref, nb, kb,
                                 );
-                            } else {
+                            }
+                            SYRK_KERNEL_MR4_NR8_FMA => {
+                                cholesky_syrk_flat_rows_mr4_nr8_fma(
+                                    rows, row_offset, n, l21_ref, l21t_ref, nb, kb,
+                                );
+                            }
+                            _ => {
                                 cholesky_syrk_flat_rows_mr4_nr8_orig(
                                     rows, row_offset, n, l21_ref, l21t_ref, nb, kb,
                                 );
@@ -5215,7 +5238,7 @@ pub fn cholesky_wall_mr4_nr8_orig(a: &[Vec<f64>]) -> Option<Vec<f64>> {
     if a.iter().any(|row| row.len() != n) {
         return None;
     }
-    cholesky_lower_blocked_with_kernels::<true, false>(a, n)
+    cholesky_lower_blocked_with_kernels::<true, SYRK_KERNEL_MR4_NR8>(a, n)
 }
 
 /// Production MR4×NR4 factor path for the one-binary Cholesky wall benchmark.
@@ -5226,7 +5249,18 @@ pub fn cholesky_wall_mr4_nr4_candidate(a: &[Vec<f64>]) -> Option<Vec<f64>> {
     if a.iter().any(|row| row.len() != n) {
         return None;
     }
-    cholesky_lower_blocked_with_kernels::<true, true>(a, n)
+    cholesky_lower_blocked_with_kernels::<true, SYRK_KERNEL_MR4_NR4>(a, n)
+}
+
+/// Candidate AVX2+FMA MR4×NR8 factor path for the one-binary Cholesky wall benchmark.
+#[cfg(feature = "chol-wall-bench")]
+#[doc(hidden)]
+pub fn cholesky_wall_mr4_nr8_fma_candidate(a: &[Vec<f64>]) -> Option<Vec<f64>> {
+    let n = a.len();
+    if a.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    cholesky_lower_blocked_with_kernels::<true, SYRK_KERNEL_MR4_NR8_FMA>(a, n)
 }
 
 /// `cholesky` blocked-factor gate — the parallel-SYRK blocked Cholesky beats the
@@ -9590,7 +9624,9 @@ pub fn norm(a: &[Vec<f64>], kind: NormKind, options: DecompOptions) -> Result<f6
                 let row_sq = &row_sq;
                 let parts: Vec<f64> = std::thread::scope(|scope| {
                     a.chunks(chunk)
-                        .map(|rc| scope.spawn(move || rc.iter().map(|row| row_sq(row)).sum::<f64>()))
+                        .map(|rc| {
+                            scope.spawn(move || rc.iter().map(|row| row_sq(row)).sum::<f64>())
+                        })
                         .collect::<Vec<_>>()
                         .into_iter()
                         .map(|h| h.join().expect("norm fro worker panicked"))
@@ -19197,7 +19233,9 @@ fn symmetric_gram_matrix_from_columns(matrix: &DMatrix<f64>) -> DMatrix<f64> {
     // this O(rows·cols²) Gram build DOMINATES the downstream Cholesky (O(cols³)), so fan the cells
     // across cores. BYTE-IDENTICAL: each simd_dot runs on the same operands in the same lane order
     // and writes a disjoint slot; the mirror is an exact copy. `LINALG_GRAM_FORCE_SERIAL` A/B knob.
-    let work = (cols as u64).saturating_mul(cols as u64).saturating_mul(rows as u64);
+    let work = (cols as u64)
+        .saturating_mul(cols as u64)
+        .saturating_mul(rows as u64);
     let nthreads = if LINALG_GRAM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
         || work < (1 << 20)
         || cols < 2
@@ -19222,8 +19260,9 @@ fn symmetric_gram_matrix_from_columns(matrix: &DMatrix<f64>) -> DMatrix<f64> {
     } else {
         // Upper-triangle cells as balanced independent units (rows-fan is load-imbalanced for a
         // triangular fill); compute the dots into a flat Vec in parallel, then scatter+mirror serially.
-        let cells: Vec<(usize, usize)> =
-            (0..cols).flat_map(|l| (l..cols).map(move |r| (l, r))).collect();
+        let cells: Vec<(usize, usize)> = (0..cols)
+            .flat_map(|l| (l..cols).map(move |r| (l, r)))
+            .collect();
         let nc = cells.len();
         let mut vals = vec![0.0f64; nc];
         let nt = nthreads.min(nc).max(1);
@@ -19712,6 +19751,73 @@ fn cholesky_syrk_flat_rows_mr4_nr4(
             syrk_sub4(&mut rows[r0 + n..r0 + 2 * n], col + 4, c11);
             syrk_sub4(&mut rows[r0 + 2 * n..r0 + 3 * n], col + 4, c21);
             syrk_sub4(&mut rows[r0 + 3 * n..r0 + 4 * n], col + 4, c31);
+            j += 8;
+        }
+        for mrow in 0..4 {
+            let r0 = (base + mrow) * n;
+            cholesky_syrk_row_tail(&mut rows[r0..r0 + n], ii + mrow, j, l21, nb, kb);
+        }
+        base += 4;
+    }
+    for local_i in base..m {
+        let r0 = local_i * n;
+        cholesky_syrk_row_tail(&mut rows[r0..r0 + n], row_offset + local_i, 0, l21, nb, kb);
+    }
+}
+
+/// AVX2+FMA register-tiled MR4×NR8 trailing-SYRK micro-kernel.
+///
+/// Restores the full eight-column tile (the NR4 half-panel split existed only to fit
+/// the SSE2 XMM budget; under the workspace `+avx2,+fma` build each `Simd<f64, 8>`
+/// accumulator is two YMM registers, 8 acc + operands ≤ 12/16 YMM) and contracts each
+/// update with `mul_add`, the register-blocked FMA structure OpenBLAS's
+/// `dgemm_kernel_HASWELL` uses. The tile keeps eight independent FMA chains in flight,
+/// which is what makes FMA pay: a SINGLE-chain FMA dot measured 0.76-0.90× (ledger
+/// 2026-07-10, dense-dot register-blocking REJECT) because `mul_add` puts the multiply
+/// on the serial dependency chain. NOT bit-identical to the mul+add kernels
+/// (single-rounding FMA) — allowed here because the tile region is already documented
+/// non-bit-exact vs the dot path and the factor is validated to 1e-10 against the
+/// unblocked reference; the diagonal-block / tail columns keep the exact dot path.
+#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+fn cholesky_syrk_flat_rows_mr4_nr8_fma(
+    rows: &mut [f64],
+    row_offset: usize,
+    n: usize,
+    l21: &[f64],
+    l21t: &[f64],
+    nb: usize,
+    kb: usize,
+) {
+    use std::simd::StdFloat;
+    let m = rows.len() / n;
+    let mut base = 0;
+    while base + 4 <= m {
+        let ii = row_offset + base;
+        let a0 = &l21[ii * nb..ii * nb + nb];
+        let a1 = &l21[(ii + 1) * nb..(ii + 1) * nb + nb];
+        let a2 = &l21[(ii + 2) * nb..(ii + 2) * nb + nb];
+        let a3 = &l21[(ii + 3) * nb..(ii + 3) * nb + nb];
+        let mut j = 0;
+        while j + 8 <= ii {
+            let pbase = (j / 8) * nb * 8;
+            let panel = &l21t[pbase..pbase + nb * 8];
+            let mut c0 = Simd::<f64, 8>::splat(0.0);
+            let mut c1 = Simd::<f64, 8>::splat(0.0);
+            let mut c2 = Simd::<f64, 8>::splat(0.0);
+            let mut c3 = Simd::<f64, 8>::splat(0.0);
+            for p in 0..nb {
+                let bvec = Simd::<f64, 8>::from_slice(&panel[p * 8..p * 8 + 8]);
+                c0 = bvec.mul_add(Simd::splat(a0[p]), c0);
+                c1 = bvec.mul_add(Simd::splat(a1[p]), c1);
+                c2 = bvec.mul_add(Simd::splat(a2[p]), c2);
+                c3 = bvec.mul_add(Simd::splat(a3[p]), c3);
+            }
+            let col = kb + j;
+            let r0 = base * n;
+            syrk_sub8(&mut rows[r0..r0 + n], col, c0);
+            syrk_sub8(&mut rows[r0 + n..r0 + 2 * n], col, c1);
+            syrk_sub8(&mut rows[r0 + 2 * n..r0 + 3 * n], col, c2);
+            syrk_sub8(&mut rows[r0 + 3 * n..r0 + 4 * n], col, c3);
             j += 8;
         }
         for mrow in 0..4 {
@@ -20564,43 +20670,44 @@ pub fn vnorm(v: &[f64]) -> f64 {
     // Below the gate / forced serial, keep the EXACT original `.map(x*x).sum()` fold (BYTE-IDENTICAL);
     // only the large-n parallel path reorders (~1e-15 ULP, same 4-way-unrolled chunk sum as the L1 path).
     let n = v.len();
-    let sumsq = if VECTOR_NORM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 20) {
-        v.iter().map(|&x| x * x).sum::<f64>()
-    } else {
-        let chunk_sum = |vs: &[f64]| -> f64 {
-            let mut a = [0.0f64; 4];
-            let mut i = 0;
-            while i + 4 <= vs.len() {
-                a[0] += vs[i] * vs[i];
-                a[1] += vs[i + 1] * vs[i + 1];
-                a[2] += vs[i + 2] * vs[i + 2];
-                a[3] += vs[i + 3] * vs[i + 3];
-                i += 4;
-            }
-            let mut s = (a[0] + a[1]) + (a[2] + a[3]);
-            while i < vs.len() {
-                s += vs[i] * vs[i];
-                i += 1;
-            }
-            s
+    let sumsq =
+        if VECTOR_NORM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 20) {
+            v.iter().map(|&x| x * x).sum::<f64>()
+        } else {
+            let chunk_sum = |vs: &[f64]| -> f64 {
+                let mut a = [0.0f64; 4];
+                let mut i = 0;
+                while i + 4 <= vs.len() {
+                    a[0] += vs[i] * vs[i];
+                    a[1] += vs[i + 1] * vs[i + 1];
+                    a[2] += vs[i + 2] * vs[i + 2];
+                    a[3] += vs[i + 3] * vs[i + 3];
+                    i += 4;
+                }
+                let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+                while i < vs.len() {
+                    s += vs[i] * vs[i];
+                    i += 1;
+                }
+                s
+            };
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 16))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_sum = &chunk_sum;
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                v.chunks(chunk)
+                    .map(|vs| scope.spawn(move || chunk_sum(vs)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("vnorm worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold(0.0f64, |acc, s| acc + s)
         };
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / (1 << 16))
-            .max(1);
-        let chunk = n.div_ceil(nthreads);
-        let chunk_sum = &chunk_sum;
-        let parts: Vec<f64> = std::thread::scope(|scope| {
-            v.chunks(chunk)
-                .map(|vs| scope.spawn(move || chunk_sum(vs)))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|h| h.join().expect("vnorm worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
-    };
     sumsq.sqrt()
 }
 
@@ -21132,6 +21239,48 @@ mod tests {
     }
 
     #[test]
+    fn cholesky_syrk_mr4_nr8_fma_within_factor_tolerance() {
+        // The FMA tile is single-rounding, so it is deliberately NOT bit-identical;
+        // the contract is the blocked path's 1e-10 factor-uniqueness tolerance.
+        // n values cover full 4×8 tiles, ragged tails, and multi-panel trailing blocks.
+        let mut any_bits_differ = false;
+        for &n in &[130usize, 131, 270, 271, 300] {
+            let mut a = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..=i {
+                    let value = if i == j {
+                        (n as f64) * 3.0 + (i as f64) * 0.01
+                    } else {
+                        1.0 / ((i - j + 1) as f64)
+                    };
+                    a[i][j] = value;
+                    a[j][i] = value;
+                }
+            }
+
+            let original = cholesky_lower_blocked_with_kernels::<true, SYRK_KERNEL_MR4_NR8>(&a, n)
+                .expect("MR4xNR8 factor");
+            let candidate =
+                cholesky_lower_blocked_with_kernels::<true, SYRK_KERNEL_MR4_NR8_FMA>(&a, n)
+                    .expect("MR4xNR8 FMA factor");
+            for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
+                if actual.to_bits() != expected.to_bits() {
+                    any_bits_differ = true;
+                }
+                let rel = (actual - expected).abs() / expected.abs().max(1.0);
+                assert!(
+                    rel <= 1e-10,
+                    "FMA SYRK diverged past 1e-10 at flat index {index}, n={n}: {expected} vs {actual}"
+                );
+            }
+        }
+        assert!(
+            any_bits_differ,
+            "execution proof failed: FMA kernel bit-identical on every probe size (dead arm?)"
+        );
+    }
+
+    #[test]
     fn cholesky_syrk_mr4_nr4_is_bit_identical() {
         for &n in &[130usize, 131, 270, 271] {
             let mut a = vec![vec![0.0; n]; n];
@@ -21147,10 +21296,10 @@ mod tests {
                 }
             }
 
-            let original =
-                cholesky_lower_blocked_with_kernels::<true, false>(&a, n).expect("MR4xNR8 factor");
-            let candidate =
-                cholesky_lower_blocked_with_kernels::<true, true>(&a, n).expect("MR4xNR4 factor");
+            let original = cholesky_lower_blocked_with_kernels::<true, SYRK_KERNEL_MR4_NR8>(&a, n)
+                .expect("MR4xNR8 factor");
+            let candidate = cholesky_lower_blocked_with_kernels::<true, SYRK_KERNEL_MR4_NR4>(&a, n)
+                .expect("MR4xNR4 factor");
             for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
                 assert_eq!(
                     actual.to_bits(),

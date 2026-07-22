@@ -15,7 +15,10 @@ use fsci_linalg::{
     svd, tanhm, vdot,
 };
 #[cfg(feature = "chol-wall-bench")]
-use fsci_linalg::{cholesky_wall_mr4_nr4_candidate, cholesky_wall_mr4_nr8_orig};
+use fsci_linalg::{
+    cholesky_wall_mr4_nr4_candidate, cholesky_wall_mr4_nr8_fma_candidate,
+    cholesky_wall_mr4_nr8_orig,
+};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 use std::sync::atomic::Ordering;
@@ -1228,9 +1231,294 @@ fn bench_dft_gauntlet_scipy(c: &mut Criterion) {
     group.finish();
 }
 
+/// One-binary A/B for the AVX2+FMA MR4×NR8 trailing-SYRK micro-kernel:
+/// production (MR4×NR4 mul+add) vs candidate (MR4×NR8 `mul_add`), interleaved per
+/// factor inside one routine, with a paired production-vs-production A/A null pass,
+/// a candidate-binary perf self-time child, and a differing-bits execution proof.
+/// The candidate is 1e-10-tolerant vs production (FMA single-rounding), NOT bit-exact.
+#[cfg(feature = "chol-wall-bench")]
+fn bench_cholesky_wall_nr8_fma_ab(c: &mut Criterion) {
+    const PROFILE_CHILD: &str = "FSCI_CHOL_NR8_FMA_PROFILE_CHILD";
+    let n = 1000usize;
+    let a = make_symmetric_eigh_matrix(n);
+
+    if std::env::var_os(PROFILE_CHILD).is_some() {
+        for _ in 0..4 {
+            black_box(cholesky_wall_mr4_nr8_fma_candidate(black_box(&a)).expect("warm fma factor"));
+        }
+        let start = std::time::Instant::now();
+        let mut digest = 0xcbf2_9ce4_8422_2325u64;
+        for _ in 0..160 {
+            let factor =
+                cholesky_wall_mr4_nr8_fma_candidate(black_box(&a)).expect("profiled fma factor");
+            for &value in factor.iter().step_by(4096) {
+                digest ^= value.to_bits();
+                digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            black_box(factor);
+        }
+        eprintln!(
+            "FSCI_CHOL_NR8_FMA_PROFILE factors=160 mean_ms={:.6} digest={digest:#018x}",
+            start.elapsed().as_secs_f64() * 1000.0 / 160.0
+        );
+        std::process::exit(0);
+    }
+
+    let exe = std::env::current_exe().expect("current release-perf benchmark binary");
+    let perf_path = format!(
+        "/dev/shm/fsc-chol-nr8-fma-{}-{}.perf",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    );
+    let profile_status = Command::new("perf")
+        .args([
+            "record", "-e", "cycles:u", "-F", "997", "-o", &perf_path, "--",
+        ])
+        .arg(&exe)
+        .args(["cholesky_wall_nr8_fma_ab", "--noplot"])
+        .env(PROFILE_CHILD, "1")
+        .status()
+        .expect("spawn fma perf child");
+    assert!(
+        profile_status.success(),
+        "fma perf child failed: {profile_status}"
+    );
+    let report = Command::new("perf")
+        .args([
+            "report",
+            "--stdio",
+            "--no-children",
+            "--percent-limit",
+            "0.1",
+            "--sort",
+            "symbol",
+            "-i",
+            &perf_path,
+        ])
+        .output()
+        .expect("run fma perf report");
+    assert!(
+        report.status.success(),
+        "fma perf report failed: {}",
+        String::from_utf8_lossy(&report.stderr)
+    );
+    let report = String::from_utf8(report.stdout).expect("utf8 fma perf report");
+    eprintln!("FSCI_CHOL_NR8_FMA_REPORT_BEGIN\n{report}FSCI_CHOL_NR8_FMA_REPORT_END");
+    assert!(
+        report.contains("cholesky_syrk_flat_rows_mr4_nr8_fma"),
+        "candidate-specific FMA SYRK symbol must have non-zero profiled self-time"
+    );
+
+    // Correctness (1e-10 factor-uniqueness contract) + execution proof: the FMA arm
+    // must produce a factor that differs in SOME bits (else the switch never flipped)
+    // while staying inside the blocked path's documented tolerance vs production.
+    let production = cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("production factor");
+    let candidate = cholesky_wall_mr4_nr8_fma_candidate(black_box(&a)).expect("fma factor");
+    let mut differing_elements = 0usize;
+    let mut max_rel = 0.0f64;
+    for (index, (&expected, &actual)) in production.iter().zip(&candidate).enumerate() {
+        if actual.to_bits() != expected.to_bits() {
+            differing_elements += 1;
+        }
+        let rel = (actual - expected).abs() / expected.abs().max(1.0);
+        max_rel = max_rel.max(rel);
+        assert!(
+            rel <= 1e-10,
+            "FMA factor diverged past 1e-10 at flat index {index}: {expected} vs {actual}"
+        );
+    }
+    assert!(
+        differing_elements > 0,
+        "execution proof failed: FMA arm bit-identical to production (dead arm?)"
+    );
+    let mut digest = 0xcbf2_9ce4_8422_2325u64;
+    for &value in &candidate {
+        for byte in value.to_bits().to_le_bytes() {
+            digest ^= u64::from(byte);
+            digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    eprintln!(
+        "FSCI_CHOL_NR8_FMA_AB exec_proof differing_elements={differing_elements} of {} max_rel={max_rel:.3e} digest={digest:#018x}",
+        production.len()
+    );
+    black_box(production);
+    black_box(candidate);
+
+    for candidate_first in [false, true, false, true] {
+        if candidate_first {
+            black_box(cholesky_wall_mr4_nr8_fma_candidate(black_box(&a)).expect("warm fma factor"));
+            black_box(
+                cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("warm production factor"),
+            );
+        } else {
+            black_box(
+                cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("warm production factor"),
+            );
+            black_box(cholesky_wall_mr4_nr8_fma_candidate(black_box(&a)).expect("warm fma factor"));
+        }
+    }
+
+    let samples = 20usize;
+    let factors_per_sample = 32usize;
+    let measure_production = || -> Duration {
+        let start = std::time::Instant::now();
+        black_box(
+            cholesky_wall_mr4_nr4_candidate(black_box(&a)).expect("measured production factor"),
+        );
+        start.elapsed()
+    };
+    let measure_fma = || -> Duration {
+        let start = std::time::Instant::now();
+        black_box(cholesky_wall_mr4_nr8_fma_candidate(black_box(&a)).expect("measured fma factor"));
+        start.elapsed()
+    };
+
+    let summarize = |values: &[f64]| -> (f64, f64, f64, f64, f64) {
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values
+            .iter()
+            .map(|value| (value - mean) * (value - mean))
+            .sum::<f64>()
+            / values.len() as f64;
+        let cv_pct = variance.sqrt() / mean * 100.0;
+        let mut sorted = values.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        let percentile = |pct: usize| sorted[(sorted.len() - 1) * pct / 100];
+        (mean, cv_pct, percentile(50), percentile(95), percentile(99))
+    };
+
+    // A/A NULL pass: production vs production, paired inside the same routine. The
+    // candidate is DECIDABLE iff its paired-ratio median lies outside the null's
+    // observed [min, max] (median null gate; cv reported, not gated).
+    let mut null_ratios = Vec::with_capacity(samples);
+    for sample in 0..samples {
+        let mut first_elapsed = Duration::ZERO;
+        let mut second_elapsed = Duration::ZERO;
+        for factor in 0..factors_per_sample {
+            if (sample + factor) % 2 == 0 {
+                first_elapsed += measure_production();
+                second_elapsed += measure_production();
+            } else {
+                second_elapsed += measure_production();
+                first_elapsed += measure_production();
+            }
+        }
+        null_ratios.push(first_elapsed.as_secs_f64() / second_elapsed.as_secs_f64());
+    }
+    let mut null_sorted = null_ratios.clone();
+    null_sorted.sort_by(f64::total_cmp);
+    let null_summary = summarize(&null_ratios);
+    eprintln!(
+        "FSCI_CHOL_NR8_FMA_AB NULL median={:.6} min={:.6} max={:.6} cv_pct={:.3}",
+        null_summary.2,
+        null_sorted[0],
+        null_sorted[null_sorted.len() - 1],
+        null_summary.1
+    );
+
+    let mut production_ms = Vec::with_capacity(samples);
+    let mut fma_ms = Vec::with_capacity(samples);
+    for sample in 0..samples {
+        let mut production_elapsed = Duration::ZERO;
+        let mut fma_elapsed = Duration::ZERO;
+        for factor in 0..factors_per_sample {
+            if (sample + factor) % 2 == 0 {
+                production_elapsed += measure_production();
+                fma_elapsed += measure_fma();
+            } else {
+                fma_elapsed += measure_fma();
+                production_elapsed += measure_production();
+            }
+        }
+        production_ms.push(production_elapsed.as_secs_f64() * 1000.0 / factors_per_sample as f64);
+        fma_ms.push(fma_elapsed.as_secs_f64() * 1000.0 / factors_per_sample as f64);
+    }
+    let prod = summarize(&production_ms);
+    let cand = summarize(&fma_ms);
+    let paired_ratios = production_ms
+        .iter()
+        .zip(&fma_ms)
+        .map(|(before, after)| before / after)
+        .collect::<Vec<_>>();
+    let paired = summarize(&paired_ratios);
+    let gflops = |ms: f64| (n as f64).powi(3) / 3.0 / (ms * 1e6);
+    eprintln!(
+        "FSCI_CHOL_NR8_FMA_AB PROD mean_ms={:.6} cv_pct={:.3} p50_ms={:.6} p95_ms={:.6} p99_ms={:.6} gflops_p50={:.2}",
+        prod.0,
+        prod.1,
+        prod.2,
+        prod.3,
+        prod.4,
+        gflops(prod.2)
+    );
+    eprintln!(
+        "FSCI_CHOL_NR8_FMA_AB CAND mean_ms={:.6} cv_pct={:.3} p50_ms={:.6} p95_ms={:.6} p99_ms={:.6} gflops_p50={:.2}",
+        cand.0,
+        cand.1,
+        cand.2,
+        cand.3,
+        cand.4,
+        gflops(cand.2)
+    );
+    let decided = paired.2 < null_sorted[0] || paired.2 > null_sorted[null_sorted.len() - 1];
+    eprintln!(
+        "FSCI_CHOL_NR8_FMA_AB paired_median={:.6} paired_mean={:.6} paired_cv_pct={:.3} null=[{:.6},{:.6}] DECIDED={decided} samples={samples} factors_per_sample={factors_per_sample}",
+        paired.2,
+        paired.0,
+        paired.1,
+        null_sorted[0],
+        null_sorted[null_sorted.len() - 1]
+    );
+
+    let mut group = c.benchmark_group("cholesky_wall_nr8_fma_ab");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    let candidate_first = std::cell::Cell::new(false);
+    group.bench_function("1000x1000_paired_alternating", |bencher| {
+        bencher.iter(|| {
+            let first = candidate_first.get();
+            candidate_first.set(!first);
+            if first {
+                black_box(
+                    cholesky_wall_mr4_nr8_fma_candidate(black_box(&a))
+                        .expect("criterion fma factor"),
+                );
+                black_box(
+                    cholesky_wall_mr4_nr4_candidate(black_box(&a))
+                        .expect("criterion production factor"),
+                );
+            } else {
+                black_box(
+                    cholesky_wall_mr4_nr4_candidate(black_box(&a))
+                        .expect("criterion production factor"),
+                );
+                black_box(
+                    cholesky_wall_mr4_nr8_fma_candidate(black_box(&a))
+                        .expect("criterion fma factor"),
+                );
+            }
+        });
+    });
+    group.finish();
+}
+
+#[cfg(not(feature = "chol-wall-bench"))]
+fn bench_cholesky_wall_nr8_fma_ab(_c: &mut Criterion) {}
+
 #[cfg(feature = "chol-wall-bench")]
 fn bench_cholesky_wall_mr4_nr4_ab(c: &mut Criterion) {
     const PROFILE_CHILD: &str = "FSCI_CHOL_MR4_NR4_PROFILE_CHILD";
+    // Allow the FMA A/B run to isolate itself from this preamble (it is expensive
+    // and spawns its own perf child); the guard is opt-in via env and changes nothing
+    // for existing invocations.
+    if std::env::var_os("FSCI_CHOL_MR4_NR4_AB_SKIP").is_some() {
+        return;
+    }
     let n = 1000usize;
     let a = make_symmetric_eigh_matrix(n);
 
@@ -1779,6 +2067,10 @@ criterion_group!(
     bench_baseline_pinv
 );
 
-criterion_group!(cholesky_wall_benches, bench_cholesky_wall_mr4_nr4_ab);
+criterion_group!(
+    cholesky_wall_benches,
+    bench_cholesky_wall_nr8_fma_ab,
+    bench_cholesky_wall_mr4_nr4_ab
+);
 
 criterion_main!(cholesky_wall_benches, benches, baseline_benches);
