@@ -1,11 +1,11 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+use fsci_integrate::bdf::BDF_FORCE_PER_ITER_ALLOC;
+use fsci_integrate::radau::RADAU_FORCE_PER_ITER_ALLOC;
 use fsci_integrate::{
     IntegrateValidationError, MIN_RTOL, SolveIvpOptions, SolverKind, ToleranceValue,
     ToleranceWarning, ValidatedTolerance, solve_ivp, trapezoid_irregular, trapezoid_richardson,
     validate_tol,
 };
-use fsci_integrate::bdf::BDF_FORCE_PER_ITER_ALLOC;
-use fsci_integrate::radau::RADAU_FORCE_PER_ITER_ALLOC;
 use fsci_runtime::RuntimeMode;
 use std::hint::black_box;
 use std::sync::atomic::Ordering;

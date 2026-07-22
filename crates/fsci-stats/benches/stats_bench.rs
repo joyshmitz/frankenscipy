@@ -1,17 +1,14 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_stats::{
     BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, BIWEIGHT_MAD_HOIST_DISABLE, HaltonSampler,
-    SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
-    binned_statistic_dd, biweight_midcorrelation, centered_discrepancy, ecdf, energy_distance,
-    bayes_mvs, brier_score, cohens_d, excess_kurtosis, gstd, histogram, kendalltau, kruskal,
-    ks_2samp, l2_star_discrepancy, mad, mean_absolute_error, mean_squared_error,
-    mannkendall, mannwhitneyu, mad_zscore, median_abs_deviation, mixture_discrepancy, pacf,
-    pooled_variance, psd_welch,
-    rand_index,
-    siegelslopes, somersd, theilslopes, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance,
-    weighted_mean, wraparound_discrepancy,
     MAD_FN_REUSE_DISABLE, MAD_REUSE_DISABLE, MAD_ZSCORE_HOIST_DISABLE, MOMENT_PAR_FORCE_SERIAL,
-    PAR_SUM_FORCE_SERIAL,
+    PAR_SUM_FORCE_SERIAL, SobolSampler, SomersDInput, acf, argsort, bayes_mvs, binned_statistic,
+    binned_statistic_2d, binned_statistic_dd, biweight_midcorrelation, brier_score,
+    centered_discrepancy, cohens_d, ecdf, energy_distance, excess_kurtosis, gstd, histogram,
+    kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mad, mad_zscore, mannkendall, mannwhitneyu,
+    mean_absolute_error, mean_squared_error, median_abs_deviation, mixture_discrepancy, pacf,
+    pooled_variance, psd_welch, rand_index, siegelslopes, somersd, theilslopes, ttest_1samp,
+    ttest_ind, ttest_rel, wasserstein_distance, weighted_mean, wraparound_discrepancy,
 };
 use std::hint::black_box;
 
@@ -78,12 +75,7 @@ fn bench_mean_absolute_error_simd_ab(c: &mut Criterion) {
     let mut group = c.benchmark_group("mean_absolute_error_simd_ab");
     group.sample_size(15);
     group.bench_function("current_simd_n2097152", |bencher| {
-        bencher.iter(|| {
-            black_box(mean_absolute_error(
-                black_box(&y_true),
-                black_box(&y_pred),
-            ))
-        })
+        bencher.iter(|| black_box(mean_absolute_error(black_box(&y_true), black_box(&y_pred))))
     });
     group.bench_function("orig_scalar_n2097152", |bencher| {
         bencher.iter(|| {

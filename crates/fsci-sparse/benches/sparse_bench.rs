@@ -62,7 +62,12 @@ fn sparse_trace_materialized_reference(matrix: &CsrMatrix) -> f64 {
 }
 
 fn sparse_norm_scalar_reference(matrix: &CsrMatrix) -> f64 {
-    matrix.data().iter().map(|value| value * value).sum::<f64>().sqrt()
+    matrix
+        .data()
+        .iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt()
 }
 
 fn sparse_sum_scalar_reference(matrix: &CsrMatrix) -> f64 {
@@ -686,10 +691,8 @@ fn bench_vstack_canonical_ab(c: &mut Criterion) {
     let blocks: Vec<CsrMatrix> = (0..16u64)
         .map(|i| make_random_rect_csr(block_rows, cols, 0.005, SEED ^ i))
         .collect();
-    let refs: Vec<&dyn FormatConvertible> = blocks
-        .iter()
-        .map(|m| m as &dyn FormatConvertible)
-        .collect();
+    let refs: Vec<&dyn FormatConvertible> =
+        blocks.iter().map(|m| m as &dyn FormatConvertible).collect();
 
     group.bench_function("current_direct", |bn| {
         bn.iter(|| {
@@ -1133,9 +1136,7 @@ fn bench_sparse_frobenius_inner_merge_ab(c: &mut Criterion) {
     let b = make_inner_bench_matrix(n, row_width, 2.0);
 
     group.bench_function("current_merge_n4096_w64", |bencher| {
-        bencher.iter(|| {
-            black_box(sparse_frobenius_inner(black_box(&a), black_box(&b)))
-        });
+        bencher.iter(|| black_box(sparse_frobenius_inner(black_box(&a), black_box(&b))));
     });
     group.bench_function("orig_nested_n4096_w64", |bencher| {
         bencher.iter(|| {
