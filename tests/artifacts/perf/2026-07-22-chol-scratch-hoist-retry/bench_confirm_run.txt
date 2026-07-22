@@ -1,0 +1,13 @@
+    Finished `bench` profile [optimized] target(s) in 0.12s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-65eebc4797541807)
+Gnuplot not found, using plotters backend
+FSCI_CHOL_SCRATCH_AB n=1000 bit_identical=true
+FSCI_CHOL_SCRATCH_AB n=1000 NULL median=1.007701 min=0.973688 max=1.035301 cv_pct=1.629
+FSCI_CHOL_SCRATCH_AB n=1000 PROD mean_ms=11.352427 cv_pct=1.603 p50_ms=11.395917 gflops_p50=29.25
+FSCI_CHOL_SCRATCH_AB n=1000 CAND mean_ms=11.120312 cv_pct=1.708 p50_ms=11.124314 gflops_p50=29.96
+FSCI_CHOL_SCRATCH_AB n=1000 paired_median=1.024695 paired_cv_pct=1.781 null=[0.973688,1.035301] DECIDED=false samples=20 factors_per_sample=32
+FSCI_CHOL_SCRATCH_AB n=2048 bit_identical=true
+FSCI_CHOL_SCRATCH_AB n=2048 NULL median=0.997822 min=0.965120 max=1.033560 cv_pct=1.802
+FSCI_CHOL_SCRATCH_AB n=2048 PROD mean_ms=54.517360 cv_pct=1.455 p50_ms=54.592533 gflops_p50=52.45
+FSCI_CHOL_SCRATCH_AB n=2048 CAND mean_ms=52.923073 cv_pct=1.249 p50_ms=53.079390 gflops_p50=53.94
+FSCI_CHOL_SCRATCH_AB n=2048 paired_median=1.028507 paired_cv_pct=2.020 null=[0.965120,1.033560] DECIDED=false samples=12 factors_per_sample=6
