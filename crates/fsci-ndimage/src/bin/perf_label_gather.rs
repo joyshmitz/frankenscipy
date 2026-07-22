@@ -22,7 +22,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let npix: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let npix: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let nlabels: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(64);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(13);
 
@@ -46,8 +49,14 @@ fn main() {
     let a = extrema(&input, Some(&labels), Some(&index)).unwrap();
     NDIMAGE_LABEL_GATHER_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = extrema(&input, Some(&labels), Some(&index)).unwrap();
-    let bit_f = |x: &[f64], y: &[f64]| x.iter().zip(y).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    let bit_pos = |x: &[Vec<usize>], y: &[Vec<usize>]| x.iter().zip(y).filter(|(p, q)| p != q).count();
+    let bit_f = |x: &[f64], y: &[f64]| {
+        x.iter()
+            .zip(y)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count()
+    };
+    let bit_pos =
+        |x: &[Vec<usize>], y: &[Vec<usize>]| x.iter().zip(y).filter(|(p, q)| p != q).count();
     let bitmism = bit_f(&a.0, &b.0) + bit_f(&a.1, &b.1) + bit_pos(&a.2, &b.2) + bit_pos(&a.3, &b.3);
 
     let bench = |force_serial: bool| -> f64 {

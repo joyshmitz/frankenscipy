@@ -2,7 +2,9 @@
 //! vs gather-then-concat across contiguous row-blocks. BYTE-IDENTICAL (same filter, rows/entries
 //! concatenated in stored order). Toggled by `SPARSE_ELIMINATE_ZEROS_FORCE_SERIAL`.
 //! Args: rows [nnz_per_row] [zero_frac_pct] [iters].
-use fsci_sparse::{CsrMatrix, SPARSE_ELIMINATE_ZEROS_FORCE_SERIAL, Shape2D, sparse_eliminate_zeros};
+use fsci_sparse::{
+    CsrMatrix, SPARSE_ELIMINATE_ZEROS_FORCE_SERIAL, Shape2D, sparse_eliminate_zeros,
+};
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -19,7 +21,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let rows: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2_000_000);
+    let rows: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2_000_000);
     let nnz_per: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
     let zero_pct: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20);
     let iters: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(15);
@@ -58,9 +63,24 @@ fn main() {
     let sa = sparse_eliminate_zeros(&mat);
     SPARSE_ELIMINATE_ZEROS_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let pa = sparse_eliminate_zeros(&mat);
-    let dbit = sa.data().iter().zip(pa.data()).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-    let ibit = sa.indices().iter().zip(pa.indices()).filter(|(x, y)| x != y).count();
-    let pbit = sa.indptr().iter().zip(pa.indptr()).filter(|(x, y)| x != y).count();
+    let dbit = sa
+        .data()
+        .iter()
+        .zip(pa.data())
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
+    let ibit = sa
+        .indices()
+        .iter()
+        .zip(pa.indices())
+        .filter(|(x, y)| x != y)
+        .count();
+    let pbit = sa
+        .indptr()
+        .iter()
+        .zip(pa.indptr())
+        .filter(|(x, y)| x != y)
+        .count();
     let lenmis = (sa.data().len() != pa.data().len()) as usize;
     let bitmism = dbit + ibit + pbit + lenmis;
     println!(

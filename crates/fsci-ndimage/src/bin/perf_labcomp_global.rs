@@ -4,7 +4,9 @@
 //! `NDIMAGE_LABELED_COMPREHENSION_GLOBAL_FORCE_SERIAL` and ALTERNATED per iteration. Byte-identical
 //! (one group = every value in flat order; the reducer is deterministic); the ~384MB of alloc/copy is
 //! the dominant cost for a light reducer.
-use fsci_ndimage::{NDIMAGE_LABELED_COMPREHENSION_GLOBAL_FORCE_SERIAL, NdArray, labeled_comprehension};
+use fsci_ndimage::{
+    NDIMAGE_LABELED_COMPREHENSION_GLOBAL_FORCE_SERIAL, NdArray, labeled_comprehension,
+};
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -30,7 +32,10 @@ fn reducer(values: &[f64], _positions: Option<&[usize]>) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let npix: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let npix: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
 
     let mut s = 1u64;
@@ -57,7 +62,8 @@ fn main() {
 
     let bench = |force_serial: bool| -> f64 {
         NDIMAGE_LABELED_COMPREHENSION_GLOBAL_FORCE_SERIAL.store(force_serial, Ordering::Relaxed);
-        let run = || labeled_comprehension(black_box(&input), None, None, reducer, 0.0, false).unwrap();
+        let run =
+            || labeled_comprehension(black_box(&input), None, None, reducer, 0.0, false).unwrap();
         let _ = black_box(run());
         let t = Instant::now();
         for _ in 0..3 {

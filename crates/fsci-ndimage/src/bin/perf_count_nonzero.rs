@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0xb5297a4du64;
@@ -29,7 +32,11 @@ fn main() {
         (s >> 11) as f64 / (1u64 << 53) as f64
     };
     // ~50% nonzero (values below 0.5 rounded to 0.0) so the count is nontrivial.
-    let arr = NdArray::new((0..n).map(|_| if r() < 0.5 { 0.0 } else { r() }).collect(), vec![n]).unwrap();
+    let arr = NdArray::new(
+        (0..n).map(|_| if r() < 0.5 { 0.0 } else { r() }).collect(),
+        vec![n],
+    )
+    .unwrap();
 
     COUNT_NONZERO_FORCE_SERIAL.store(true, Ordering::Relaxed);
     let a = count_nonzero(&arr);

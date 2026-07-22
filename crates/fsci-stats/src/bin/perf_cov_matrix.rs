@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let npts: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1_500_000);
+    let npts: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1_500_000);
     let dims: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(16);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
 
@@ -29,7 +32,9 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64 * 4.0 - 2.0
     };
-    let data: Vec<Vec<f64>> = (0..npts).map(|_| (0..dims).map(|_| r()).collect()).collect();
+    let data: Vec<Vec<f64>> = (0..npts)
+        .map(|_| (0..dims).map(|_| r()).collect())
+        .collect();
 
     COV_MATRIX_FORCE_SERIAL.store(true, Ordering::Relaxed);
     let a = cov_matrix(&data);
@@ -38,9 +43,17 @@ fn main() {
     let bitmism: usize = a
         .iter()
         .zip(&b)
-        .map(|(ra, rb)| ra.iter().zip(rb).filter(|(x, y)| x.to_bits() != y.to_bits()).count())
+        .map(|(ra, rb)| {
+            ra.iter()
+                .zip(rb)
+                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                .count()
+        })
         .sum();
-    println!("# stats::cov_matrix npts={npts} dims={dims} cov[0][1]={} bitmism={bitmism}", a[0][1]);
+    println!(
+        "# stats::cov_matrix npts={npts} dims={dims} cov[0][1]={} bitmism={bitmism}",
+        a[0][1]
+    );
 
     let bench = |serial: bool| -> f64 {
         COV_MATRIX_FORCE_SERIAL.store(serial, Ordering::Relaxed);

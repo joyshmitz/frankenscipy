@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0x1a2b_3c4du64;
@@ -38,16 +41,27 @@ fn main() {
     let a = power_divergence(&obs, Some(&exp), 1.0);
     POWER_DIV_FUSE_DISABLE.store(false, Ordering::Relaxed);
     let b = power_divergence(&obs, Some(&exp), 1.0);
-    let bitmism = usize::from(a.0.to_bits() != b.0.to_bits()) + usize::from(a.1.to_bits() != b.1.to_bits());
-    println!("# stats::power_divergence n={n} orig=({},{}) fused=({},{}) bitmism={bitmism}",
-        a.0, a.1, b.0, b.1);
+    let bitmism =
+        usize::from(a.0.to_bits() != b.0.to_bits()) + usize::from(a.1.to_bits() != b.1.to_bits());
+    println!(
+        "# stats::power_divergence n={n} orig=({},{}) fused=({},{}) bitmism={bitmism}",
+        a.0, a.1, b.0, b.1
+    );
 
     let bench = |disable: bool| -> f64 {
         POWER_DIV_FUSE_DISABLE.store(disable, Ordering::Relaxed);
-        let _ = black_box(power_divergence(black_box(&obs), Some(black_box(&exp)), 1.0));
+        let _ = black_box(power_divergence(
+            black_box(&obs),
+            Some(black_box(&exp)),
+            1.0,
+        ));
         let t = Instant::now();
         for _ in 0..5 {
-            let _ = black_box(power_divergence(black_box(&obs), Some(black_box(&exp)), 1.0));
+            let _ = black_box(power_divergence(
+                black_box(&obs),
+                Some(black_box(&exp)),
+                1.0,
+            ));
         }
         t.elapsed().as_secs_f64() / 5.0 * 1e3
     };

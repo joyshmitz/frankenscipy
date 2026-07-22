@@ -20,7 +20,15 @@ fn cv(v: &[f64]) -> f64 {
     if m > 0.0 { var.sqrt() / m * 100.0 } else { 0.0 }
 }
 
-fn report(name: &str, npix: usize, ov: &[f64], fv: &[f64], null_r: &mut [f64], cand_r: &mut [f64], bitmism: usize) {
+fn report(
+    name: &str,
+    npix: usize,
+    ov: &[f64],
+    fv: &[f64],
+    null_r: &mut [f64],
+    cand_r: &mut [f64],
+    bitmism: usize,
+) {
     let null_med = med(null_r);
     let cand_med = med(cand_r);
     let null_lo = null_r.iter().copied().fold(f64::MAX, f64::min);
@@ -40,7 +48,10 @@ fn report(name: &str, npix: usize, ov: &[f64], fv: &[f64], null_r: &mut [f64], c
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let npix: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let npix: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
 
     let mut s = 1u64;
@@ -58,20 +69,32 @@ fn main() {
     let ea = exp_array(&input);
     NDIMAGE_EXP_ARRAY_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let eb = exp_array(&input);
-    let ebit = ea.data.iter().zip(&eb.data).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let ebit = ea
+        .data
+        .iter()
+        .zip(&eb.data)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
         + usize::from(ea.data.len() != eb.data.len());
     let ebench = |fs: bool| -> f64 {
         NDIMAGE_EXP_ARRAY_FORCE_SERIAL.store(fs, Ordering::Relaxed);
         let run = || exp_array(black_box(&input));
         let _ = black_box(run());
         let t = Instant::now();
-        for _ in 0..3 { let _ = black_box(run()); }
+        for _ in 0..3 {
+            let _ = black_box(run());
+        }
         t.elapsed().as_secs_f64() / 3.0 * 1e3
     };
     let (mut eov, mut efv, mut enull, mut ecand) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for _ in 0..iters {
-        let o = ebench(true); let f = ebench(false); let o2 = ebench(true);
-        enull.push(o / o2); ecand.push(o / f); eov.push(o); efv.push(f);
+        let o = ebench(true);
+        let f = ebench(false);
+        let o2 = ebench(true);
+        enull.push(o / o2);
+        ecand.push(o / f);
+        eov.push(o);
+        efv.push(f);
     }
     NDIMAGE_EXP_ARRAY_FORCE_SERIAL.store(false, Ordering::Relaxed);
 
@@ -80,20 +103,32 @@ fn main() {
     let la = log_array(&input);
     NDIMAGE_LOG_ARRAY_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let lb = log_array(&input);
-    let lbit = la.data.iter().zip(&lb.data).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let lbit = la
+        .data
+        .iter()
+        .zip(&lb.data)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
         + usize::from(la.data.len() != lb.data.len());
     let lbench = |fs: bool| -> f64 {
         NDIMAGE_LOG_ARRAY_FORCE_SERIAL.store(fs, Ordering::Relaxed);
         let run = || log_array(black_box(&input));
         let _ = black_box(run());
         let t = Instant::now();
-        for _ in 0..3 { let _ = black_box(run()); }
+        for _ in 0..3 {
+            let _ = black_box(run());
+        }
         t.elapsed().as_secs_f64() / 3.0 * 1e3
     };
     let (mut lov, mut lfv, mut lnull, mut lcand) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for _ in 0..iters {
-        let o = lbench(true); let f = lbench(false); let o2 = lbench(true);
-        lnull.push(o / o2); lcand.push(o / f); lov.push(o); lfv.push(f);
+        let o = lbench(true);
+        let f = lbench(false);
+        let o2 = lbench(true);
+        lnull.push(o / o2);
+        lcand.push(o / f);
+        lov.push(o);
+        lfv.push(f);
     }
     NDIMAGE_LOG_ARRAY_FORCE_SERIAL.store(false, Ordering::Relaxed);
 
