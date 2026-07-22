@@ -39,6 +39,24 @@ fn make_vector(n: usize) -> Vec<f64> {
     (0..n).map(|i| (i as f64) * 0.01 - 0.5).collect()
 }
 
+fn make_skewed_spmv_csr(rows: usize, cols: usize) -> CsrMatrix {
+    let hot_rows = rows / 8;
+    let mut data = Vec::with_capacity(hot_rows * 80 + (rows - hot_rows) * 2);
+    let mut indices = Vec::with_capacity(data.capacity());
+    let mut indptr = Vec::with_capacity(rows + 1);
+    indptr.push(0);
+    for row in 0..rows {
+        let degree = if row < hot_rows { 80 } else { 2 };
+        for k in 0..degree {
+            data.push((k + 1) as f64 * 0.001);
+            indices.push((row.wrapping_mul(37) + k * 9_973) % cols);
+        }
+        indptr.push(data.len());
+    }
+    CsrMatrix::from_components(Shape2D::new(rows, cols), data, indices, indptr, false)
+        .expect("valid skewed CSR")
+}
+
 fn sparse_trace_materialized_reference(matrix: &CsrMatrix) -> f64 {
     sparse_diagonal(matrix).iter().sum()
 }
@@ -320,6 +338,22 @@ fn bench_spmv_query_gate_ab(c: &mut Criterion) {
                 .min(csr.shape().rows.max(1));
             black_box(cores);
             let result = spmv_csr(black_box(&csr), black_box(&vector)).expect("query-first spmv");
+            black_box(result);
+        });
+    });
+    group.finish();
+}
+
+fn bench_spmv_skewed_rows(c: &mut Criterion) {
+    let csr = make_skewed_spmv_csr(100_000, 100_000);
+    let vector = make_vector(100_000);
+    let mut group = c.benchmark_group("spmv_skewed_rows");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("rows100k_nnz1175k", |b| {
+        b.iter(|| {
+            let result = spmv_csr(black_box(&csr), black_box(&vector)).expect("skewed spmv");
             black_box(result);
         });
     });
@@ -1162,6 +1196,7 @@ criterion_group!(
     bench_csr_construction,
     bench_spmv,
     bench_spmv_query_gate_ab,
+    bench_spmv_skewed_rows,
     bench_format_conversion,
     bench_arithmetic,
     bench_eye,

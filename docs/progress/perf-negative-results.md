@@ -31,6 +31,32 @@ condition so dead ends are not repeated casually.
   particular, a rejected streak is not evidence of a ceiling: route to a
   different alien primitive whose retry predicate is presently true.
 
+## 2026-07-22 - frankenscipy-8l8r1.163 - KEEP: equal-nnz parallel CSR SpMV partition (bit-identical, 1.245x)
+
+- Both negative ledgers and recent history were screened first. The public SpMV row-dot/unroll, parallel-row, and
+  below-gate affinity-query families are already shipped; no prior result covered load balancing within the admitted
+  parallel path. Alien segmented storage plus morsel-driven work partitioning admitted this distinct scheduler lever.
+- The untouched 100,000x100,000 skew fixture has 1,175,000 nonzeros: its first 12,500 rows have degree 80 and the
+  rest degree 2. The old 16-way equal-row partition assigned 500,000 nonzeros to each of two critical chunks and
+  12,500 to most peers, a measured **40x scheduler-work skew**. Untouched Criterion on named worker `ovh-a` was
+  **764.67 us** (estimate interval 758.13-771.69 us).
+- One lever chooses contiguous row cuts at equal cumulative-nonzero targets using `indptr.partition_point`. Row
+  arithmetic, row order, serial gates, and result placement are unchanged; no unsafe code or external BLAS/LAPACK.
+- Final strict same-binary `ovh-a` A/B/null used two scheduler workers, 11 interleaved rounds, 256 complete SpMVs per
+  subwindow, and the predeclared middle-five mean of nine subwindows per arm. Candidate p50/p95/p99
+  **276.171970/281.571818/281.571818 ms**, CV **2.531%**; equal-row baseline
+  **343.583978/351.706523/351.706523 ms**, CV **1.927%**. Paired speedup p50/p05/p95
+  **1.245166/1.212176/1.290156x** versus candidate/candidate null
+  **0.994250/0.980510/1.038696**. Candidate p05 clears null p95: not in-floor.
+- Every output matched the serial and equal-row controls by exact `to_bits()`. The retained skew conformance test
+  passed strict remote. Matrix/result resident memory is unchanged; the final scheduler adds only an O(cores)
+  transient boundary vector (136 bytes at 16 cores, about 0.017% of the 800,000-byte result).
+- Shorter whole-host attempts with arm CV **6.15-94.11%** were explicitly invalidated rather than used for a verdict;
+  fail-closed RCH capacity/preflight and one `ovh-b` build-script SIGILL produced no local fallback or candidate data.
+- Retry only when a fresh profile demonstrates residual intra-partition imbalance and a different primitive is
+  available, such as persistent-pool dynamic morsels after that substrate is approved. Equal-cumulative-nnz static
+  partitioning itself is closed.
+
 ## 2026-07-22 - frankenscipy-8l8r1.162 - KEEP: dimension-major N-D KDE distances (bit-identical, 1.41x)
 
 - Both negative ledgers and recent history were screened before editing. The earlier N-D KDE SIMD-exp keep closed

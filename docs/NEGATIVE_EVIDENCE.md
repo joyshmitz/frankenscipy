@@ -23111,3 +23111,100 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - **Retry predicate:** do not repeat dimension-major distance accumulation. Retry N-D KDE only when a new profile
   admits a different primitive (for example query batching across lanes or a changed dimensional regime) and a new
   exact/tolerance contract clears an interleaved same-worker null control with both arm CVs below 5%.
+
+## 2026-07-22 - CopperFalcon (cc) - KEEP (1e-10 contract, size-adaptive): cholesky panel width NB staircase 128/192/256 — 1.078x DECIDED @n=1000, 1.162x @n=1536, 1.159x @n=2048, zero small-n regression by construction
+
+- Dense-BLAS wall lane lever 7, the vein-switch pick after the pool-substrate BLOCKER. RETRY ADMISSIBILITY:
+  the 2026-07-05 "cholesky NB block-size tuning" row was formally **DOWNGRADED 2026-07-10** (no candidate
+  sha256/self-time/worker — fails the provenance rule) AND predates the entire current kernel mix (AVX2+FMA
+  build, FMA MR4×NR8 SYRK, blocked-FMA TRSM, 8M-gated parallel TRSM). This retry supplies the provenance the
+  old row lacked: ONE binary, NB as a runtime parameter (`CHOL_NB_OVERRIDE`, threaded as an explicit
+  `nb_block` arg so unit tests never touch the global), per-arm differing-bits execution proofs
+  (e.g. 213,711/1e6 elements at nb=96, max_rel 2.6e-16 — well inside the 1e-10 uniqueness contract),
+  per-size A/A nulls, interleaved paired medians.
+- SWEEP (thinkstation1, artifacts `2026-07-22-chol-nb-sweep/bench_stdout_stderr.txt` + `bench_full_sweep.txt`
+  + `bench_boundary_probe.txt`): vs NB=128 —
+  | n | nb=96 | 160 | 192 | 224 | 256 | null range |
+  |---|---|---|---|---|---|---|
+  | 256 | | | **0.892 DEC-** | | | [0.990, 1.005] |
+  | 384 | | | **0.880 DEC-** | | | [0.984, 1.048] |
+  | 512 | | | **0.964 DEC-** | | | [0.983, 1.025] |
+  | 768 | | 0.990 | **0.890 DEC-** | | | [0.955, 1.038] |
+  | 1000 | 0.973 | 1.011 | **1.078 DEC+** | 1.054 DEC+ | 1.029 | [0.927, 1.041] |
+  | 1536 | | | 1.131 DEC+ | | **1.162 DEC+** | [0.952, 1.050] |
+  | 2048 | | | 1.115 DEC+ | | **1.159 DEC+** (62.2→53.7 ms) | [0.980, 1.039] |
+- MECHANISM (why my own flop-shift analysis was WRONG and the measurement right): wider panels do add serial
+  TRSM (∝ NB·n²) and in-panel (∝ n·NB²) flops, but at n ≥ 1000 they (a) cut spawn/pack ROUNDS (8→6→4),
+  (b) fatten K per SYRK tile (128→192→256 FMA steps per C-tile load/store), and (c) push per-panel TRSM MACs
+  over the lever-5 8M parallel gate (nb=192 @n=1000: 14.9M ⇒ the previously-serial TRSM fans out) — the
+  levers COMPOUND. Below n≈768 the serial-flop tax wins ⇒ staircase, thresholds AT measured points, gap
+  regions inherit the proven-safe side.
+- SHIPPED: `chol_nb_for(n)` (128 below 1000 — sub-1000 factors BIT-UNCHANGED; 192 in [1000,1536); 256 at
+  ≥1536), override static kept for A/B; canonical sweep table in `bench_cholesky_wall_nb_sweep`.
+  Conformance: fsci-linalg **516/0**, cholesky diff lanes 39/0, ubs 0 critical, clippy clean in-region.
+  Mid-sweep hazard fixed: the first draft flipped the global override inside a unit test and raced the
+  concurrent bit-identity tests — resolved by threading `nb_block` as a parameter (tests never mutate the
+  static). NEW BASELINES: n=1000 ≈ 11.0 ms (192), n=1536 26.3 ms (256), **n=2048 ≈ 53.7 ms (63.5 GF/s
+  effective → vs scipy-default 62.36 ms = ~1.16x FASTER)**.
+- Bead: `frankenscipy-0f34e`.
+
+## 2026-07-22 - CopperFalcon (cc) - TERMINAL REJECT (in-floor ×4 runs, pre-registered rule): cholesky scratch hoist retry — real ~+3% monotone effect, permanently under the wall-clock decision floor
+
+- Lever-3 retry under its fired predicate (memset share 16.5% → **28.35%**, #1 frame after the NB staircase).
+  Re-implemented against the nb-param code (`_into` pack + `_in` TRSM + `REUSE_SCRATCH` const), bit-identity
+  re-proven (unit test 6 sizes + full-factor equality at n=1000/2048 in-bench).
+- MEASUREMENT (artifacts `2026-07-22-chol-scratch-hoist-retry/bench_stdout_stderr.txt` + `bench_confirm_run.txt`):
+  run A n=1000 paired **1.0283** [null 0.9713, 1.0310] — inside by 0.003; n=2048 **1.0397** [0.9849, 1.0630] —
+  inside; PRE-REGISTERED confirmation run n=1000 paired **1.0247** [0.9737, 1.0353] — inside. With the original
+  reject's 1.0197, that is FOUR independent runs, ALL positive, NONE range-decidable.
+- MECHANISM CLOSED (the profile lied about the budget): the removable per-panel scratch memset is ~8 MB/factor
+  at L3-ish bandwidth ≈ **0.3 ms ≈ 3%** — exactly the measured deltas. The 28.35% `__memset_avx2` profile
+  share is dominated by the CONTRACTUAL 8 MB output-buffer zeroing plus perf's page-fault attribution on
+  fresh mmap'd buffers. **LESSON (ledger-worthy): a memset frame's self-time % is NOT its removable share —
+  compute the byte-math budget (bytes / measured bandwidth) BEFORE sizing an allocation lever.**
+- DISPOSITION: candidate stashed (recoverable); tree at c3e209d13-lineage production; 21/21 cholesky tests
+  green. Bead `frankenscipy-vpjel` closed as terminal-reject. Fleet cv-gate note for honesty: the lever
+  passes the ORIGINAL cv<5% KEEP gate (paired cv 1.8-2.5%) and matches the BDF-hoist monotone precedent,
+  but the stricter median-null-RANGE rule governs this harness and it never cleared it; the pre-registered
+  confirmation run settled the call as REJECT — no gate-shopping.
+- RETRY PREDICATE (TERMINAL for wall-clock): do NOT re-run wall-clock A/Bs at any n ≤ 2048 — four runs
+  bound the effect at ~+3%, under the ±3-6% observed null ranges. Landable ONLY via (a) a perf-stat cycles
+  self-time gate (~4% floor, prior art d97283534), or (b) bundled inside a ≥10% lever, or (c) if the output
+  upper-zero contract is ever dropped (unlocks the other ~8 MB memset half).
+
+## 2026-07-22 - BlackThrush (cod) - KEEP (bit-identical, 1.245x): equal-cumulative-nnz parallel CSR SpMV partition
+
+- **Negative-evidence screen:** before source work, both ledgers and recent git history were searched for SpMV,
+  row partitioning, skew, load balance, and nonzero work. The cached/unrolled row sweep (`dfd81f32f`), parallel-row
+  execution (`0f9c3b8a1`), and post-gate affinity query (`6d63244e4`) are shipped families; no prior result covered
+  load balancing inside the admitted parallel path. The below-gate affinity-syscall reject remains closed. Alien
+  segmented-array flattening and morsel-driven parallelism matched the measured seam without requiring a pool.
+- **Baseline/profile:** a deterministic 100,000x100,000 CSR fixture has 1,175,000 nonzeros, with degree 80 in the
+  first 12,500 rows and degree 2 thereafter. The old 16-way equal-row scheduler creates two 500,000-nnz critical
+  chunks and mostly 12,500-nnz peers: **40x chunk-work skew** and about 6.8x ideal critical-path headroom. Untouched
+  Criterion on named worker `ovh-a` estimated **764.67 us** (758.13-771.69 us). This structural scheduler profile
+  is stronger than symbol self-time for a row-dot whose arithmetic is intentionally unchanged.
+- **One lever:** for the existing above-gate parallel path only, compute `cores - 1` contiguous row boundaries at
+  equal cumulative-nonzero targets using binary searches over monotone CSR `indptr`. Incremental `split_at_mut`
+  preserves safe disjoint result ownership. Every row still calls the identical unrolled `row_dot` in the same
+  arithmetic order; serial thresholds and error behavior are untouched. Pure safe Rust, no C BLAS/LAPACK.
+- **Strict A/B/null:** final release test binary on exclusive named worker `ovh-a`; two scheduled workers; 11
+  interleaved rounds; each arm is 256 full SpMVs per subwindow and the predeclared middle-five mean of nine
+  subwindows. Candidate p50/p95/p99 **276.171970/281.571818/281.571818 ms**, CV **2.531%**; equal-row baseline
+  **343.583978/351.706523/351.706523 ms**, CV **1.927%**. Paired speedup p50/p05/p95
+  **1.245166/1.212176/1.290156x**; candidate/candidate null p50/p05/p95
+  **0.994250/0.980510/1.038696**. Candidate p05 exceeds null p95, so this is a decided KEEP, not in-floor.
+  Normalized p50 is 1.079 ms candidate versus 1.342 ms baseline per call.
+- **Invalid evidence discipline:** shorter whole-host attempts were discarded: `ovh-a` 16-core arm CV
+  41.945/28.944%, `vmi1149989` 10-core 31.359/9.617%, `hz1` 8-core five-window 24.156/94.106%, and the first
+  topology-controlled two-core run 6.154/7.496%. They established routing/noise only and did not decide the lever.
+- **Behavior/memory proof:** the strict harness compared all 100,000 outputs by exact `to_bits()` before timing;
+  a focused strict-remote skew test also matched the shipped partition to forced serial exactly. Matrix and result
+  resident memory are unchanged. The only new transient allocation is `cores + 1` row boundaries: **136 bytes at
+  16 cores**, about **0.017%** of the 800,000-byte result, with no per-row or per-nonzero growth.
+- **RCH surfaces:** fail-closed requests reported `insufficient_slots`/`hard_preflight` and never ran locally;
+  one `ovh-a` dependency-sync preflight and one `ovh-b` third-party build-script SIGILL were surfaced and excluded.
+- **Retry predicate:** do not repeat static equal-cumulative-nnz partitioning. Reopen SpMV load scheduling only if a
+  fresh profile shows residual skew within those contiguous partitions and a distinct primitive is available—for
+  example dynamic morsels after a persistent safe-Rust pool substrate is approved—or if a new API/format permits
+  row splitting while preserving the numerical contract.

@@ -424,16 +424,34 @@ pub fn spmv_csr(matrix: &CsrMatrix, vector: &[f64]) -> SparseResult<Vec<f64>> {
             *r = row_dot(row);
         }
     } else {
-        let chunk = rows.div_ceil(cores);
+        // CSR row lengths can be extremely skewed, so equal row counts leave the
+        // critical thread with most of the nonzeros. Find contiguous row cuts at
+        // equal cumulative-nnz targets instead. There are only `cores - 1` searches,
+        // and every row still executes the identical `row_dot` arithmetic.
+        let mut boundaries = Vec::with_capacity(cores + 1);
+        boundaries.push(0);
+        for worker in 1..cores {
+            let target = ((data.len() as u128) * (worker as u128) / (cores as u128)) as usize;
+            boundaries.push(indptr.partition_point(|&offset| offset < target).min(rows));
+        }
+        boundaries.push(rows);
         let row_dot_ref = &row_dot;
         std::thread::scope(|scope| {
-            for (t, slice) in result.chunks_mut(chunk).enumerate() {
-                let base = t * chunk;
+            let mut base = 0;
+            let mut remaining = result.as_mut_slice();
+            for end in boundaries.into_iter().skip(1) {
+                let (slice, rest) = remaining.split_at_mut(end - base);
+                remaining = rest;
+                if slice.is_empty() {
+                    base = end;
+                    continue;
+                }
                 scope.spawn(move || {
                     for (o, r) in slice.iter_mut().enumerate() {
                         *r = row_dot_ref(base + o);
                     }
                 });
+                base = end;
             }
         });
     }
@@ -1430,6 +1448,31 @@ mod tests {
     use super::*;
     use crate::formats::{CooMatrix, CsrMatrix, Shape2D};
 
+    static SPMV_AB_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn skewed_spmv_fixture() -> (CsrMatrix, Vec<f64>) {
+        let rows = 100_000usize;
+        let cols = 100_000usize;
+        let hot_rows = rows / 8;
+        let mut data = Vec::with_capacity(hot_rows * 80 + (rows - hot_rows) * 2);
+        let mut indices = Vec::with_capacity(data.capacity());
+        let mut indptr = Vec::with_capacity(rows + 1);
+        indptr.push(0);
+        for row in 0..rows {
+            let degree = if row < hot_rows { 80 } else { 2 };
+            for k in 0..degree {
+                data.push((k + 1) as f64 * 0.001);
+                indices.push((row.wrapping_mul(37) + k * 9_973) % cols);
+            }
+            indptr.push(data.len());
+        }
+        let matrix =
+            CsrMatrix::from_components(Shape2D::new(rows, cols), data, indices, indptr, false)
+                .expect("valid skewed CSR");
+        let vector = (0..cols).map(|i| (i as f64) * 0.01 - 0.5).collect();
+        (matrix, vector)
+    }
+
     fn coo_full(n: usize) -> CsrMatrix {
         // n×n matrix where M[i][j] = i*n + j + 1 (all entries non-zero
         // and distinct so a wrong filter shows up).
@@ -1462,6 +1505,7 @@ mod tests {
     fn spmv_parallel_is_byte_identical_to_serial_above_gate() {
         use crate::FormatConvertible;
         use std::sync::atomic::Ordering;
+        let _guard = SPMV_AB_TEST_LOCK.lock().unwrap();
         // Build an n×n matrix past the fan-out gate (nnz≥1M, cols≥65536): the
         // parallel-across-rows spmv must be BYTE-IDENTICAL to the serial loop (each
         // output row is an independent dot — no reassociation).
@@ -1507,6 +1551,25 @@ mod tests {
             .filter(|(a, b)| a.to_bits() != b.to_bits())
             .count();
         assert_eq!(mism, 0, "parallel spmv must be byte-identical to serial");
+    }
+
+    #[test]
+    fn spmv_equal_nnz_partition_is_byte_identical_on_skewed_rows() {
+        use std::sync::atomic::Ordering;
+        let _guard = SPMV_AB_TEST_LOCK.lock().unwrap();
+        let (matrix, vector) = skewed_spmv_fixture();
+
+        SPMV_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = spmv_csr(&matrix, &vector).unwrap();
+        SPMV_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let equal_nnz = spmv_csr(&matrix, &vector).unwrap();
+
+        assert!(
+            serial
+                .iter()
+                .zip(equal_nnz.iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
     }
 
     #[test]
