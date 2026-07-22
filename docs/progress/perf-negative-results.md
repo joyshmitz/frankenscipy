@@ -4,10 +4,10 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
-## 2026-07-16 - catch-up sync through current measured-frontier ancestry
+## 2026-07-22 - catch-up sync through current measured-frontier ancestry
 
 - This routing ledger had stopped at 2026-07-12 while the code and the detailed
-  `docs/NEGATIVE_EVIDENCE.md` ledger had advanced through 2026-07-16. The table
+  `docs/NEGATIVE_EVIDENCE.md` ledger had advanced through 2026-07-22. The table
   below refreshes the high-EV `opt`/`integrate`/`stats`/`sparse`/`interpolate`
   frontier before another candidate is selected. The detailed ledger remains
   authoritative for fingerprints, confidence intervals, exact proof commands,
@@ -15,6 +15,9 @@ condition so dead ends are not repeated casually.
 
 | Domain / lever | Disposition and measured effect | Retry boundary |
 | --- | --- | --- |
+| integrate Radau: cache diagonal-J structural certificate (`frankenscipy-8l8r1.164`) | **KEEP**, strict interleaved same-binary **3.666x** median, baseline/candidate CV **3.290%/3.625%**, exact result/counters | Repeated structural scans are closed; require a fresh profile on a different Radau stage or non-diagonal structure. |
+| sparse SpMV: equal-cumulative-nnz row partitions (`4bcacc1be`) | **KEEP**, strict interleaved same-binary **1.245x** median, exact outputs | Static equal-nnz partitioning is closed; require measured residual skew and a distinct scheduler primitive. |
+| stats N-D KDE dimension-major distance layout (`ec345cd9d`) | **KEEP**, strict interleaved same-binary **1.410x** median, exact outputs | Dimension-major distance accumulation is closed; require a different freshly profiled KDE primitive. |
 | sparse SpMV: defer `available_parallelism()` until after the serial gate (`6d63244e4`) | **KEEP**, same-binary `43.996 us -> 1.0880 us`, **40.44x** centered | Reprofile above both existing parallel thresholds; the below-gate affinity-query family is closed. |
 | interpolate PCHIP sorted-query cursor (`1e801d63e`) | **KEEP**, same-worker former/cursor **39.634 us -> 15.135 us**, **2.619x** centered, bit-identical | Only revisit with a different primitive on unsorted/non-finite or parallel batches. |
 | interpolate cubic/Akima/Hermite sibling cursors (`36a5f9e1c`) | **KEEP**, same-binary **3.09-6.47x**, bit-identical | Binary-search removal for finite sorted serial batches is closed; require a newly profiled non-cursor path. |
@@ -30,6 +33,41 @@ condition so dead ends are not repeated casually.
 - Fresh work must screen both this catch-up and the detailed ledger. In
   particular, a rejected streak is not evidence of a ceiling: route to a
   different alien primitive whose retry predicate is presently true.
+
+## 2026-07-22 - frankenscipy-8l8r1.164 - KEEP: cache Radau diagonal-J structural certificate (bit-identical, 3.666x)
+
+- Both negative ledgers and recent history were screened before source work. The shipped diagonal stage solver,
+  dense eigen-decoupling, Newton allocation hoist, and rejected streamed-norm families remain closed. No prior
+  result covered rediscovering an unchanged Jacobian's structure on every accepted step. Alien self-adjusting
+  computation admitted this distinct derived-state cache: recompute the certificate only when its Jacobian changes.
+- The untouched 256-state diagonal stiff fixture reuses one Jacobian across 105 recorded solution points. Named
+  worker `ovh-a` Criterion estimated **10.186 ms** (10.157-10.217 ms). An untouched strict-remote `perf` profile on
+  `vmi1264463` captured about **6,000 cycle samples**: `diagonal_jacobian_entries` was **73.60% self-time**, versus
+  **13.27%** for the actual diagonal collocation solve. Five samples and one chunk were reported lost; the hotspot
+  separation was still more than 5.5x. `ovh-a` profiling was invalid because `perf_event_paranoid=4` and was excluded.
+- One lever derives exact diagonal entries alongside each fresh finite-difference Jacobian, retains them while that
+  Jacobian is reused, and clears them on the existing stale-Jacobian invalidation path. Dense Jacobians retain the
+  same `None` certificate and dense factors; stage equations, arithmetic order, tolerances, counters, and fallback
+  decisions are unchanged. Pure safe Rust; no external BLAS/LAPACK.
+- Final strict same-binary `ovh-a` A/candidate/A probe used 13 interleaved rounds and 16 complete integrations per
+  subwindow. Original-rescan p05/p50/p95 **154.940919/157.963797/171.618279 ms**, CV **3.290%**; cached-candidate
+  **42.382970/42.792567/47.840822 ms**, CV **3.625%**. Paired speedup p05/p50/p95
+  **3.299055/3.665935/3.961938x** versus original/original null **0.907729/1.000375/1.035204**, null CV **3.546%**.
+  Candidate p05 clears null p95 by more than 3.18x: decisively outside the A/A floor. Independent Criterion arms
+  corroborated **9.8168 ms -> 2.6547 ms**, with a candidate null of **2.6681 ms**.
+- The A/B fixture compared the entire `SolveIvpResult` exactly: all trajectory `f64` values, time points,
+  `nfev=985`, `njev=1`, `nlu=208`, status, and message matched. Strict-remote Radau gates passed **4/4**, including
+  the SciPy-reference IVP test and both dense/diagonal algebra equivalence tests. Resident overhead is one 256-entry
+  vector (**2,048 bytes**, 0.39% of the existing 524,288-byte Jacobian); it replaces the same per-step transient
+  vector and removes repeated O(n^2) scans.
+- RCH remained fail-closed: a direct non-Cargo `perf` request was rejected, `ovh-a` denied perf events, and a busy
+  `vmi1227854` route was abandoned before execution; no local Cargo command or invalid timing entered the verdict.
+  A final strict-remote all-targets clippy retry was blocked by the peer-owned missing
+  `fsci-special/src/bin/perf_hankel_array.rs` entrypoint; targeted UBS/rustfmt passed, while workspace fmt still
+  reports unrelated committed drift in cluster/FFT/stats files.
+- Retry predicate: do not repeat diagonal-certificate rescanning or caching. Further Radau work must start from a
+  fresh profile exposing a different stage—such as non-diagonal/banded factorization, analytic-Jacobian plumbing,
+  or a new callback-dominated regime—and must preserve the exact tolerance and convergence contract.
 
 ## 2026-07-22 - frankenscipy-8l8r1.163 - KEEP: equal-nnz parallel CSR SpMV partition (bit-identical, 1.245x)
 

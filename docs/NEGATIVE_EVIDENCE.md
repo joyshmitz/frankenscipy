@@ -23208,3 +23208,40 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   fresh profile shows residual skew within those contiguous partitions and a distinct primitive is available—for
   example dynamic morsels after a persistent safe-Rust pool substrate is approved—or if a new API/format permits
   row splitting while preserving the numerical contract.
+
+## 2026-07-22 - BlackThrush (cod) - KEEP (bit-identical, 3.666x): cache Radau diagonal-J structural certificate
+
+- **Negative-evidence screen:** before source work, both ledgers and recent git history were searched for Radau,
+  BDF, diagonal Jacobians, structural detection, Jacobian caching, and Newton work. The diagonal stage solve
+  (`7c6ad3cc5`), dense eigen-decoupling (`7ca225b5c`), Newton allocation hoist (`a769dc102`), and rejected streamed
+  scaled norms (`ba4bac274`) are closed families. None covered the repeated exact-structure scan. Alien §6.1
+  self-adjusting computation supplied the distinct primitive: retain derived state until its dependency changes.
+- **Untouched profile:** the 256-state cheap diagonal stiff fixture retains one finite-difference Jacobian across
+  105 solution points. Named-worker `ovh-a` Criterion estimated **10.186 ms** (10.157-10.217 ms). Strict-remote
+  `perf` on `vmi1264463` captured about **6K cycle samples** and attributed **73.60% self-time** to
+  `diagonal_jacobian_entries`, while the diagonal collocation solve held **13.27%**. The report noted five lost
+  samples and one lost chunk, far too small to challenge the 5.5x hotspot separation. The attempted `ovh-a` profile
+  was invalid (`perf_event_paranoid=4`) and discarded.
+- **One lever:** compute the exact diagonal-entry vector when a fresh Jacobian is built, borrow it across reused
+  steps, and clear it on the existing stale-Jacobian invalidation. A same-binary atomic switch restores the original
+  O(n^2) scan for evidence only. Dense Jacobians still cache `None` and take the unchanged eigen-decoupled factors.
+  No stage arithmetic, callback order, acceptance decision, tolerance, or counter changes; safe Rust only.
+- **Strict interleaved A/B/null:** named worker `ovh-a`, one release-perf binary, 13 A/candidate/A rounds, 16 full
+  integrations per subwindow. Original p05/p50/p95 **154.940919/157.963797/171.618279 ms**, CV **3.290%**;
+  candidate **42.382970/42.792567/47.840822 ms**, CV **3.625%**. Paired speedup p05/p50/p95
+  **3.299055/3.665935/3.961938x**; A/A null **0.907729/1.000375/1.035204**, CV **3.546%**. Candidate p05 is well
+  above null p95. Separate Criterion arms corroborated **9.8168 ms original**, **2.6547 ms candidate**, and
+  **2.6681 ms candidate null**.
+- **Behavior/isomorphism:** the harness asserts equality of the entire `SolveIvpResult`, including every `t`/`y`
+  bit, message/status, and `nfev=985`, `njev=1`, `nlu=208`. Strict-remote Radau tests passed **4/4**: SciPy-reference
+  IVP behavior plus diagonal and dense algebra equivalence. The retained certificate is **2,048 bytes** for n=256,
+  only 0.39% of the existing 524,288-byte Jacobian, and replaces the same transient vector previously allocated
+  every step.
+- **Remote evidence discipline:** the first direct non-Cargo perf wrapper was rejected by strict RCH; `ovh-a`
+  denied perf access; `vmi1227854` remained queued behind peer builds and was cancelled before execution. No local
+  Cargo fallback and no data from those invalid routes entered the verdict. The final strict all-targets clippy
+  retry was preflight-blocked by peer-owned missing `fsci-special/src/bin/perf_hankel_array.rs`; targeted UBS and
+  rustfmt were clean, while workspace fmt exposed unrelated cluster/FFT/stats drift.
+- **Retry predicate:** diagonal structural-certificate caching is closed. Reopen Radau only when a fresh profile
+  puts a different stage above the null floor, such as non-diagonal/banded factorization or analytic-Jacobian
+  plumbing, with the existing convergence/tolerance contract and full-result equivalence retained.

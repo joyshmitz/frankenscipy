@@ -1,11 +1,11 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+use fsci_integrate::bdf::BDF_FORCE_PER_ITER_ALLOC;
+use fsci_integrate::radau::{RADAU_FORCE_DIAGONAL_RESCAN, RADAU_FORCE_PER_ITER_ALLOC};
 use fsci_integrate::{
     IntegrateValidationError, MIN_RTOL, SolveIvpOptions, SolverKind, ToleranceValue,
     ToleranceWarning, ValidatedTolerance, solve_ivp, trapezoid_irregular, trapezoid_richardson,
     validate_tol,
 };
-use fsci_integrate::bdf::BDF_FORCE_PER_ITER_ALLOC;
-use fsci_integrate::radau::RADAU_FORCE_PER_ITER_ALLOC;
 use fsci_runtime::RuntimeMode;
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
@@ -448,6 +448,155 @@ fn bench_bdf_newton_alloc_ab(c: &mut Criterion) {
     group.finish();
 }
 
+/// Cheap, exactly diagonal stiff system whose Jacobian is reused across many
+/// accepted steps. This isolates the structural-certificate cost from dense
+/// factorization and expensive user callbacks.
+fn bench_radau_diagonal_jacobian_reuse(c: &mut Criterion) {
+    const N: usize = 256;
+    let y0 = vec![1.0; N];
+    let rates = (0..N)
+        .map(|index| 10.0 + index as f64 / N as f64)
+        .collect::<Vec<_>>();
+    let opts = SolveIvpOptions {
+        t_span: (0.0, 1.0),
+        y0: &y0,
+        method: SolverKind::Radau,
+        rtol: 1e-6,
+        atol: ToleranceValue::Scalar(1e-9),
+        max_step: 0.01,
+        mode: RuntimeMode::Strict,
+        ..Default::default()
+    };
+
+    let run = || {
+        let mut rhs = |_t: f64, y: &[f64]| {
+            y.iter()
+                .zip(rates.iter())
+                .map(|(&value, &rate)| -rate * value)
+                .collect::<Vec<_>>()
+        };
+        solve_ivp(&mut rhs, &opts).expect("radau diagonal fixture")
+    };
+
+    RADAU_FORCE_DIAGONAL_RESCAN.store(true, Ordering::Relaxed);
+    let original = run();
+    RADAU_FORCE_DIAGONAL_RESCAN.store(false, Ordering::Relaxed);
+    let cached = run();
+    assert_eq!(
+        cached, original,
+        "cached diagonal certificate changed Radau output"
+    );
+
+    if std::env::var_os("FSCI_RADAU_DIAGONAL_PROBE").is_some() {
+        const ROUNDS: usize = 13;
+        const SOLVES_PER_WINDOW: usize = 16;
+
+        let timed_window = |force_rescan: bool| {
+            RADAU_FORCE_DIAGONAL_RESCAN.store(force_rescan, Ordering::Relaxed);
+            let started = std::time::Instant::now();
+            let mut checksum = 0.0;
+            for _ in 0..SOLVES_PER_WINDOW {
+                let result = black_box(run());
+                checksum += result.y.last().expect("final state")[0];
+            }
+            black_box(checksum);
+            started.elapsed().as_secs_f64() * 1000.0
+        };
+
+        for _ in 0..3 {
+            black_box(timed_window(true));
+            black_box(timed_window(false));
+        }
+
+        let mut original_before_ms = Vec::with_capacity(ROUNDS);
+        let mut cached_ms = Vec::with_capacity(ROUNDS);
+        let mut original_after_ms = Vec::with_capacity(ROUNDS);
+        for _ in 0..ROUNDS {
+            original_before_ms.push(timed_window(true));
+            cached_ms.push(timed_window(false));
+            original_after_ms.push(timed_window(true));
+        }
+
+        let summarize = |values: &[f64]| {
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            let variance = values
+                .iter()
+                .map(|value| (value - mean) * (value - mean))
+                .sum::<f64>()
+                / values.len() as f64;
+            let mut sorted = values.to_vec();
+            sorted.sort_by(f64::total_cmp);
+            let percentile = |pct: usize| {
+                let rank = (pct * sorted.len()).div_ceil(100).saturating_sub(1);
+                sorted[rank]
+            };
+            (
+                percentile(5),
+                percentile(50),
+                percentile(95),
+                variance.sqrt() / mean * 100.0,
+            )
+        };
+
+        let mut original_ms = Vec::with_capacity(ROUNDS * 2);
+        for (&before, &after) in original_before_ms.iter().zip(&original_after_ms) {
+            original_ms.push(before);
+            original_ms.push(after);
+        }
+        let candidate_ratios = original_before_ms
+            .iter()
+            .zip(&original_after_ms)
+            .zip(&cached_ms)
+            .map(|((&before, &after), &candidate)| ((before + after) * 0.5) / candidate)
+            .collect::<Vec<_>>();
+        let null_ratios = original_before_ms
+            .iter()
+            .zip(&original_after_ms)
+            .map(|(&before, &after)| before / after)
+            .collect::<Vec<_>>();
+        let (original_p05, original_p50, original_p95, original_cv) = summarize(&original_ms);
+        let (cached_p05, cached_p50, cached_p95, cached_cv) = summarize(&cached_ms);
+        let (ratio_p05, ratio_p50, ratio_p95, _) = summarize(&candidate_ratios);
+        let (null_p05, null_p50, null_p95, null_cv) = summarize(&null_ratios);
+        eprintln!(
+            "FSCI_RADAU_DIAGONAL_INTERLEAVED n={N} rounds={ROUNDS} solves_per_window={SOLVES_PER_WINDOW} \
+             original_ms[p05={original_p05:.6},p50={original_p50:.6},p95={original_p95:.6},cv={original_cv:.3}%] \
+             cached_ms[p05={cached_p05:.6},p50={cached_p50:.6},p95={cached_p95:.6},cv={cached_cv:.3}%] \
+             speedup[p05={ratio_p05:.6},p50={ratio_p50:.6},p95={ratio_p95:.6}] \
+             null[p05={null_p05:.6},p50={null_p50:.6},p95={null_p95:.6},cv={null_cv:.3}%] \
+             steps={} nfev={} njev={} nlu={} exact=true",
+            cached.t.len(),
+            cached.nfev,
+            cached.njev,
+            cached.nlu
+        );
+    }
+
+    let mut group = c.benchmark_group("radau_diagonal_jacobian_reuse");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(5));
+    group.bench_function("original_rescan/n256", |b| {
+        b.iter(|| {
+            RADAU_FORCE_DIAGONAL_RESCAN.store(true, Ordering::Relaxed);
+            black_box(run())
+        });
+    });
+    group.bench_function("candidate_cached/n256", |b| {
+        b.iter(|| {
+            RADAU_FORCE_DIAGONAL_RESCAN.store(false, Ordering::Relaxed);
+            black_box(run())
+        });
+    });
+    group.bench_function("null_cached/n256", |b| {
+        b.iter(|| {
+            RADAU_FORCE_DIAGONAL_RESCAN.store(false, Ordering::Relaxed);
+            black_box(run())
+        });
+    });
+    RADAU_FORCE_DIAGONAL_RESCAN.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_radau_newton_alloc_ab,
@@ -459,6 +608,7 @@ criterion_group!(
     bench_validate_tol,
     bench_validate_tol_audit_fingerprint_ab,
     bench_validate_tol_clone_scan_ab,
-    bench_trapezoid_richardson_allocation_ab
+    bench_trapezoid_richardson_allocation_ab,
+    bench_radau_diagonal_jacobian_reuse
 );
 criterion_main!(benches);

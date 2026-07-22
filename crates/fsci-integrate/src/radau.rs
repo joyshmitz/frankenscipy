@@ -31,6 +31,12 @@ const NEWTON_MAXITER: usize = 6;
 /// monotone win. `#[doc(hidden)]`.
 #[doc(hidden)]
 pub static RADAU_FORCE_PER_ITER_ALLOC: AtomicBool = AtomicBool::new(false);
+/// When `true`, rediscover diagonal Jacobians by scanning the unchanged dense
+/// matrix on every step. This preserves the original path for same-binary A/B;
+/// production caches the structural certificate when the Jacobian is refreshed.
+/// `#[doc(hidden)]`.
+#[doc(hidden)]
+pub static RADAU_FORCE_DIAGONAL_RESCAN: AtomicBool = AtomicBool::new(false);
 const MIN_FACTOR: f64 = 0.2;
 const MAX_FACTOR: f64 = 8.0;
 const ERR_EXP: f64 = -0.25; // embedded estimator is order 3 → 1/(3+1).
@@ -258,6 +264,9 @@ pub struct RadauSolver {
 
     // Lazy Jacobian / factorization caches.
     jac: Option<DMatrix<f64>>,
+    /// Exact diagonal entries derived alongside `jac`; `None` means the cached
+    /// Jacobian is structurally dense (or no Jacobian has been built yet).
+    jac_diagonal: Option<Vec<f64>>,
 }
 
 impl RadauSolver {
@@ -360,6 +369,7 @@ impl RadauSolver {
             t_old: None,
             y_old: None,
             jac: None,
+            jac_diagonal: None,
         })
     }
 
@@ -485,6 +495,7 @@ impl RadauSolver {
                 let f_cur = self.f.clone();
                 let y_cur = self.y.clone();
                 let jac = self.compute_jacobian(fun, self.t, &y_cur, &f_cur);
+                self.jac_diagonal = diagonal_jacobian_entries(&jac);
                 self.jac = Some(jac);
             }
             // M_3n = I_{3n} − h (A ⊗ J); M_real = (mu_real/h) I − J.
@@ -493,9 +504,20 @@ impl RadauSolver {
             // and LU while preserving the same simplified-Newton equations.
             let mut lu_real = None;
             let mut lu_complex = None;
+            let rescanned_diagonal;
             let diagonal_jac = {
                 let jac = self.jac.as_ref().expect("jacobian present");
-                let diagonal = diagonal_jacobian_entries(jac);
+                let force_rescan = RADAU_FORCE_DIAGONAL_RESCAN.load(Ordering::Relaxed);
+                rescanned_diagonal = if force_rescan {
+                    diagonal_jacobian_entries(jac)
+                } else {
+                    None
+                };
+                let diagonal = if force_rescan {
+                    rescanned_diagonal.as_deref()
+                } else {
+                    self.jac_diagonal.as_deref()
+                };
                 if diagonal.is_none() {
                     // Dense Jacobian: factor the eigen-decoupled real and complex
                     // n×n blocks `(MU_REAL/h)I − J` and `(MU_COMPLEX/h)I − J` rather
@@ -613,6 +635,7 @@ impl RadauSolver {
                 }
                 // Stale Jacobian — refresh and retry at the same h.
                 self.jac = None;
+                self.jac_diagonal = None;
                 continue;
             }
 
