@@ -1,0 +1,14 @@
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+    Finished `bench` profile [optimized] target(s) in 4.49s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-65eebc4797541807)
+Gnuplot not found, using plotters backend
+FSCI_CHOL_NB_SWEEP n=768 NULL median=1.000761 min=0.955012 max=1.038124 cv_pct=2.269
+FSCI_CHOL_NB_SWEEP n=768 nb=160 exec_proof differing_elements=96869 max_rel=2.958e-16
+FSCI_CHOL_NB_SWEEP n=768 nb=160 base128_p50_ms=4.509582 cand_p50_ms=4.553128 paired_median=0.989896 paired_cv_pct=2.004 null=[0.955012,1.038124] DECIDED=false
+FSCI_CHOL_NB_SWEEP n=768 nb=192 exec_proof differing_elements=91319 max_rel=2.958e-16
+FSCI_CHOL_NB_SWEEP n=768 nb=192 base128_p50_ms=5.487510 cand_p50_ms=6.086668 paired_median=0.890306 paired_cv_pct=3.275 null=[0.955012,1.038124] DECIDED=true
+FSCI_CHOL_NB_SWEEP n=1536 NULL median=0.994939 min=0.951984 max=1.050364 cv_pct=2.743
+FSCI_CHOL_NB_SWEEP n=1536 nb=192 exec_proof differing_elements=526071 max_rel=4.181e-16
+FSCI_CHOL_NB_SWEEP n=1536 nb=192 base128_p50_ms=30.136122 cand_p50_ms=26.616752 paired_median=1.130776 paired_cv_pct=2.376 null=[0.951984,1.050364] DECIDED=true
+FSCI_CHOL_NB_SWEEP n=1536 nb=256 exec_proof differing_elements=474298 max_rel=4.183e-16
+FSCI_CHOL_NB_SWEEP n=1536 nb=256 base128_p50_ms=30.572758 cand_p50_ms=26.319582 paired_median=1.162156 paired_cv_pct=2.370 null=[0.951984,1.050364] DECIDED=true

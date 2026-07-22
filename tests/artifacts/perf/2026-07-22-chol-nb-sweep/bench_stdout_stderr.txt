@@ -1,0 +1,11 @@
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+    Finished `bench` profile [optimized] target(s) in 19.09s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-65eebc4797541807)
+Gnuplot not found, using plotters backend
+FSCI_CHOL_NB_SWEEP n=1000 NULL median=1.007857 min=0.939018 max=1.051067 cv_pct=2.854
+FSCI_CHOL_NB_SWEEP n=1000 nb=96 exec_proof differing_elements=213711 max_rel=2.593e-16
+FSCI_CHOL_NB_SWEEP n=1000 nb=96 base128_p50_ms=10.991969 cand_p50_ms=11.264934 paired_median=0.990394 paired_cv_pct=2.398 null=[0.939018,1.051067] DECIDED=false
+FSCI_CHOL_NB_SWEEP n=1000 nb=160 exec_proof differing_elements=183184 max_rel=2.592e-16
+FSCI_CHOL_NB_SWEEP n=1000 nb=160 base128_p50_ms=11.535780 cand_p50_ms=11.479799 paired_median=0.995754 paired_cv_pct=2.615 null=[0.939018,1.051067] DECIDED=false
+FSCI_CHOL_NB_SWEEP n=1000 nb=192 exec_proof differing_elements=174184 max_rel=2.592e-16
+FSCI_CHOL_NB_SWEEP n=1000 nb=192 base128_p50_ms=12.017097 cand_p50_ms=11.160733 paired_median=1.069326 paired_cv_pct=2.617 null=[0.939018,1.051067] DECIDED=true

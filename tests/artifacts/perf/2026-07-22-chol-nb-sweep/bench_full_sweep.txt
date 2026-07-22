@@ -1,0 +1,29 @@
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+    Finished `bench` profile [optimized] target(s) in 4.67s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-65eebc4797541807)
+Gnuplot not found, using plotters backend
+FSCI_CHOL_NB_SWEEP n=1000 NULL median=1.003276 min=0.927029 max=1.041329 cv_pct=2.724
+FSCI_CHOL_NB_SWEEP n=1000 nb=96 exec_proof differing_elements=213711 max_rel=2.593e-16
+FSCI_CHOL_NB_SWEEP n=1000 nb=96 base128_p50_ms=11.357958 cand_p50_ms=11.672349 paired_median=0.972856 paired_cv_pct=3.039 null=[0.927029,1.041329] DECIDED=false
+FSCI_CHOL_NB_SWEEP n=1000 nb=160 exec_proof differing_elements=183184 max_rel=2.592e-16
+FSCI_CHOL_NB_SWEEP n=1000 nb=160 base128_p50_ms=11.702281 cand_p50_ms=11.544002 paired_median=1.011454 paired_cv_pct=3.260 null=[0.927029,1.041329] DECIDED=false
+FSCI_CHOL_NB_SWEEP n=1000 nb=192 exec_proof differing_elements=174184 max_rel=2.592e-16
+FSCI_CHOL_NB_SWEEP n=1000 nb=192 base128_p50_ms=11.753062 cand_p50_ms=11.022066 paired_median=1.077905 paired_cv_pct=3.125 null=[0.927029,1.041329] DECIDED=true
+FSCI_CHOL_NB_SWEEP n=1000 nb=224 exec_proof differing_elements=181418 max_rel=2.592e-16
+FSCI_CHOL_NB_SWEEP n=1000 nb=224 base128_p50_ms=11.968575 cand_p50_ms=11.376526 paired_median=1.053965 paired_cv_pct=1.876 null=[0.927029,1.041329] DECIDED=true
+FSCI_CHOL_NB_SWEEP n=1000 nb=256 exec_proof differing_elements=158114 max_rel=2.592e-16
+FSCI_CHOL_NB_SWEEP n=1000 nb=256 base128_p50_ms=11.727585 cand_p50_ms=11.423123 paired_median=1.028733 paired_cv_pct=2.879 null=[0.927029,1.041329] DECIDED=false
+FSCI_CHOL_NB_SWEEP n=2048 NULL median=1.015583 min=0.980207 max=1.039036 cv_pct=1.864
+FSCI_CHOL_NB_SWEEP n=2048 nb=192 exec_proof differing_elements=995026 max_rel=3.623e-16
+FSCI_CHOL_NB_SWEEP n=2048 nb=192 base128_p50_ms=61.912788 cand_p50_ms=54.734582 paired_median=1.115063 paired_cv_pct=1.733 null=[0.980207,1.039036] DECIDED=true
+FSCI_CHOL_NB_SWEEP n=2048 nb=256 exec_proof differing_elements=899709 max_rel=3.623e-16
+FSCI_CHOL_NB_SWEEP n=2048 nb=256 base128_p50_ms=62.179553 cand_p50_ms=53.711516 paired_median=1.158972 paired_cv_pct=2.230 null=[0.980207,1.039036] DECIDED=true
+FSCI_CHOL_NB_SWEEP n=512 NULL median=1.000833 min=0.982978 max=1.024955 cv_pct=1.229
+FSCI_CHOL_NB_SWEEP n=512 nb=192 exec_proof differing_elements=29452 max_rel=1.812e-16
+FSCI_CHOL_NB_SWEEP n=512 nb=192 base128_p50_ms=1.779900 cand_p50_ms=1.837913 paired_median=0.964023 paired_cv_pct=1.852 null=[0.982978,1.024955] DECIDED=true
+FSCI_CHOL_NB_SWEEP n=384 NULL median=1.005038 min=0.983780 max=1.047669 cv_pct=1.526
+FSCI_CHOL_NB_SWEEP n=384 nb=192 exec_proof differing_elements=13778 max_rel=2.092e-16
+FSCI_CHOL_NB_SWEEP n=384 nb=192 base128_p50_ms=0.858634 cand_p50_ms=0.972398 paired_median=0.880273 paired_cv_pct=1.925 null=[0.983780,1.047669] DECIDED=true
+FSCI_CHOL_NB_SWEEP n=256 NULL median=0.999283 min=0.990048 max=1.005157 cv_pct=0.357
+FSCI_CHOL_NB_SWEEP n=256 nb=192 exec_proof differing_elements=4254 max_rel=1.281e-16
+FSCI_CHOL_NB_SWEEP n=256 nb=192 base128_p50_ms=0.306449 cand_p50_ms=0.342718 paired_median=0.891936 paired_cv_pct=0.309 null=[0.990048,1.005157] DECIDED=true

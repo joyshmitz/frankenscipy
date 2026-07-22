@@ -5103,19 +5103,20 @@ fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
     // 1.115x, null [0.965, 1.052], DECIDED; n=1000 factor p50 12.61 -> 11.32 ms,
     // 26.4 -> 29.4 GF/s; blocked-TRSM self 34.28% on the candidate binary; factor
     // within 1.7e-18 rel of the dot-kernel path, 1e-10 contract).
-    cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_BLOCKED_FMA>(a_in, n)
+    cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_BLOCKED_FMA>(a_in, n, chol_nb_for(n))
 }
 
 #[allow(clippy::needless_range_loop)]
 fn cholesky_lower_blocked_with_panel_trsm<const TRSM_KERNEL: u8>(
     a_in: &[Vec<f64>],
     n: usize,
+    nb_block: usize,
 ) -> Option<Vec<f64>> {
     // Production SYRK kernel: AVX2+FMA MR4×NR8 (measured 2026-07-22, thinkstation1, one-binary
     // interleaved A/B vs MR4×NR4 with A/A null: paired median 1.143x, null [0.943, 1.069],
     // DECIDED; n=1000 factor p50 15.07 -> 13.22 ms, 22.1 -> 25.2 GF/s; candidate-binary
     // self-time 26.92%; factor within 1.1e-19 rel of the mul+add kernel, 1e-10 contract).
-    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL, SYRK_KERNEL_MR4_NR8_FMA>(a_in, n)
+    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL, SYRK_KERNEL_MR4_NR8_FMA>(a_in, n, nb_block)
 }
 
 /// Trailing-SYRK kernel selector for [`cholesky_lower_blocked_with_kernels`]:
@@ -5139,8 +5140,8 @@ const TRSM_KERNEL_BLOCKED_FMA: u8 = 2;
 fn cholesky_lower_blocked_with_kernels<const TRSM_KERNEL: u8, const SYRK_KERNEL: u8>(
     a_in: &[Vec<f64>],
     n: usize,
+    nb_block: usize,
 ) -> Option<Vec<f64>> {
-    const NB: usize = 128;
     let mut lower = vec![0.0f64; n * n];
     for (i, row) in a_in.iter().enumerate() {
         lower[i * n..i * n + i + 1].copy_from_slice(&row[..i + 1]);
@@ -5148,7 +5149,7 @@ fn cholesky_lower_blocked_with_kernels<const TRSM_KERNEL: u8, const SYRK_KERNEL:
 
     let mut k = 0;
     while k < n {
-        let kb = (k + NB).min(n);
+        let kb = (k + nb_block).min(n);
         for j in k..kb {
             // Diagonal: d = A[j][j] − Σ_{p<j} L[j][p]². The inner reductions here and in
             // the two TRSM loops below were scalar over `p`; each is a `simd_dot` of two
@@ -5256,7 +5257,11 @@ pub fn cholesky_wall_mr4_nr8_orig(a: &[Vec<f64>]) -> Option<Vec<f64>> {
     if a.iter().any(|row| row.len() != n) {
         return None;
     }
-    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL_ROWS2, SYRK_KERNEL_MR4_NR8>(a, n)
+    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL_ROWS2, SYRK_KERNEL_MR4_NR8>(
+        a,
+        n,
+        chol_nb_for(n),
+    )
 }
 
 /// Production MR4×NR4 factor path for the one-binary Cholesky wall benchmark.
@@ -5267,7 +5272,11 @@ pub fn cholesky_wall_mr4_nr4_candidate(a: &[Vec<f64>]) -> Option<Vec<f64>> {
     if a.iter().any(|row| row.len() != n) {
         return None;
     }
-    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL_ROWS2, SYRK_KERNEL_MR4_NR4>(a, n)
+    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL_ROWS2, SYRK_KERNEL_MR4_NR4>(
+        a,
+        n,
+        chol_nb_for(n),
+    )
 }
 
 /// Candidate AVX2+FMA MR4×NR8 factor path for the one-binary Cholesky wall benchmark.
@@ -5278,7 +5287,11 @@ pub fn cholesky_wall_mr4_nr8_fma_candidate(a: &[Vec<f64>]) -> Option<Vec<f64>> {
     if a.iter().any(|row| row.len() != n) {
         return None;
     }
-    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL_ROWS2, SYRK_KERNEL_MR4_NR8_FMA>(a, n)
+    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL_ROWS2, SYRK_KERNEL_MR4_NR8_FMA>(
+        a,
+        n,
+        chol_nb_for(n),
+    )
 }
 
 /// Candidate blocked-FMA panel-TRSM factor path for the one-binary Cholesky wall benchmark
@@ -5290,7 +5303,11 @@ pub fn cholesky_wall_trsm_blocked_fma_candidate(a: &[Vec<f64>]) -> Option<Vec<f6
     if a.iter().any(|row| row.len() != n) {
         return None;
     }
-    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL_BLOCKED_FMA, SYRK_KERNEL_MR4_NR8_FMA>(a, n)
+    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL_BLOCKED_FMA, SYRK_KERNEL_MR4_NR8_FMA>(
+        a,
+        n,
+        chol_nb_for(n),
+    )
 }
 
 /// `cholesky` blocked-factor gate — the parallel-SYRK blocked Cholesky beats the
@@ -5324,6 +5341,39 @@ pub static CHOL_PANEL_TRSM_PAR_PANELS: std::sync::atomic::AtomicUsize =
 /// 15.7M). 8M puts the crossover between them: n ≤ ~1100 stays fully serial,
 /// n = 2048 spawns only its 8 largest panels (`m2 ≥ ~977` at nb=128).
 const CHOL_PANEL_TRSM_PAR_MIN_MACS: u64 = 8 * 1024 * 1024;
+
+/// A/B override for the blocked-Cholesky panel width `NB` (0 ⇒ default 128).
+/// One-binary sweep knob: NB shifts flops between the SERIAL phases (in-panel factor
+/// ∝ n·NB², panel TRSM ∝ NB·n²) and the PARALLEL trailing SYRK, so its optimum moved
+/// when the 2026-07-22 kernel mix landed. NOT bit-identical across values (panel
+/// boundaries regroup accumulation) — factor-uniqueness 1e-10 contract.
+pub static CHOL_NB_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Size-adaptive blocked-Cholesky panel width (override wins when set). Staircase
+/// from the 2026-07-22 one-binary sweep on thinkstation1 (artifact
+/// 2026-07-22-chol-nb-sweep; paired-vs-NB=128 medians, per-size A/A nulls):
+/// NB=192 REGRESSES n ≤ 768 (0.880-0.964 DECIDED at 256/384/512/768) but wins
+/// n=1000 (1.078 DECIDED; 224: 1.054, 256 in-null); NB=256 wins from n=1536
+/// (1.162 DECIDED; n=2048: 1.159, 62.2 → 53.7 ms). Wider panels trade parallel
+/// SYRK flops for serial TRSM/in-panel flops yet WIN at large n: fewer
+/// spawn/pack rounds and fatter K per tile dominate, and ≥14M-MAC TRSM panels
+/// clear the lever-5 parallel gate. Thresholds sit at measured points; the
+/// gap regions [769,999] and [1001,1535] inherit the nearest proven-safe value.
+#[inline]
+fn chol_nb_for(n: usize) -> usize {
+    let o = CHOL_NB_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if o != 0 {
+        return o;
+    }
+    if n >= 1536 {
+        256
+    } else if n >= 1000 {
+        192
+    } else {
+        128
+    }
+}
 
 /// Test/A-B override for [`CHOL_PANEL_TRSM_PAR_MIN_MACS`] (0 ⇒ default). Lets unit
 /// tests exercise the fan-out path at small `n` without paying a `n>1100` factor in
@@ -21482,15 +21532,63 @@ mod tests {
                 }
             }
 
-            let original = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_SCALAR>(&a, n)
+            let original = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_SCALAR>(&a, n, 128)
                 .expect("scalar panel TRSM factor");
-            let candidate = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_ROWS2>(&a, n)
+            let candidate = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_ROWS2>(&a, n, 128)
                 .expect("paired panel TRSM factor");
             for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
                 assert_eq!(
                     actual.to_bits(),
                     expected.to_bits(),
                     "paired panel TRSM changed factor bits at flat index {index}, n={n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cholesky_nb_override_within_factor_tolerance() {
+        // Different panel widths regroup the accumulation (NOT bit-identical by
+        // design); the contract is 1e-10 factor uniqueness vs the NB=128 default.
+        // Sizes cover ragged last panels for every width.
+        for &n in &[270usize, 300, 420] {
+            let mut a = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..=i {
+                    let value = if i == j {
+                        (n as f64) * 3.0 + (i as f64) * 0.01
+                    } else {
+                        1.0 / ((i - j + 1) as f64)
+                    };
+                    a[i][j] = value;
+                    a[j][i] = value;
+                }
+            }
+            let baseline = cholesky_lower_blocked_with_kernels::<
+                TRSM_KERNEL_BLOCKED_FMA,
+                SYRK_KERNEL_MR4_NR8_FMA,
+            >(&a, n, 128)
+            .expect("NB=128 factor");
+            for &nb in &[96usize, 160] {
+                let candidate = cholesky_lower_blocked_with_kernels::<
+                    TRSM_KERNEL_BLOCKED_FMA,
+                    SYRK_KERNEL_MR4_NR8_FMA,
+                >(&a, n, nb)
+                .expect("NB-override factor");
+                let mut differing = 0usize;
+                for (index, (&expected, &actual)) in baseline.iter().zip(&candidate).enumerate() {
+                    if actual.to_bits() != expected.to_bits() {
+                        differing += 1;
+                    }
+                    let rel = (actual - expected).abs() / expected.abs().max(1.0);
+                    assert!(
+                        rel <= 1e-10,
+                        "NB={nb} diverged past 1e-10 at flat index {index}, n={n}"
+                    );
+                }
+                assert!(
+                    differing > 0,
+                    "execution proof failed: NB={nb} bit-identical to NB=128 at n={n} (param dead?)"
                 );
             }
         }
@@ -21523,14 +21621,14 @@ mod tests {
             let serial = cholesky_lower_blocked_with_kernels::<
                 TRSM_KERNEL_BLOCKED_FMA,
                 SYRK_KERNEL_MR4_NR8_FMA,
-            >(&a, n)
+            >(&a, n, 128)
             .expect("forced-serial TRSM factor");
             CHOL_PANEL_TRSM_FORCE_SERIAL.store(false, std::sync::atomic::Ordering::Relaxed);
             let before = CHOL_PANEL_TRSM_PAR_PANELS.load(std::sync::atomic::Ordering::Relaxed);
             let parallel = cholesky_lower_blocked_with_kernels::<
                 TRSM_KERNEL_BLOCKED_FMA,
                 SYRK_KERNEL_MR4_NR8_FMA,
-            >(&a, n)
+            >(&a, n, 128)
             .expect("parallel TRSM factor");
             let spawned =
                 CHOL_PANEL_TRSM_PAR_PANELS.load(std::sync::atomic::Ordering::Relaxed) - before;
@@ -21572,10 +21670,10 @@ mod tests {
                 }
             }
 
-            let original = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_SCALAR>(&a, n)
+            let original = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_SCALAR>(&a, n, 128)
                 .expect("scalar panel TRSM factor");
             let candidate =
-                cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_BLOCKED_FMA>(&a, n)
+                cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_BLOCKED_FMA>(&a, n, 128)
                     .expect("blocked FMA panel TRSM factor");
             for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
                 if actual.to_bits() != expected.to_bits() {
@@ -21617,12 +21715,12 @@ mod tests {
             let original = cholesky_lower_blocked_with_kernels::<
                 TRSM_KERNEL_ROWS2,
                 SYRK_KERNEL_MR4_NR8,
-            >(&a, n)
+            >(&a, n, 128)
             .expect("MR4xNR8 factor");
             let candidate = cholesky_lower_blocked_with_kernels::<
                 TRSM_KERNEL_ROWS2,
                 SYRK_KERNEL_MR4_NR8_FMA,
-            >(&a, n)
+            >(&a, n, 128)
             .expect("MR4xNR8 FMA factor");
             for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
                 if actual.to_bits() != expected.to_bits() {
@@ -21660,12 +21758,12 @@ mod tests {
             let original = cholesky_lower_blocked_with_kernels::<
                 TRSM_KERNEL_ROWS2,
                 SYRK_KERNEL_MR4_NR8,
-            >(&a, n)
+            >(&a, n, 128)
             .expect("MR4xNR8 factor");
             let candidate = cholesky_lower_blocked_with_kernels::<
                 TRSM_KERNEL_ROWS2,
                 SYRK_KERNEL_MR4_NR4,
-            >(&a, n)
+            >(&a, n, 128)
             .expect("MR4xNR4 factor");
             for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
                 assert_eq!(
@@ -21695,9 +21793,9 @@ mod tests {
             }
         }
 
-        let original = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_SCALAR>(&a, n)
+        let original = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_SCALAR>(&a, n, 128)
             .expect("scalar panel TRSM factor");
-        let candidate = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_ROWS2>(&a, n)
+        let candidate = cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_ROWS2>(&a, n, 128)
             .expect("paired panel TRSM factor");
         for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
             assert_eq!(
@@ -21717,9 +21815,9 @@ mod tests {
 
         for &pair_rows in &[false, true, false, true] {
             let factor = if pair_rows {
-                cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_ROWS2>(&a, n)
+                cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_ROWS2>(&a, n, 128)
             } else {
-                cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_SCALAR>(&a, n)
+                cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_SCALAR>(&a, n, 128)
             };
             std::hint::black_box(factor.expect("warm factor"));
         }
@@ -21733,11 +21831,13 @@ mod tests {
                     cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_ROWS2>(
                         std::hint::black_box(&a),
                         n,
+                        128,
                     )
                 } else {
                     cholesky_lower_blocked_with_panel_trsm::<TRSM_KERNEL_SCALAR>(
                         std::hint::black_box(&a),
                         n,
+                        128,
                     )
                 };
                 std::hint::black_box(factor.expect("measured factor"));

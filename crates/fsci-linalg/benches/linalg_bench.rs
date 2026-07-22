@@ -7,7 +7,7 @@ use std::{
 
 use criterion::{Criterion, criterion_group, criterion_main};
 #[cfg(feature = "chol-wall-bench")]
-use fsci_linalg::{CHOL_PANEL_TRSM_FORCE_SERIAL, CHOL_PANEL_TRSM_PAR_PANELS};
+use fsci_linalg::{CHOL_NB_OVERRIDE, CHOL_PANEL_TRSM_FORCE_SERIAL, CHOL_PANEL_TRSM_PAR_PANELS};
 use fsci_linalg::{
     DecompOptions, HELMERT_FORCE_SERIAL, IS_DIAGONAL_FORCE_SERIAL, InvOptions,
     KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions,
@@ -1238,6 +1238,160 @@ fn bench_dft_gauntlet_scipy(c: &mut Criterion) {
 /// factor inside one routine, with a paired production-vs-production A/A null pass,
 /// a candidate-binary perf self-time child, and a differing-bits execution proof.
 /// The candidate is 1e-10-tolerant vs production (FMA single-rounding), NOT bit-exact.
+/// One-binary NB panel-width sweep: candidates {96, 160, 192} each paired against the
+/// NB=128 default via `CHOL_NB_OVERRIDE`, with an A/A (128,128) null. Same symbols in
+/// every arm (runtime const), so provenance = per-arm differing-bits execution proof
+/// + recorded override value. 1e-10 factor contract; winner must clear the null range.
+#[cfg(feature = "chol-wall-bench")]
+fn bench_cholesky_wall_nb_sweep(c: &mut Criterion) {
+    if std::env::var_os("FSCI_CHOL_NB_SWEEP_SKIP").is_some() {
+        return;
+    }
+    // Canonical staircase-evidence sweep (2026-07-22 verdicts in the artifact dir):
+    // NB=192 regresses n ≤ 768, wins n=1000; NB=256 wins n ≥ 1536.
+    let sweep: &[(usize, &[usize], usize, usize)] = &[
+        (256, &[192], 12, 96),
+        (384, &[192], 12, 64),
+        (512, &[192], 12, 48),
+        (768, &[160, 192], 14, 32),
+        (1000, &[96, 160, 192, 224, 256], 16, 24),
+        (1536, &[192, 256], 10, 10),
+        (2048, &[192, 256], 10, 6),
+    ];
+
+    let summarize = |values: &[f64]| -> (f64, f64, f64) {
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values
+            .iter()
+            .map(|value| (value - mean) * (value - mean))
+            .sum::<f64>()
+            / values.len() as f64;
+        let mut sorted = values.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        (
+            mean,
+            variance.sqrt() / mean * 100.0,
+            sorted[sorted.len() / 2],
+        )
+    };
+
+    for &(n, nb_list, samples, factors_per_sample) in sweep {
+        let a = make_symmetric_eigh_matrix(n);
+        let measure_with_nb = |nb: usize| -> Duration {
+            CHOL_NB_OVERRIDE.store(nb, Ordering::Relaxed);
+            let start = std::time::Instant::now();
+            black_box(
+                cholesky_wall_trsm_blocked_fma_candidate(black_box(&a)).expect("measured factor"),
+            );
+            start.elapsed()
+        };
+
+        // A/A null at NB=128.
+        for _ in 0..4 {
+            black_box(measure_with_nb(128));
+        }
+        let mut null_ratios = Vec::with_capacity(samples);
+        for sample in 0..samples {
+            let mut first_elapsed = Duration::ZERO;
+            let mut second_elapsed = Duration::ZERO;
+            for factor in 0..factors_per_sample {
+                if (sample + factor) % 2 == 0 {
+                    first_elapsed += measure_with_nb(128);
+                    second_elapsed += measure_with_nb(128);
+                } else {
+                    second_elapsed += measure_with_nb(128);
+                    first_elapsed += measure_with_nb(128);
+                }
+            }
+            null_ratios.push(first_elapsed.as_secs_f64() / second_elapsed.as_secs_f64());
+        }
+        let mut null_sorted = null_ratios.clone();
+        null_sorted.sort_by(f64::total_cmp);
+        let null_summary = summarize(&null_ratios);
+        eprintln!(
+            "FSCI_CHOL_NB_SWEEP n={n} NULL median={:.6} min={:.6} max={:.6} cv_pct={:.3}",
+            null_summary.2,
+            null_sorted[0],
+            null_sorted[null_sorted.len() - 1],
+            null_summary.1
+        );
+
+        CHOL_NB_OVERRIDE.store(0, Ordering::Relaxed);
+        let baseline_factor =
+            cholesky_wall_trsm_blocked_fma_candidate(black_box(&a)).expect("baseline factor");
+        for &nb in nb_list {
+            CHOL_NB_OVERRIDE.store(nb, Ordering::Relaxed);
+            let candidate_factor =
+                cholesky_wall_trsm_blocked_fma_candidate(black_box(&a)).expect("candidate factor");
+            let mut differing = 0usize;
+            let mut max_rel = 0.0f64;
+            for (index, (&expected, &actual)) in
+                baseline_factor.iter().zip(&candidate_factor).enumerate()
+            {
+                if actual.to_bits() != expected.to_bits() {
+                    differing += 1;
+                }
+                let rel = (actual - expected).abs() / expected.abs().max(1.0);
+                max_rel = max_rel.max(rel);
+                assert!(
+                    rel <= 1e-10,
+                    "NB={nb} factor diverged past 1e-10 at flat index {index}"
+                );
+            }
+            assert!(
+                differing > 0,
+                "execution proof failed: NB={nb} arm bit-identical to NB=128 (override dead?)"
+            );
+            eprintln!(
+                "FSCI_CHOL_NB_SWEEP n={n} nb={nb} exec_proof differing_elements={differing} max_rel={max_rel:.3e}"
+            );
+            black_box(&candidate_factor);
+
+            let mut base_ms = Vec::with_capacity(samples);
+            let mut cand_ms = Vec::with_capacity(samples);
+            for sample in 0..samples {
+                let mut base_elapsed = Duration::ZERO;
+                let mut cand_elapsed = Duration::ZERO;
+                for factor in 0..factors_per_sample {
+                    if (sample + factor) % 2 == 0 {
+                        base_elapsed += measure_with_nb(128);
+                        cand_elapsed += measure_with_nb(nb);
+                    } else {
+                        cand_elapsed += measure_with_nb(nb);
+                        base_elapsed += measure_with_nb(128);
+                    }
+                }
+                base_ms.push(base_elapsed.as_secs_f64() * 1000.0 / factors_per_sample as f64);
+                cand_ms.push(cand_elapsed.as_secs_f64() * 1000.0 / factors_per_sample as f64);
+            }
+            let base = summarize(&base_ms);
+            let cand = summarize(&cand_ms);
+            let paired_ratios = base_ms
+                .iter()
+                .zip(&cand_ms)
+                .map(|(before, after)| before / after)
+                .collect::<Vec<_>>();
+            let paired = summarize(&paired_ratios);
+            let decided =
+                paired.2 < null_sorted[0] || paired.2 > null_sorted[null_sorted.len() - 1];
+            eprintln!(
+                "FSCI_CHOL_NB_SWEEP n={n} nb={nb} base128_p50_ms={:.6} cand_p50_ms={:.6} paired_median={:.6} paired_cv_pct={:.3} null=[{:.6},{:.6}] DECIDED={decided}",
+                base.2,
+                cand.2,
+                paired.2,
+                paired.1,
+                null_sorted[0],
+                null_sorted[null_sorted.len() - 1]
+            );
+        }
+        CHOL_NB_OVERRIDE.store(0, Ordering::Relaxed);
+    }
+    let _ = c;
+}
+
+#[cfg(not(feature = "chol-wall-bench"))]
+fn bench_cholesky_wall_nb_sweep(_c: &mut Criterion) {}
+
 /// One-binary A/B for the work-gated parallel blocked-FMA panel TRSM: both arms run
 /// the SAME production factor path; the `CHOL_PANEL_TRSM_FORCE_SERIAL` static picks
 /// serial (baseline) vs fanned (candidate) per call. BIT-IDENTICAL (4-row-aligned
@@ -2648,6 +2802,7 @@ criterion_group!(
 
 criterion_group!(
     cholesky_wall_benches,
+    bench_cholesky_wall_nb_sweep,
     bench_cholesky_wall_trsm_par_ab,
     bench_cholesky_wall_trsm_fma_ab,
     bench_cholesky_wall_nr8_fma_ab,
