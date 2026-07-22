@@ -22966,3 +22966,31 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   (`bench_cholesky_wall_trsm_fma_ab` + `FSCI_CHOL_NR8_FMA_AB_SKIP` guard on yesterday's bench). Local
   thinkstation1 build/bench (banked-baseline host; ovh-b SIGILL hazard `frankenscipy-hhr7j` still open).
   Bead: `frankenscipy-2pdpo`.
+
+## 2026-07-22 - CopperFalcon (cc) - REJECT (in-floor, bit-identical): hoist+reuse per-panel Cholesky scratch — memset 16.5%→8.4% in-profile but paired median 1.0197 inside null [0.9428, 1.0506]
+
+- Dense-BLAS wall lane lever 3, profile-directed: the fresh production profile (blocked-TRSM candidate binary
+  = today's production, artifact 2026-07-22-chol-trsm-blocked-fma) showed `__memset_avx2` = **16.50% self**,
+  the third-biggest frame — the per-panel `vec![0.0]` scratch (`l21` copy, packed `l21ᵀ`, packed `L11ᵀ`, TRSM
+  prefix ≈ 8 MB zeroed per n=1000 factor across 8 panels). Ledger vein: allocation-elimination / stiff-Newton
+  alloc hoist (both KEEP-class priors).
+- ONE LEVER: hoist all four buffers out of the panel loop (sized to the first, largest panel) behind
+  `const REUSE_SCRATCH: bool`; `copy_l21_and_pack_transpose_into` re-zeroes only the partial-panel padding
+  lanes; TRSM refactored into wrapper + `_with_scratch` core. BIT-IDENTICAL proven twice: unit test
+  (5 sizes, exact `to_bits` equality) and the bench's full n=1000 1e6-element equality gate.
+- MEASUREMENT (thinkstation1, one binary, interleaved, A/A null first): NULL median 0.9859
+  [0.9428, 1.0506] cv 2.32%; CAND **paired median 1.0197**, mean 1.0164, cv 2.93% — **INSIDE the null range,
+  NOT DECIDED**. PROD p50 11.559 ms / CAND p50 11.284 ms (28.8 → 29.5 GF/s nominal, indistinguishable).
+  Candidate-binary profile CONFIRMS the mechanism worked: memset 16.50% → **8.41%** (residual = the 8 MB
+  output-buffer zero, which is CONTRACTUAL — `cholesky()` copies full rows relying on "strict upper triangle
+  is already zero"), pack `_into` now visible at 9.21%, `_int_malloc` 0.27%. The eliminated zeroing was
+  simply too cheap in wall-clock (~2%) for the n=1000 whole-factor noise floor (±5%).
+  Artifact: `tests/artifacts/perf/2026-07-22-chol-scratch-hoist/bench_stdout_stderr.txt`.
+- DISPOSITION: candidate STASHED (non-destructive, `git stash` "cc REJECT candidate (in-floor): cholesky
+  per-panel scratch hoist/reuse"), tree back to c7e9062bf production; 19/19 cholesky tests green post-revert.
+  Bead `frankenscipy-ojyzo` closed as rejected.
+- RETRY PREDICATE: (a) bundle with a lever that also attacks the pack (9.2%) + memmove (3.9%) data-movement
+  block so the combined effect clears the ±5% floor; or (b) a harness with a tighter floor (perf-stat cycles
+  self-time gate ~4%, or pinned-core / larger-n runs where the relative floor shrinks); or (c) if a future
+  contract change drops the output upper-zero guarantee, rebundle with eliminating the 8 MB `lower` memset
+  (8.4% — the bigger half). Do NOT re-run the identical n=1000 wall-clock A/B expecting a different answer.
