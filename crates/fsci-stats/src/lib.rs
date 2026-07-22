@@ -41894,12 +41894,13 @@ pub static GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE: std::sync::atomic::AtomicBool =
 const KDE_ND_SIMD_MIN_POINTS: usize = 64;
 
 pub struct GaussianKdeNd {
-    /// Pre-whitened data points: `n` rows of `L⁻¹ xᵢ` (`d` coords each). Whitening
-    /// each point ONCE (in `new`) turns a query's Mahalanobis quadratic form
-    /// `‖L⁻¹(q-xᵢ)‖²` into a plain squared distance `‖L⁻¹q - wᵢ‖²` (O(d) per
-    /// point) instead of re-solving the `d×d` triangular system per
-    /// (query, point) pair (O(d²)). frankenscipy-greenfalcon-kde-whiten.
-    whitened: Vec<Vec<f64>>,
+    /// Pre-whitened data points in dimension-major order: coordinate `j` for every
+    /// sample is contiguous at `j * n..(j + 1) * n`. Whitening each point once
+    /// turns the Mahalanobis quadratic form into a plain squared distance, while
+    /// this layout lets eight samples accumulate through contiguous SIMD loads.
+    whitened_soa: Vec<f64>,
+    /// Number of data points.
+    n: usize,
     /// Dimensionality.
     d: usize,
     /// Lower-triangular Cholesky factor of the kernel covariance (`d×d`); kept
@@ -41968,7 +41969,8 @@ impl GaussianKdeNd {
             }
             s
         };
-        let cov_serial = GAUSSIAN_KDE_ND_COV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        let cov_serial = GAUSSIAN_KDE_ND_COV_FORCE_SERIAL
+            .load(std::sync::atomic::Ordering::Relaxed)
             || n < 2
             || n.saturating_mul(d.saturating_mul(d)) < (1 << 16);
         if cov_serial {
@@ -42060,7 +42062,10 @@ impl GaussianKdeNd {
                 .min(n_pts)
         };
         let whitened: Vec<Vec<f64>> = if whiten_threads <= 1 {
-            dataset.iter().map(|x| kde_whiten_lower(&chol, x, d)).collect()
+            dataset
+                .iter()
+                .map(|x| kde_whiten_lower(&chol, x, d))
+                .collect()
         } else {
             let mut out: Vec<Vec<f64>> = vec![Vec::new(); n_pts];
             let chunk = n_pts.div_ceil(whiten_threads);
@@ -42079,8 +42084,15 @@ impl GaussianKdeNd {
         };
 
         let data_finite = whitened.iter().all(|w| w.iter().all(|v| v.is_finite()));
+        let mut whitened_soa = vec![0.0f64; n_pts * d];
+        for (sample, point) in whitened.iter().enumerate() {
+            for (dimension, &value) in point.iter().enumerate() {
+                whitened_soa[dimension * n_pts + sample] = value;
+            }
+        }
         Some(Self {
-            whitened,
+            whitened_soa,
+            n: n_pts,
             d,
             chol,
             norm,
@@ -42114,17 +42126,17 @@ impl GaussianKdeNd {
     /// Falls back to scalar for a small/non-finite dataset or a non-finite query.
     fn evaluate_whitened(&self, wq: &[f64]) -> f64 {
         let d = self.d;
-        let n = self.whitened.len();
+        let n = self.n;
         let use_simd = !GAUSSIAN_KDE_ND_SIMD_EXP_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
             && self.data_finite
             && n >= KDE_ND_SIMD_MIN_POINTS
             && wq.iter().all(|v| v.is_finite());
         if !use_simd {
             let mut acc = 0.0f64;
-            for wx in &self.whitened {
+            for sample in 0..n {
                 let mut quad = 0.0f64;
-                for i in 0..d {
-                    let diff = wq[i] - wx[i];
+                for (dimension, &query) in wq.iter().enumerate().take(d) {
+                    let diff = query - self.whitened_soa[dimension * n + sample];
                     quad += diff * diff;
                 }
                 acc += (-0.5 * quad).exp();
@@ -42132,32 +42144,42 @@ impl GaussianKdeNd {
             return acc * self.norm;
         }
 
+        self.evaluate_whitened_soa_simd(wq)
+    }
+
+    /// Dimension-major eight-sample distance accumulation. Each SIMD lane visits
+    /// dimensions in the original `0..d` order, so the squared distance is
+    /// bit-identical to the sample-major scalar reduction feeding the same SIMD-exp
+    /// and lane-group sum.
+    fn evaluate_whitened_soa_simd(&self, wq: &[f64]) -> f64 {
         use std::simd::{Simd, num::SimdFloat};
+
+        let d = self.d;
+        let n = self.n;
         let minus_half = Simd::<f64, KDE_SIMD_LANES>::splat(-0.5);
         let mut acc = Simd::<f64, KDE_SIMD_LANES>::splat(0.0);
-        let mut buf = [0.0f64; KDE_SIMD_LANES];
-        let mut i = 0;
-        while i + KDE_SIMD_LANES <= n {
-            for (k, slot) in buf.iter_mut().enumerate() {
-                let wx = &self.whitened[i + k];
-                let mut quad = 0.0f64;
-                for j in 0..d {
-                    let diff = wq[j] - wx[j];
-                    quad += diff * diff;
-                }
-                *slot = quad;
+        let mut sample = 0usize;
+        while sample + KDE_SIMD_LANES <= n {
+            let mut quad = Simd::<f64, KDE_SIMD_LANES>::splat(0.0);
+            for (dimension, &query) in wq.iter().enumerate().take(d) {
+                let start = dimension * n + sample;
+                let points = Simd::from_slice(&self.whitened_soa[start..start + KDE_SIMD_LANES]);
+                let diff = Simd::splat(query) - points;
+                quad += diff * diff;
             }
-            acc += kde_simd_exp_nonpos(minus_half * Simd::from_array(buf));
-            i += KDE_SIMD_LANES;
+            acc += kde_simd_exp_nonpos(minus_half * quad);
+            sample += KDE_SIMD_LANES;
         }
+
         let mut sum = acc.reduce_sum();
-        for wx in &self.whitened[i..n] {
+        while sample < n {
             let mut quad = 0.0f64;
-            for j in 0..d {
-                let diff = wq[j] - wx[j];
+            for (dimension, &query) in wq.iter().enumerate().take(d) {
+                let diff = query - self.whitened_soa[dimension * n + sample];
                 quad += diff * diff;
             }
             sum += (-0.5 * quad).exp();
+            sample += 1;
         }
         sum * self.norm
     }
@@ -42169,7 +42191,7 @@ impl GaussianKdeNd {
     pub fn evaluate_many(&self, points: &[Vec<f64>]) -> Vec<f64> {
         let m = points.len();
         let work = (m as u64)
-            .saturating_mul(self.whitened.len() as u64)
+            .saturating_mul(self.n as u64)
             .saturating_mul(self.d as u64);
         let threads = std::thread::available_parallelism()
             .map(|c| c.get())
@@ -70489,6 +70511,41 @@ mod tests {
         for (p, s) in par.iter().zip(&seq) {
             assert_eq!(p.to_bits(), s.to_bits(), "parallel != serial");
         }
+    }
+
+    #[test]
+    #[ignore = "manual profiler harness"]
+    fn gaussian_kde_nd_profile_d3_eval5k() {
+        let n = 2000usize;
+        let m = 5000usize;
+        let data: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                let t = i as f64;
+                vec![
+                    (t * 0.017).sin(),
+                    (t * 0.0031).cos() * 2.0,
+                    (t * 0.011).sin() * 0.5,
+                ]
+            })
+            .collect();
+        let kde = GaussianKdeNd::new(&data).expect("kde");
+        let q: Vec<Vec<f64>> = (0..m)
+            .map(|i| {
+                let t = i as f64;
+                vec![
+                    (t * 0.02).cos(),
+                    (t * 0.005).sin() * 2.0,
+                    (t * 0.013).cos() * 0.5,
+                ]
+            })
+            .collect();
+
+        let mut checksum = 0u64;
+        for iteration in 0..512usize {
+            let out = std::hint::black_box(kde.evaluate_many(std::hint::black_box(&q)));
+            checksum ^= out[iteration % out.len()].to_bits();
+        }
+        eprintln!("gaussian_kde_nd_profile checksum={checksum:016x}");
     }
 
     #[test]

@@ -31,6 +31,32 @@ condition so dead ends are not repeated casually.
   particular, a rejected streak is not evidence of a ceiling: route to a
   different alien primitive whose retry predicate is presently true.
 
+## 2026-07-22 - frankenscipy-8l8r1.162 - KEEP: dimension-major N-D KDE distances (bit-identical, 1.41x)
+
+- Both negative ledgers and recent history were screened before editing. The earlier N-D KDE SIMD-exp keep closed
+  scalar exponential batching; its recorded next primitive was distance layout. The rejected query-buffer and d=3
+  specialization retries remained closed. Alien nested-data flattening, loop interchange, and vector execution
+  therefore admitted one distinct representation lever.
+- An untouched strict-remote profile on `vmi1227854` sampled **52,000 cycles events, 0 lost**: `GaussianKdeNd::evaluate`
+  held **95.91%** self cycles and query whitening only **0.29%**. Annotation showed bounds/pointer/gather machinery
+  across the separately allocated sample rows. The untouched Criterion d3/eval5k median estimate was **6.2239 ms**.
+- One lever stores pre-whitened points dimension-major (`dimension * n + sample`) and loads each eight-sample block
+  contiguously into SIMD distance lanes. Every lane retains the original `0..d` accumulation order and feeds the
+  unchanged SIMD-exp polynomial and lane reduction. The shipped object keeps only this layout: payload bytes are
+  unchanged, while `n` row allocations and `24n` bytes of row headers disappear.
+- Strict same-binary, same-worker `ovh-a` A/B/null (CPU 6, 11 interleaved rounds, 64 complete d3/eval5k kernel
+  sweeps per arm): candidate p50/p95/p99 **28.758/29.810/29.810 ms**, CV **1.364%**; original
+  **40.553/42.043/42.043 ms**, CV **1.557%**; paired speedup p50/p05/p95
+  **1.409700/1.384476/1.450798x** versus null p50/p05/p95 **1.000916/0.747108/1.036171**. Candidate p05
+  clears null p95, so this is not in-floor. Earlier scheduler-contaminated attempts with CV 7.67-26.39% were
+  discarded and did not decide the lever.
+- All **5,000** end-to-end candidate/control outputs matched by `to_bits()` before timing. The final strict-remote
+  SciPy-reference and parallel-isomorphism unit gates passed **2/2**. Same-worker process max-RSS was
+  **6,212-6,228 KiB** candidate versus **5,944-5,964 KiB** original (about +4.5% at process-page granularity),
+  despite the object-level allocation reduction; this remains below the 5% measurement budget but is recorded.
+- Retry only after a fresh profile admits a different KDE primitive. Dimension-major distance accumulation is
+  closed; the existing SIMD-exp, query-buffer, and d=3 specialization families remain closed independently.
+
 ## 2026-07-22 - frankenscipy-8l8r1.161 - KEEP: flat trust-exact augmented storage (bit-identical, 1.10-1.18x)
 
 - Recent history and both ledgers were screened before editing. The earlier trust-exact keep closed only the
@@ -9564,3 +9590,34 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   confidence intervals overlapped and the gain cleared the A/A floor by only ~1.8%.
 - **REJECT / IN-FLOOR; candidate removed.** The durable output is the `dominant_frequency_ab` benchmark seam plus
   this no-retry boundary. Only reconsider as part of producer-side maximum tracking that removes a full array scan.
+
+## 2026-07-22 - CopperFalcon (cc) - BLOCKER/SURFACE: small-n cholesky thread orchestration — spawn overhead measured at 28µs/thread/round, pool dispatch 6-8x cheaper, but a safe-Rust zero-copy pool is inexpressible; rayon-as-dependency is an OWNER DECISION
+
+- Dense-BLAS wall lane lever 6, following the 2026-07-22 re-baseline (n=2048 CROSSED scipy-default; n=1000
+  residual 2.36x vs scipy-default is thread-orchestration, not kernel arithmetic — per-core parity 1.21x).
+- PROBE (per the banked retry predicate "persistent pool whose dispatch cost is independently proven below
+  the stage budget"; artifact `tests/artifacts/perf/2026-07-22-chol-spawn-cost-probe/`, single-file rustc -O,
+  thinkstation1, medians of 300 rounds): `thread::scope` spawn+join = **144µs @T=4 / 202µs @T=6 / 240-256µs
+  @T=8 / 344-371µs @T=13 / 430-449µs @T=16** per round (~28µs/thread); persistent workers woken via
+  `std::sync::Barrier` = **19-68µs per round** at the same T — **6-8x cheaper**, stable across 0/100/500µs
+  work items. Budget: n=1000 factor spends ~0.68ms (2 spawning SYRK panels, T=13/11) ≈ **6.3%** on spawn;
+  n=2048 ≈ **10-12%** (10 SYRK rounds T≤30 + 8 TRSM rounds T≤15). The pool would cut that ~7x. ALSO measured
+  (2026-07-22 lever-5 gate2m run): scope-spawn parallel TRSM at n=1000 is a DECIDED 0.945x REGRESSION —
+  sub-8M-MAC stages cannot pay for scope spawns, exactly as the sparse row-forward reject predicted.
+- WHY BLOCKED (analysis, not vibes): a zero-copy persistent pool over PER-ROUND-CHANGING `&mut` partitions
+  of one flat buffer is inexpressible in safe std Rust: (a) scoped channels cannot carry `&'round mut` items
+  (lifetime fixed at channel type); (b) fixed per-worker row ownership dies on row retirement into the panel
+  region; (c) `Vec::split_off` ownership transfer copies; (d) `&[AtomicU64]`-as-data sidesteps aliasing but
+  kills `Simd::from_slice` (needs `&[f64]`); (e) hand-rolled pool with internal unsafe violates the
+  workspace-level `#![forbid(unsafe_code)]`. The only routes: **rayon (or equivalent audited pool crate) as
+  a dependency** — pure Rust, no tokio, and deps with internal unsafe are already accepted (nalgebra) — or
+  an owner-approved exception crate. Both are OWNER decisions, not agent calls. Bead filed:
+  `frankenscipy-vndri` (decision), `frankenscipy-ua3gn` updated (design, blocked-on decision).
+- VEIN SWITCH (alien graveyard): the fitting primitive is **§8.2 Morsel-Driven Parallelism** (cache-local
+  work distribution, near-linear scaling) — it PRESUPPOSES the pool substrate, so it becomes the follow-on
+  lever the moment the dependency decision lands. Kernel/cache/data-movement veins in this lane are
+  measured-exhausted this session (FMA tiles near port-bound; jc-blocking L3-neutral; scratch-hoist and pack
+  levers under the ±5% n=1000 wall-clock floor — use a perf-stat cycles gate or n≥2048 for sub-10% levers).
+- RETRY PREDICATE: the pool lever reopens when (a) the owner rules on rayon/pool-crate, or (b) someone
+  proves a safe-Rust pool pattern over changing &mut partitions (e.g., a std API change), or (c) the factor
+  is restructured so partitions are round-invariant (lookahead/left-looking redesign — separate lever, big).

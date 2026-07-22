@@ -23072,3 +23072,42 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Caveats recorded in the artifact (adjacent same-host runs, not one-process interleaved; value-independent
   flop count makes fixture differences immaterial). Artifact:
   `tests/artifacts/perf/2026-07-22-chol-trsm-parallel/scipy_headtohead_results.txt` (+ script).
+
+## 2026-07-22 - BlackThrush (cod) - KEEP (bit-identical, 1.410x): dimension-major N-D KDE distance accumulation
+
+- **Negative-evidence screen:** the current ledger and recent git history were searched before source work. N-D KDE
+  scalar-exp batching is closed by `570e5bbf7`; query-whitening buffer reuse and the d=3 specialization are rejected
+  families whose retry predicates have not fired. The SIMD-exp entry explicitly named transposed distance layout as
+  the next distinct primitive. Alien nested-data flattening / loop interchange / vector execution matched that seam.
+- **Baseline/profile:** untouched strict-remote Criterion on named worker `ovh-a` estimated d3/eval5k at
+  **6.2239 ms**. An isolated strict-remote symbolic test binary on `vmi1227854`, run for 512 full batches, produced
+  checksum `0033ffecd951b96e`; `perf` recorded **52K samples, 0 lost**, with **95.91%** self cycles in
+  `GaussianKdeNd::evaluate` and **0.29%** in query whitening. Annotation exposed pointer/bounds/gather work over
+  eight separately allocated sample rows, admitting layout work. A Criterion registration profile was discarded as
+  invalid because unrelated benchmark setup ran before filtering; `perf_event_paranoid=4` on `ovh-a` was surfaced.
+- **One lever:** replace the sample-major `Vec<Vec<f64>>` resident representation with one dimension-major
+  `Vec<f64>`. Each coordinate slice is contiguous across samples, so one SIMD load supplies eight distance lanes.
+  Each lane still visits dimensions in ascending order, then uses the existing SIMD-exp and lane sum unchanged.
+  The non-SIMD fallback indexes the same values in the same sample/dimension order. Final payload remains `n*d*8`
+  bytes, while `n` allocations and `24n` row-header bytes are removed; no C BLAS/LAPACK and no unsafe code.
+- **Strict A/B/null gate:** one release test binary built through fail-closed RCH, executed on named worker `ovh-a`
+  pinned to CPU 6. Eleven interleaved rounds, each arm averaging 64 full serial d3/eval5k kernel sweeps:
+  candidate p50/p95/p99 **28.757925/29.810104/29.810104 ms**, CV **1.364%**; original
+  **40.552885/42.043174/42.043174 ms**, CV **1.557%**. Paired speedup p50/p05/p95
+  **1.409700/1.384476/1.450798x**; candidate/candidate null p50/p05/p95
+  **1.000916/0.747108/1.036171**. The conservative candidate p05 clears null p95: **DECIDED KEEP**, not in-floor.
+  Earlier thread-scheduler-contaminated attempts (arm CV **7.67-26.39%**) were invalidated rather than averaged in.
+- **Behavior/memory proof:** before timing, all 5,000 `evaluate_many` results matched the original arm by exact
+  `to_bits()`. Final strict-remote tests passed the SciPy-reference values and parallel/sequential bit-isomorphism
+  lanes (**2/2**). Alternating same-worker `/usr/bin/time` runs recorded max RSS **6,212-6,228 KiB** candidate and
+  **5,944-5,964 KiB** original (~4.5% process-page increase despite lower object allocation count); this is below
+  5% but explicitly retained as the memory re-baseline. The full strict-remote conformance command compiled and
+  entered its 211-test core suite, then remained in the unrelated linalg eig-trace test after its 60-second slow-test
+  warning; it produced no candidate-related failure before landing. Workspace check was refused fail-closed for
+  capacity, and workspace Clippy stopped on pre-existing `fsci-opt`/`fsci-linalg` warnings outside this lever.
+- **RCH surfaces:** two wider-slot strict requests failed closed with `insufficient_slots` and never ran locally;
+  four/six-slot retries were remotely assigned. `ovh-b` SIGILL and fleet contention were treated as routing/noise,
+  never as candidate evidence.
+- **Retry predicate:** do not repeat dimension-major distance accumulation. Retry N-D KDE only when a new profile
+  admits a different primitive (for example query batching across lanes or a changed dimensional regime) and a new
+  exact/tolerance contract clears an interleaved same-worker null control with both arm CVs below 5%.
