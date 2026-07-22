@@ -81,7 +81,9 @@ fn main() {
     let decidable = cand_med > null_hi || cand_med < null_lo;
     let ob = ov.iter().copied().fold(f64::MAX, f64::min);
     let fb = fv.iter().copied().fold(f64::MAX, f64::min);
-    println!("# maximum_filter (N-D) {d0}x{d1}x{d2} size={size} mode=Reflect (vectorized vs per-column)");
+    println!(
+        "# maximum_filter (N-D) {d0}x{d1}x{d2} size={size} mode=Reflect (vectorized vs per-column)"
+    );
     println!(
         "{} percolumn {ob:.2}ms (cv {:.1}%) vectorized {fb:.2}ms (cv {:.1}%) | CAND(percolumn/vectorized) \
          median {cand_med:.3}x | NULL(A/A) median {null_med:.3}x range [{null_lo:.3}, {null_hi:.3}] | bitmism={bitmism}",

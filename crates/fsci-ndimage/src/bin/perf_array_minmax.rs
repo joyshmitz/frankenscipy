@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0x243f_6a88u64;
@@ -36,7 +39,9 @@ fn main() {
     let (b_max, b_min) = (array_max(&arr), array_min(&arr));
     let bitmism = usize::from(a_max.to_bits() != b_max.to_bits())
         + usize::from(a_min.to_bits() != b_min.to_bits());
-    println!("# ndimage::array_max/min n={n} max({a_max}=={b_max}) min({a_min}=={b_min}) bitmism={bitmism}");
+    println!(
+        "# ndimage::array_max/min n={n} max({a_max}=={b_max}) min({a_min}=={b_min}) bitmism={bitmism}"
+    );
 
     let bench = |serial: bool| -> f64 {
         NDIMAGE_ARRAY_MINMAX_FORCE_SERIAL.store(serial, Ordering::Relaxed);

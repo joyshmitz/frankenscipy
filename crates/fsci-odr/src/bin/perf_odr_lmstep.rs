@@ -19,7 +19,9 @@ fn cv(v: &[f64]) -> f64 {
 // Non-separable custom model y = b0*exp(b1*x) + b2 -> Model::new default (scalar_separable=false)
 // forces odr onto the dense solve_least_squares / solve_lm_step path.
 fn model(beta: &[f64], x: &[f64]) -> Vec<f64> {
-    x.iter().map(|&xi| beta[0] * (beta[1] * xi).exp() + beta[2]).collect()
+    x.iter()
+        .map(|&xi| beta[0] * (beta[1] * xi).exp() + beta[2])
+        .collect()
 }
 
 fn main() {
@@ -37,15 +39,26 @@ fn main() {
         (s >> 11) as f64 / (1u64 << 53) as f64 * 0.02 - 0.01
     };
     let x: Vec<f64> = (0..ndata).map(|i| i as f64 / ndata as f64 * 3.0).collect();
-    let y: Vec<f64> = x.iter().map(|&xi| b0 * (b1 * xi).exp() + b2 + noise()).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| b0 * (b1 * xi).exp() + b2 + noise())
+        .collect();
     let beta0 = vec![1.5_f64, 0.25, 0.8];
 
     ODR_LMSTEP_FORCE_SERIAL.store(true, Ordering::Relaxed);
     let a = odr(model, beta0.clone(), y.clone(), x.clone()).expect("odr");
     ODR_LMSTEP_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = odr(model, beta0.clone(), y.clone(), x.clone()).expect("odr");
-    let bitmism = a.beta.iter().zip(&b.beta).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    println!("# odr::solve_lm_step ndata={ndata} beta={:?} bitmism={bitmism}", a.beta);
+    let bitmism = a
+        .beta
+        .iter()
+        .zip(&b.beta)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    println!(
+        "# odr::solve_lm_step ndata={ndata} beta={:?} bitmism={bitmism}",
+        a.beta
+    );
 
     let bench = |serial: bool| -> f64 {
         ODR_LMSTEP_FORCE_SERIAL.store(serial, Ordering::Relaxed);

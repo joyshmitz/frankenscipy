@@ -28,16 +28,28 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64 * 10.0 - 5.0
     };
-    let m: Vec<Vec<f64>> = (0..side).map(|_| (0..side).map(|_| r()).collect()).collect();
+    let m: Vec<Vec<f64>> = (0..side)
+        .map(|_| (0..side).map(|_| r()).collect())
+        .collect();
 
     LINALG_MAT_ELEMENTWISE_FORCE_SERIAL.store(true, Ordering::Relaxed);
     let a = transpose_rows(&m);
     LINALG_MAT_ELEMENTWISE_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = transpose_rows(&m);
-    let bitmism: usize = a.iter().zip(&b).map(|(ra, rb)| {
-        ra.iter().zip(rb).filter(|(u, v)| u.to_bits() != v.to_bits()).count()
-    }).sum();
-    println!("# linalg::transpose_rows {side}x{side} a[1][0]={} b[1][0]={} bitmism={bitmism}", a[1][0], b[1][0]);
+    let bitmism: usize = a
+        .iter()
+        .zip(&b)
+        .map(|(ra, rb)| {
+            ra.iter()
+                .zip(rb)
+                .filter(|(u, v)| u.to_bits() != v.to_bits())
+                .count()
+        })
+        .sum();
+    println!(
+        "# linalg::transpose_rows {side}x{side} a[1][0]={} b[1][0]={} bitmism={bitmism}",
+        a[1][0], b[1][0]
+    );
 
     let bench = |serial: bool| -> f64 {
         LINALG_MAT_ELEMENTWISE_FORCE_SERIAL.store(serial, Ordering::Relaxed);

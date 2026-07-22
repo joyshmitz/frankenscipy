@@ -23,7 +23,10 @@ fn cv(v: &[f64]) -> f64 {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let side: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2048);
-    let which: String = args.get(2).cloned().unwrap_or_else(|| "gaussian".to_string());
+    let which: String = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| "gaussian".to_string());
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(13);
 
     let shape = vec![side, side];

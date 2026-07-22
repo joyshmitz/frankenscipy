@@ -18,7 +18,11 @@ fn cv(v: &[f64]) -> f64 {
 }
 
 fn euclidean(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f64>().sqrt()
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| (x - y) * (x - y))
+        .sum::<f64>()
+        .sqrt()
 }
 
 fn main() {
@@ -79,7 +83,10 @@ fn main() {
     let decidable = cand_med > null_hi || cand_med < null_lo;
     let ob = ov.iter().copied().fold(f64::MAX, f64::min);
     let fb = fv.iter().copied().fold(f64::MAX, f64::min);
-    println!("# spatial::pdist_func(euclidean) n={n} d={d} pairs={}", n * (n - 1) / 2);
+    println!(
+        "# spatial::pdist_func(euclidean) n={n} d={d} pairs={}",
+        n * (n - 1) / 2
+    );
     println!(
         "{} serial {ob:.2}ms (cv {:.1}%) parallel {fb:.2}ms (cv {:.1}%) | CAND(serial/parallel) median \
          {cand_med:.3}x | NULL(A/A) median {null_med:.3}x range [{null_lo:.3}, {null_hi:.3}] | bitmism={bitmism}",

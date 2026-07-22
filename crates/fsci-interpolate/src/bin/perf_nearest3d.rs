@@ -20,7 +20,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let nq: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2_000_000);
+    let nq: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2_000_000);
     let axis_len: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
 
@@ -35,8 +38,9 @@ fn main() {
     let points = vec![axis.clone(), axis.clone(), axis.clone()];
     let nvals = axis_len * axis_len * axis_len;
     let values: Vec<f64> = (0..nvals).map(|i| (i as f64).sin()).collect();
-    let interp = RegularGridInterpolator::new(points, values, RegularGridMethod::Nearest, false, Some(0.0))
-        .expect("interp");
+    let interp =
+        RegularGridInterpolator::new(points, values, RegularGridMethod::Nearest, false, Some(0.0))
+            .expect("interp");
 
     // Random in-bounds 3-D queries.
     let mut s = 0x2f6e_1122u64;
@@ -52,8 +56,15 @@ fn main() {
     let a = interp.eval_many(&queries).expect("eval");
     INTERPN_NEAREST3D_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = interp.eval_many(&queries).expect("eval");
-    let bitmism = a.iter().zip(&b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-    println!("# interp::eval_many(nearest3d) nq={nq} axis_len={axis_len} a[1]={} bitmism={bitmism}", a[1]);
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
+    println!(
+        "# interp::eval_many(nearest3d) nq={nq} axis_len={axis_len} a[1]={} bitmism={bitmism}",
+        a[1]
+    );
 
     let bench = |serial: bool| -> f64 {
         INTERPN_NEAREST3D_FORCE_SERIAL.store(serial, Ordering::Relaxed);

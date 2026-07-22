@@ -32,7 +32,9 @@ fn main() {
         (s >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
     };
     let mut start: Vec<f64> = (0..d).map(|_| r()).collect();
-    let mut end: Vec<f64> = (0..d).map(|i| r() + if i == 0 { 0.3 } else { 0.0 }).collect();
+    let mut end: Vec<f64> = (0..d)
+        .map(|i| r() + if i == 0 { 0.3 } else { 0.0 })
+        .collect();
     let norm = |v: &mut [f64]| {
         let n = v.iter().map(|x| x * x).sum::<f64>().sqrt();
         for x in v.iter_mut() {
@@ -58,7 +60,8 @@ fn main() {
 
     let bench = |force_serial: bool| -> f64 {
         SPATIAL_SLERP_FORCE_SERIAL.store(force_serial, Ordering::Relaxed);
-        let run = || geometric_slerp(black_box(&start), black_box(&end), black_box(&t_values)).unwrap();
+        let run =
+            || geometric_slerp(black_box(&start), black_box(&end), black_box(&t_values)).unwrap();
         let _ = black_box(run());
         let t = Instant::now();
         for _ in 0..3 {

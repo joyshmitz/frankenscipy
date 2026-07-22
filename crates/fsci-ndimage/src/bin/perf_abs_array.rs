@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0x9e37_79b9u64;
@@ -34,8 +37,16 @@ fn main() {
     let a = abs_array(&arr);
     NDIMAGE_ABS_ARRAY_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = abs_array(&arr);
-    let bitmism = a.data.iter().zip(&b.data).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    println!("# ndimage::abs_array n={n} a[1]={} b[1]={} bitmism={bitmism}", a.data[1], b.data[1]);
+    let bitmism = a
+        .data
+        .iter()
+        .zip(&b.data)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    println!(
+        "# ndimage::abs_array n={n} a[1]={} b[1]={} bitmism={bitmism}",
+        a.data[1], b.data[1]
+    );
 
     let bench = |serial: bool| -> f64 {
         NDIMAGE_ABS_ARRAY_FORCE_SERIAL.store(serial, Ordering::Relaxed);

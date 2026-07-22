@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let rows: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2_000_000);
+    let rows: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2_000_000);
     let nnz_per: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
     let cols = nnz_per.max(1) * 4;
@@ -50,10 +53,22 @@ fn main() {
     let a = sparse_scale(&mat, alpha);
     SPARSE_SCALE_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = sparse_scale(&mat, alpha);
-    let dbit = a.data().iter().zip(b.data()).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    let ibit = a.indices().iter().zip(b.indices()).filter(|(p, q)| p != q).count();
+    let dbit = a
+        .data()
+        .iter()
+        .zip(b.data())
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    let ibit = a
+        .indices()
+        .iter()
+        .zip(b.indices())
+        .filter(|(p, q)| p != q)
+        .count();
     let bitmism = dbit + ibit;
-    println!("# sparse::sparse_scale rows={rows} nnz={nnz} dbit={dbit} ibit={ibit} bitmism={bitmism}");
+    println!(
+        "# sparse::sparse_scale rows={rows} nnz={nnz} dbit={dbit} ibit={ibit} bitmism={bitmism}"
+    );
 
     let bench = |serial: bool| -> f64 {
         SPARSE_SCALE_FORCE_SERIAL.store(serial, Ordering::Relaxed);

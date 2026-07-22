@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let nnz_per: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
     let cols = n;
@@ -54,8 +57,15 @@ fn main() {
     let a = sparse_diagonal(&mat);
     SPARSE_ROW_MINMAX_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = sparse_diagonal(&mat);
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    println!("# sparse::sparse_diagonal n={n} nnz_per={nnz_per} a[n/2]={} bitmism={bitmism}", a[n / 2]);
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    println!(
+        "# sparse::sparse_diagonal n={n} nnz_per={nnz_per} a[n/2]={} bitmism={bitmism}",
+        a[n / 2]
+    );
 
     let bench = |serial: bool| -> f64 {
         SPARSE_ROW_MINMAX_FORCE_SERIAL.store(serial, Ordering::Relaxed);

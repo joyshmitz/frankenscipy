@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let dln = 0.001_f64;
@@ -40,8 +43,15 @@ fn main() {
     let a = fht(&input, dln, mu, offset, bias, &opts).expect("fht");
     FHTCOEFF_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = fht(&input, dln, mu, offset, bias, &opts).expect("fht");
-    let bitmism = a.iter().zip(&b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-    println!("# fft::fht (fhtcoeff) n={n} a[1]={} bitmism={bitmism}", a[1]);
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
+    println!(
+        "# fft::fht (fhtcoeff) n={n} a[1]={} bitmism={bitmism}",
+        a[1]
+    );
 
     let bench = |serial: bool| -> f64 {
         FHTCOEFF_FORCE_SERIAL.store(serial, Ordering::Relaxed);

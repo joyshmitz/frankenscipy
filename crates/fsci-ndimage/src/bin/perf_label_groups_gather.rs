@@ -21,7 +21,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let npix: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let npix: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let nlabels: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(64);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(21);
 
@@ -45,7 +48,11 @@ fn main() {
     let a = sum(&input, Some(&labels), Some(&index)).unwrap();
     NDIMAGE_LABEL_GATHER_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = sum(&input, Some(&labels), Some(&index)).unwrap();
-    let bitmism = a.iter().zip(&b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
 
     let bench = |force_serial: bool| -> f64 {
         NDIMAGE_LABEL_GATHER_FORCE_SERIAL.store(force_serial, Ordering::Relaxed);
@@ -78,7 +85,9 @@ fn main() {
     let decidable = cand_med > null_hi || cand_med < null_lo;
     let ob = ov.iter().copied().fold(f64::MAX, f64::min);
     let fb = fv.iter().copied().fold(f64::MAX, f64::min);
-    println!("# ndimage label groups gather via sum(reversed index) {npix} pixels, {nlabels} labels");
+    println!(
+        "# ndimage label groups gather via sum(reversed index) {npix} pixels, {nlabels} labels"
+    );
     println!(
         "{} serial {ob:.2}ms (cv {:.1}%) parallel {fb:.2}ms (cv {:.1}%) | CAND(serial/parallel) median \
          {cand_med:.3}x | NULL(A/A) median {null_med:.3}x range [{null_lo:.3}, {null_hi:.3}] | bitmism={bitmism}",
