@@ -5304,6 +5304,43 @@ const CHOL_FACTOR_FLAT_MIN_DIM: usize = 256;
 pub static CHOL_FACTOR_FLAT_MIN_OVERRIDE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+/// A/B switch: force the blocked-FMA panel TRSM onto its serial path. Same-binary
+/// A/B only; the parallel split is byte-identical (4-row-aligned chunks), so either
+/// setting produces the same factor bits.
+pub static CHOL_PANEL_TRSM_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Execution-proof counter: panels whose TRSM actually took the parallel branch.
+/// One relaxed increment per PANEL (≤ `n/NB` per factor) — bench/test introspection.
+pub static CHOL_PANEL_TRSM_PAR_PANELS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Panel-TRSM parallel gate: MACs = `m2·nb²/2`. Lower than the SYRK's 64M
+/// `matmul_thread_count` gate (TRSM-sized work never reaches 64M, which is how the
+/// pre-2026-07-22 "TRSM fan-out ~0 gain" attempts were shaped) but NOT low: measured
+/// 2026-07-22 (thinkstation1, artifact 2026-07-22-chol-trsm-parallel), a 2M gate made
+/// n=1000 a DECIDED 0.945x regression (5 spawning panels, 7.1M MACs max, spawn/join
+/// dominates ~0.5 ms panels) while n=2048 was a DECIDED 1.067x win (14 panels, up to
+/// 15.7M). 8M puts the crossover between them: n ≤ ~1100 stays fully serial,
+/// n = 2048 spawns only its 8 largest panels (`m2 ≥ ~977` at nb=128).
+const CHOL_PANEL_TRSM_PAR_MIN_MACS: u64 = 8 * 1024 * 1024;
+
+/// Test/A-B override for [`CHOL_PANEL_TRSM_PAR_MIN_MACS`] (0 ⇒ default). Lets unit
+/// tests exercise the fan-out path at small `n` without paying a `n>1100` factor in
+/// debug builds; bit-identical either way.
+pub static CHOL_PANEL_TRSM_PAR_MACS_OVERRIDE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[inline]
+fn chol_panel_trsm_par_min_macs() -> u64 {
+    let o = CHOL_PANEL_TRSM_PAR_MACS_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if o == 0 {
+        CHOL_PANEL_TRSM_PAR_MIN_MACS
+    } else {
+        o
+    }
+}
+
 #[inline]
 fn chol_factor_flat_min() -> usize {
     let o = CHOL_FACTOR_FLAT_MIN_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
@@ -19541,14 +19578,14 @@ fn cholesky_panel_trsm_blocked_fma(
     k: usize,
     kb: usize,
 ) -> Option<()> {
-    use std::simd::StdFloat;
     let nb = kb - k;
     let m2 = trailing.len() / n;
     let full_jblocks = nb / 8;
 
     // Pack L11ᵀ (strict lower triangle only; the diagonal divides, never multiplies)
     // into 8-wide micro-panels. Entries at or above the diagonal stay zero and the
-    // GEMM/dot phases below never read them.
+    // GEMM/dot phases below never read them. Packed ONCE, shared read-only by every
+    // row chunk.
     let mut l11t = vec![0.0f64; full_jblocks * nb * 8];
     for jb in 0..full_jblocks {
         let out = &mut l11t[jb * nb * 8..(jb + 1) * nb * 8];
@@ -19560,6 +19597,62 @@ fn cholesky_panel_trsm_blocked_fma(
             }
         }
     }
+    let l11t = &l11t[..];
+
+    // Trailing rows are independent: fan out across 4-row-ALIGNED chunks so every
+    // 4-row block keeps exactly the serial path's grouping (tile vs tail assignment
+    // unchanged ⇒ bit-identical). Gated by TRSM MACs, not the SYRK's 64M gate,
+    // which TRSM-sized work never reaches.
+    let macs = (m2 as u64)
+        .saturating_mul(nb as u64)
+        .saturating_mul(nb as u64)
+        / 2;
+    let nthreads = if CHOL_PANEL_TRSM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+        || macs < chol_panel_trsm_par_min_macs()
+    {
+        1
+    } else {
+        let cores = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1);
+        cores.min(m2 / 128).max(1)
+    };
+    if nthreads <= 1 {
+        return cholesky_panel_trsm_blocked_fma_rows(panel, l11t, trailing, n, k, kb);
+    }
+    CHOL_PANEL_TRSM_PAR_PANELS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let chunk_rows = (m2 / 4).div_ceil(nthreads) * 4;
+    let ok = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for rows in trailing.chunks_mut(chunk_rows * n) {
+            handles.push(scope.spawn(move || {
+                cholesky_panel_trsm_blocked_fma_rows(panel, l11t, rows, n, k, kb).is_some()
+            }));
+        }
+        handles
+            .into_iter()
+            .all(|handle| handle.join().expect("panel TRSM worker panicked"))
+    });
+    if ok { Some(()) } else { None }
+}
+
+/// Per-chunk core of [`cholesky_panel_trsm_blocked_fma`]: solves a 4-row-aligned
+/// slice of the trailing rows against the shared packed `L11ᵀ`. Row arithmetic is
+/// identical for any chunking, so serial and fanned-out runs agree bit for bit.
+#[allow(clippy::needless_range_loop, clippy::too_many_lines)]
+#[inline(never)] // keep a distinct frame so profiles attribute TRSM self-time
+fn cholesky_panel_trsm_blocked_fma_rows(
+    panel: &[f64],
+    l11t: &[f64],
+    trailing: &mut [f64],
+    n: usize,
+    k: usize,
+    kb: usize,
+) -> Option<()> {
+    use std::simd::StdFloat;
+    let nb = kb - k;
+    let m2 = trailing.len() / n;
+    let full_jblocks = nb / 8;
 
     // Contiguous solved-prefix scratch for the current 4-row block.
     let mut prefix = vec![0.0f64; 4 * nb];
@@ -21401,6 +21494,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn cholesky_panel_trsm_parallel_is_bit_identical() {
+        // 4-row-aligned chunking preserves every row-block grouping, so the fanned
+        // TRSM must agree bit-for-bit with the forced-serial path. The MACs-gate
+        // override forces the fan-out at unit-test sizes (production gate needs
+        // n > ~1100); n=130 exercises the too-few-rows serial fallback. Both the
+        // static flips are safe under concurrent tests — every setting produces
+        // identical bits by construction.
+        CHOL_PANEL_TRSM_PAR_MACS_OVERRIDE.store(1, std::sync::atomic::Ordering::Relaxed);
+        for &n in &[130usize, 420, 600] {
+            let mut a = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..=i {
+                    let value = if i == j {
+                        (n as f64) * 3.0 + (i as f64) * 0.01
+                    } else {
+                        1.0 / ((i - j + 1) as f64)
+                    };
+                    a[i][j] = value;
+                    a[j][i] = value;
+                }
+            }
+
+            CHOL_PANEL_TRSM_FORCE_SERIAL.store(true, std::sync::atomic::Ordering::Relaxed);
+            let serial = cholesky_lower_blocked_with_kernels::<
+                TRSM_KERNEL_BLOCKED_FMA,
+                SYRK_KERNEL_MR4_NR8_FMA,
+            >(&a, n)
+            .expect("forced-serial TRSM factor");
+            CHOL_PANEL_TRSM_FORCE_SERIAL.store(false, std::sync::atomic::Ordering::Relaxed);
+            let before = CHOL_PANEL_TRSM_PAR_PANELS.load(std::sync::atomic::Ordering::Relaxed);
+            let parallel = cholesky_lower_blocked_with_kernels::<
+                TRSM_KERNEL_BLOCKED_FMA,
+                SYRK_KERNEL_MR4_NR8_FMA,
+            >(&a, n)
+            .expect("parallel TRSM factor");
+            let spawned =
+                CHOL_PANEL_TRSM_PAR_PANELS.load(std::sync::atomic::Ordering::Relaxed) - before;
+            if n >= 420 {
+                assert!(
+                    spawned > 0,
+                    "execution proof failed: no panel took the parallel branch at n={n}"
+                );
+            }
+            for (index, (&expected, &actual)) in serial.iter().zip(&parallel).enumerate() {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "parallel TRSM changed factor bits at flat index {index}, n={n}"
+                );
+            }
+        }
+        CHOL_PANEL_TRSM_PAR_MACS_OVERRIDE.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[test]

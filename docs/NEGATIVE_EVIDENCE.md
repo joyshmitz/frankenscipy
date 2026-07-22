@@ -23019,3 +23019,35 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   perf-stat L3-miss delta FIRST — do not re-run on 5975WX-class L3 at n ≤ 2048. The KEY takeaway for the
   lane: SYRK's remaining gap is not cache traffic; the tile is near FMA-port-bound — further SYRK wins must
   come from reducing NON-tile time (tails, in-panel factorization, serial TRSM phase — the Amdahl side).
+
+## 2026-07-22 - CopperFalcon (cc) - KEEP (bit-identical, size-gated): work-gated parallel blocked-FMA panel TRSM — 1.048x DECIDED at n=2048, exactly neutral at n=1000 (zero spawns)
+
+- Dense-BLAS wall lane lever 5. The blocked-FMA TRSM (33% self) was the biggest SERIAL phase while the SYRK
+  fans out. NEGATIVE-EVIDENCE / RETRY-PREDICATE CHECK on the two prior fan-out rejects (2026-06-27 NO-SHIP —
+  invalid cross-mode measurement; 2026-07-04 ~0-gain): both predate the blocked-FMA kernel, and BOTH ran when
+  (a) TRSM was a minority frame behind the then-slow SYRK, and (b) the only gate in the code was the 64M-MAC
+  `matmul_thread_count`, which TRSM-sized work (max ~7M MACs/panel at n=1000, ~16M at n=2048) NEVER reaches —
+  the fan-outs were effectively ungated micro-spawns. Both conditions inverted ⇒ retry admissible.
+- ONE LEVER: split `cholesky_panel_trsm_blocked_fma` into pack (once, shared read-only `L11ᵀ`) + gate +
+  per-chunk `_rows` core; fan trailing rows across **4-row-ALIGNED chunks** (preserves every row-block's
+  tile/tail grouping ⇒ BIT-IDENTICAL — unit-proven with a forced-low gate at n=130/420/600 and full-factor
+  equality at n=1000/2048 in the bench); per-chunk 4×nb prefix scratch; threads = cores.min(m2/128).
+- GATE TUNING (the measurement drove it, artifact keeps BOTH runs): with a 2M-MAC gate, n=1000 was a
+  **DECIDED 0.945x REGRESSION** (5 spawning panels of 2-7M MACs; scoped spawn/join dominates ~0.5 ms panels)
+  while n=2048 was a DECIDED 1.067x win (14 panels) — the crossover sits between 7M and 16M MACs/panel.
+  Final gate **8M MACs** (`CHOL_PANEL_TRSM_PAR_MIN_MACS`, override static for tests/A-B): n=1000 spawns ZERO
+  panels (gate-proof asserted in the bench; paired 0.9915 inside null [0.9513, 1.0331] = baseline-identical
+  code path), n=2048 spawns its 8 largest panels — **paired median 1.0479** vs null [0.9418, 1.0273],
+  **DECIDED**; p50 **64.468 → 61.041 ms (44.4 → 46.9 GF/s)**. Same shape as the landed LU
+  trailing-update precedent (serial below gate, no small-n regression, wins grow with n).
+- Evidence: `tests/artifacts/perf/2026-07-22-chol-trsm-parallel/bench_stdout_stderr.txt` (8M run) and
+  `bench_stdout_stderr_gate2m.txt` (2M tuning run). Execution proofs: `CHOL_PANEL_TRSM_PAR_PANELS` counter
+  (0 spawns forced-serial and at n=1000; 8 at n=2048), candidate perf child shows
+  `cholesky_panel_trsm_blocked_fma_rows`. Conformance: fsci-linalg lib **515/0**, cholesky diff lanes 39/0,
+  ubs 0 critical, clippy clean in-region (repo-wide clippy still red from toolchain drift, `frankenscipy-q9nxz`).
+- Session score: 2 KEEP (FMA SYRK 1.143x, blocked TRSM 1.115x), 2 in-floor REJECT (scratch hoist, jc-block),
+  1 size-gated KEEP (this). n=1000 p50 ~10.8-11.3 ms (~30 GF/s); n=2048 p50 61.0 ms (46.9 GF/s).
+- NEXT: n=2048 gap re-check vs SciPy both-multicore (banked 07-04: fsci 105-114 ms vs scipy 77.5 — fsci is
+  now 61 ms = FASTER than that banked scipy number; needs a fresh same-host head-to-head with thread parity
+  before claiming a flip). Gate fine-tuning 4-8M and mid-n (1200-1800) sweep are cheap follow-ons.
+- Bead: `frankenscipy-l30nd`.

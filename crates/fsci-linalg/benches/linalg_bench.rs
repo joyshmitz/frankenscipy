@@ -6,6 +6,8 @@ use std::{
 };
 
 use criterion::{Criterion, criterion_group, criterion_main};
+#[cfg(feature = "chol-wall-bench")]
+use fsci_linalg::{CHOL_PANEL_TRSM_FORCE_SERIAL, CHOL_PANEL_TRSM_PAR_PANELS};
 use fsci_linalg::{
     DecompOptions, HELMERT_FORCE_SERIAL, IS_DIAGONAL_FORCE_SERIAL, InvOptions,
     KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions,
@@ -1236,6 +1238,303 @@ fn bench_dft_gauntlet_scipy(c: &mut Criterion) {
 /// factor inside one routine, with a paired production-vs-production A/A null pass,
 /// a candidate-binary perf self-time child, and a differing-bits execution proof.
 /// The candidate is 1e-10-tolerant vs production (FMA single-rounding), NOT bit-exact.
+/// One-binary A/B for the work-gated parallel blocked-FMA panel TRSM: both arms run
+/// the SAME production factor path; the `CHOL_PANEL_TRSM_FORCE_SERIAL` static picks
+/// serial (baseline) vs fanned (candidate) per call. BIT-IDENTICAL (4-row-aligned
+/// chunks); execution proof via the `CHOL_PANEL_TRSM_PAR_PANELS` counter.
+#[cfg(feature = "chol-wall-bench")]
+fn bench_cholesky_wall_trsm_par_ab(c: &mut Criterion) {
+    const PROFILE_CHILD: &str = "FSCI_CHOL_TRSM_PAR_PROFILE_CHILD";
+    if std::env::var_os("FSCI_CHOL_TRSM_PAR_AB_SKIP").is_some() {
+        return;
+    }
+
+    if std::env::var_os(PROFILE_CHILD).is_some() {
+        let a = make_symmetric_eigh_matrix(1000);
+        CHOL_PANEL_TRSM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        for _ in 0..4 {
+            black_box(
+                cholesky_wall_trsm_blocked_fma_candidate(black_box(&a))
+                    .expect("warm parallel factor"),
+            );
+        }
+        let start = std::time::Instant::now();
+        let mut digest = 0xcbf2_9ce4_8422_2325u64;
+        for _ in 0..160 {
+            let factor = cholesky_wall_trsm_blocked_fma_candidate(black_box(&a))
+                .expect("profiled parallel factor");
+            for &value in factor.iter().step_by(4096) {
+                digest ^= value.to_bits();
+                digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            black_box(factor);
+        }
+        eprintln!(
+            "FSCI_CHOL_TRSM_PAR_PROFILE factors=160 mean_ms={:.6} digest={digest:#018x}",
+            start.elapsed().as_secs_f64() * 1000.0 / 160.0
+        );
+        std::process::exit(0);
+    }
+
+    let exe = std::env::current_exe().expect("current release-perf benchmark binary");
+    let perf_path = format!(
+        "/dev/shm/fsc-chol-trsm-par-{}-{}.perf",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    );
+    let profile_status = Command::new("perf")
+        .args([
+            "record", "-e", "cycles:u", "-F", "997", "-o", &perf_path, "--",
+        ])
+        .arg(&exe)
+        .args(["cholesky_wall_trsm_par_ab", "--noplot"])
+        .env(PROFILE_CHILD, "1")
+        .status()
+        .expect("spawn trsm-par perf child");
+    assert!(
+        profile_status.success(),
+        "trsm-par perf child failed: {profile_status}"
+    );
+    let report = Command::new("perf")
+        .args([
+            "report",
+            "--stdio",
+            "--no-children",
+            "--percent-limit",
+            "0.1",
+            "--sort",
+            "symbol",
+            "-i",
+            &perf_path,
+        ])
+        .output()
+        .expect("run trsm-par perf report");
+    assert!(
+        report.status.success(),
+        "trsm-par perf report failed: {}",
+        String::from_utf8_lossy(&report.stderr)
+    );
+    let report = String::from_utf8(report.stdout).expect("utf8 trsm-par perf report");
+    eprintln!("FSCI_CHOL_TRSM_PAR_REPORT_BEGIN\n{report}FSCI_CHOL_TRSM_PAR_REPORT_END");
+    assert!(
+        report.contains("cholesky_panel_trsm_blocked_fma_rows"),
+        "chunk-level TRSM symbol must have non-zero profiled self-time"
+    );
+
+    let summarize = |values: &[f64]| -> (f64, f64, f64, f64, f64) {
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values
+            .iter()
+            .map(|value| (value - mean) * (value - mean))
+            .sum::<f64>()
+            / values.len() as f64;
+        let cv_pct = variance.sqrt() / mean * 100.0;
+        let mut sorted = values.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        let percentile = |pct: usize| sorted[(sorted.len() - 1) * pct / 100];
+        (mean, cv_pct, percentile(50), percentile(95), percentile(99))
+    };
+
+    for &(n, samples, factors_per_sample, expect_spawn) in
+        &[(1000usize, 20usize, 32usize, false), (2048, 12, 6, true)]
+    {
+        let a = make_symmetric_eigh_matrix(n);
+
+        CHOL_PANEL_TRSM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial_before = CHOL_PANEL_TRSM_PAR_PANELS.load(Ordering::Relaxed);
+        let serial_factor =
+            cholesky_wall_trsm_blocked_fma_candidate(black_box(&a)).expect("serial factor");
+        assert_eq!(
+            CHOL_PANEL_TRSM_PAR_PANELS.load(Ordering::Relaxed),
+            serial_before,
+            "forced-serial arm must not take the parallel branch"
+        );
+        CHOL_PANEL_TRSM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel_before = CHOL_PANEL_TRSM_PAR_PANELS.load(Ordering::Relaxed);
+        let parallel_factor =
+            cholesky_wall_trsm_blocked_fma_candidate(black_box(&a)).expect("parallel factor");
+        let spawned_panels = CHOL_PANEL_TRSM_PAR_PANELS.load(Ordering::Relaxed) - parallel_before;
+        // Gate proof: n=1000's largest TRSM panel (7.1M MACs) sits BELOW the 8M gate
+        // (measured 0.945x regression with a 2M gate), n=2048's largest (15.7M) above.
+        if expect_spawn {
+            assert!(
+                spawned_panels > 0,
+                "execution proof failed: no panel took the parallel branch at n={n}"
+            );
+        } else {
+            assert_eq!(
+                spawned_panels, 0,
+                "gate proof failed: n={n} must stay fully serial under the 8M gate"
+            );
+        }
+        for (index, (&expected, &actual)) in serial_factor.iter().zip(&parallel_factor).enumerate()
+        {
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "parallel TRSM changed n={n} factor bits at flat index {index}"
+            );
+        }
+        eprintln!("FSCI_CHOL_TRSM_PAR_AB n={n} bit_identical=true spawned_panels={spawned_panels}");
+        black_box(serial_factor);
+        black_box(parallel_factor);
+
+        let measure_serial = || -> Duration {
+            CHOL_PANEL_TRSM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+            let start = std::time::Instant::now();
+            black_box(
+                cholesky_wall_trsm_blocked_fma_candidate(black_box(&a))
+                    .expect("measured serial factor"),
+            );
+            start.elapsed()
+        };
+        let measure_parallel = || -> Duration {
+            CHOL_PANEL_TRSM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+            let start = std::time::Instant::now();
+            black_box(
+                cholesky_wall_trsm_blocked_fma_candidate(black_box(&a))
+                    .expect("measured parallel factor"),
+            );
+            start.elapsed()
+        };
+
+        for candidate_first in [false, true] {
+            if candidate_first {
+                black_box(measure_parallel());
+                black_box(measure_serial());
+            } else {
+                black_box(measure_serial());
+                black_box(measure_parallel());
+            }
+        }
+
+        let mut null_ratios = Vec::with_capacity(samples);
+        for sample in 0..samples {
+            let mut first_elapsed = Duration::ZERO;
+            let mut second_elapsed = Duration::ZERO;
+            for factor in 0..factors_per_sample {
+                if (sample + factor) % 2 == 0 {
+                    first_elapsed += measure_serial();
+                    second_elapsed += measure_serial();
+                } else {
+                    second_elapsed += measure_serial();
+                    first_elapsed += measure_serial();
+                }
+            }
+            null_ratios.push(first_elapsed.as_secs_f64() / second_elapsed.as_secs_f64());
+        }
+        let mut null_sorted = null_ratios.clone();
+        null_sorted.sort_by(f64::total_cmp);
+        let null_summary = summarize(&null_ratios);
+        eprintln!(
+            "FSCI_CHOL_TRSM_PAR_AB n={n} NULL median={:.6} min={:.6} max={:.6} cv_pct={:.3}",
+            null_summary.2,
+            null_sorted[0],
+            null_sorted[null_sorted.len() - 1],
+            null_summary.1
+        );
+
+        let mut serial_ms = Vec::with_capacity(samples);
+        let mut parallel_ms = Vec::with_capacity(samples);
+        for sample in 0..samples {
+            let mut serial_elapsed = Duration::ZERO;
+            let mut parallel_elapsed = Duration::ZERO;
+            for factor in 0..factors_per_sample {
+                if (sample + factor) % 2 == 0 {
+                    serial_elapsed += measure_serial();
+                    parallel_elapsed += measure_parallel();
+                } else {
+                    parallel_elapsed += measure_parallel();
+                    serial_elapsed += measure_serial();
+                }
+            }
+            serial_ms.push(serial_elapsed.as_secs_f64() * 1000.0 / factors_per_sample as f64);
+            parallel_ms.push(parallel_elapsed.as_secs_f64() * 1000.0 / factors_per_sample as f64);
+        }
+        let prod = summarize(&serial_ms);
+        let cand = summarize(&parallel_ms);
+        let paired_ratios = serial_ms
+            .iter()
+            .zip(&parallel_ms)
+            .map(|(before, after)| before / after)
+            .collect::<Vec<_>>();
+        let paired = summarize(&paired_ratios);
+        let gflops = |ms: f64| (n as f64).powi(3) / 3.0 / (ms * 1e6);
+        eprintln!(
+            "FSCI_CHOL_TRSM_PAR_AB n={n} PROD mean_ms={:.6} cv_pct={:.3} p50_ms={:.6} p95_ms={:.6} p99_ms={:.6} gflops_p50={:.2}",
+            prod.0,
+            prod.1,
+            prod.2,
+            prod.3,
+            prod.4,
+            gflops(prod.2)
+        );
+        eprintln!(
+            "FSCI_CHOL_TRSM_PAR_AB n={n} CAND mean_ms={:.6} cv_pct={:.3} p50_ms={:.6} p95_ms={:.6} p99_ms={:.6} gflops_p50={:.2}",
+            cand.0,
+            cand.1,
+            cand.2,
+            cand.3,
+            cand.4,
+            gflops(cand.2)
+        );
+        let decided = paired.2 < null_sorted[0] || paired.2 > null_sorted[null_sorted.len() - 1];
+        eprintln!(
+            "FSCI_CHOL_TRSM_PAR_AB n={n} paired_median={:.6} paired_mean={:.6} paired_cv_pct={:.3} null=[{:.6},{:.6}] DECIDED={decided} samples={samples} factors_per_sample={factors_per_sample}",
+            paired.2,
+            paired.0,
+            paired.1,
+            null_sorted[0],
+            null_sorted[null_sorted.len() - 1]
+        );
+    }
+    CHOL_PANEL_TRSM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+
+    let a = make_symmetric_eigh_matrix(1000);
+    let mut group = c.benchmark_group("cholesky_wall_trsm_par_ab");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    let candidate_first = std::cell::Cell::new(false);
+    group.bench_function("1000x1000_paired_alternating", |bencher| {
+        bencher.iter(|| {
+            let first = candidate_first.get();
+            candidate_first.set(!first);
+            if first {
+                CHOL_PANEL_TRSM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                black_box(
+                    cholesky_wall_trsm_blocked_fma_candidate(black_box(&a))
+                        .expect("criterion parallel factor"),
+                );
+                CHOL_PANEL_TRSM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                black_box(
+                    cholesky_wall_trsm_blocked_fma_candidate(black_box(&a))
+                        .expect("criterion serial factor"),
+                );
+            } else {
+                CHOL_PANEL_TRSM_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                black_box(
+                    cholesky_wall_trsm_blocked_fma_candidate(black_box(&a))
+                        .expect("criterion serial factor"),
+                );
+                CHOL_PANEL_TRSM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                black_box(
+                    cholesky_wall_trsm_blocked_fma_candidate(black_box(&a))
+                        .expect("criterion parallel factor"),
+                );
+            }
+        });
+    });
+    group.finish();
+    CHOL_PANEL_TRSM_FORCE_SERIAL.store(false, Ordering::Relaxed);
+}
+
+#[cfg(not(feature = "chol-wall-bench"))]
+fn bench_cholesky_wall_trsm_par_ab(_c: &mut Criterion) {}
+
 /// One-binary A/B for the blocked GEMM-shaped panel TRSM: production (rows2 dot TRSM +
 /// FMA SYRK) vs candidate (blocked left-looking FMA TRSM + FMA SYRK), interleaved per
 /// factor with a production/production A/A null pass, a candidate-binary perf self-time
@@ -2349,6 +2648,7 @@ criterion_group!(
 
 criterion_group!(
     cholesky_wall_benches,
+    bench_cholesky_wall_trsm_par_ab,
     bench_cholesky_wall_trsm_fma_ab,
     bench_cholesky_wall_nr8_fma_ab,
     bench_cholesky_wall_mr4_nr4_ab
