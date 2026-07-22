@@ -343,13 +343,12 @@ pub fn cosine(a: &[f64], b: &[f64]) -> f64 {
     // Fuse the dot product and the two squared-norms into ONE pass over (a, b) — byte-identical to
     // the three separate SIMD helpers (see `fused_dot_sqsum`) but reading each vector once instead
     // of twice. Only for equal-length inputs (the helpers cover different ranges otherwise).
-    let (dot, sqsum_a, sqsum_b) = if COSINE_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
-        || a.len() != b.len()
-    {
-        (simd_dot(a, b), simd_sqsum(a), simd_sqsum(b))
-    } else {
-        fused_dot_sqsum(a, b)
-    };
+    let (dot, sqsum_a, sqsum_b) =
+        if COSINE_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) || a.len() != b.len() {
+            (simd_dot(a, b), simd_sqsum(a), simd_sqsum(b))
+        } else {
+            fused_dot_sqsum(a, b)
+        };
     let norm_a = sqsum_a.sqrt();
     let norm_b = sqsum_b.sqrt();
     let denom = norm_a * norm_b;
@@ -6231,17 +6230,17 @@ pub fn geometric_slerp(
     };
 
     let n_t = t_values.len();
-    let nthreads = if SPATIAL_SLERP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n_t < 2
-    {
-        1
-    } else if (n_t as u64).saturating_mul((d + 8) as u64) < (1 << 16) {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n_t)
-    };
+    let nthreads =
+        if SPATIAL_SLERP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n_t < 2 {
+            1
+        } else if (n_t as u64).saturating_mul((d + 8) as u64) < (1 << 16) {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n_t)
+        };
 
     if nthreads <= 1 {
         for &t in t_values {
@@ -7111,9 +7110,8 @@ where
         return dists;
     }
 
-    let block_of = |i: usize| -> Vec<f64> {
-        (i + 1..n).map(|j| metric(&data[i], &data[j])).collect()
-    };
+    let block_of =
+        |i: usize| -> Vec<f64> { (i + 1..n).map(|j| metric(&data[i], &data[j])).collect() };
     let block_of = &block_of;
     let chunk = n.div_ceil(nthreads);
     let parts: Vec<Vec<Vec<f64>>> = std::thread::scope(|scope| {

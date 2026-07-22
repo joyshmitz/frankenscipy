@@ -2116,12 +2116,12 @@ fn trust_region_exact_step(grad: &[f64], hessian: &[Vec<f64>], delta: f64) -> Ve
     let mut boundary_step = None;
 
     for _ in 0..60 {
-        let candidate_opt = if TRUST_EXACT_FOLD_SHIFT_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
-        {
-            solve_linear_system(&shifted_matrix(hessian, upper), &rhs)
-        } else {
-            solve_shifted_system(hessian, upper, &rhs)
-        };
+        let candidate_opt =
+            if TRUST_EXACT_FOLD_SHIFT_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+                solve_linear_system(&shifted_matrix(hessian, upper), &rhs)
+            } else {
+                solve_shifted_system(hessian, upper, &rhs)
+            };
         if let Some(candidate) = candidate_opt {
             let norm = l2_norm(&candidate);
             if norm <= delta {
@@ -2139,13 +2139,12 @@ fn trust_region_exact_step(grad: &[f64], hessian: &[Vec<f64>], delta: f64) -> Ve
         let mut lo_lambda = lower;
         for _ in 0..60 {
             let mid_lambda = 0.5 * (lo_lambda + hi_lambda);
-            let candidate_opt = if TRUST_EXACT_FOLD_SHIFT_DISABLE
-                .load(std::sync::atomic::Ordering::Relaxed)
-            {
-                solve_linear_system(&shifted_matrix(hessian, mid_lambda), &rhs)
-            } else {
-                solve_shifted_system(hessian, mid_lambda, &rhs)
-            };
+            let candidate_opt =
+                if TRUST_EXACT_FOLD_SHIFT_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+                    solve_linear_system(&shifted_matrix(hessian, mid_lambda), &rhs)
+                } else {
+                    solve_shifted_system(hessian, mid_lambda, &rhs)
+                };
             let Some(candidate) = candidate_opt else {
                 lo_lambda = mid_lambda;
                 continue;
