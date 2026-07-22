@@ -39,7 +39,9 @@ fn main() {
     a.extend((0..order).map(|_| 0.08 * r()));
     let b: Vec<f64> = (0..=order).map(|_| 0.1 * r()).collect();
     // 2-D input: `rows` independent lines of length `cols`, filtered along axis 1 (rows).
-    let x: Vec<Vec<f64>> = (0..rows).map(|_| (0..cols).map(|_| r()).collect()).collect();
+    let x: Vec<Vec<f64>> = (0..rows)
+        .map(|_| (0..cols).map(|_| r()).collect())
+        .collect();
 
     // Parity: hoisted must be byte-identical to the per-line path over every element.
     FILTFILT_AXIS_HOIST_DISABLE.store(true, Ordering::Relaxed);
@@ -50,7 +52,11 @@ fn main() {
         .iter()
         .zip(&rb)
         .map(|(row_a, row_b)| {
-            row_a.iter().zip(row_b).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+            row_a
+                .iter()
+                .zip(row_b)
+                .filter(|(p, q)| p.to_bits() != q.to_bits())
+                .count()
                 + usize::from(row_a.len() != row_b.len())
         })
         .sum::<usize>()

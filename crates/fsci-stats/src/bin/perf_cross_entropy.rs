@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
 
     let mut s = 1u64;
@@ -37,7 +40,11 @@ fn main() {
     CROSS_ENTROPY_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = cross_entropy(&pk, &qk, None);
     let ulp = (a.to_bits() as i64 - b.to_bits() as i64).unsigned_abs();
-    let rel = if a != 0.0 { ((a - b) / a).abs() } else { (a - b).abs() };
+    let rel = if a != 0.0 {
+        ((a - b) / a).abs()
+    } else {
+        (a - b).abs()
+    };
 
     let bench = |force_serial: bool| -> f64 {
         CROSS_ENTROPY_FORCE_SERIAL.store(force_serial, Ordering::Relaxed);
@@ -67,7 +74,9 @@ fn main() {
     let decidable = cand_med > null_hi || cand_med < null_lo;
     let ob = ov.iter().copied().fold(f64::MAX, f64::min);
     let fb = fv.iter().copied().fold(f64::MAX, f64::min);
-    println!("# stats::cross_entropy {n} elements | serial={a:.17e} parallel={b:.17e} ULP_dist={ulp} rel={rel:.3e}");
+    println!(
+        "# stats::cross_entropy {n} elements | serial={a:.17e} parallel={b:.17e} ULP_dist={ulp} rel={rel:.3e}"
+    );
     println!(
         "{} serial {ob:.2}ms (cv {:.1}%) parallel {fb:.2}ms (cv {:.1}%) | CAND(serial/parallel) median \
          {cand_med:.3}x | NULL(A/A) range [{null_lo:.3}, {null_hi:.3}]",

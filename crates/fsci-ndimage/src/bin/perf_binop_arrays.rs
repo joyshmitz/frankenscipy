@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0x27d4_eb2fu64;
@@ -35,8 +38,16 @@ fn main() {
     let x = multiply_arrays(&a, &b).unwrap();
     NDIMAGE_BINOP_ARRAYS_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let y = multiply_arrays(&a, &b).unwrap();
-    let bitmism = x.data.iter().zip(&y.data).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    println!("# ndimage::multiply_arrays n={n} x[1]={} y[1]={} bitmism={bitmism}", x.data[1], y.data[1]);
+    let bitmism = x
+        .data
+        .iter()
+        .zip(&y.data)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    println!(
+        "# ndimage::multiply_arrays n={n} x[1]={} y[1]={} bitmism={bitmism}",
+        x.data[1], y.data[1]
+    );
 
     let bench = |serial: bool| -> f64 {
         NDIMAGE_BINOP_ARRAYS_FORCE_SERIAL.store(serial, Ordering::Relaxed);

@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 1u64;
@@ -42,7 +45,10 @@ fn main() {
         + usize::from(a.kurtosis.to_bits() != b.kurtosis.to_bits())
         + usize::from(a.minmax.0.to_bits() != b.minmax.0.to_bits())
         + usize::from(a.minmax.1.to_bits() != b.minmax.1.to_bits());
-    println!("# stats::describe n={n} (mean {} / {}) bitmism={bitmism}", a.mean, b.mean);
+    println!(
+        "# stats::describe n={n} (mean {} / {}) bitmism={bitmism}",
+        a.mean, b.mean
+    );
 
     let run = || describe(black_box(&data));
     // disable=true is the ORIG (three-pass) baseline; false is the fused candidate.

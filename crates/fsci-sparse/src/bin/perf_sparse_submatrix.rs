@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let rows: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2_000_000);
+    let rows: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2_000_000);
     let nnz_per: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
     let cols = nnz_per.max(1) * 4;
@@ -54,9 +57,24 @@ fn main() {
     let sa = sparse_submatrix(&mat, r0, r1, c0, c1);
     SPARSE_SUBMATRIX_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let pa = sparse_submatrix(&mat, r0, r1, c0, c1);
-    let dbit = sa.data().iter().zip(pa.data()).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-    let ibit = sa.indices().iter().zip(pa.indices()).filter(|(x, y)| x != y).count();
-    let pbit = sa.indptr().iter().zip(pa.indptr()).filter(|(x, y)| x != y).count();
+    let dbit = sa
+        .data()
+        .iter()
+        .zip(pa.data())
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
+    let ibit = sa
+        .indices()
+        .iter()
+        .zip(pa.indices())
+        .filter(|(x, y)| x != y)
+        .count();
+    let pbit = sa
+        .indptr()
+        .iter()
+        .zip(pa.indptr())
+        .filter(|(x, y)| x != y)
+        .count();
     let lenmis = (sa.data().len() != pa.data().len()) as usize;
     let bitmism = dbit + ibit + pbit + lenmis;
     println!(

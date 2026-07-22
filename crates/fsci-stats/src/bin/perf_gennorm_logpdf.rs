@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
     let beta: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1.5);
 
@@ -38,7 +41,11 @@ fn main() {
     let a = dist.logpdf_many(&xs);
     GENNORM_LOGPDF_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = dist.logpdf_many(&xs);
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
         + usize::from(a.len() != b.len());
 
     let bench = |force_serial: bool| -> f64 {

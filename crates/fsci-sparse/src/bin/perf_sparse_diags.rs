@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3_000_000);
     let nbands: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(7);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
 
@@ -34,7 +37,9 @@ fn main() {
         .iter()
         .map(|&off| {
             let len = n - (off.unsigned_abs());
-            (0..len).map(|i| 1.0 + (i as f64) * 1e-6 + off as f64).collect::<Vec<f64>>()
+            (0..len)
+                .map(|i| 1.0 + (i as f64) * 1e-6 + off as f64)
+                .collect::<Vec<f64>>()
         })
         .collect();
 
@@ -42,9 +47,24 @@ fn main() {
     let sa = diags(&diagonals, &offsets, None).expect("diags");
     SPARSE_DIAGS_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let pa = diags(&diagonals, &offsets, None).expect("diags");
-    let dbit = sa.data().iter().zip(pa.data()).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-    let ibit = sa.indices().iter().zip(pa.indices()).filter(|(x, y)| x != y).count();
-    let pbit = sa.indptr().iter().zip(pa.indptr()).filter(|(x, y)| x != y).count();
+    let dbit = sa
+        .data()
+        .iter()
+        .zip(pa.data())
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
+    let ibit = sa
+        .indices()
+        .iter()
+        .zip(pa.indices())
+        .filter(|(x, y)| x != y)
+        .count();
+    let pbit = sa
+        .indptr()
+        .iter()
+        .zip(pa.indptr())
+        .filter(|(x, y)| x != y)
+        .count();
     let lenmis = (sa.data().len() != pa.data().len()) as usize;
     let bitmism = dbit + ibit + pbit + lenmis;
     println!(

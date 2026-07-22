@@ -132,7 +132,11 @@ fn bench_odr_dense_hoist_ab(c: &mut Criterion) {
         let hoisted = make_solver(n).run_dense_reference().unwrap();
         ODR_LMSTEP_HOIST_DISABLE.store(true, Ordering::Relaxed);
         let orig = make_solver(n).run_dense_reference().unwrap();
-        assert_eq!(hoisted.beta.len(), orig.beta.len(), "beta length differs (n={n})");
+        assert_eq!(
+            hoisted.beta.len(),
+            orig.beta.len(),
+            "beta length differs (n={n})"
+        );
         assert!(
             hoisted
                 .beta

@@ -53,7 +53,10 @@ fn main() {
     FREQRESP_METHOD_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let (mb, pb) = sys.freqresp(&w);
     let bit = |x: &[f64], y: &[f64]| -> usize {
-        x.iter().zip(y).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+        x.iter()
+            .zip(y)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count()
             + usize::from(x.len() != y.len())
     };
     let bitmism = bit(&ma, &mb) + bit(&pa, &pb);

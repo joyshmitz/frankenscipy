@@ -39,8 +39,10 @@ fn main() {
     let b = wilcoxon(&x, &y);
     let bitmism = usize::from(a.statistic.to_bits() != b.statistic.to_bits())
         + usize::from(a.pvalue.to_bits() != b.pvalue.to_bits());
-    println!("# wilcoxon n={n} orig(stat={},p={}) lazy(stat={},p={}) bitmism={bitmism}",
-        a.statistic, a.pvalue, b.statistic, b.pvalue);
+    println!(
+        "# wilcoxon n={n} orig(stat={},p={}) lazy(stat={},p={}) bitmism={bitmism}",
+        a.statistic, a.pvalue, b.statistic, b.pvalue
+    );
 
     let bench = |eager: bool| -> f64 {
         WILCOXON_FORCE_EAGER_NOTIES.store(eager, Ordering::Relaxed);

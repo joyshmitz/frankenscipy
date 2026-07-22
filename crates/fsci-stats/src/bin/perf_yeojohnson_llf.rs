@@ -21,7 +21,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
     let lmb: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0.7);
 
@@ -41,7 +44,9 @@ fn main() {
     YEOJOHNSON_LLF_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = yeojohnson_llf(lmb, &data);
     let bitmism = usize::from(a.to_bits() != b.to_bits());
-    println!("# stats::yeojohnson_llf n={n} lambda={lmb} (serial={a} parallel={b}) bitmism={bitmism}");
+    println!(
+        "# stats::yeojohnson_llf n={n} lambda={lmb} (serial={a} parallel={b}) bitmism={bitmism}"
+    );
 
     let run = || yeojohnson_llf(black_box(lmb), black_box(&data));
     let bench = |force_serial: bool| -> f64 {

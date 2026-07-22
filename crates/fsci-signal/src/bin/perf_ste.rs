@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let siglen: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(64_000_000);
+    let siglen: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(64_000_000);
     let frame_len: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(512);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
     let hop_len = frame_len; // non-overlapping -> distinct reads
@@ -37,9 +40,16 @@ fn main() {
     let a = short_time_energy(&signal, frame_len, hop_len);
     SHORT_TIME_ENERGY_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = short_time_energy(&signal, frame_len, hop_len);
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
         + usize::from(a.len() != b.len());
-    println!("# signal::short_time_energy siglen={siglen} frame_len={frame_len} nframes={} bitmism={bitmism}", a.len());
+    println!(
+        "# signal::short_time_energy siglen={siglen} frame_len={frame_len} nframes={} bitmism={bitmism}",
+        a.len()
+    );
 
     let bench = |serial: bool| -> f64 {
         SHORT_TIME_ENERGY_FORCE_SERIAL.store(serial, Ordering::Relaxed);

@@ -28,7 +28,12 @@ fn main() {
     let mut z: Vec<[f64; 4]> = Vec::with_capacity(m);
     z.push([0.0, 1.0, 1.0, 2.0]);
     for s in 1..m {
-        z.push([(n + s - 1) as f64, (s + 1) as f64, (s + 1) as f64, (s + 2) as f64]);
+        z.push([
+            (n + s - 1) as f64,
+            (s + 1) as f64,
+            (s + 1) as f64,
+            (s + 2) as f64,
+        ]);
     }
 
     INCONSISTENT_FORCE_SERIAL.store(true, Ordering::Relaxed);
@@ -38,9 +43,17 @@ fn main() {
     let bitmism: usize = a
         .iter()
         .zip(&b)
-        .map(|(ra, rb)| ra.iter().zip(rb).filter(|(x, y)| x.to_bits() != y.to_bits()).count())
+        .map(|(ra, rb)| {
+            ra.iter()
+                .zip(rb)
+                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                .count()
+        })
         .sum();
-    println!("# cluster::inconsistent m={m} depth={depth} a[m/2]={:?} bitmism={bitmism}", a[m / 2]);
+    println!(
+        "# cluster::inconsistent m={m} depth={depth} a[m/2]={:?} bitmism={bitmism}",
+        a[m / 2]
+    );
 
     let bench = |serial: bool| -> f64 {
         INCONSISTENT_FORCE_SERIAL.store(serial, Ordering::Relaxed);

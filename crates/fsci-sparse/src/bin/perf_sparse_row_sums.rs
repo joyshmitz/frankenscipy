@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let rows: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2_000_000);
+    let rows: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2_000_000);
     let nnz_per: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
     let cols = nnz_per.max(1) * 4;
@@ -49,8 +52,15 @@ fn main() {
     let a = sparse_row_sums(&mat);
     SPARSE_ROW_MINMAX_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = sparse_row_sums(&mat);
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    println!("# sparse::sparse_row_sums rows={rows} nnz_per={nnz_per} a[1]={} b[1]={} bitmism={bitmism}", a[1], b[1]);
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    println!(
+        "# sparse::sparse_row_sums rows={rows} nnz_per={nnz_per} a[1]={} b[1]={} bitmism={bitmism}",
+        a[1], b[1]
+    );
 
     let bench = |serial: bool| -> f64 {
         SPARSE_ROW_MINMAX_FORCE_SERIAL.store(serial, Ordering::Relaxed);

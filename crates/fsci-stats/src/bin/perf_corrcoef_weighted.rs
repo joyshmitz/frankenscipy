@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0xcbf2_9ce4u64;
@@ -28,8 +31,12 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64
     };
-    let x: Vec<f64> = (0..n).map(|i| (i as f64 * 1e-6).sin() + r() * 0.1).collect();
-    let y: Vec<f64> = (0..n).map(|i| (i as f64 * 1e-6).sin() + r() * 0.4).collect();
+    let x: Vec<f64> = (0..n)
+        .map(|i| (i as f64 * 1e-6).sin() + r() * 0.1)
+        .collect();
+    let y: Vec<f64> = (0..n)
+        .map(|i| (i as f64 * 1e-6).sin() + r() * 0.4)
+        .collect();
     let w: Vec<f64> = (0..n).map(|_| r() + 0.05).collect();
 
     CORRCOEF_W_FUSE_DISABLE.store(true, Ordering::Relaxed);
@@ -41,10 +48,18 @@ fn main() {
 
     let bench = |disable: bool| -> f64 {
         CORRCOEF_W_FUSE_DISABLE.store(disable, Ordering::Relaxed);
-        let _ = black_box(corrcoef_weighted(black_box(&x), black_box(&y), black_box(&w)));
+        let _ = black_box(corrcoef_weighted(
+            black_box(&x),
+            black_box(&y),
+            black_box(&w),
+        ));
         let t = Instant::now();
         for _ in 0..3 {
-            let _ = black_box(corrcoef_weighted(black_box(&x), black_box(&y), black_box(&w)));
+            let _ = black_box(corrcoef_weighted(
+                black_box(&x),
+                black_box(&y),
+                black_box(&w),
+            ));
         }
         t.elapsed().as_secs_f64() / 3.0 * 1e3
     };

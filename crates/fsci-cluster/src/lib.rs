@@ -2202,17 +2202,18 @@ fn nystroem_e_block(data: &[Vec<f64>], landmarks: &[usize], gamma: f64) -> Vec<V
         landmarks
             .iter()
             .map(|&b| {
-                let d2: f64 = xi.iter().zip(&data[b]).map(|(&x, &y)| (x - y) * (x - y)).sum();
+                let d2: f64 = xi
+                    .iter()
+                    .zip(&data[b])
+                    .map(|(&x, &y)| (x - y) * (x - y))
+                    .sum();
                 (-gamma * d2).exp()
             })
             .collect()
     };
     let serial = NYSTROEM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
     let nthreads = if serial
-        || (n as u64)
-            .saturating_mul(m as u64)
-            .saturating_mul(d as u64)
-            < (1 << 20)
+        || (n as u64).saturating_mul(m as u64).saturating_mul(d as u64) < (1 << 20)
         || n < 2
     {
         1
@@ -5211,16 +5212,15 @@ pub fn inconsistent(z: &[[f64; 4]], depth: usize) -> Vec<[f64; 4]> {
         [mean, std, count, incon]
     };
 
-    let nthreads = if INCONSISTENT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || m < 4096
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(m)
-    };
+    let nthreads =
+        if INCONSISTENT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || m < 4096 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(m)
+        };
     if nthreads <= 1 {
         return (0..m).map(stat).collect();
     }
@@ -7459,47 +7459,47 @@ pub fn kmedoids(
             // ascending order, the `>i` terms during outer iteration `i`; the dropped
             // diagonal is a `+0.0` no-op on the non-negative running sum), and the
             // strict-`<` first-wins min-selection is unchanged.
-            let best_local = if KMEDOIDS_COST_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
-            {
-                let mut dmat = vec![vec![0.0_f64; m]; m];
-                for i in 0..m {
-                    let mi = &member_flat[i * d..i * d + d];
-                    for j in (i + 1)..m {
-                        let dist = sq_dist(mi, &member_flat[j * d..j * d + d]).sqrt();
-                        dmat[i][j] = dist;
-                        dmat[j][i] = dist;
+            let best_local =
+                if KMEDOIDS_COST_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+                    let mut dmat = vec![vec![0.0_f64; m]; m];
+                    for i in 0..m {
+                        let mi = &member_flat[i * d..i * d + d];
+                        for j in (i + 1)..m {
+                            let dist = sq_dist(mi, &member_flat[j * d..j * d + d]).sqrt();
+                            dmat[i][j] = dist;
+                            dmat[j][i] = dist;
+                        }
                     }
-                }
-                let mut best_local = 0usize;
-                let mut best_cost = dmat[0].iter().sum::<f64>();
-                for (i, row) in dmat.iter().enumerate().skip(1) {
-                    let cost: f64 = row.iter().sum();
-                    if cost < best_cost {
-                        best_cost = cost;
-                        best_local = i;
+                    let mut best_local = 0usize;
+                    let mut best_cost = dmat[0].iter().sum::<f64>();
+                    for (i, row) in dmat.iter().enumerate().skip(1) {
+                        let cost: f64 = row.iter().sum();
+                        if cost < best_cost {
+                            best_cost = cost;
+                            best_local = i;
+                        }
                     }
-                }
-                best_local
-            } else {
-                let mut cost = vec![0.0f64; m];
-                for i in 0..m {
-                    let mi = &member_flat[i * d..i * d + d];
-                    for j in (i + 1)..m {
-                        let dist = sq_dist(mi, &member_flat[j * d..j * d + d]).sqrt();
-                        cost[i] += dist;
-                        cost[j] += dist;
+                    best_local
+                } else {
+                    let mut cost = vec![0.0f64; m];
+                    for i in 0..m {
+                        let mi = &member_flat[i * d..i * d + d];
+                        for j in (i + 1)..m {
+                            let dist = sq_dist(mi, &member_flat[j * d..j * d + d]).sqrt();
+                            cost[i] += dist;
+                            cost[j] += dist;
+                        }
                     }
-                }
-                let mut best_local = 0usize;
-                let mut best_cost = cost[0];
-                for (i, &c) in cost.iter().enumerate().skip(1) {
-                    if c < best_cost {
-                        best_cost = c;
-                        best_local = i;
+                    let mut best_local = 0usize;
+                    let mut best_cost = cost[0];
+                    for (i, &c) in cost.iter().enumerate().skip(1) {
+                        if c < best_cost {
+                            best_cost = c;
+                            best_local = i;
+                        }
                     }
-                }
-                best_local
-            };
+                    best_local
+                };
             let best_med = members[best_local];
 
             if best_med != *medoid_index {

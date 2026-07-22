@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let siglen: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8_000_000);
+    let siglen: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8_000_000);
     let frame_len: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1024);
     let hop_len: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(256);
     let iters: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(15);
@@ -40,10 +43,18 @@ fn main() {
     let bitmism: usize = a
         .iter()
         .zip(&b)
-        .map(|(ra, rb)| ra.iter().zip(rb).filter(|(x, y)| x.to_bits() != y.to_bits()).count())
+        .map(|(ra, rb)| {
+            ra.iter()
+                .zip(rb)
+                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                .count()
+        })
         .sum::<usize>()
         + usize::from(a.len() != b.len());
-    println!("# signal::frame_signal siglen={siglen} frame_len={frame_len} hop={hop_len} nframes={} bitmism={bitmism}", a.len());
+    println!(
+        "# signal::frame_signal siglen={siglen} frame_len={frame_len} hop={hop_len} nframes={} bitmism={bitmism}",
+        a.len()
+    );
 
     let bench = |serial: bool| -> f64 {
         FRAME_SIGNAL_FORCE_SERIAL.store(serial, Ordering::Relaxed);

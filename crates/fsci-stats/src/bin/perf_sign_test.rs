@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(32_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(32_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 1u64;
@@ -37,7 +40,10 @@ fn main() {
     let b = sign_test(&x, &y).unwrap();
     let bitmism = usize::from(a.statistic.to_bits() != b.statistic.to_bits())
         + usize::from(a.pvalue.to_bits() != b.pvalue.to_bits());
-    println!("# stats::sign_test n={n} (stat 2pass={} fused={}) bitmism={bitmism}", a.statistic, b.statistic);
+    println!(
+        "# stats::sign_test n={n} (stat 2pass={} fused={}) bitmism={bitmism}",
+        a.statistic, b.statistic
+    );
 
     let run = || sign_test(black_box(&x), black_box(&y)).unwrap();
     let bench = |disable: bool| -> f64 {

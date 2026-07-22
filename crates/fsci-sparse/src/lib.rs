@@ -12,9 +12,8 @@ pub use audit::{
 
 pub use construct::{
     BMAT_FORCE_GENERIC, DIAGS_VALIDATE, HstackOutput, KRON_VALIDATE, SPARSE_DIAGS_FORCE_SERIAL,
-    VSTACK_FORCE_GENERIC, block_array, block_diag, bmat, diags, diags_array, eye,
-    eye_array, eye_rectangular, hstack, hstack_with_format, identity, kron, kronsum, random,
-    spdiags, vstack,
+    VSTACK_FORCE_GENERIC, block_array, block_diag, bmat, diags, diags_array, eye, eye_array,
+    eye_rectangular, hstack, hstack_with_format, identity, kron, kronsum, random, spdiags, vstack,
 };
 pub use formats::{
     BsrMatrix, COO_SUM_DUPLICATES_RADIX_DISABLE, CanonicalMeta, ConstructionLogEntry, CooMatrix,
@@ -65,6 +64,13 @@ pub use linalg::{
     LuOptions,
     MstResult,
     PermutationOrdering,
+    SPARSE_ADD_FORCE_SERIAL,
+    SPARSE_ELIMINATE_ZEROS_FORCE_SERIAL,
+    SPARSE_MAP_FORCE_SERIAL,
+    SPARSE_NNZ_FORCE_SERIAL,
+    SPARSE_ROW_MINMAX_FORCE_SERIAL,
+    SPARSE_SCALE_FORCE_SERIAL,
+    SPARSE_SUBMATRIX_FORCE_SERIAL,
     ShortestPathResult,
     SolveOptions,
     SolveResult,
@@ -124,26 +130,19 @@ pub use linalg::{
     sparse_density,
     sparse_diagonal,
     sparse_eliminate_zeros,
-    SPARSE_ELIMINATE_ZEROS_FORCE_SERIAL,
     sparse_frobenius_inner,
     sparse_has_explicit_zeros,
     sparse_is_symmetric,
-    SPARSE_ADD_FORCE_SERIAL,
     sparse_map,
-    SPARSE_MAP_FORCE_SERIAL,
     sparse_nnz,
-    SPARSE_NNZ_FORCE_SERIAL,
     // Sparse matrix operations
     sparse_norm,
     sparse_power,
     sparse_row_max,
     sparse_row_min,
-    SPARSE_ROW_MINMAX_FORCE_SERIAL,
     sparse_row_sums,
     sparse_scale,
-    SPARSE_SCALE_FORCE_SERIAL,
     sparse_submatrix,
-    SPARSE_SUBMATRIX_FORCE_SERIAL,
     sparse_sum,
     sparse_trace,
     sparse_transpose,
@@ -845,7 +844,11 @@ mod tests {
             assert_eq!(actual.0, expected.0);
             assert_eq!(actual.1, expected.1);
             assert_eq!(
-                actual.2.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                actual
+                    .2
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
                 expected
                     .2
                     .iter()

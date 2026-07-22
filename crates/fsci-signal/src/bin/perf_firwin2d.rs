@@ -31,9 +31,17 @@ fn main() {
     let bitmism: usize = a
         .iter()
         .zip(&b)
-        .map(|(ra, rb)| ra.iter().zip(rb).filter(|(x, y)| x.to_bits() != y.to_bits()).count())
+        .map(|(ra, rb)| {
+            ra.iter()
+                .zip(rb)
+                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                .count()
+        })
         .sum();
-    println!("# signal::firwin_2d_circular hs={hs} a[1][1]={} bitmism={bitmism}", a[1][1]);
+    println!(
+        "# signal::firwin_2d_circular hs={hs} a[1][1]={} bitmism={bitmism}",
+        a[1][1]
+    );
 
     let bench = |serial: bool| -> f64 {
         FIRWIN2D_CIRCULAR_FORCE_SERIAL.store(serial, Ordering::Relaxed);

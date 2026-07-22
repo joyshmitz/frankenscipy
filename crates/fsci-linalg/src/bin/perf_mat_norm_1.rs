@@ -28,7 +28,9 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64 * 10.0 - 5.0
     };
-    let m: Vec<Vec<f64>> = (0..side).map(|_| (0..side).map(|_| r()).collect()).collect();
+    let m: Vec<Vec<f64>> = (0..side)
+        .map(|_| (0..side).map(|_| r()).collect())
+        .collect();
 
     LINALG_MAT_NORM_1_FORCE_SERIAL.store(true, Ordering::Relaxed);
     let a = mat_norm_1(&m);

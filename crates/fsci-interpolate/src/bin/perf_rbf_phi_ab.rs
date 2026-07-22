@@ -38,7 +38,9 @@ fn main() {
     let a = RbfInterpolator::new(&points, &values, kernel, 1.0).unwrap();
     RBF_BUILD_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = RbfInterpolator::new(&points, &values, kernel, 1.0).unwrap();
-    let q: Vec<Vec<f64>> = (0..200).map(|_| (0..dim).map(|_| rng()).collect()).collect();
+    let q: Vec<Vec<f64>> = (0..200)
+        .map(|_| (0..dim).map(|_| rng()).collect())
+        .collect();
     let bitmism = q
         .iter()
         .filter(|p| a.eval(p).to_bits() != b.eval(p).to_bits())

@@ -35,10 +35,20 @@ fn main() {
     let p = outer(&a, &b);
     LINALG_MAT_ELEMENTWISE_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let q = outer(&a, &b);
-    let bitmism: usize = p.iter().zip(&q).map(|(rp, rq)| {
-        rp.iter().zip(rq).filter(|(u, v)| u.to_bits() != v.to_bits()).count()
-    }).sum();
-    println!("# linalg::outer {side}x{side} p[0][1]={} q[0][1]={} bitmism={bitmism}", p[0][1], q[0][1]);
+    let bitmism: usize = p
+        .iter()
+        .zip(&q)
+        .map(|(rp, rq)| {
+            rp.iter()
+                .zip(rq)
+                .filter(|(u, v)| u.to_bits() != v.to_bits())
+                .count()
+        })
+        .sum();
+    println!(
+        "# linalg::outer {side}x{side} p[0][1]={} q[0][1]={} bitmism={bitmism}",
+        p[0][1], q[0][1]
+    );
 
     let bench = |serial: bool| -> f64 {
         LINALG_MAT_ELEMENTWISE_FORCE_SERIAL.store(serial, Ordering::Relaxed);

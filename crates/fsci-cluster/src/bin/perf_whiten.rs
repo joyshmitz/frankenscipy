@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1_500_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1_500_000);
     let dims: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(24);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
 
@@ -40,9 +43,17 @@ fn main() {
     let bitmism: usize = a
         .iter()
         .zip(&b)
-        .map(|(ra, rb)| ra.iter().zip(rb).filter(|(x, y)| x.to_bits() != y.to_bits()).count())
+        .map(|(ra, rb)| {
+            ra.iter()
+                .zip(rb)
+                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                .count()
+        })
         .sum();
-    println!("# cluster::whiten n={n} dims={dims} a[0][0]={} bitmism={bitmism}", a[0][0]);
+    println!(
+        "# cluster::whiten n={n} dims={dims} a[0][0]={} bitmism={bitmism}",
+        a[0][0]
+    );
 
     let bench = |serial: bool| -> f64 {
         WHITEN_FORCE_SERIAL.store(serial, Ordering::Relaxed);

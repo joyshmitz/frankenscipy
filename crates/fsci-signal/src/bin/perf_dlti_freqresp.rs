@@ -6,7 +6,7 @@
 //! two Horner `poly_eval_complex` sweeps (O(len(num)+len(den)) complex MACs) + a complex divide, then
 //! a `sqrt`/`atan2` — compute-bound at high system order, independent per frequency. Discrete-time
 //! sibling of `Lti::freqresp`; the free-fn `bode`/`dfreqresp` sweeps are already parallel.
-use fsci_signal::{FREQRESP_METHOD_FORCE_SERIAL, Dlti};
+use fsci_signal::{Dlti, FREQRESP_METHOD_FORCE_SERIAL};
 use std::hint::black_box;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -41,7 +41,11 @@ fn main() {
         d.extend((0..4).map(|_| 0.1 * r()));
         d
     };
-    let sys = Dlti { num, den, dt: 0.001 };
+    let sys = Dlti {
+        num,
+        den,
+        dt: 0.001,
+    };
     // Explicit angular-frequency grid over [0, π/dt) — the scipy dlti.freqresp(w=...) case.
     let w: Vec<f64> = (0..n_freqs)
         .map(|k| std::f64::consts::PI / 0.001 * k as f64 / n_freqs as f64)
@@ -53,7 +57,10 @@ fn main() {
     FREQRESP_METHOD_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let (mb, pb) = sys.freqresp(&w);
     let bit = |x: &[f64], y: &[f64]| -> usize {
-        x.iter().zip(y).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+        x.iter()
+            .zip(y)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count()
             + usize::from(x.len() != y.len())
     };
     let bitmism = bit(&ma, &mb) + bit(&pa, &pb);

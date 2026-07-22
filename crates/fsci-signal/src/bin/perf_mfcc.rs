@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let siglen: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let siglen: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let frame_len: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2048);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
     let (sr, n_mfcc, n_mels, hop_len) = (16000.0_f64, 13usize, 40usize, 512usize);
@@ -40,17 +43,39 @@ fn main() {
     let bitmism: usize = a
         .iter()
         .zip(&b)
-        .map(|(ra, rb)| ra.iter().zip(rb).filter(|(x, y)| x.to_bits() != y.to_bits()).count())
+        .map(|(ra, rb)| {
+            ra.iter()
+                .zip(rb)
+                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                .count()
+        })
         .sum::<usize>()
         + usize::from(a.len() != b.len());
-    println!("# signal::mfcc siglen={siglen} frame_len={frame_len} nframes={} bitmism={bitmism}", a.len());
+    println!(
+        "# signal::mfcc siglen={siglen} frame_len={frame_len} nframes={} bitmism={bitmism}",
+        a.len()
+    );
 
     let bench = |serial: bool| -> f64 {
         MFCC_FORCE_SERIAL.store(serial, Ordering::Relaxed);
-        let _ = black_box(mfcc(black_box(&signal), sr, n_mfcc, n_mels, frame_len, hop_len));
+        let _ = black_box(mfcc(
+            black_box(&signal),
+            sr,
+            n_mfcc,
+            n_mels,
+            frame_len,
+            hop_len,
+        ));
         let t = Instant::now();
         for _ in 0..3 {
-            let _ = black_box(mfcc(black_box(&signal), sr, n_mfcc, n_mels, frame_len, hop_len));
+            let _ = black_box(mfcc(
+                black_box(&signal),
+                sr,
+                n_mfcc,
+                n_mels,
+                frame_len,
+                hop_len,
+            ));
         }
         t.elapsed().as_secs_f64() / 3.0 * 1e3
     };

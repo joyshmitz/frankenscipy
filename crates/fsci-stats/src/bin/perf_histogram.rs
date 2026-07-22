@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
     let bins: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(64);
 
@@ -38,8 +41,14 @@ fn main() {
     HISTOGRAM_FUSE_DISABLE.store(false, Ordering::Relaxed);
     let (cb, eb) = histogram(&data, bins);
     let bitmism = usize::from(ca != cb)
-        + ea.iter().zip(&eb).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-    println!("# stats::histogram n={n} bins={bins} (count[0] {}/{}) bitmism={bitmism}", ca[0], cb[0]);
+        + ea.iter()
+            .zip(&eb)
+            .filter(|(x, y)| x.to_bits() != y.to_bits())
+            .count();
+    println!(
+        "# stats::histogram n={n} bins={bins} (count[0] {}/{}) bitmism={bitmism}",
+        ca[0], cb[0]
+    );
 
     let run = || histogram(black_box(&data), black_box(bins));
     // disable=true is the ORIG (three-pass) baseline; false is the fused candidate.

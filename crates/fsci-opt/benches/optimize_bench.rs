@@ -794,13 +794,21 @@ fn bench_trust_exact_fold_shift_ab(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("current_folded", dim), &x0, |b, x0| {
             b.iter(|| {
                 TRUST_EXACT_FOLD_SHIFT_DISABLE.store(false, Ordering::Relaxed);
-                black_box(trust_exact(&rosenbrock, x0, opts(OptimizeMethod::TrustExact)))
+                black_box(trust_exact(
+                    &rosenbrock,
+                    x0,
+                    opts(OptimizeMethod::TrustExact),
+                ))
             });
         });
         group.bench_with_input(BenchmarkId::new("orig_shifted_copy", dim), &x0, |b, x0| {
             b.iter(|| {
                 TRUST_EXACT_FOLD_SHIFT_DISABLE.store(true, Ordering::Relaxed);
-                black_box(trust_exact(&rosenbrock, x0, opts(OptimizeMethod::TrustExact)))
+                black_box(trust_exact(
+                    &rosenbrock,
+                    x0,
+                    opts(OptimizeMethod::TrustExact),
+                ))
             });
         });
     }

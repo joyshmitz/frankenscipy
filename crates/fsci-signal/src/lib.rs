@@ -4843,31 +4843,30 @@ pub fn spectral_bandwidth(magnitudes: &[f64], freqs: &[f64]) -> f64 {
     // check, `total = Σm` and `wsum = Σ(m·f)` into ONE pass; `centroid = wsum/total` is bit-for-bit
     // what `spectral_centroid` returns. BYTE-IDENTICAL: every Σ keeps its left-to-right order and
     // `m * f` expression, and the invalid⇒NaN / zero-total⇒0.0 early-outs are preserved.
-    let (centroid, total) = if SPECTRAL_BANDWIDTH_FUSE_DISABLE
-        .load(std::sync::atomic::Ordering::Relaxed)
-    {
-        if has_invalid_paired_spectral_bins(magnitudes, freqs) {
-            return f64::NAN;
-        }
-        let centroid = spectral_centroid(magnitudes, freqs);
-        let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
-        (centroid, total)
-    } else {
-        let mut total = 0.0f64;
-        let mut wsum = 0.0f64;
-        let mut valid = true;
-        for (&m, &f) in magnitudes.iter().zip(freqs.iter()) {
-            valid &= m.is_finite() && m >= 0.0 && f.is_finite();
-            total += m;
-            wsum += m * f;
-        }
-        if !valid {
-            return f64::NAN;
-        }
-        // Matches spectral_centroid: it returns 0.0 when total == 0, but that path returns 0.0 below
-        // regardless, so `wsum / total` here is only consumed when total != 0.
-        (wsum / total, total)
-    };
+    let (centroid, total) =
+        if SPECTRAL_BANDWIDTH_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            if has_invalid_paired_spectral_bins(magnitudes, freqs) {
+                return f64::NAN;
+            }
+            let centroid = spectral_centroid(magnitudes, freqs);
+            let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
+            (centroid, total)
+        } else {
+            let mut total = 0.0f64;
+            let mut wsum = 0.0f64;
+            let mut valid = true;
+            for (&m, &f) in magnitudes.iter().zip(freqs.iter()) {
+                valid &= m.is_finite() && m >= 0.0 && f.is_finite();
+                total += m;
+                wsum += m * f;
+            }
+            if !valid {
+                return f64::NAN;
+            }
+            // Matches spectral_centroid: it returns 0.0 when total == 0, but that path returns 0.0 below
+            // regardless, so `wsum / total` here is only consumed when total != 0.
+            (wsum / total, total)
+        };
     if total == 0.0 {
         return 0.0;
     }
@@ -6648,8 +6647,20 @@ pub fn normalize_minmax(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
-    let nan_min = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) };
-    let nan_max = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) };
+    let nan_min = |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.min(b)
+        }
+    };
+    let nan_max = |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    };
 
     if NORMALIZE_MINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         let min = x.iter().copied().fold(f64::INFINITY, nan_min);
@@ -10994,7 +11005,9 @@ pub fn freqs_zpk(zpk: &ZpkCoeffs, w: &[f64]) -> Result<FreqzResult, SignalError>
     // `bode`/`freqs` use. Chunks are index-aligned and the kernel is pure, so the
     // (ω, |H|, ∠H) result is byte-identical to the serial `for &omega in w` loop.
     let force_serial = FREQS_ZPK_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
-    let work = (zpk.zeros_re.len() + zpk.poles_re.len()).saturating_mul(2).max(8);
+    let work = (zpk.zeros_re.len() + zpk.poles_re.len())
+        .saturating_mul(2)
+        .max(8);
     let nthreads = if force_serial {
         1
     } else {
@@ -11018,11 +11031,7 @@ pub fn freqs_zpk(zpk: &ZpkCoeffs, w: &[f64]) -> Result<FreqzResult, SignalError>
         } else {
             let h_re = (num.0 * den.0 + num.1 * den.1) / dd;
             let h_im = (num.1 * den.0 - num.0 * den.1) / dd;
-            (
-                omega,
-                (h_re * h_re + h_im * h_im).sqrt(),
-                h_im.atan2(h_re),
-            )
+            (omega, (h_re * h_re + h_im * h_im).sqrt(), h_im.atan2(h_re))
         }
     }))
 }
@@ -11152,11 +11161,7 @@ pub fn freqs(b: &[f64], a: &[f64], w: &[f64]) -> Result<FreqzResult, SignalError
         } else {
             let h_re = (b_re * a_re + b_im * a_im) / denom;
             let h_im = (b_im * a_re - b_re * a_im) / denom;
-            (
-                omega,
-                (h_re * h_re + h_im * h_im).sqrt(),
-                h_im.atan2(h_re),
-            )
+            (omega, (h_re * h_re + h_im * h_im).sqrt(), h_im.atan2(h_re))
         }
     }))
 }
@@ -19290,8 +19295,7 @@ impl Lti {
         // shared `freqz_par_collect` helper (the same path the free-fn `bode`/`dfreqresp` sweeps use):
         // chunks are index-aligned and the kernel is pure, so the (mag, phase) result is byte-
         // identical to the serial `for &omega in w` loop.
-        let force_serial =
-            FREQRESP_METHOD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+        let force_serial = FREQRESP_METHOD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
         let work = (self.num.len() + self.den.len()).saturating_mul(2).max(8);
         let nthreads = if force_serial {
             1
@@ -19623,8 +19627,7 @@ impl Dlti {
         // `dfreqresp` sweeps use): chunks are index-aligned and the kernel is pure, so the (mag,
         // phase) result is byte-identical to the serial `for &omega in w` loop. Discrete-time sibling
         // of `Lti::freqresp`, sharing the `FREQRESP_METHOD_FORCE_SERIAL` gate.
-        let force_serial =
-            FREQRESP_METHOD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+        let force_serial = FREQRESP_METHOD_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
         let work = (self.num.len() + self.den.len()).saturating_mul(2).max(8);
         let nthreads = if force_serial {
             1
@@ -26781,7 +26784,11 @@ mod tests {
                     let hoisted = resample_poly_axis_2d(&x, up, down, axis);
                     match (perrow, hoisted) {
                         (Ok(a), Ok(b)) => {
-                            assert_eq!(a.len(), b.len(), "shape=({rows},{cols}) up={up} down={down} axis={axis}");
+                            assert_eq!(
+                                a.len(),
+                                b.len(),
+                                "shape=({rows},{cols}) up={up} down={down} axis={axis}"
+                            );
                             for (ra, rb) in a.iter().zip(&b) {
                                 assert_eq!(ra.len(), rb.len());
                                 for (p, q) in ra.iter().zip(rb) {
@@ -34089,7 +34096,8 @@ mod tests {
         // The parallel (row + transposed-column) IIR must be BYTE-IDENTICAL to the serial passes,
         // across rectangular shapes (incl. above the parallel gate) and the 1-row/1-col degenerate
         // cases. Both cspline2d (cubic) and qspline2d (quadratic) route through spline2d_separable.
-        let shapes: &[(usize, usize)] = &[(1, 20), (20, 1), (5, 7), (400, 300), (300, 400), (33, 33)];
+        let shapes: &[(usize, usize)] =
+            &[(1, 20), (20, 1), (5, 7), (400, 300), (300, 400), (33, 33)];
         for &(rows, cols) in shapes {
             let data: Vec<f64> = (0..rows * cols)
                 .map(|k| ((k as f64 * 0.041).sin() * 5.0 - 0.4) + (k % 9) as f64 * 0.3)
@@ -34111,11 +34119,7 @@ mod tests {
                     (Ok(a), Ok(b)) => {
                         assert_eq!(a.len(), b.len());
                         for (x, y) in a.iter().zip(&b) {
-                            assert_eq!(
-                                x.to_bits(),
-                                y.to_bits(),
-                                "shape=({rows},{cols}) q={use_q}"
-                            );
+                            assert_eq!(x.to_bits(), y.to_bits(), "shape=({rows},{cols}) q={use_q}");
                         }
                     }
                     (Err(_), Err(_)) => {}
@@ -34320,4 +34324,3 @@ mod tests {
         }
     }
 }
-

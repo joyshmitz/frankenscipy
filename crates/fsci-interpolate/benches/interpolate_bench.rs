@@ -239,7 +239,10 @@ fn bench_cubic_cursor_eval_many_ab(c: &mut Criterion) {
             ),
         ] {
             assert!(
-                cursor.iter().zip(&orig).all(|(a, b)| a.to_bits() == b.to_bits()),
+                cursor
+                    .iter()
+                    .zip(&orig)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
                 "cursor eval_many must be byte-identical to par_query_map for {name} m={m}"
             );
         }

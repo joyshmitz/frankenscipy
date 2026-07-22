@@ -37,8 +37,15 @@ fn main() {
     let (_wa, ma, pa) = bode(&num, &den, &w).unwrap();
     BODE_POST_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let (_wb, mb, pb) = bode(&num, &den, &w).unwrap();
-    let bitmism = ma.iter().zip(&mb).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
-        + pa.iter().zip(&pb).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let bitmism = ma
+        .iter()
+        .zip(&mb)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
+        + pa.iter()
+            .zip(&pb)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count()
         + usize::from(ma.len() != mb.len() || pa.len() != pb.len());
 
     let bench = |force_serial: bool| -> f64 {

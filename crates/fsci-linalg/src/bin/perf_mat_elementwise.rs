@@ -28,17 +28,31 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64 * 10.0 - 5.0
     };
-    let a: Vec<Vec<f64>> = (0..side).map(|_| (0..side).map(|_| r()).collect()).collect();
-    let b: Vec<Vec<f64>> = (0..side).map(|_| (0..side).map(|_| r()).collect()).collect();
+    let a: Vec<Vec<f64>> = (0..side)
+        .map(|_| (0..side).map(|_| r()).collect())
+        .collect();
+    let b: Vec<Vec<f64>> = (0..side)
+        .map(|_| (0..side).map(|_| r()).collect())
+        .collect();
 
     LINALG_MAT_ELEMENTWISE_FORCE_SERIAL.store(true, Ordering::Relaxed);
     let x = hadamard_product(&a, &b);
     LINALG_MAT_ELEMENTWISE_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let y = hadamard_product(&a, &b);
-    let bitmism: usize = x.iter().zip(&y).map(|(rx, ry)| {
-        rx.iter().zip(ry).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
-    }).sum();
-    println!("# linalg::hadamard_product {side}x{side} x[0][1]={} y[0][1]={} bitmism={bitmism}", x[0][1], y[0][1]);
+    let bitmism: usize = x
+        .iter()
+        .zip(&y)
+        .map(|(rx, ry)| {
+            rx.iter()
+                .zip(ry)
+                .filter(|(p, q)| p.to_bits() != q.to_bits())
+                .count()
+        })
+        .sum();
+    println!(
+        "# linalg::hadamard_product {side}x{side} x[0][1]={} y[0][1]={} bitmism={bitmism}",
+        x[0][1], y[0][1]
+    );
 
     let bench = |serial: bool| -> f64 {
         LINALG_MAT_ELEMENTWISE_FORCE_SERIAL.store(serial, Ordering::Relaxed);

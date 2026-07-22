@@ -51,9 +51,18 @@ fn main() {
     let (wa, ha) = dfreqresp(&num, &den, 1.0, &w).unwrap();
     DFREQRESP_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let (wb, hb) = dfreqresp(&num, &den, 1.0, &w).unwrap();
-    let bitmism = wa.iter().zip(&wb).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
+    let bitmism = wa
+        .iter()
+        .zip(&wb)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count()
         + usize::from(wa.len() != wb.len())
-        + ha.iter().zip(&hb).filter(|((ar, ai), (br, bi))| ar.to_bits() != br.to_bits() || ai.to_bits() != bi.to_bits()).count()
+        + ha.iter()
+            .zip(&hb)
+            .filter(|((ar, ai), (br, bi))| {
+                ar.to_bits() != br.to_bits() || ai.to_bits() != bi.to_bits()
+            })
+            .count()
         + usize::from(ha.len() != hb.len());
 
     let bench = |force_serial: bool| -> f64 {

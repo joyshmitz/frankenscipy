@@ -34,7 +34,10 @@ fn p90(values: &[f64], _positions: Option<&[usize]>) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let npix: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let npix: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let nlabels: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(64);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(13);
 

@@ -175,16 +175,15 @@ where
         }
         Ok((f_plus - f0) / epsilon)
     };
-    let nthreads = if OPT_APPROX_FPRIME_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < 2
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n)
-    };
+    let nthreads =
+        if OPT_APPROX_FPRIME_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < 2 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n)
+        };
     let results: Vec<Result<f64, usize>> = if nthreads <= 1 {
         (0..n).map(component).collect()
     } else {
@@ -442,16 +441,15 @@ where
         col
     };
 
-    let nthreads = if OPT_APPROX_DERIV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < 2
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n)
-    };
+    let nthreads =
+        if OPT_APPROX_DERIV_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < 2 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n)
+        };
 
     let jt: Vec<Vec<f64>> = if nthreads <= 1 {
         (0..n).map(compute_col).collect()

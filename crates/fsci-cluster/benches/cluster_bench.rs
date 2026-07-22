@@ -401,8 +401,15 @@ fn bench_kmedoids_fuse_ab(c: &mut Criterion) {
         let f = kmedoids(&data, k, 50, 42).expect("kmedoids fused");
         KMEDOIDS_COST_FUSE_DISABLE.store(true, Ordering::Relaxed);
         let o = kmedoids(&data, k, 50, 42).expect("kmedoids orig");
-        assert_eq!(f.labels, o.labels, "kmedoids fuse labels mismatch (n={n} k={k})");
-        assert_eq!(f.inertia.to_bits(), o.inertia.to_bits(), "kmedoids fuse inertia mismatch");
+        assert_eq!(
+            f.labels, o.labels,
+            "kmedoids fuse labels mismatch (n={n} k={k})"
+        );
+        assert_eq!(
+            f.inertia.to_bits(),
+            o.inertia.to_bits(),
+            "kmedoids fuse inertia mismatch"
+        );
         assert!(
             f.centroids
                 .iter()
@@ -410,18 +417,24 @@ fn bench_kmedoids_fuse_ab(c: &mut Criterion) {
                 .all(|(a, b)| a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())),
             "kmedoids fuse centroids not byte-identical (n={n} k={k})"
         );
-        group.bench_function(BenchmarkId::new("current_fused", format!("n{n}_k{k}_d{d}")), |b| {
-            b.iter(|| {
-                KMEDOIDS_COST_FUSE_DISABLE.store(false, Ordering::Relaxed);
-                kmedoids(&data, k, 50, 42).expect("km")
-            })
-        });
-        group.bench_function(BenchmarkId::new("orig_matrix", format!("n{n}_k{k}_d{d}")), |b| {
-            b.iter(|| {
-                KMEDOIDS_COST_FUSE_DISABLE.store(true, Ordering::Relaxed);
-                kmedoids(&data, k, 50, 42).expect("km")
-            })
-        });
+        group.bench_function(
+            BenchmarkId::new("current_fused", format!("n{n}_k{k}_d{d}")),
+            |b| {
+                b.iter(|| {
+                    KMEDOIDS_COST_FUSE_DISABLE.store(false, Ordering::Relaxed);
+                    kmedoids(&data, k, 50, 42).expect("km")
+                })
+            },
+        );
+        group.bench_function(
+            BenchmarkId::new("orig_matrix", format!("n{n}_k{k}_d{d}")),
+            |b| {
+                b.iter(|| {
+                    KMEDOIDS_COST_FUSE_DISABLE.store(true, Ordering::Relaxed);
+                    kmedoids(&data, k, 50, 42).expect("km")
+                })
+            },
+        );
     }
     KMEDOIDS_COST_FUSE_DISABLE.store(false, Ordering::Relaxed);
     group.finish();

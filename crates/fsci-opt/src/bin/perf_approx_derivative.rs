@@ -58,8 +58,17 @@ fn main() {
 
     let bench = |force_serial: bool| -> f64 {
         OPT_APPROX_DERIV_FORCE_SERIAL.store(force_serial, Ordering::Relaxed);
-        let run =
-            || approx_derivative(&fun, black_box(&x0), FiniteDiffMethod::ThreePoint, None, None, None).unwrap();
+        let run = || {
+            approx_derivative(
+                &fun,
+                black_box(&x0),
+                FiniteDiffMethod::ThreePoint,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
         let _ = black_box(run());
         let t = Instant::now();
         for _ in 0..3 {

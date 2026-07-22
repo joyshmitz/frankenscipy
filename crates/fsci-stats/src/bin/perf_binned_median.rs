@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
     let bins: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(16);
 
@@ -37,8 +40,15 @@ fn main() {
     let a = binned_statistic(&x, &values, bins, "median").0;
     BINNED_MEDIAN_FORCE_SORT.store(false, Ordering::Relaxed);
     let b = binned_statistic(&x, &values, bins, "median").0;
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    println!("# stats::binned_statistic median n={n} bins={bins} (m[0] {}/{}) bitmism={bitmism}", a[0], b[0]);
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    println!(
+        "# stats::binned_statistic median n={n} bins={bins} (m[0] {}/{}) bitmism={bitmism}",
+        a[0], b[0]
+    );
 
     let run = || binned_statistic(black_box(&x), black_box(&values), bins, "median").0;
     let bench = |force_sort: bool| -> f64 {

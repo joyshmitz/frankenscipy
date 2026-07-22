@@ -176,7 +176,11 @@ pub fn diags(
         // Checking only that extremum yields the byte-identical valid/invalid verdict while
         // collapsing an O(nnz) bounds pre-scan to O(#diagonals) — meaningful because this
         // pass is serial while the row fill below fans across cores.
-        let range = if validate { 0..diag.len() } else { (diag.len() - 1)..diag.len() };
+        let range = if validate {
+            0..diag.len()
+        } else {
+            (diag.len() - 1)..diag.len()
+        };
         for k in range {
             let row = start_row + k;
             let col = start_col + k;
@@ -832,8 +836,7 @@ pub fn hstack_with_format(
 /// `from_components(.., true)` — the ORIG O(nnz) bounds scan + detect_canonical. Default `false`
 /// stamps {sorted, deduplicated} via the trusted constructor. Byte-identical result. A/B perf gate.
 #[doc(hidden)]
-pub static KRON_VALIDATE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub static KRON_VALIDATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn kron(a: &CsrMatrix, b: &CsrMatrix) -> SparseResult<CsrMatrix> {
     let a_shape = a.shape();
@@ -1628,7 +1631,8 @@ mod tests {
             .to_csr()
             .unwrap();
         // Row 0: [a (6x5), b (6x7)]; Row 1: [None (4x5), d (4x7)].
-        let grid: Vec<Vec<Option<&CsrMatrix>>> = vec![vec![Some(&a), Some(&b)], vec![None, Some(&d)]];
+        let grid: Vec<Vec<Option<&CsrMatrix>>> =
+            vec![vec![Some(&a), Some(&b)], vec![None, Some(&d)]];
         BMAT_FORCE_GENERIC.store(true, Ordering::Relaxed);
         let generic = bmat(&grid).unwrap();
         BMAT_FORCE_GENERIC.store(false, Ordering::Relaxed);
@@ -1638,7 +1642,11 @@ mod tests {
         assert_eq!(direct.indptr(), generic.indptr());
         assert_eq!(direct.indices(), generic.indices());
         assert_eq!(
-            direct.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            direct
+                .data()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
             generic
                 .data()
                 .iter()
@@ -1681,7 +1689,11 @@ mod tests {
         assert_eq!(direct.indptr(), generic.indptr());
         assert_eq!(direct.indices(), generic.indices());
         assert_eq!(
-            direct.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            direct
+                .data()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
             generic
                 .data()
                 .iter()
@@ -1719,7 +1731,11 @@ mod tests {
         assert_eq!(trusted.indptr(), validated.indptr());
         assert_eq!(trusted.indices(), validated.indices());
         assert_eq!(
-            trusted.data().iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            trusted
+                .data()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
             validated
                 .data()
                 .iter()
@@ -1742,7 +1758,11 @@ mod tests {
         // (diagonals, offsets, shape) cases: valid ones and ones that exceed the shape.
         let cases: &[(&[&[f64]], &[isize], Shape2D)] = &[
             (&[&[1.0, 2.0, 3.0]], &[0], Shape2D::new(3, 3)),
-            (&[&[1.0, 2.0], &[3.0, 4.0, 5.0]], &[1, 0], Shape2D::new(3, 3)),
+            (
+                &[&[1.0, 2.0], &[3.0, 4.0, 5.0]],
+                &[1, 0],
+                Shape2D::new(3, 3),
+            ),
             (&[&[1.0, 2.0, 3.0]], &[1], Shape2D::new(3, 3)), // last col out of bounds
             (&[&[1.0, 2.0, 3.0, 4.0]], &[0], Shape2D::new(3, 3)), // overruns both axes
         ];
@@ -1752,7 +1772,11 @@ mod tests {
             let full = diags(&owned, offsets, Some(shape));
             DIAGS_VALIDATE.store(false, Ordering::Relaxed);
             let fast = diags(&owned, offsets, Some(shape));
-            assert_eq!(full.is_ok(), fast.is_ok(), "verdict mismatch for {offsets:?}");
+            assert_eq!(
+                full.is_ok(),
+                fast.is_ok(),
+                "verdict mismatch for {offsets:?}"
+            );
             if let (Ok(a), Ok(b)) = (&full, &fast) {
                 assert_eq!(a.indptr(), b.indptr());
                 assert_eq!(a.indices(), b.indices());

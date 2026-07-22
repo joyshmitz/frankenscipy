@@ -13540,38 +13540,37 @@ impl ContinuousDistribution for Triangular {
         if data.len() < 3 {
             return nan;
         }
-        let (left, right, sum, all_finite) = if TRIANGULAR_FIT_FUSE_DISABLE
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            // ORIG: four separate traversals (finite-check, min, max, sum).
-            if data.iter().any(|v| !v.is_finite()) {
-                return nan;
-            }
-            (
-                data.iter().cloned().fold(f64::INFINITY, f64::min),
-                data.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-                data.iter().sum::<f64>(),
-                true,
-            )
-        } else {
-            // FUSED: finite-check + min + max + Σ in ONE pass. BYTE-IDENTICAL — Σ stays a
-            // left-to-right `+=` from 0.0 (== iter().sum()), min/max use the same f64::min/max
-            // (order-independent), and the finite guard is carried as a flag; if it trips we
-            // return `nan` exactly as the original early-out would (partial min/max/Σ discarded).
-            let mut left = f64::INFINITY;
-            let mut right = f64::NEG_INFINITY;
-            let mut sum = 0.0f64;
-            let mut all_finite = true;
-            for &v in data {
-                if !v.is_finite() {
-                    all_finite = false;
+        let (left, right, sum, all_finite) =
+            if TRIANGULAR_FIT_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+                // ORIG: four separate traversals (finite-check, min, max, sum).
+                if data.iter().any(|v| !v.is_finite()) {
+                    return nan;
                 }
-                left = f64::min(left, v);
-                right = f64::max(right, v);
-                sum += v;
-            }
-            (left, right, sum, all_finite)
-        };
+                (
+                    data.iter().cloned().fold(f64::INFINITY, f64::min),
+                    data.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+                    data.iter().sum::<f64>(),
+                    true,
+                )
+            } else {
+                // FUSED: finite-check + min + max + Σ in ONE pass. BYTE-IDENTICAL — Σ stays a
+                // left-to-right `+=` from 0.0 (== iter().sum()), min/max use the same f64::min/max
+                // (order-independent), and the finite guard is carried as a flag; if it trips we
+                // return `nan` exactly as the original early-out would (partial min/max/Σ discarded).
+                let mut left = f64::INFINITY;
+                let mut right = f64::NEG_INFINITY;
+                let mut sum = 0.0f64;
+                let mut all_finite = true;
+                for &v in data {
+                    if !v.is_finite() {
+                        all_finite = false;
+                    }
+                    left = f64::min(left, v);
+                    right = f64::max(right, v);
+                    sum += v;
+                }
+                (left, right, sum, all_finite)
+            };
         if !all_finite || left >= right {
             return nan;
         }
@@ -25582,29 +25581,28 @@ pub fn cov(x: &[f64], y: &[f64]) -> f64 {
         }
         s
     };
-    let ssxym = if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || nn < (1 << 22)
-    {
-        chunk_sum(x, y)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(nn / (1 << 16))
-            .max(1);
-        let chunk = nn.div_ceil(nthreads);
-        let chunk_sum = &chunk_sum;
-        let parts: Vec<f64> = std::thread::scope(|scope| {
-            x.chunks(chunk)
-                .zip(y.chunks(chunk))
-                .map(|(xs, ys)| scope.spawn(move || chunk_sum(xs, ys)))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|h| h.join().expect("cov worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
-    };
+    let ssxym =
+        if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || nn < (1 << 22) {
+            chunk_sum(x, y)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nn / (1 << 16))
+                .max(1);
+            let chunk = nn.div_ceil(nthreads);
+            let chunk_sum = &chunk_sum;
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                x.chunks(chunk)
+                    .zip(y.chunks(chunk))
+                    .map(|(xs, ys)| scope.spawn(move || chunk_sum(xs, ys)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("cov worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+        };
     ssxym / (n - 1.0)
 }
 
@@ -25697,31 +25695,32 @@ pub fn corrcoef(x: &[f64], y: &[f64]) -> f64 {
         }
         (cov, vx, vy)
     };
-    let (cov_xy, var_x, var_y) = if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || nn < (1 << 22)
-    {
-        chunk_ss(x, y)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(nn / (1 << 16))
-            .max(1);
-        let chunk = nn.div_ceil(nthreads);
-        let chunk_ss = &chunk_ss;
-        let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
-            x.chunks(chunk)
-                .zip(y.chunks(chunk))
-                .map(|(xs, ys)| scope.spawn(move || chunk_ss(xs, ys)))
-                .collect::<Vec<_>>()
+    let (cov_xy, var_x, var_y) =
+        if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || nn < (1 << 22) {
+            chunk_ss(x, y)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nn / (1 << 16))
+                .max(1);
+            let chunk = nn.div_ceil(nthreads);
+            let chunk_ss = &chunk_ss;
+            let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
+                x.chunks(chunk)
+                    .zip(y.chunks(chunk))
+                    .map(|(xs, ys)| scope.spawn(move || chunk_ss(xs, ys)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("corrcoef worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("corrcoef worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold((0.0f64, 0.0f64, 0.0f64), |(am, bm, cm), (a, b, c)| {
-            (am + a, bm + b, cm + c)
-        })
-    };
+                .fold((0.0f64, 0.0f64, 0.0f64), |(am, bm, cm), (a, b, c)| {
+                    (am + a, bm + b, cm + c)
+                })
+        };
     if var_x == 0.0 || var_y == 0.0 {
         return f64::NAN;
     }
@@ -26104,7 +26103,13 @@ pub fn nanzscore(data: &[f64]) -> Vec<f64> {
     // same index order). Shares [`ZSCORE_FORCE_SERIAL`]; 800k gate keeps small arrays serial.
     if ZSCORE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         data.iter()
-            .map(|&x| if x.is_nan() { f64::NAN } else { (x - mean) / std })
+            .map(|&x| {
+                if x.is_nan() {
+                    f64::NAN
+                } else {
+                    (x - mean) / std
+                }
+            })
             .collect()
     } else {
         par_continuous_map_min(data, 800_000, move |x| {
@@ -26201,18 +26206,22 @@ pub static NANMINMAX_FORCE_SERIAL: std::sync::atomic::AtomicBool =
 /// identically. Work-gated (the syscall + spawn cost more than the fold below the gate).
 fn par_nan_fold(data: &[f64], ident: f64, reduce: fn(f64, f64) -> f64) -> f64 {
     let n = data.len();
-    let serial = |d: &[f64]| d.iter().filter(|x| !x.is_nan()).copied().fold(ident, reduce);
-    let nthreads = if NANMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < 131_072
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / 65_536)
-            .max(1)
+    let serial = |d: &[f64]| {
+        d.iter()
+            .filter(|x| !x.is_nan())
+            .copied()
+            .fold(ident, reduce)
     };
+    let nthreads =
+        if NANMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < 131_072 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / 65_536)
+                .max(1)
+        };
     if nthreads <= 1 {
         return serial(data);
     }
@@ -26367,46 +26376,45 @@ pub fn gmean_weighted(data: &[f64], weights: &[f64]) -> f64 {
     // `map.sum()` fold (byte-identical for small inputs and any bit-exact test); above 1<<16 fan a
     // 4-way-unrolled chunk sum across cores (within per-op ULP tolerance, parallel reorder).
     let n = data.len();
-    let weighted_log_sum: f64 = if GMEAN_W_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < (1 << 16)
-    {
-        data.iter().zip(weights).map(|(&x, &w)| w * x.ln()).sum()
-    } else {
-        let chunk_sum = |ds: &[f64], ws: &[f64]| -> f64 {
-            let mut a = [0.0f64; 4];
-            let mut i = 0;
-            while i + 4 <= ds.len() {
-                a[0] += ws[i] * ds[i].ln();
-                a[1] += ws[i + 1] * ds[i + 1].ln();
-                a[2] += ws[i + 2] * ds[i + 2].ln();
-                a[3] += ws[i + 3] * ds[i + 3].ln();
-                i += 4;
-            }
-            let mut s = (a[0] + a[1]) + (a[2] + a[3]);
-            while i < ds.len() {
-                s += ws[i] * ds[i].ln();
-                i += 1;
-            }
-            s
+    let weighted_log_sum: f64 =
+        if GMEAN_W_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 16) {
+            data.iter().zip(weights).map(|(&x, &w)| w * x.ln()).sum()
+        } else {
+            let chunk_sum = |ds: &[f64], ws: &[f64]| -> f64 {
+                let mut a = [0.0f64; 4];
+                let mut i = 0;
+                while i + 4 <= ds.len() {
+                    a[0] += ws[i] * ds[i].ln();
+                    a[1] += ws[i + 1] * ds[i + 1].ln();
+                    a[2] += ws[i + 2] * ds[i + 2].ln();
+                    a[3] += ws[i + 3] * ds[i + 3].ln();
+                    i += 4;
+                }
+                let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+                while i < ds.len() {
+                    s += ws[i] * ds[i].ln();
+                    i += 1;
+                }
+                s
+            };
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 15))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_sum = &chunk_sum;
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .zip(weights.chunks(chunk))
+                    .map(|(ds, ws)| scope.spawn(move || chunk_sum(ds, ws)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("gmean_weighted worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold(0.0f64, |acc, s| acc + s)
         };
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / (1 << 15))
-            .max(1);
-        let chunk = n.div_ceil(nthreads);
-        let chunk_sum = &chunk_sum;
-        let parts: Vec<f64> = std::thread::scope(|scope| {
-            data.chunks(chunk)
-                .zip(weights.chunks(chunk))
-                .map(|(ds, ws)| scope.spawn(move || chunk_sum(ds, ws)))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|h| h.join().expect("gmean_weighted worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
-    };
     (weighted_log_sum / total_w).exp()
 }
 
@@ -26580,7 +26588,13 @@ fn hmean_weighted_reduce(data: &[f64], weights: &[f64]) -> (bool, bool, bool, f6
             has_zero |= x == 0.0 && w > 0.0;
             weighted_inv_sum += w / x;
         }
-        (data_invalid, weights_invalid, has_zero, total_w, weighted_inv_sum)
+        (
+            data_invalid,
+            weights_invalid,
+            has_zero,
+            total_w,
+            weighted_inv_sum,
+        )
     };
     let n = data.len();
     // Short-circuit small inputs BEFORE the `available_parallelism()` syscall — the per-line axis
@@ -26618,7 +26632,13 @@ fn hmean_weighted_reduce(data: &[f64], weights: &[f64]) -> (bool, bool, bool, f6
         total_w += tw;
         weighted_inv_sum += wis;
     }
-    (data_invalid, weights_invalid, has_zero, total_w, weighted_inv_sum)
+    (
+        data_invalid,
+        weights_invalid,
+        has_zero,
+        total_w,
+        weighted_inv_sum,
+    )
 }
 
 /// Compute the weighted harmonic mean.
@@ -28665,7 +28685,11 @@ pub fn canberra_distance(u: &[f64], v: &[f64]) -> f64 {
     let n = u.len();
     let kern = |ui: f64, vi: f64| -> f64 {
         let denom = ui.abs() + vi.abs();
-        if denom == 0.0 { 0.0 } else { (ui - vi).abs() / denom }
+        if denom == 0.0 {
+            0.0
+        } else {
+            (ui - vi).abs() / denom
+        }
     };
     if CANBERRA_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         return u.iter().zip(v).map(|(&ui, &vi)| kern(ui, vi)).sum();
@@ -29478,7 +29502,9 @@ pub fn levene(groups: &[&[f64]]) -> VarianceTestResult {
         std::thread::scope(|scope| {
             groups
                 .chunks(chunk)
-                .map(|gc| scope.spawn(move || gc.iter().map(|g| build(g)).collect::<Vec<Vec<f64>>>()))
+                .map(|gc| {
+                    scope.spawn(move || gc.iter().map(|g| build(g)).collect::<Vec<Vec<f64>>>())
+                })
                 .collect::<Vec<_>>()
                 .into_iter()
                 .flat_map(|h| h.join().expect("levene worker panicked"))
@@ -29827,8 +29853,7 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
         group.iter().map(|&x| (x - median).abs()).collect()
     };
     let total: usize = group_sizes.iter().sum();
-    let all_scores: Vec<f64> = if FLIGNER_FORCE_SERIAL
-        .load(std::sync::atomic::Ordering::Relaxed)
+    let all_scores: Vec<f64> = if FLIGNER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
         || total < (1 << 18)
         || groups.len() < 2
     {
@@ -29879,7 +29904,9 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
             .map(|&r| standard_normal_ppf((1.0 + r / (nf + 1.0)) / 2.0))
             .collect()
     } else {
-        par_continuous_map(&ranks, |r| standard_normal_ppf((1.0 + r / (nf + 1.0)) / 2.0))
+        par_continuous_map(&ranks, |r| {
+            standard_normal_ppf((1.0 + r / (nf + 1.0)) / 2.0)
+        })
     };
 
     // Compute group means of scores
@@ -30740,8 +30767,7 @@ pub fn logrank(x: &[f64], y: &[f64], alternative: &str) -> LogRankResult {
     times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     times.dedup();
 
-    let (sum_var, sum_exp_x) = if LOGRANK_FORCE_QUADRATIC
-        .load(std::sync::atomic::Ordering::Relaxed)
+    let (sum_var, sum_exp_x) = if LOGRANK_FORCE_QUADRATIC.load(std::sync::atomic::Ordering::Relaxed)
     {
         // ORIGINAL O(|times|·n): a linear scan of x and y for every distinct time.
         let count_ge = |s: &[f64], t: f64| s.iter().filter(|&&v| v >= t).count() as f64;
@@ -31461,31 +31487,32 @@ pub fn linregress(x: &[f64], y: &[f64]) -> LinregressResult {
         }
         (sxm, sym, sxym)
     };
-    let (ssxm, ssym, ssxym) = if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || nn < (1 << 22)
-    {
-        chunk_ss(x, y)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(nn / (1 << 16))
-            .max(1);
-        let chunk = nn.div_ceil(nthreads);
-        let chunk_ss = &chunk_ss;
-        let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
-            x.chunks(chunk)
-                .zip(y.chunks(chunk))
-                .map(|(xs, ys)| scope.spawn(move || chunk_ss(xs, ys)))
-                .collect::<Vec<_>>()
+    let (ssxm, ssym, ssxym) =
+        if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || nn < (1 << 22) {
+            chunk_ss(x, y)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nn / (1 << 16))
+                .max(1);
+            let chunk = nn.div_ceil(nthreads);
+            let chunk_ss = &chunk_ss;
+            let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
+                x.chunks(chunk)
+                    .zip(y.chunks(chunk))
+                    .map(|(xs, ys)| scope.spawn(move || chunk_ss(xs, ys)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("linregress worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("linregress worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold((0.0f64, 0.0f64, 0.0f64), |(am, bm, cm), (a, b, c)| {
-            (am + a, bm + b, cm + c)
-        })
-    };
+                .fold((0.0f64, 0.0f64, 0.0f64), |(am, bm, cm), (a, b, c)| {
+                    (am + a, bm + b, cm + c)
+                })
+        };
 
     if ssxm == 0.0 {
         // All x values identical — slope undefined
@@ -31709,29 +31736,30 @@ fn par_two_means(x: &[f64], y: &[f64]) -> (f64, f64) {
         }
         (sx, sy)
     };
-    let (sx, sy) = if PEARSONR_MEAN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < (1 << 22)
-    {
-        chunk_sums(x, y)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / (1 << 16))
-            .max(1);
-        let chunk = n.div_ceil(nthreads);
-        let chunk_sums = &chunk_sums;
-        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
-            x.chunks(chunk)
-                .zip(y.chunks(chunk))
-                .map(|(xs, ys)| scope.spawn(move || chunk_sums(xs, ys)))
-                .collect::<Vec<_>>()
+    let (sx, sy) =
+        if PEARSONR_MEAN_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+            chunk_sums(x, y)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 16))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_sums = &chunk_sums;
+            let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+                x.chunks(chunk)
+                    .zip(y.chunks(chunk))
+                    .map(|(xs, ys)| scope.spawn(move || chunk_sums(xs, ys)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("par_two_means worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("par_two_means worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold((0.0f64, 0.0f64), |(a, b), (u, v)| (a + u, b + v))
-    };
+                .fold((0.0f64, 0.0f64), |(a, b), (u, v)| (a + u, b + v))
+        };
     (sx / nf, sy / nf)
 }
 
@@ -31771,31 +31799,32 @@ pub fn pearsonr(x: &[f64], y: &[f64]) -> CorrelationResult {
         }
         (sxm, sym, sxym)
     };
-    let (ssxm, ssym, ssxym) = if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < (1 << 22)
-    {
-        chunk_ss(x, y)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / (1 << 16))
-            .max(1);
-        let chunk = n.div_ceil(nthreads);
-        let chunk_ss = &chunk_ss;
-        let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
-            x.chunks(chunk)
-                .zip(y.chunks(chunk))
-                .map(|(xs, ys)| scope.spawn(move || chunk_ss(xs, ys)))
-                .collect::<Vec<_>>()
+    let (ssxm, ssym, ssxym) =
+        if PEARSONR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+            chunk_ss(x, y)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 16))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_ss = &chunk_ss;
+            let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
+                x.chunks(chunk)
+                    .zip(y.chunks(chunk))
+                    .map(|(xs, ys)| scope.spawn(move || chunk_ss(xs, ys)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("pearsonr worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("pearsonr worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold((0.0f64, 0.0f64, 0.0f64), |(am, bm, cm), (a, b, c)| {
-            (am + a, bm + b, cm + c)
-        })
-    };
+                .fold((0.0f64, 0.0f64, 0.0f64), |(am, bm, cm), (a, b, c)| {
+                    (am + a, bm + b, cm + c)
+                })
+        };
 
     let denom = (ssxm * ssym).sqrt();
     if denom == 0.0 {
@@ -33315,58 +33344,77 @@ pub fn describe(data: &[f64]) -> DescribeResult {
         let mut mx = f64::NEG_INFINITY;
         for &x in ds {
             sum += x;
-            mn = if mn.is_nan() || x.is_nan() { f64::NAN } else { mn.min(x) };
-            mx = if mx.is_nan() || x.is_nan() { f64::NAN } else { mx.max(x) };
+            mn = if mn.is_nan() || x.is_nan() {
+                f64::NAN
+            } else {
+                mn.min(x)
+            };
+            mx = if mx.is_nan() || x.is_nan() {
+                f64::NAN
+            } else {
+                mx.max(x)
+            };
         }
         (sum, mn, mx)
     };
     let merge = |a: (f64, f64, f64), b: (f64, f64, f64)| -> (f64, f64, f64) {
-        let mn = if a.1.is_nan() || b.1.is_nan() { f64::NAN } else { a.1.min(b.1) };
-        let mx = if a.2.is_nan() || b.2.is_nan() { f64::NAN } else { a.2.max(b.2) };
+        let mn = if a.1.is_nan() || b.1.is_nan() {
+            f64::NAN
+        } else {
+            a.1.min(b.1)
+        };
+        let mx = if a.2.is_nan() || b.2.is_nan() {
+            f64::NAN
+        } else {
+            a.2.max(b.2)
+        };
         (a.0 + b.0, mn, mx)
     };
-    let (sum, min_val, max_val) = if DESCRIBE_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
-    {
-        let sum = data.iter().sum::<f64>();
-        let min_val = data.iter().copied().fold(f64::INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.min(b)
-            }
-        });
-        let max_val = data.iter().copied().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
-        });
-        (sum, min_val, max_val)
-    } else if DESCRIBE_REDUCE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < (1 << 22)
-    {
-        chunk_reduce(data)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / (1 << 16))
-            .max(1);
-        let chunk = n.div_ceil(nthreads);
-        let chunk_reduce = &chunk_reduce;
-        let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
-            data.chunks(chunk)
-                .map(|ds| scope.spawn(move || chunk_reduce(ds)))
-                .collect::<Vec<_>>()
+    let (sum, min_val, max_val) =
+        if DESCRIBE_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            let sum = data.iter().sum::<f64>();
+            let min_val = data.iter().copied().fold(f64::INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.min(b)
+                }
+            });
+            let max_val = data
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
+            (sum, min_val, max_val)
+        } else if DESCRIBE_REDUCE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
+            || n < (1 << 22)
+        {
+            chunk_reduce(data)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 16))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_reduce = &chunk_reduce;
+            let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || chunk_reduce(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("describe reduce worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("describe reduce worker panicked"))
-                .collect()
-        });
-        parts
-            .into_iter()
-            .fold((0.0f64, f64::INFINITY, f64::NEG_INFINITY), merge)
-    };
+                .fold((0.0f64, f64::INFINITY, f64::NEG_INFINITY), merge)
+        };
     let mean_val = sum / nf;
 
     // Central moments m2=Σd², m3=Σd²·d, m4=Σd²·d² (d=x−mean) — the dominant O(n) reduction (mean fixed
@@ -33387,30 +33435,31 @@ pub fn describe(data: &[f64]) -> DescribeResult {
         }
         (m2, m3, m4)
     };
-    let (m2, m3, m4) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < (1 << 22)
-    {
-        chunk_m(data)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / (1 << 16))
-            .max(1);
-        let chunk = n.div_ceil(nthreads);
-        let chunk_m = &chunk_m;
-        let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
-            data.chunks(chunk)
-                .map(|ds| scope.spawn(move || chunk_m(ds)))
-                .collect::<Vec<_>>()
+    let (m2, m3, m4) =
+        if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+            chunk_m(data)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 16))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_m = &chunk_m;
+            let parts: Vec<(f64, f64, f64)> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || chunk_m(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("describe moment worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("describe moment worker panicked"))
-                .collect()
-        });
-        parts
-            .into_iter()
-            .fold((0.0f64, 0.0f64, 0.0f64), |(a, b, c), (x, y, z)| (a + x, b + y, c + z))
-    };
+                .fold((0.0f64, 0.0f64, 0.0f64), |(a, b, c), (x, y, z)| {
+                    (a + x, b + y, c + z)
+                })
+        };
 
     let variance_val = m2 / (nf - 1.0);
     let skewness_val = skew_from_moments(nf, m2, m3);
@@ -33459,30 +33508,29 @@ pub fn skew(data: &[f64]) -> f64 {
         }
         (m2, m3)
     };
-    let (m2, m3) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < (1 << 22)
-    {
-        chunk_m(data)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / (1 << 16))
-            .max(1);
-        let chunk = n.div_ceil(nthreads);
-        let chunk_m = &chunk_m;
-        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
-            data.chunks(chunk)
-                .map(|ds| scope.spawn(move || chunk_m(ds)))
-                .collect::<Vec<_>>()
+    let (m2, m3) =
+        if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+            chunk_m(data)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 16))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_m = &chunk_m;
+            let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || chunk_m(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("skew worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("skew worker panicked"))
-                .collect()
-        });
-        parts
-            .into_iter()
-            .fold((0.0f64, 0.0f64), |(a2, a3), (c2, c3)| (a2 + c2, a3 + c3))
-    };
+                .fold((0.0f64, 0.0f64), |(a2, a3), (c2, c3)| (a2 + c2, a3 + c3))
+        };
     skew_from_moments(nf, m2, m3)
 }
 
@@ -33573,30 +33621,29 @@ pub fn kurtosis(data: &[f64]) -> f64 {
         }
         (m2, m4)
     };
-    let (m2, m4) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < (1 << 22)
-    {
-        chunk_m(data)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / (1 << 16))
-            .max(1);
-        let chunk = n.div_ceil(nthreads);
-        let chunk_m = &chunk_m;
-        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
-            data.chunks(chunk)
-                .map(|ds| scope.spawn(move || chunk_m(ds)))
-                .collect::<Vec<_>>()
+    let (m2, m4) =
+        if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 22) {
+            chunk_m(data)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 16))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_m = &chunk_m;
+            let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || chunk_m(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("kurtosis worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("kurtosis worker panicked"))
-                .collect()
-        });
-        parts
-            .into_iter()
-            .fold((0.0f64, 0.0f64), |(a2, a4), (c2, c4)| (a2 + c2, a4 + c4))
-    };
+                .fold((0.0f64, 0.0f64), |(a2, a4), (c2, c4)| (a2 + c2, a4 + c4))
+        };
     kurtosis_from_moments(nf, m2, m4)
 }
 
@@ -33618,7 +33665,8 @@ pub fn kurtosis_weighted(data: &[f64], weights: &[f64]) -> f64 {
     // and the weighted-mean numerator `Σw·x` are three INDEPENDENT reductions — fold them into ONE
     // pass (the m2/m4 moment loop below is already fused). Each Σ keeps its left-to-right order and
     // `w * x` expression; a bad weight still returns NaN (polluted sums discarded as the orig did).
-    let (total_w, mean_val) = if KURTOSIS_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+    let (total_w, mean_val) = if KURTOSIS_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
         if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
             return f64::NAN;
         }
@@ -33755,28 +33803,27 @@ pub fn moment(data: &[f64], k: u32) -> f64 {
         }
         s
     };
-    let total = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || nn < (1 << 22)
-    {
-        chunk_sum(data)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(nn / (1 << 16))
-            .max(1);
-        let chunk = nn.div_ceil(nthreads);
-        let chunk_sum = &chunk_sum;
-        let parts: Vec<f64> = std::thread::scope(|scope| {
-            data.chunks(chunk)
-                .map(|ds| scope.spawn(move || chunk_sum(ds)))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|h| h.join().expect("moment worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
-    };
+    let total =
+        if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || nn < (1 << 22) {
+            chunk_sum(data)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nn / (1 << 16))
+                .max(1);
+            let chunk = nn.div_ceil(nthreads);
+            let chunk_sum = &chunk_sum;
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || chunk_sum(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("moment worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+        };
     total / n
 }
 
@@ -33877,28 +33924,27 @@ pub fn central_moment(data: &[f64], k: u32) -> f64 {
         }
         s
     };
-    let total = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || nn < (1 << 22)
-    {
-        chunk_sum(data)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(nn / (1 << 16))
-            .max(1);
-        let chunk = nn.div_ceil(nthreads);
-        let chunk_sum = &chunk_sum;
-        let parts: Vec<f64> = std::thread::scope(|scope| {
-            data.chunks(chunk)
-                .map(|ds| scope.spawn(move || chunk_sum(ds)))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|h| h.join().expect("moment worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold(0.0f64, |acc, s| acc + s)
-    };
+    let total =
+        if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || nn < (1 << 22) {
+            chunk_sum(data)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nn / (1 << 16))
+                .max(1);
+            let chunk = nn.div_ceil(nthreads);
+            let chunk_sum = &chunk_sum;
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || chunk_sum(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("moment worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold(0.0f64, |acc, s| acc + s)
+        };
     total / n
 }
 
@@ -33932,30 +33978,29 @@ pub fn standardized_moment(data: &[f64], k: u32) -> f64 {
         }
         (s2, sk)
     };
-    let (sum2, sumk) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || nn < (1 << 22)
-    {
-        chunk_m(data)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(nn / (1 << 16))
-            .max(1);
-        let chunk = nn.div_ceil(nthreads);
-        let chunk_m = &chunk_m;
-        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
-            data.chunks(chunk)
-                .map(|ds| scope.spawn(move || chunk_m(ds)))
-                .collect::<Vec<_>>()
+    let (sum2, sumk) =
+        if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || nn < (1 << 22) {
+            chunk_m(data)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nn / (1 << 16))
+                .max(1);
+            let chunk = nn.div_ceil(nthreads);
+            let chunk_m = &chunk_m;
+            let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || chunk_m(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("standardized_moment worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("standardized_moment worker panicked"))
-                .collect()
-        });
-        parts
-            .into_iter()
-            .fold((0.0f64, 0.0f64), |(a2, ak), (c2, ck)| (a2 + c2, ak + ck))
-    };
+                .fold((0.0f64, 0.0f64), |(a2, ak), (c2, ck)| (a2 + c2, ak + ck))
+        };
     let m2 = sum2 / n;
     if m2 <= 0.0 {
         return f64::NAN;
@@ -35937,35 +35982,34 @@ pub fn variation_weighted(data: &[f64], weights: &[f64]) -> f64 {
     // numerator `Σw·x` are three INDEPENDENT reductions — fold them into ONE pass. Each Σ keeps its
     // left-to-right order and `w * x` expression; a bad weight still returns NaN (polluted sums
     // discarded exactly as the original early-out did). The `var` pass depends on the mean.
-    let (total_w, mean_val) =
-        if VARIATION_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
-            if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
-                return f64::NAN;
-            }
-            let total_w: f64 = weights.iter().sum();
-            if total_w <= 0.0 {
-                return f64::NAN;
-            }
-            let mean_val: f64 =
-                data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
-            (total_w, mean_val)
-        } else {
-            let mut total_w = 0.0f64;
-            let mut sum_wx = 0.0f64;
-            let mut valid = true;
-            for (&x, &w) in data.iter().zip(weights) {
-                valid &= w.is_finite() && w >= 0.0;
-                total_w += w;
-                sum_wx += w * x;
-            }
-            if !valid {
-                return f64::NAN;
-            }
-            if total_w <= 0.0 {
-                return f64::NAN;
-            }
-            (total_w, sum_wx / total_w)
-        };
+    let (total_w, mean_val) = if VARIATION_W_FUSE_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+            return f64::NAN;
+        }
+        let total_w: f64 = weights.iter().sum();
+        if total_w <= 0.0 {
+            return f64::NAN;
+        }
+        let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+        (total_w, mean_val)
+    } else {
+        let mut total_w = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        let mut valid = true;
+        for (&x, &w) in data.iter().zip(weights) {
+            valid &= w.is_finite() && w >= 0.0;
+            total_w += w;
+            sum_wx += w * x;
+        }
+        if !valid {
+            return f64::NAN;
+        }
+        if total_w <= 0.0 {
+            return f64::NAN;
+        }
+        (total_w, sum_wx / total_w)
+    };
     if mean_val == 0.0 {
         return f64::NAN;
     }
@@ -36239,47 +36283,46 @@ pub fn min_max_scale(data: &[f64], feature_range: Option<(f64, f64)>) -> Vec<f64
     // index. FUSING the min/max preamble was IN-FLOOR (the output map dominates); PARALLELIZING the
     // map (order-preserving `par_continuous_map_min`) is the win. `MIN_MAX_SCALE_FORCE_SERIAL` A/B.
     let n = data.len();
-    let (min_val, max_val) = if MIN_MAX_SCALE_FORCE_SERIAL
-        .load(std::sync::atomic::Ordering::Relaxed)
-    {
-        (
-            data.iter().copied().fold(f64::INFINITY, f64::min),
-            data.iter().copied().fold(f64::NEG_INFINITY, f64::max),
-        )
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / 4096)
-            .max(1);
-        if nthreads <= 1 {
+    let (min_val, max_val) =
+        if MIN_MAX_SCALE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
             (
                 data.iter().copied().fold(f64::INFINITY, f64::min),
                 data.iter().copied().fold(f64::NEG_INFINITY, f64::max),
             )
         } else {
-            let chunk = n.div_ceil(nthreads);
-            let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
-                data.chunks(chunk)
-                    .map(|c| {
-                        scope.spawn(move || {
-                            (
-                                c.iter().copied().fold(f64::INFINITY, f64::min),
-                                c.iter().copied().fold(f64::NEG_INFINITY, f64::max),
-                            )
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / 4096)
+                .max(1);
+            if nthreads <= 1 {
+                (
+                    data.iter().copied().fold(f64::INFINITY, f64::min),
+                    data.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                )
+            } else {
+                let chunk = n.div_ceil(nthreads);
+                let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+                    data.chunks(chunk)
+                        .map(|c| {
+                            scope.spawn(move || {
+                                (
+                                    c.iter().copied().fold(f64::INFINITY, f64::min),
+                                    c.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                                )
+                            })
                         })
-                    })
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .map(|h| h.join().expect("min_max_scale chunk panicked"))
-                    .collect()
-            });
-            parts.into_iter().fold(
-                (f64::INFINITY, f64::NEG_INFINITY),
-                |(amn, amx), (bmn, bmx)| (f64::min(amn, bmn), f64::max(amx, bmx)),
-            )
-        }
-    };
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|h| h.join().expect("min_max_scale chunk panicked"))
+                        .collect()
+                });
+                parts.into_iter().fold(
+                    (f64::INFINITY, f64::NEG_INFINITY),
+                    |(amn, amx), (bmn, bmx)| (f64::min(amn, bmn), f64::max(amx, bmx)),
+                )
+            }
+        };
 
     if !min_val.is_finite() || !max_val.is_finite() {
         return vec![f64::NAN; n];
@@ -36413,7 +36456,11 @@ pub fn zmap_weighted(scores: &[f64], compare: &[f64], weights: &[f64]) -> Vec<f6
         if total_w <= 0.0 {
             return vec![f64::NAN; scores.len()];
         }
-        let sum_wx: f64 = compare.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>();
+        let sum_wx: f64 = compare
+            .iter()
+            .zip(weights)
+            .map(|(&x, &w)| w * x)
+            .sum::<f64>();
         (total_w, sum_wx)
     } else {
         let mut total_w = 0.0f64;
@@ -37160,8 +37207,16 @@ pub static TVAR_PAR_FORCE_SERIAL: std::sync::atomic::AtomicBool =
 /// The trimmed variance, or NaN if fewer than ddof+1 values remain.
 pub fn tvar(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usize) -> f64 {
     let within = |x: f64| -> bool {
-        let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
-        let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+        let above_lower = if inclusive.0 {
+            x >= limits.0
+        } else {
+            x > limits.0
+        };
+        let below_upper = if inclusive.1 {
+            x <= limits.1
+        } else {
+            x < limits.1
+        };
         above_lower && below_upper
     };
     // The alloc-free two-pass form (below) wins ONLY in the memory-bound regime: at n≥~4M `data`
@@ -37219,7 +37274,9 @@ pub fn tvar(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
                 .map(|h| h.join().expect("tvar sum worker panicked"))
                 .collect()
         });
-        parts.into_iter().fold((0.0f64, 0usize), |(a, b), (s, c)| (a + s, b + c))
+        parts
+            .into_iter()
+            .fold((0.0f64, 0usize), |(a, b), (s, c)| (a + s, b + c))
     };
     if count <= ddof {
         return f64::NAN;
@@ -37292,8 +37349,16 @@ pub static TMEAN_FORCE_COLLECT: std::sync::atomic::AtomicBool =
 /// The trimmed mean, or NaN if no values remain after filtering.
 pub fn tmean(data: &[f64], limits: (f64, f64), inclusive: (bool, bool)) -> f64 {
     let within = |x: f64| -> bool {
-        let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
-        let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+        let above_lower = if inclusive.0 {
+            x >= limits.0
+        } else {
+            x > limits.0
+        };
+        let below_upper = if inclusive.1 {
+            x <= limits.1
+        } else {
+            x < limits.1
+        };
         above_lower && below_upper
     };
     if !TMEAN_FORCE_COLLECT.load(std::sync::atomic::Ordering::Relaxed) {
@@ -37339,8 +37404,16 @@ pub fn tmean(data: &[f64], limits: (f64, f64), inclusive: (bool, bool)) -> f64 {
 /// The trimmed SEM, or NaN if fewer than ddof+1 values remain.
 pub fn tsem(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usize) -> f64 {
     let within = |x: f64| -> bool {
-        let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
-        let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+        let above_lower = if inclusive.0 {
+            x >= limits.0
+        } else {
+            x > limits.0
+        };
+        let below_upper = if inclusive.1 {
+            x <= limits.1
+        } else {
+            x < limits.1
+        };
         above_lower && below_upper
     };
     // Same alloc-free lever as [`tvar`]: the intermediate in-limit Vec only pays for itself when
@@ -37392,7 +37465,9 @@ pub fn tsem(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
                     .map(|h| h.join().expect("tsem sum worker panicked"))
                     .collect()
             });
-            parts.into_iter().fold((0.0f64, 0usize), |(a, b), (s, c)| (a + s, b + c))
+            parts
+                .into_iter()
+                .fold((0.0f64, 0usize), |(a, b), (s, c)| (a + s, b + c))
         };
         if count <= ddof {
             return f64::NAN;
@@ -37468,8 +37543,7 @@ where
         }
         (acc, any)
     };
-    let nthreads = if TMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < 131_072
+    let nthreads = if TMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < 131_072
     {
         1
     } else {
@@ -37501,7 +37575,14 @@ where
 
 /// The trimmed minimum, or NaN if no values remain.
 pub fn tmin(data: &[f64], lowerlimit: f64, inclusive: bool) -> f64 {
-    let keep = |x: f64| x.is_finite() && if inclusive { x >= lowerlimit } else { x > lowerlimit };
+    let keep = |x: f64| {
+        x.is_finite()
+            && if inclusive {
+                x >= lowerlimit
+            } else {
+                x > lowerlimit
+            }
+    };
     if TMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         let filtered: Vec<f64> = data.iter().copied().filter(|&x| keep(x)).collect();
         if filtered.is_empty() {
@@ -37526,7 +37607,14 @@ pub fn tmin(data: &[f64], lowerlimit: f64, inclusive: bool) -> f64 {
 /// # Returns
 /// The trimmed maximum, or NaN if no values remain.
 pub fn tmax(data: &[f64], upperlimit: f64, inclusive: bool) -> f64 {
-    let keep = |x: f64| x.is_finite() && if inclusive { x <= upperlimit } else { x < upperlimit };
+    let keep = |x: f64| {
+        x.is_finite()
+            && if inclusive {
+                x <= upperlimit
+            } else {
+                x < upperlimit
+            }
+    };
     if TMINMAX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         let filtered: Vec<f64> = data.iter().copied().filter(|&x| keep(x)).collect();
         if filtered.is_empty() {
@@ -37614,7 +37702,9 @@ pub fn expectile(data: &[f64], alpha: f64) -> f64 {
                     .map(|h| h.join().expect("expectile worker panicked"))
                     .collect()
             });
-            parts.into_iter().fold((0.0f64, 0.0f64), |(a, b), (s, t)| (a + s, b + t))
+            parts
+                .into_iter()
+                .fold((0.0f64, 0.0f64), |(a, b), (s, t)| (a + s, b + t))
         };
 
         let new_mu = sum_wx / sum_w;
@@ -37803,7 +37893,13 @@ pub fn obrientransform(groups: &[&[f64]]) -> Vec<Vec<f64>> {
     std::thread::scope(|scope| {
         groups
             .chunks(chunk)
-            .map(|gc| scope.spawn(move || gc.iter().map(|g| transform_group(g)).collect::<Vec<Vec<f64>>>()))
+            .map(|gc| {
+                scope.spawn(move || {
+                    gc.iter()
+                        .map(|g| transform_group(g))
+                        .collect::<Vec<Vec<f64>>>()
+                })
+            })
             .collect::<Vec<_>>()
             .into_iter()
             .flat_map(|h| h.join().expect("obrientransform worker panicked"))
@@ -40032,7 +40128,13 @@ pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64 + Sync) -> GoodnessO
     // reference CDF, e.g. erf/gammainc) is INDEPENDENT, and the outer `max` is associative/commutative
     // incl NaN (any-NaN ⇒ NaN, matching the serial guard) with no signed-zero issue (|·| ≥ +0.0), so a
     // chunk-max-then-merge is BYTE-IDENTICAL to the sequential fold. Fan across cores for large n.
-    let nan_max = |a: f64, b: f64| if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) };
+    let nan_max = |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    };
     let point_max = |i: usize, x: f64| -> f64 {
         let f_x = cdf_func(x);
         let d_plus = ((i + 1) as f64 / nf - f_x).abs();
@@ -40378,8 +40480,7 @@ pub fn cramervonmises(data: &[f64], cdf_func: impl Fn(f64) -> f64 + Sync) -> Goo
     // pass that a 2-thread parallel map doesn't offset (measured 0.97x@1M), and the serial `total_cmp`
     // sort caps the ceiling ~1.3x; below 4M keep the no-alloc fused serial fold. `CVM_FORCE_SERIAL`.
     const CVM_MIN_PER_THREAD: usize = 400_000;
-    let statistic = if CVM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < 4_000_000
+    let statistic = if CVM_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < 4_000_000
     {
         sorted.iter().enumerate().fold(base, |acc, (i, &x)| {
             let ui = (2.0 * (i + 1) as f64 - 1.0) / (2.0 * nf);
@@ -43302,7 +43403,11 @@ pub fn spearmanr_matrix(variables: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsEr
             variables
                 .chunks(chunk)
                 .map(|vc| {
-                    scope.spawn(move || vc.iter().map(|v| rankdata_average(v)).collect::<Vec<Vec<f64>>>())
+                    scope.spawn(move || {
+                        vc.iter()
+                            .map(|v| rankdata_average(v))
+                            .collect::<Vec<Vec<f64>>>()
+                    })
                 })
                 .collect::<Vec<_>>()
                 .into_iter()
@@ -43365,7 +43470,8 @@ pub fn wasserstein_distance_matrix(samples: &[Vec<f64>]) -> Result<Vec<Vec<f64>>
     let has_bad = samples
         .iter()
         .any(|s| s.is_empty() || s.iter().any(|v| v.is_nan()));
-    if has_bad || WASSERSTEIN_DISTANCE_MATRIX_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    if has_bad
+        || WASSERSTEIN_DISTANCE_MATRIX_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
     {
         return all_pairs_symmetric_matrix(samples, wasserstein_distance);
     }
@@ -43400,7 +43506,8 @@ pub fn energy_distance_matrix(samples: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, Sta
     let has_bad = samples
         .iter()
         .any(|s| s.is_empty() || s.iter().any(|v| v.is_nan()));
-    if has_bad || ENERGY_DISTANCE_MATRIX_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+    if has_bad || ENERGY_DISTANCE_MATRIX_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed)
+    {
         return all_pairs_symmetric_matrix(samples, energy_distance);
     }
     let sorted: Vec<Vec<f64>> = samples
@@ -47783,16 +47890,15 @@ where
             .collect();
         statistic(&subset)
     };
-    let nthreads = if STATS_JACKKNIFE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < 2
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n)
-    };
+    let nthreads =
+        if STATS_JACKKNIFE_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < 2 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n)
+        };
     let replicates: Vec<f64> = if nthreads <= 1 {
         (0..n).map(replicate).collect()
     } else {
@@ -48346,7 +48452,9 @@ pub fn yeojohnson_llf(lmb: f64, data: &[f64]) -> f64 {
     // index-ordered sum ⇒ BYTE-IDENTICAL to `data.iter().map(..).sum()` (same left fold).
     // Called repeatedly by yeojohnson_normmax, so this speeds up the whole lambda search.
     let log_term: f64 = if YEOJOHNSON_LLF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
-        data.iter().map(|&x| x.signum() * (x.abs() + 1.0).ln()).sum()
+        data.iter()
+            .map(|&x| x.signum() * (x.abs() + 1.0).ln())
+            .sum()
     } else {
         par_continuous_map(data, |x| x.signum() * (x.abs() + 1.0).ln())
             .iter()
@@ -48821,7 +48929,10 @@ pub fn probplot(x: &[f64]) -> ProbplotResult {
     // rational approximation); fan them across cores (work-gated). BYTE-IDENTICAL:
     // `par_continuous_map` preserves index order ⇒ same bits as the serial map.
     let osm: Vec<f64> = if PROBPLOT_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
-        probs.iter().map(|&p| fsci_special::ndtri_scalar(p)).collect()
+        probs
+            .iter()
+            .map(|&p| fsci_special::ndtri_scalar(p))
+            .collect()
     } else {
         par_continuous_map(&probs, |p| fsci_special::ndtri_scalar(p))
     };
@@ -49703,11 +49814,7 @@ pub fn dice_distance(u: &[f64], v: &[f64]) -> f64 {
     }
 
     let denom = 2.0 * c_tt as f64 + d as f64;
-    if denom == 0.0 {
-        0.0
-    } else {
-        d as f64 / denom
-    }
+    if denom == 0.0 { 0.0 } else { d as f64 / denom }
 }
 
 /// Yule dissimilarity for binary data.
@@ -50086,28 +50193,27 @@ pub fn logsumexp(x: &[f64]) -> f64 {
         }
         s
     };
-    let sum_exp: f64 = if LOGSUMEXP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || n < (1 << 16)
-    {
-        x.iter().map(|&xi| (xi - max_x).exp()).sum()
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(n / (1 << 15))
-            .max(1);
-        let chunk = n.div_ceil(nthreads);
-        let chunk_sum = &chunk_sum;
-        let parts: Vec<f64> = std::thread::scope(|scope| {
-            x.chunks(chunk)
-                .map(|xs| scope.spawn(move || chunk_sum(xs)))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|h| h.join().expect("logsumexp worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold(0.0f64, |a, b| a + b)
-    };
+    let sum_exp: f64 =
+        if LOGSUMEXP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || n < (1 << 16) {
+            x.iter().map(|&xi| (xi - max_x).exp()).sum()
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(n / (1 << 15))
+                .max(1);
+            let chunk = n.div_ceil(nthreads);
+            let chunk_sum = &chunk_sum;
+            let parts: Vec<f64> = std::thread::scope(|scope| {
+                x.chunks(chunk)
+                    .map(|xs| scope.spawn(move || chunk_sum(xs)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("logsumexp worker panicked"))
+                    .collect()
+            });
+            parts.into_iter().fold(0.0f64, |a, b| a + b)
+        };
     max_x + sum_exp.ln()
 }
 
@@ -51837,28 +51943,29 @@ pub fn excess_kurtosis(data: &[f64]) -> f64 {
         (m2, m4)
     };
     let nn = data.len();
-    let (s2, s4) = if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || nn < (1 << 22)
-    {
-        chunk_m(data)
-    } else {
-        let nthreads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(nn / (1 << 16))
-            .max(1);
-        let chunk = nn.div_ceil(nthreads);
-        let chunk_m = &chunk_m;
-        let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
-            data.chunks(chunk)
-                .map(|ds| scope.spawn(move || chunk_m(ds)))
-                .collect::<Vec<_>>()
+    let (s2, s4) =
+        if MOMENT_PAR_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || nn < (1 << 22) {
+            chunk_m(data)
+        } else {
+            let nthreads = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(nn / (1 << 16))
+                .max(1);
+            let chunk = nn.div_ceil(nthreads);
+            let chunk_m = &chunk_m;
+            let parts: Vec<(f64, f64)> = std::thread::scope(|scope| {
+                data.chunks(chunk)
+                    .map(|ds| scope.spawn(move || chunk_m(ds)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("excess_kurtosis worker panicked"))
+                    .collect()
+            });
+            parts
                 .into_iter()
-                .map(|h| h.join().expect("excess_kurtosis worker panicked"))
-                .collect()
-        });
-        parts.into_iter().fold((0.0f64, 0.0f64), |(a, b), (u, v)| (a + u, b + v))
-    };
+                .fold((0.0f64, 0.0f64), |(a, b), (u, v)| (a + u, b + v))
+        };
     let m2 = s2 / n;
     let m4 = s4 / n;
     if m2 == 0.0 {
@@ -51991,17 +52098,16 @@ pub fn cov_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
             out[j] = s / denom;
         }
     };
-    let nthreads = if COV_MATRIX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || work < 1 << 22
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(d)
-            .max(1)
-    };
+    let nthreads =
+        if COV_MATRIX_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || work < 1 << 22 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(d)
+                .max(1)
+        };
     if nthreads <= 1 {
         for (i, row) in cov.iter_mut().enumerate() {
             fill_row(i, row);
@@ -52204,7 +52310,10 @@ pub fn contingency_table(x: &[usize], y: &[usize]) -> (Vec<Vec<usize>>, Vec<usiz
         std::thread::scope(|scope| {
             let h = scope.spawn(|| uniq(y));
             let rl = uniq(x);
-            (rl, h.join().expect("contingency_table sort worker panicked"))
+            (
+                rl,
+                h.join().expect("contingency_table sort worker panicked"),
+            )
         })
     };
 
@@ -52660,17 +52769,16 @@ pub fn diff(data: &[f64]) -> Vec<f64> {
     // inputs — FILL-IN-PLACE via `chunks_mut` (not collect-then-concat), BYTE-IDENTICAL to
     // `windows(2).map(..).collect()` (same values, index order). 800k/thread gate (light map).
     const MIN_PER_THREAD: usize = 800_000;
-    let nthreads = if DIFF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || m < 2 * MIN_PER_THREAD
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(m / MIN_PER_THREAD)
-            .max(1)
-    };
+    let nthreads =
+        if DIFF_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || m < 2 * MIN_PER_THREAD {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(m / MIN_PER_THREAD)
+                .max(1)
+        };
     if nthreads <= 1 {
         return data.windows(2).map(|w| w[1] - w[0]).collect();
     }
@@ -52814,13 +52922,16 @@ pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
                 a.min(b)
             }
         });
-        let max_val = data.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
-        });
+        let max_val = data
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
         (min_val, max_val)
     } else {
         let mut min_val = f64::INFINITY;
@@ -52957,14 +53068,16 @@ fn scipy_frequency_histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>
                 .map(|c| scope.spawn(move || chunk_minmax(c)))
                 .collect::<Vec<_>>()
                 .into_iter()
-                .map(|h| h.join().expect("scipy_frequency_histogram minmax worker panicked"))
+                .map(|h| {
+                    h.join()
+                        .expect("scipy_frequency_histogram minmax worker panicked")
+                })
                 .collect()
         });
-        parts
-            .into_iter()
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(amn, amx), (mn, mx)| {
-                (amn.min(mn), amx.max(mx))
-            })
+        parts.into_iter().fold(
+            (f64::INFINITY, f64::NEG_INFINITY),
+            |(amn, amx), (mn, mx)| (amn.min(mn), amx.max(mx)),
+        )
     };
 
     let padding = (max_val - min_val) / (2.0 * (bins - 1) as f64);
@@ -53448,8 +53561,7 @@ pub fn binned_statistic(
             _ => bv.iter().sum::<f64>() / bv.len() as f64,
         }
     };
-    let stats: Vec<f64> = if BINNED_STAT_MAP_FORCE_SERIAL
-        .load(std::sync::atomic::Ordering::Relaxed)
+    let stats: Vec<f64> = if BINNED_STAT_MAP_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
         || bins < 2
         || x.len() < (1 << 18)
     {
@@ -54841,7 +54953,9 @@ fn augmented_normal_equations(x: &[Vec<f64>], y: &[f64], p: usize) -> (Vec<Vec<f
     let n = x.len();
     let p1 = p + 1;
 
-    let work = (p1 as u64).saturating_mul(p1 as u64).saturating_mul(n as u64);
+    let work = (p1 as u64)
+        .saturating_mul(p1 as u64)
+        .saturating_mul(n as u64);
     // Small p AND small work: textbook rank-1 (bit-identical reference), no transpose overhead. For
     // a small p but LARGE n the rank-1 form is O(n·p1²) SERIAL, so it falls through to the transposed
     // build below (cache-friendly streamed dots, output rows fanned) — BYTE-IDENTICAL (same products
@@ -54935,17 +55049,16 @@ fn augmented_normal_equations(x: &[Vec<f64>], y: &[f64], p: usize) -> (Vec<Vec<f
         sy
     };
 
-    let nthreads = if NORMAL_EQ_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed)
-        || work < 1 << 22
-    {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
-            .min(p1)
-            .max(1)
-    };
+    let nthreads =
+        if NORMAL_EQ_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed) || work < 1 << 22 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1)
+                .min(p1)
+                .max(1)
+        };
     if nthreads <= 1 {
         for j in 0..p1 {
             xty[j] = fill(j, &mut xtx[j]);
@@ -56024,7 +56137,11 @@ mod tests {
             PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
             MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
             let parallel = gstd(data);
-            assert_eq!(serial.to_bits(), parallel.to_bits(), "gstd mismatch for {data:?}");
+            assert_eq!(
+                serial.to_bits(),
+                parallel.to_bits(),
+                "gstd mismatch for {data:?}"
+            );
         }
         PAR_SUM_FORCE_SERIAL.store(false, Ordering::Relaxed);
         MOMENT_PAR_FORCE_SERIAL.store(false, Ordering::Relaxed);
@@ -56146,9 +56263,8 @@ mod tests {
             &[-3.0, 0.5, 2.0, -1.25, 7.0, 4.0, -2.5, 9.0, 3.0, -6.0],
             &[1e6, -1e6, 3.5, -2.5, 100.0, -50.0, 0.0, 7.0, 11.0],
         ];
-        let bits = |ci: &CredibleInterval| {
-            (ci.statistic.to_bits(), ci.low.to_bits(), ci.high.to_bits())
-        };
+        let bits =
+            |ci: &CredibleInterval| (ci.statistic.to_bits(), ci.low.to_bits(), ci.high.to_bits());
         for &data in cases {
             for &alpha in &[0.9, 0.95] {
                 PAR_SUM_FORCE_SERIAL.store(true, Ordering::Relaxed);

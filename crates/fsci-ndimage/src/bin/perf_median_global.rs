@@ -20,7 +20,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let npix: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let npix: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
 
     let mut s = 1u64;
@@ -76,7 +79,10 @@ fn main() {
     let decidable = cand_med > null_hi || cand_med < null_lo;
     let ob = ov.iter().copied().fold(f64::MAX, f64::min);
     let fb = fv.iter().copied().fold(f64::MAX, f64::min);
-    println!("# ndimage::median (global, no labels) {npix} pixels (median serial={} direct={})", a[0], b[0]);
+    println!(
+        "# ndimage::median (global, no labels) {npix} pixels (median serial={} direct={})",
+        a[0], b[0]
+    );
     println!(
         "{} serial {ob:.2}ms (cv {:.1}%) direct {fb:.2}ms (cv {:.1}%) | CAND(serial/direct) median \
          {cand_med:.3}x | NULL(A/A) median {null_med:.3}x range [{null_lo:.3}, {null_hi:.3}] | bitmism={bitmism}",

@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0x1357_9bdfu64;
@@ -28,8 +31,12 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
     };
-    let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.001).sin() + r() * 0.1).collect();
-    let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.001).sin() + r() * 0.3).collect();
+    let x: Vec<f64> = (0..n)
+        .map(|i| (i as f64 * 0.001).sin() + r() * 0.1)
+        .collect();
+    let y: Vec<f64> = (0..n)
+        .map(|i| (i as f64 * 0.001).sin() + r() * 0.3)
+        .collect();
 
     XCORR_COEF_FUSE_DISABLE.store(true, Ordering::Relaxed);
     let a = xcorr_coefficient(&x, &y);

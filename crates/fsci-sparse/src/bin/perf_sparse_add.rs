@@ -45,7 +45,10 @@ fn build(seed: u64, rows: usize, nnz_per: usize, cols: usize) -> CsrMatrix {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let rows: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1_000_000);
+    let rows: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1_000_000);
     let nnz_per: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
     let iters: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15);
     let cols = (nnz_per.max(1) * 8).max(16);
@@ -57,9 +60,24 @@ fn main() {
     let s_out = sparse_add(&a, &b);
     SPARSE_ADD_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let p_out = sparse_add(&a, &b);
-    let dbit = s_out.data().iter().zip(p_out.data()).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-    let ibit = s_out.indices().iter().zip(p_out.indices()).filter(|(x, y)| x != y).count();
-    let pbit = s_out.indptr().iter().zip(p_out.indptr()).filter(|(x, y)| x != y).count();
+    let dbit = s_out
+        .data()
+        .iter()
+        .zip(p_out.data())
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
+    let ibit = s_out
+        .indices()
+        .iter()
+        .zip(p_out.indices())
+        .filter(|(x, y)| x != y)
+        .count();
+    let pbit = s_out
+        .indptr()
+        .iter()
+        .zip(p_out.indptr())
+        .filter(|(x, y)| x != y)
+        .count();
     let lenmis = (s_out.data().len() != p_out.data().len()) as usize;
     let bitmism = dbit + ibit + pbit + lenmis;
     println!(

@@ -57,7 +57,17 @@ fn main() {
 
     let bench = |force_serial: bool| -> f64 {
         GENERIC_FILTER1D_FORCE_SERIAL.store(force_serial, Ordering::Relaxed);
-        let run = || generic_filter1d(black_box(&input), reducer, size, 1, BoundaryMode::Reflect, 0.0).unwrap();
+        let run = || {
+            generic_filter1d(
+                black_box(&input),
+                reducer,
+                size,
+                1,
+                BoundaryMode::Reflect,
+                0.0,
+            )
+            .unwrap()
+        };
         let _ = black_box(run());
         let t = Instant::now();
         for _ in 0..3 {

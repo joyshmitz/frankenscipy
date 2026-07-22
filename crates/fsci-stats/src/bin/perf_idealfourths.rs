@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 1u64;
@@ -36,7 +39,8 @@ fn main() {
     let a = idealfourths(&data);
     IDEALFOURTHS_FORCE_SORT.store(false, Ordering::Relaxed);
     let b = idealfourths(&data);
-    let bitmism = usize::from(a.0.to_bits() != b.0.to_bits()) + usize::from(a.1.to_bits() != b.1.to_bits());
+    let bitmism =
+        usize::from(a.0.to_bits() != b.0.to_bits()) + usize::from(a.1.to_bits() != b.1.to_bits());
     println!("# stats::idealfourths n={n} (sort={a:?} select={b:?}) bitmism={bitmism}");
 
     let run = || idealfourths(black_box(&data));

@@ -20,7 +20,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let npix: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let npix: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
 
     let mut s = 1u64;
@@ -38,7 +41,12 @@ fn main() {
     let a = extrema(&input, None, None).unwrap();
     NDIMAGE_EXTREMA_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let b = extrema(&input, None, None).unwrap();
-    let bf = |x: &[f64], y: &[f64]| x.iter().zip(y).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
+    let bf = |x: &[f64], y: &[f64]| {
+        x.iter()
+            .zip(y)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count()
+    };
     let bp = |x: &[Vec<usize>], y: &[Vec<usize>]| x.iter().zip(y).filter(|(p, q)| p != q).count();
     let bitmism = bf(&a.0, &b.0) + bf(&a.1, &b.1) + bp(&a.2, &b.2) + bp(&a.3, &b.3);
 

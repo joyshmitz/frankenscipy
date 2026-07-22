@@ -102,7 +102,9 @@ fn main() {
     let decidable = cand_med > null_hi || cand_med < null_lo;
     let ob = ov.iter().copied().fold(f64::MAX, f64::min);
     let hb = hv.iter().copied().fold(f64::MAX, f64::min);
-    println!("# SmoothBivariateSpline eval_grid {nsamp}x{nsamp} samples, {gside}x{gside} query grid");
+    println!(
+        "# SmoothBivariateSpline eval_grid {nsamp}x{nsamp} samples, {gside}x{gside} query grid"
+    );
     println!(
         "{} percell {ob:.2}ms (cv {:.1}%) hoisted {hb:.2}ms (cv {:.1}%) | CAND(percell/hoisted) median \
          {cand_med:.3}x | NULL(A/A) median {null_med:.3}x range [{null_lo:.3}, {null_hi:.3}] | bitmism={bitmism}",

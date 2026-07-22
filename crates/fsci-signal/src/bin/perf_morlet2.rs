@@ -19,7 +19,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let m: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
+    let m: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(21);
     let w: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5.0);
     let s = (m as f64 / 16.0).max(1.0); // scale spanning the window (realistic wavelet)

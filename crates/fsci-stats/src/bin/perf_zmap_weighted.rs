@@ -18,7 +18,10 @@ fn cv(v: &[f64]) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(16_000_000);
+    let n: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_000_000);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
 
     let mut s = 0xb7e1_5163u64;
@@ -36,16 +39,32 @@ fn main() {
     let a = zmap_weighted(&scores, &compare, &w);
     ZSCORE_W_FUSE_DISABLE.store(false, Ordering::Relaxed);
     let b = zmap_weighted(&scores, &compare, &w);
-    let bitmism = a.iter().zip(&b).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
-    println!("# stats::zmap_weighted compare_n={n} scores={} orig[1]={} fused[1]={} bitmism={bitmism}",
-        scores.len(), a[1], b[1]);
+    let bitmism = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.to_bits() != q.to_bits())
+        .count();
+    println!(
+        "# stats::zmap_weighted compare_n={n} scores={} orig[1]={} fused[1]={} bitmism={bitmism}",
+        scores.len(),
+        a[1],
+        b[1]
+    );
 
     let bench = |disable: bool| -> f64 {
         ZSCORE_W_FUSE_DISABLE.store(disable, Ordering::Relaxed);
-        let _ = black_box(zmap_weighted(black_box(&scores), black_box(&compare), black_box(&w)));
+        let _ = black_box(zmap_weighted(
+            black_box(&scores),
+            black_box(&compare),
+            black_box(&w),
+        ));
         let t = Instant::now();
         for _ in 0..3 {
-            let _ = black_box(zmap_weighted(black_box(&scores), black_box(&compare), black_box(&w)));
+            let _ = black_box(zmap_weighted(
+                black_box(&scores),
+                black_box(&compare),
+                black_box(&w),
+            ));
         }
         t.elapsed().as_secs_f64() / 3.0 * 1e3
     };

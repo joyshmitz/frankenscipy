@@ -27,15 +27,24 @@ fn main() {
         s ^= s << 17;
         (s >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
     };
-    let a: Vec<Vec<f64>> = (0..side).map(|_| (0..side).map(|_| r()).collect()).collect();
+    let a: Vec<Vec<f64>> = (0..side)
+        .map(|_| (0..side).map(|_| r()).collect())
+        .collect();
     let x: Vec<f64> = (0..side).map(|_| r()).collect();
 
     LINALG_MATVEC_FORCE_SERIAL.store(true, Ordering::Relaxed);
     let p = matvec(&a, &x).unwrap();
     LINALG_MATVEC_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let q = matvec(&a, &x).unwrap();
-    let bitmism = p.iter().zip(&q).filter(|(u, v)| u.to_bits() != v.to_bits()).count();
-    println!("# linalg::matvec {side}x{side} p[1]={} q[1]={} bitmism={bitmism}", p[1], q[1]);
+    let bitmism = p
+        .iter()
+        .zip(&q)
+        .filter(|(u, v)| u.to_bits() != v.to_bits())
+        .count();
+    println!(
+        "# linalg::matvec {side}x{side} p[1]={} q[1]={} bitmism={bitmism}",
+        p[1], q[1]
+    );
 
     let bench = |serial: bool| -> f64 {
         LINALG_MATVEC_FORCE_SERIAL.store(serial, Ordering::Relaxed);

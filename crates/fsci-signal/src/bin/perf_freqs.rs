@@ -52,12 +52,24 @@ fn main() {
     let ra = freqs(&b, &a, &w).unwrap();
     FREQS_FORCE_SERIAL.store(false, Ordering::Relaxed);
     let rb = freqs(&b, &a, &w).unwrap();
-    let bitmism = ra.w.iter().zip(&rb.w).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
-        + usize::from(ra.w.len() != rb.w.len())
-        + ra.h_mag.iter().zip(&rb.h_mag).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
-        + usize::from(ra.h_mag.len() != rb.h_mag.len())
-        + ra.h_phase.iter().zip(&rb.h_phase).filter(|(p, q)| p.to_bits() != q.to_bits()).count()
-        + usize::from(ra.h_phase.len() != rb.h_phase.len());
+    let bitmism =
+        ra.w.iter()
+            .zip(&rb.w)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count()
+            + usize::from(ra.w.len() != rb.w.len())
+            + ra.h_mag
+                .iter()
+                .zip(&rb.h_mag)
+                .filter(|(p, q)| p.to_bits() != q.to_bits())
+                .count()
+            + usize::from(ra.h_mag.len() != rb.h_mag.len())
+            + ra.h_phase
+                .iter()
+                .zip(&rb.h_phase)
+                .filter(|(p, q)| p.to_bits() != q.to_bits())
+                .count()
+            + usize::from(ra.h_phase.len() != rb.h_phase.len());
 
     let bench = |force_serial: bool| -> f64 {
         FREQS_FORCE_SERIAL.store(force_serial, Ordering::Relaxed);
