@@ -22923,3 +22923,46 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   one-binary A/B with null gate, exec proof, perf self-time child; opt-in `FSCI_CHOL_MR4_NR4_AB_SKIP` guard on
   the older preamble). Local thinkstation1 build/bench (rch worker ovh-b SIGILL forced fail-open; measurement
   host = the banked-baseline host, deliberately). Bead: `frankenscipy-o90ln`.
+
+## 2026-07-22 - CopperFalcon (cc) - KEEP (1e-10 factor contract): blocked GEMM-shaped panel TRSM (packed L11ᵀ + FMA MR4×NR8 tile) — 1.115x DECIDED on the n=1000 Cholesky factor
+
+- Dense-BLAS wall lane, the OTHER half of the banked joint-primitive retry predicate ("a flat, packed,
+  lower-triangle-only GEMM-shaped update AND a GEMM-speed flat panel TRSM"). After the FMA SYRK landed
+  (23355d1c5), the candidate-binary profile showed panel TRSM as the DOMINANT frame: `cholesky_panel_trsm_rows2`
+  **41.43% self** vs SYRK 26.92 — exactly the "dtrsm/exact-tail dot instruction count" target the 2026-07-10
+  campaign postmortem named. NEGATIVE-EVIDENCE CHECK: TRSM *parallel fan-out* is REJECTED twice (2026-06-27
+  NO-SHIP; 2026-07-04 ~0-gain, spawn-overhead-×-panels root cause) and was NOT retried; the *instruction-count*
+  lever (GEMM-shaped blocked TRSM) had no prior entry — first attempt.
+- ONE LEVER: `cholesky_panel_trsm_blocked_fma` — blocked LEFT-LOOKING TRSM. `L11ᵀ` (strict lower) packs once
+  per panel into the `pack_l21_transpose` 8-wide micro-panel layout; each 4-row block keeps its solved prefix
+  in a contiguous 4×nb scratch; per 8-column block, one K=8·jb broadcast-FMA MR4×NR8 tile (same structure as
+  the landed SYRK kernel) subtracts all cross-block contributions (~94% of TRSM flops), then 8 short ≤7-term
+  dots + divide + `is_finite` finish the triangle. Tail columns (nb%8) and tail rows (m2%4) keep exact-shape
+  dot fallbacks. Kernel selector now `const TRSM_KERNEL: u8` (scalar/rows2/blocked-FMA); production
+  `cholesky_lower_blocked` dispatches blocked-FMA. `#[inline(never)]` keeps a distinct profile frame — the
+  first run's provenance assert CORRECTLY panicked when LLVM inlined the kernel and erased its symbol.
+- MEASUREMENT (thinkstation1, one binary, interleaved per factor, A/A null first, both older wall benches
+  skipped via env guards): NULL(prod/prod) median 0.9995 [0.9651, 1.0525] cv 2.21%; CAND(prod=rows2+FMA-SYRK /
+  cand=blocked-TRSM+FMA-SYRK) **paired median 1.1151**, mean 1.1132, cv 2.11% — **outside the null, DECIDED**.
+  n=1000 factor p50 **12.613 → 11.321 ms** (**26.4 → 29.4 GF/s**; both arms identical threading). Criterion
+  cross-check paired-alternating agrees. CUMULATIVE two-lever arc (FMA SYRK + blocked TRSM): 15.07 → 11.32 ms
+  p50 = **1.33×**; vs banked same-host SciPy: 8.539 ms 1-thread ⇒ gap **~1.90× → 1.33×**; 4.319 ms default ⇒
+  **~3.5× → 2.62×**. Artifact: `tests/artifacts/perf/2026-07-22-chol-trsm-blocked-fma/bench_stdout_stderr.txt`.
+- PROVENANCE: candidate-binary profile — `cholesky_panel_trsm_blocked_fma` **34.28% self** (live), FMA SYRK
+  31.28%, copy+pack 3.89% — the two register-tiled kernels now dominate in balance. EXECUTION PROOF:
+  81,777/1,000,000 factor elements differ in bits vs production, max_rel **1.735e-18** (8 orders inside the
+  1e-10 contract). Profile-child factor mean under perf: 16.38 ms (yesterday's production) → 11.90 ms (today).
+- CONFORMANCE: new inline test `cholesky_panel_trsm_blocked_fma_within_factor_tolerance` (≤1e-10 vs the
+  scalar-TRSM factor + differing-bits proof, tile/tail/multi-panel sizes); fsci-linalg lib **514/0**;
+  `diff_linalg_inv_pinv_cholesky` 37/0, `diff_linalg` 1/0, `diff_linalg_structured_solvers` 1/0; ubs 0
+  critical; clippy zero findings in the diff's regions (repo-wide clippy still red from the pre-existing
+  toolchain drift, bead `frankenscipy-q9nxz`).
+- NEXT (measured): with TRSM and SYRK balanced at ~34/31%, the single-kernel headroom is thinning — next
+  candidates are (a) the within-tile K-blocking / NC-blocking of the SYRK sweep (B-panel L2 traffic scales
+  m2²·nb per trailing update), (b) `copy_l21_and_pack_transpose` fusion into the first SYRK pass, (c) the
+  `simd_dot`-bound in-panel factorization at ~small%. Re-profile before choosing.
+- Disposition: KEEP. Shipped `crates/fsci-linalg/src/lib.rs` (blocked TRSM kernel + u8 TRSM selector +
+  production flip + inline test) and `crates/fsci-linalg/benches/linalg_bench.rs`
+  (`bench_cholesky_wall_trsm_fma_ab` + `FSCI_CHOL_NR8_FMA_AB_SKIP` guard on yesterday's bench). Local
+  thinkstation1 build/bench (banked-baseline host; ovh-b SIGILL hazard `frankenscipy-hhr7j` still open).
+  Bead: `frankenscipy-2pdpo`.
