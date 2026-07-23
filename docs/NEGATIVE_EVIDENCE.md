@@ -23385,3 +23385,33 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   Honest boundary: the hyperbolic functions carry 2 solves + assembly that dilute the matmul-count win faster
   than plain `expm` (which had m5 1.5x decided at n=256). The high-value part of this lever was the public
   `expm` (prior entry); this extension is the low-EV tail.
+
+## 2026-07-23 - CopperFalcon (cc) - REJECT (spawn-bound): parallel eigh tridiagonalization rank-2 update — 2.3-2.8x SLOWER
+
+- Profile-directed (bead frankenscipy-ll0kk): the `symmetric_eigh_native` stage probe showed the Householder
+  tridiagonalization is the DOMINANT, serial, fastest-growing stage — n=1200 **322 ms of ~563 ms total (57%)**
+  (vs tridiag-eigen 108, back-transform 125 [already parallel], sort 7). So the reduction's per-step rank-2
+  symmetric trailing update (`apply_symmetric_householder_trailing_rank2_lower_storage`, O(active²)) was the
+  target — same class as the cholesky SYRK / LU trailing-update parallelization that landed.
+- ONE LEVER: parallel path gated on `active ≥ 256` — row-parallel symmetric matvec `p = A_sym·v` (each `p[i]`
+  a sequential dot, deterministic reassociation ⇒ tolerance-parity) + column-parallel write-once rank-2 update
+  (byte-identical; active columns are one contiguous `active·n` region in column-major). TOLERANCE-PARITY
+  proven (new `symmetric_eigh_native_parallel_tridiag_matches_serial`: eigenvalues <1e-9, residual <1e-8;
+  the native contract is 1e-9, eigenvectors non-unique). 16 eigh tests green.
+- MEASUREMENT (thinkstation1, `EIGH_TRIDIAG_FORCE_SERIAL` A/B, criterion): parallel is **DECIDED SLOWER** —
+  n=512 serial 105.3 ms vs parallel 241.1 ms (**0.44x = 2.29x slower**); n=800 190.1 vs 539.9 (**2.84x
+  slower**). Artifact `tests/artifacts/perf/2026-07-23-eigh-tridiag-parallel/bench.txt`.
+- ROOT CAUSE (the recurring per-step-spawn wall): the reduction is **n−2 SEQUENTIAL steps** with the active
+  block shrinking n→3. Each step's O(active²) update is memory-bound and TINY in wall time (~25 µs at
+  active=500), so a `std::thread::scope` spawn (~28 µs/thread × T + the per-step `p_vec` alloc) COSTS MORE than
+  the work it parallelizes — at EVERY step, even the largest. ~256 gated steps × 2 scopes × spawns = tens of ms
+  of pure spawn overhead. IDENTICAL blocker to the cholesky panel-TRSM per-block spawn (2026-07-04 ~0-gain) and
+  the pool-substrate analysis: sub-`~15M`-MAC work cannot pay a per-invocation scoped spawn.
+- DISPOSITION: candidate STASHED (non-destructive, "cc REJECT candidate: eigh parallel tridiag …"), tree back
+  to 9c1ddbec7 production; 16 eigh tests green post-revert. Bead ll0kk stays open.
+- RETRY PREDICATE (two real routes, both heavier): (1) a PERSISTENT worker pool (blocked on `frankenscipy-vndri`
+  — the dispatch cost is 6-8x lower than fresh spawn, which would flip these; the SAME substrate the cholesky
+  n=1000 lane needs); or (2) BLOCKED tridiagonalization (LAPACK dsytrd style: aggregate `k` reflectors via the
+  WY representation, apply as ONE rank-2k BLAS-3 update per panel = O(n/k) large parallel ops instead of n
+  tiny ones) — a substantial rewrite but the algorithmically-correct fix, and it also closes more of the
+  vs-LAPACK constant. Do NOT re-run the per-step scoped-spawn form.

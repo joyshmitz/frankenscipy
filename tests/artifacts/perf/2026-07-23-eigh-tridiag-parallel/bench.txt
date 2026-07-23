@@ -1,0 +1,60 @@
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+warning: constant `SYRK_KERNEL_MR4_NR8` is never used
+    --> crates/fsci-linalg/src/lib.rs:5125:7
+     |
+5125 | const SYRK_KERNEL_MR4_NR8: u8 = 0;
+     |       ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-linalg` (lib) generated 1 warning
+    Finished `bench` profile [optimized] target(s) in 18.04s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-2f2a4a1818c7f0d1)
+Gnuplot not found, using plotters backend
+Benchmarking eigh_tridiag_parallel_ab/serial_n512
+Benchmarking eigh_tridiag_parallel_ab/serial_n512: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.7s or enable flat sampling.
+Benchmarking eigh_tridiag_parallel_ab/serial_n512: Collecting 10 samples in estimated 5.7135 s (55 iterations)
+Benchmarking eigh_tridiag_parallel_ab/serial_n512: Analyzing
+eigh_tridiag_parallel_ab/serial_n512
+                        time:   [102.55 ms 105.34 ms 108.49 ms]
+Benchmarking eigh_tridiag_parallel_ab/parallel_n512
+Benchmarking eigh_tridiag_parallel_ab/parallel_n512: Warming up for 3.0000 s
+Benchmarking eigh_tridiag_parallel_ab/parallel_n512: Collecting 10 samples in estimated 7.3289 s (30 iterations)
+Benchmarking eigh_tridiag_parallel_ab/parallel_n512: Analyzing
+eigh_tridiag_parallel_ab/parallel_n512
+                        time:   [239.47 ms 241.05 ms 242.74 ms]
+Benchmarking eigh_tridiag_parallel_ab/serial_n800
+Benchmarking eigh_tridiag_parallel_ab/serial_n800: Warming up for 3.0000 s
+Benchmarking eigh_tridiag_parallel_ab/serial_n800: Collecting 10 samples in estimated 5.8272 s (30 iterations)
+Benchmarking eigh_tridiag_parallel_ab/serial_n800: Analyzing
+eigh_tridiag_parallel_ab/serial_n800
+                        time:   [185.54 ms 190.12 ms 195.22 ms]
+Benchmarking eigh_tridiag_parallel_ab/parallel_n800
+Benchmarking eigh_tridiag_parallel_ab/parallel_n800: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.4s.
+Benchmarking eigh_tridiag_parallel_ab/parallel_n800: Collecting 10 samples in estimated 5.3712 s (10 iterations)
+Benchmarking eigh_tridiag_parallel_ab/parallel_n800: Analyzing
+eigh_tridiag_parallel_ab/parallel_n800
+                        time:   [535.19 ms 539.94 ms 544.65 ms]
+Benchmarking eigh_tridiag_parallel_ab/serial_n1200
+Benchmarking eigh_tridiag_parallel_ab/serial_n1200: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.7s.
+Benchmarking eigh_tridiag_parallel_ab/serial_n1200: Collecting 10 samples in estimated 5.6768 s (10 iterations)
+Benchmarking eigh_tridiag_parallel_ab/serial_n1200: Analyzing
+eigh_tridiag_parallel_ab/serial_n1200
+                        time:   [572.73 ms 579.03 ms 587.98 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking eigh_tridiag_parallel_ab/parallel_n1200
+Benchmarking eigh_tridiag_parallel_ab/parallel_n1200: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.3s.
+Benchmarking eigh_tridiag_parallel_ab/parallel_n1200: Collecting 10 samples in estimated 12.271 s (10 iterations)
+Benchmarking eigh_tridiag_parallel_ab/parallel_n1200: Analyzing
+eigh_tridiag_parallel_ab/parallel_n1200
+                        time:   [1.2096 s 1.2139 s 1.2189 s]
+
