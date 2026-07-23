@@ -1,0 +1,62 @@
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+warning: constant `SYRK_KERNEL_MR4_NR8` is never used
+    --> crates/fsci-linalg/src/lib.rs:5125:7
+     |
+5125 | const SYRK_KERNEL_MR4_NR8: u8 = 0;
+     |       ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-linalg` (lib) generated 1 warning
+    Finished `bench` profile [optimized] target(s) in 18.72s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-2f2a4a1818c7f0d1)
+Gnuplot not found, using plotters backend
+Benchmarking eigh_inviter_parallel_ab/serial_n512
+Benchmarking eigh_inviter_parallel_ab/serial_n512: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.8s or enable flat sampling.
+Benchmarking eigh_inviter_parallel_ab/serial_n512: Collecting 10 samples in estimated 5.8259 s (55 iterations)
+Benchmarking eigh_inviter_parallel_ab/serial_n512: Analyzing
+eigh_inviter_parallel_ab/serial_n512
+                        time:   [104.32 ms 107.01 ms 108.60 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking eigh_inviter_parallel_ab/parallel_n512
+Benchmarking eigh_inviter_parallel_ab/parallel_n512: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.4s or enable flat sampling.
+Benchmarking eigh_inviter_parallel_ab/parallel_n512: Collecting 10 samples in estimated 5.4046 s (55 iterations)
+Benchmarking eigh_inviter_parallel_ab/parallel_n512: Analyzing
+eigh_inviter_parallel_ab/parallel_n512
+                        time:   [95.041 ms 96.100 ms 97.242 ms]
+Benchmarking eigh_inviter_parallel_ab/serial_n800
+Benchmarking eigh_inviter_parallel_ab/serial_n800: Warming up for 3.0000 s
+Benchmarking eigh_inviter_parallel_ab/serial_n800: Collecting 10 samples in estimated 6.0698 s (30 iterations)
+Benchmarking eigh_inviter_parallel_ab/serial_n800: Analyzing
+eigh_inviter_parallel_ab/serial_n800
+                        time:   [193.96 ms 198.80 ms 203.82 ms]
+Benchmarking eigh_inviter_parallel_ab/parallel_n800
+Benchmarking eigh_inviter_parallel_ab/parallel_n800: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 9.5s or enable flat sampling.
+Benchmarking eigh_inviter_parallel_ab/parallel_n800: Collecting 10 samples in estimated 9.4567 s (55 iterations)
+Benchmarking eigh_inviter_parallel_ab/parallel_n800: Analyzing
+eigh_inviter_parallel_ab/parallel_n800
+                        time:   [161.22 ms 166.09 ms 173.96 ms]
+Benchmarking eigh_inviter_parallel_ab/serial_n1200
+Benchmarking eigh_inviter_parallel_ab/serial_n1200: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.7s.
+Benchmarking eigh_inviter_parallel_ab/serial_n1200: Collecting 10 samples in estimated 5.7033 s (10 iterations)
+Benchmarking eigh_inviter_parallel_ab/serial_n1200: Analyzing
+eigh_inviter_parallel_ab/serial_n1200
+                        time:   [554.22 ms 568.43 ms 580.59 ms]
+Benchmarking eigh_inviter_parallel_ab/parallel_n1200
+Benchmarking eigh_inviter_parallel_ab/parallel_n1200: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.3s.
+Benchmarking eigh_inviter_parallel_ab/parallel_n1200: Collecting 10 samples in estimated 5.3244 s (10 iterations)
+Benchmarking eigh_inviter_parallel_ab/parallel_n1200: Analyzing
+eigh_inviter_parallel_ab/parallel_n1200
+                        time:   [517.85 ms 527.80 ms 537.87 ms]
+

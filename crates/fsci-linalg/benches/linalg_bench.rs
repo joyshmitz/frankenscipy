@@ -12,12 +12,12 @@ use fsci_linalg::{
     CHOL_PANEL_TRSM_PAR_PANELS,
 };
 use fsci_linalg::{
-    DecompOptions, EXPM_ADAPTIVE_ORDER_DISABLE, HELMERT_FORCE_SERIAL, IS_DIAGONAL_FORCE_SERIAL,
-    InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL,
-    PinvOptions, SolveOptions, TANHM_SHARED_PADE_DISABLE, TriangularSolveOptions, cho_factor,
-    cho_solve, coshm, det, dft, eigh, expm, frobenius_norm, inv, is_diagonal, lstsq, lu_factor,
-    lu_solve, mat_flatten, matmul, orthogonal_procrustes, pascal, pinv, randomized_eigh, solve,
-    solve_banded, solve_triangular, svd, tanhm, vdot,
+    DecompOptions, EIGH_INVITER_FORCE_SERIAL, EXPM_ADAPTIVE_ORDER_DISABLE, HELMERT_FORCE_SERIAL,
+    IS_DIAGONAL_FORCE_SERIAL, InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption,
+    PASCAL_FORCE_SERIAL, PinvOptions, SolveOptions, TANHM_SHARED_PADE_DISABLE,
+    TriangularSolveOptions, cho_factor, cho_solve, coshm, det, dft, eigh, expm, frobenius_norm,
+    inv, is_diagonal, lstsq, lu_factor, lu_solve, mat_flatten, matmul, orthogonal_procrustes,
+    pascal, pinv, randomized_eigh, solve, solve_banded, solve_triangular, svd, tanhm, vdot,
 };
 #[cfg(feature = "chol-wall-bench")]
 use fsci_linalg::{
@@ -488,6 +488,45 @@ fn bench_matmul(c: &mut Criterion) {
 }
 
 // ── eigh ──────────────────────────────────────────────────────────────────────
+
+/// Parallel vs serial inverse-iteration eigenvector sweep in native `eigh` (n≥512).
+/// One scoped spawn over independent columns; BYTE-IDENTICAL (asserted before timing).
+/// `EIGH_INVITER_FORCE_SERIAL` A/B.
+fn bench_eigh_inviter_parallel_ab(c: &mut Criterion) {
+    let mut group = c.benchmark_group("eigh_inviter_parallel_ab");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(5));
+    for &n in &[512usize, 800, 1200] {
+        let a = make_symmetric_eigh_matrix(n);
+        EIGH_INVITER_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let par = eigh(&a, DecompOptions::default()).unwrap();
+        EIGH_INVITER_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let ser = eigh(&a, DecompOptions::default()).unwrap();
+        let identical = par
+            .eigenvalues
+            .iter()
+            .zip(&ser.eigenvalues)
+            .all(|(p, s)| p.to_bits() == s.to_bits());
+        assert!(
+            identical,
+            "n{n}: parallel inviter not byte-identical to serial"
+        );
+        group.bench_function(format!("serial_n{n}"), |bencher| {
+            bencher.iter(|| {
+                EIGH_INVITER_FORCE_SERIAL.store(true, Ordering::Relaxed);
+                black_box(eigh(black_box(&a), DecompOptions::default()).unwrap())
+            });
+        });
+        group.bench_function(format!("parallel_n{n}"), |bencher| {
+            bencher.iter(|| {
+                EIGH_INVITER_FORCE_SERIAL.store(false, Ordering::Relaxed);
+                black_box(eigh(black_box(&a), DecompOptions::default()).unwrap())
+            });
+        });
+    }
+    EIGH_INVITER_FORCE_SERIAL.store(false, Ordering::Relaxed);
+    group.finish();
+}
 
 fn bench_eigh_dense(c: &mut Criterion) {
     let mut group = c.benchmark_group("eigh_dense");
@@ -3192,6 +3231,7 @@ criterion_group!(
     bench_frobenius_norm_simd,
     bench_vdot_simd_ab,
     bench_is_diagonal,
+    bench_eigh_inviter_parallel_ab,
     bench_eigh_dense,
     bench_randomized_eigh
 );

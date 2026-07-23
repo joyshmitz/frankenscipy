@@ -12403,6 +12403,74 @@ fn tridiagonal_eigenvector_residual_max(
     max_residual
 }
 
+/// A/B switch: force the inverse-iteration eigenvector sweep onto its serial path.
+/// Byte-identical either way (each column is a pure, deterministic function of its
+/// index; parallelism only changes which thread runs which column).
+pub static EIGH_INVITER_FORCE_SERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Minimum tridiagonal dimension to parallelize the inverse-iteration eigenvector
+/// sweep. It is ONE scoped spawn over `n` independent columns (unlike the per-step
+/// tridiagonalization), so the gate is modest — small `n` stays serial to skip the
+/// single spawn's fixed cost.
+const EIGH_INVITER_PAR_MIN_DIM: usize = 192;
+
+/// One inverse-iteration eigenvector for eigenvalue `lambda` (index `col`), written
+/// into `dst` (length `n`). Pure function of `(diagonal, offdiagonal, lambda, col)` —
+/// deterministic start vector + shift, allocating its own scratch — so calling it from
+/// parallel column-chunks is byte-identical to the serial sweep. Returns false on a
+/// singular solve / normalization failure (⇒ the caller falls back to QR).
+fn compute_inverse_iteration_column(
+    diagonal: &[f64],
+    offdiagonal: &[f64],
+    lambda: f64,
+    col: usize,
+    min_pivot: f64,
+    shift_unit: f64,
+    dst: &mut [f64],
+) -> bool {
+    let n = diagonal.len();
+    let mut rhs = vec![0.0_f64; n];
+    let mut solution = vec![0.0_f64; n];
+    let mut upper_factors = vec![0.0_f64; n];
+    let mut reduced_rhs = vec![0.0_f64; n];
+    for (row, value) in rhs.iter_mut().enumerate() {
+        let pattern = ((row + 1) * (col + 3) + 5) % 17;
+        *value = 0.5 + pattern as f64 / 19.0;
+    }
+    if !normalize_tridiagonal_inverse_vector(&mut rhs) {
+        return false;
+    }
+    let signed_shift = if col % 2 == 0 {
+        shift_unit
+    } else {
+        -shift_unit
+    };
+    let shifted_lambda = lambda + signed_shift * (1 + col % 13) as f64;
+    for _ in 0..TRIDIAGONAL_INVERSE_ITERATIONS {
+        if !solve_shifted_tridiagonal_system(
+            diagonal,
+            offdiagonal,
+            shifted_lambda,
+            min_pivot,
+            &rhs,
+            ShiftedTridiagonalWorkspace {
+                solution: &mut solution,
+                upper_factors: &mut upper_factors,
+                reduced_rhs: &mut reduced_rhs,
+            },
+        ) {
+            return false;
+        }
+        std::mem::swap(&mut rhs, &mut solution);
+        if !normalize_tridiagonal_inverse_vector(&mut rhs) {
+            return false;
+        }
+    }
+    dst[..n].copy_from_slice(&rhs[..n]);
+    true
+}
+
 fn tridiagonal_inverse_iteration_eigenvectors(
     diagonal: &[f64],
     offdiagonal: &[f64],
@@ -12437,50 +12505,74 @@ fn tridiagonal_inverse_iteration_eigenvectors(
     let min_pivot = TRIDIAGONAL_INVERSE_MIN_PIVOT * scale;
     let shift_unit = 32.0 * f64::EPSILON * scale;
     let mut eigenvectors = DMatrix::<f64>::zeros(n, n);
-    let mut rhs = vec![0.0_f64; n];
-    let mut solution = vec![0.0_f64; n];
-    let mut upper_factors = vec![0.0_f64; n];
-    let mut reduced_rhs = vec![0.0_f64; n];
 
-    for (col, &lambda) in eigenvalues.iter().enumerate() {
-        for (row, value) in rhs.iter_mut().enumerate() {
-            let pattern = ((row + 1) * (col + 3) + 5) % 17;
-            *value = 0.5 + pattern as f64 / 19.0;
-        }
-        if !normalize_tridiagonal_inverse_vector(&mut rhs) {
-            return None;
-        }
-
-        let signed_shift = if col % 2 == 0 {
-            shift_unit
-        } else {
-            -shift_unit
-        };
-        let shifted_lambda = lambda + signed_shift * (1 + col % 13) as f64;
-        for _ in 0..TRIDIAGONAL_INVERSE_ITERATIONS {
-            if !solve_shifted_tridiagonal_system(
+    // Each eigenvector is an INDEPENDENT inverse iteration: its starting vector and
+    // shift depend only on `col` (deterministic), the eigenvalues are gap-separated
+    // (checked above) so no cross-column orthogonalization is needed, and each column
+    // is written disjointly. So this loop parallelizes across columns with ONE scoped
+    // spawn (not the per-step spawn that sank the tridiagonalization) and is
+    // BYTE-IDENTICAL — the same sequential arithmetic per column, just on more threads.
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    let parallel = n >= EIGH_INVITER_PAR_MIN_DIM
+        && cores > 1
+        && !EIGH_INVITER_FORCE_SERIAL.load(std::sync::atomic::Ordering::Relaxed);
+    let ok = if parallel {
+        let nthreads = cores.min(16).min(n / 64).max(1);
+        let chunk = n.div_ceil(nthreads);
+        let evec = eigenvectors.as_mut_slice();
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = evec
+                .chunks_mut(chunk * n)
+                .enumerate()
+                .map(|(t, colblk)| {
+                    let base_col = t * chunk;
+                    scope.spawn(move || {
+                        let cols_here = colblk.len() / n;
+                        for local in 0..cols_here {
+                            let col = base_col + local;
+                            let dst = &mut colblk[local * n..local * n + n];
+                            if !compute_inverse_iteration_column(
+                                diagonal,
+                                offdiagonal,
+                                eigenvalues[col],
+                                col,
+                                min_pivot,
+                                shift_unit,
+                                dst,
+                            ) {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                })
+                .collect();
+            handles.into_iter().all(|h| h.join().unwrap_or(false))
+        })
+    } else {
+        let mut all_ok = true;
+        for (col, &lambda) in eigenvalues.iter().enumerate() {
+            let mut dst = vec![0.0_f64; n];
+            if !compute_inverse_iteration_column(
                 diagonal,
                 offdiagonal,
-                shifted_lambda,
+                lambda,
+                col,
                 min_pivot,
-                &rhs,
-                ShiftedTridiagonalWorkspace {
-                    solution: &mut solution,
-                    upper_factors: &mut upper_factors,
-                    reduced_rhs: &mut reduced_rhs,
-                },
+                shift_unit,
+                &mut dst,
             ) {
-                return None;
+                all_ok = false;
+                break;
             }
-            std::mem::swap(&mut rhs, &mut solution);
-            if !normalize_tridiagonal_inverse_vector(&mut rhs) {
-                return None;
+            for row in 0..n {
+                eigenvectors[(row, col)] = dst[row];
             }
         }
-
-        for row in 0..n {
-            eigenvectors[(row, col)] = rhs[row];
-        }
+        all_ok
+    };
+    if !ok {
+        return None;
     }
 
     let residual =
@@ -29422,6 +29514,46 @@ mod tests {
                         "lower triangle mismatch at ({row}, {col}) after start={start}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn eigh_inverse_iteration_parallel_is_byte_identical() {
+        use std::sync::atomic::Ordering;
+        // The parallel inverse-iteration eigenvector sweep must equal the serial one
+        // BIT-for-BIT (each column is a pure deterministic function of its index; no
+        // cross-column dependency). n above the native gate (512) and the inviter gate.
+        let mut s: u64 = 0x2b1c_9a8f_7e6d_5c4b;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let n = 600usize;
+        let mut a = vec![vec![0.0f64; n]; n];
+        for i in 0..n {
+            for j in i..n {
+                let v = rng();
+                a[i][j] = v;
+                a[j][i] = v;
+            }
+        }
+        EIGH_INVITER_FORCE_SERIAL.store(true, Ordering::Relaxed);
+        let serial = eigh(&a, DecompOptions::default()).expect("serial eigh");
+        EIGH_INVITER_FORCE_SERIAL.store(false, Ordering::Relaxed);
+        let parallel = eigh(&a, DecompOptions::default()).expect("parallel eigh");
+        for (se, pe) in serial.eigenvalues.iter().zip(&parallel.eigenvalues) {
+            assert_eq!(se.to_bits(), pe.to_bits(), "eigenvalue bits differ");
+        }
+        for c in 0..n {
+            for r in 0..n {
+                assert_eq!(
+                    serial.eigenvectors[r][c].to_bits(),
+                    parallel.eigenvectors[r][c].to_bits(),
+                    "eigenvector bits differ at ({r},{c})"
+                );
             }
         }
     }

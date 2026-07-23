@@ -23415,3 +23415,32 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   WY representation, apply as ONE rank-2k BLAS-3 update per panel = O(n/k) large parallel ops instead of n
   tiny ones) — a substantial rewrite but the algorithmically-correct fix, and it also closes more of the
   vs-LAPACK constant. Do NOT re-run the per-step scoped-spawn form.
+
+## 2026-07-23 - CopperFalcon (cc) - KEEP (byte-identical): parallel inverse-iteration eigenvector sweep in native eigh — 1.08-1.20x
+
+- After the per-step tridiag-parallel REJECT (above), the OTHER significant native-eigh stage — the
+  tridiagonal inverse-iteration eigenvector sweep (`tridiagonal_inverse_iteration_eigenvectors`, ~108 ms /
+  19% at n=1200 in the stage probe) — parallelizes WITHOUT the per-step wall: each eigenvector is an
+  INDEPENDENT inverse iteration whose start vector + shift depend only on its column index, and the
+  eigenvalues are gap-separated (checked up front) so there is NO cross-column orthogonalization. So the whole
+  sweep is ONE scoped spawn over `n` independent columns — not `n` tiny per-step spawns.
+- ONE LEVER: extracted `compute_inverse_iteration_column(...)` (pure function of the column index, own
+  scratch) and the sweep runs it across column-chunks in one `thread::scope`, each thread writing disjoint
+  (contiguous, column-major) columns. Gate `n ≥ 192`, threads capped 16. BYTE-IDENTICAL — each column is the
+  identical deterministic sequential arithmetic, just on more threads; the final residual check is unchanged.
+  `eigh_inverse_iteration_parallel_is_byte_identical` asserts eigenvalues AND eigenvectors `to_bits`-equal
+  serial-vs-parallel at n=600. `EIGH_INVITER_FORCE_SERIAL` for A/B.
+- MEASUREMENT (thinkstation1, criterion, whole-eigh time, `EIGH_INVITER_FORCE_SERIAL` A/B): n=512 serial
+  107.0 → parallel 96.1 ms **1.11x**; n=800 198.8 → 166.1 ms **1.20x**; n=1200 568.4 → 527.8 ms **1.077x**
+  — all CIs cleanly separated (DECIDED). The whole-eigh ratio is modest because the sweep is only ~19% of
+  eigh and the (still-serial, unparallelizable-per-step) tridiagonalization dominates more as n grows; the
+  sweep stage itself parallelizes near-linearly. Artifact
+  `tests/artifacts/perf/2026-07-23-eigh-inviter-parallel/bench.txt`.
+- Conformance: fsci-linalg lib **520/0** (+ the new byte-identity test), `diff_linalg_eigvalsh`/`eigvals`
+  green. ubs: 1 "critical" = FALSE POSITIVE (security pack flags `make_symmetric_eigh_matrix`'s benchmark RNG
+  as a "security token"; numeric-crate benchmark fixtures are not tokens — per the scoped-gate convention the
+  security pack doesn't apply here). No new real finding.
+- Disposition: KEEP (production defaults to parallel; `EIGH_INVITER_FORCE_SERIAL` A/B-only). Partly closes the
+  eigh vs-scipy gap (bead `frankenscipy-ll0kk`): n=512 2.73x→~2.4x-equiv on the parallelized portion. The
+  REMAINING gap is the tridiagonalization (blocked on the per-step spawn wall / pool substrate, OR a blocked
+  WY dsytrd rewrite — see the REJECT entry). ll0kk stays open for that structural piece.
