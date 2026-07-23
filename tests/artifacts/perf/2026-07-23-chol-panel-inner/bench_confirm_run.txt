@@ -1,0 +1,13 @@
+    Finished `bench` profile [optimized] target(s) in 0.09s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-65eebc4797541807)
+Gnuplot not found, using plotters backend
+FSCI_CHOL_PANEL_INNER_AB n=1000 NULL median=0.997463 min=0.979741 max=1.029661 cv_pct=1.297
+FSCI_CHOL_PANEL_INNER_AB n=1000 inner=16 exec_proof differing_elements=125288 max_rel=2.594e-16
+FSCI_CHOL_PANEL_INNER_AB n=1000 inner=16 base_p50_ms=11.816701 cand_p50_ms=11.508533 paired_median=1.024974 paired_cv_pct=2.065 null=[0.979741,1.029661] DECIDED=false
+FSCI_CHOL_PANEL_INNER_AB n=1000 inner=32 exec_proof differing_elements=91607 max_rel=2.592e-16
+FSCI_CHOL_PANEL_INNER_AB n=1000 inner=32 base_p50_ms=11.924693 cand_p50_ms=11.674397 paired_median=1.021452 paired_cv_pct=1.935 null=[0.979741,1.029661] DECIDED=false
+FSCI_CHOL_PANEL_INNER_AB n=2048 NULL median=1.019234 min=0.984864 max=1.041972 cv_pct=1.758
+FSCI_CHOL_PANEL_INNER_AB n=2048 inner=16 exec_proof differing_elements=526083 max_rel=3.623e-16
+FSCI_CHOL_PANEL_INNER_AB n=2048 inner=16 base_p50_ms=55.531309 cand_p50_ms=54.916764 paired_median=1.017821 paired_cv_pct=1.716 null=[0.984864,1.041972] DECIDED=false
+FSCI_CHOL_PANEL_INNER_AB n=2048 inner=32 exec_proof differing_elements=366485 max_rel=1.813e-16
+FSCI_CHOL_PANEL_INNER_AB n=2048 inner=32 base_p50_ms=54.787514 cand_p50_ms=53.972859 paired_median=1.032473 paired_cv_pct=3.642 null=[0.984864,1.041972] DECIDED=false

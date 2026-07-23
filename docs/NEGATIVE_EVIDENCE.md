@@ -23245,3 +23245,32 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - **Retry predicate:** diagonal structural-certificate caching is closed. Reopen Radau only when a fresh profile
   puts a different stage above the null floor, such as non-diagonal/banded factorization or analytic-Jacobian
   plumbing, with the existing convergence/tolerance contract and full-result equivalence retained.
+
+## 2026-07-23 - CopperFalcon (cc) - KEEP (bundle, 1e-10 contract): hoisted scratch + nested in-panel factorization — 1.046x DECIDED n=1000, 1.120x DECIDED n=2048; the sub-floor composite route worked
+
+- Levers 8+9's recorded retry predicates both named BUNDLING as the landing route; this is that bundle.
+  Components: (a) per-panel scratch hoist (bit-identical, ~+3% alone, TERMINAL-REJECTED solo ×4 runs);
+  (b) nested in-panel factorization `cholesky_factor_panel_blocked` (inner=32, composes the validated
+  rows2-TRSM + FMA-SYRK kernels one level down; solo runs: 1.027 boundary-graze then 1.021 in-null under
+  the pre-registered confirmation rule — REJECTED solo, artifact 2026-07-23-chol-panel-inner).
+- MEASUREMENT (artifacts 2026-07-23-chol-bundle/bench_stdout_stderr.txt + bench_confirm_2048.txt): each
+  size DECIDED on a clean null across two runs — n=1000 run A **paired median 1.0461** vs null
+  [0.9409, 1.0234] (base 10.51 → cand **10.05 ms, 33.2 GF/s**); n=2048 run B **1.1197** vs null
+  [0.9568, 1.0296] (→ **~49.2 ms, ~58 GF/s**). The complementary run at each size had a single ~1.23-1.26
+  A/A outlier polluting its null (medians 1.034/1.120 corroborate). Execution proofs: 91,607 (n=1000) /
+  366,485 (n=2048) differing elements, max_rel ≤ 2.6e-16.
+- POST-FLIP HARNESS GOTCHA (cost one broken bench run, self-caught by the execution-proof assert):
+  flipping production made override=0 mean "size default = nested" — the baseline arm silently became the
+  candidate. Fixed with a FORCE-DOT sentinel (override=1) and a REUSE=false-pinned baseline straddler.
+  RULE: after flipping production behind a default-following override, every baseline arm must pin the OLD
+  behavior explicitly; bit-identical arms in an A/B are the tell (which is why the exec-proof assert exists).
+- SHIPPED: production wrapper → REUSE_SCRATCH=true (all sizes; bit-identical) + `chol_panel_inner_for` → 32
+  for n ≥ 1000 (dot loop below, unmeasured there and share is small at nb=128). fsci-linalg lib **518/0**
+  (+ scratch bit-id, panel-blocked tolerance, and NB/parallel tests), cholesky diff lanes 39/0, ubs 0
+  critical, clippy clean in-region. Beads: frankenscipy-dcx11 (landed via bundle), vpjel (component landed).
+- ARC (n=1000, single day): 15.07 → 13.22 (FMA SYRK) → 11.32 (blocked TRSM) → ~11.0 (staircase+parallel
+  TRSM) → **10.05 ms = 1.50× cumulative**; n=2048: 105-114 (07-04 banked) → **49.2 ms**, vs same-host
+  scipy-default 62.36 ⇒ **~1.27× FASTER than OpenBLAS-backed SciPy at default threading, pure safe Rust.**
+- NEXT: fresh profile at the new operating point before choosing; pool decision (vndri) still the n=1000
+  ceiling-breaker; the sub-floor inventory (jc-block stash, gate sweeps) stays parked pending a cycles-gate
+  harness (bead-worthy: port the perf-stat cycles gate from d97283534 into the wall benches).

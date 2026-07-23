@@ -1,0 +1,15 @@
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+    Finished `bench` profile [optimized] target(s) in 20.69s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-65eebc4797541807)
+Gnuplot not found, using plotters backend
+FSCI_CHOL_PANEL_INNER_AB n=1000 NULL median=1.005797 min=0.965783 max=1.026727 cv_pct=1.781
+FSCI_CHOL_PANEL_INNER_AB n=1000 inner=16 exec_proof differing_elements=125288 max_rel=2.594e-16
+FSCI_CHOL_PANEL_INNER_AB n=1000 inner=16 base_p50_ms=11.902999 cand_p50_ms=11.736768 paired_median=1.018706 paired_cv_pct=1.724 null=[0.965783,1.026727] DECIDED=false
+FSCI_CHOL_PANEL_INNER_AB n=1000 inner=32 exec_proof differing_elements=91607 max_rel=2.592e-16
+FSCI_CHOL_PANEL_INNER_AB n=1000 inner=32 base_p50_ms=11.925588 cand_p50_ms=11.506392 paired_median=1.026919 paired_cv_pct=1.356 null=[0.965783,1.026727] DECIDED=true
+FSCI_CHOL_PANEL_INNER_AB n=2048 NULL median=1.002475 min=0.942907 max=1.063164 cv_pct=3.343
+FSCI_CHOL_PANEL_INNER_AB n=2048 inner=16 exec_proof differing_elements=526083 max_rel=3.623e-16
+FSCI_CHOL_PANEL_INNER_AB n=2048 inner=16 base_p50_ms=54.367177 cand_p50_ms=53.734962 paired_median=1.020353 paired_cv_pct=2.376 null=[0.942907,1.063164] DECIDED=false
+FSCI_CHOL_PANEL_INNER_AB n=2048 inner=32 exec_proof differing_elements=366485 max_rel=1.813e-16
+FSCI_CHOL_PANEL_INNER_AB n=2048 inner=32 base_p50_ms=53.864700 cand_p50_ms=52.994189 paired_median=1.022161 paired_cv_pct=2.716 null=[0.942907,1.063164] DECIDED=false

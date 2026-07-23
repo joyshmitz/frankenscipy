@@ -5142,43 +5142,84 @@ fn cholesky_lower_blocked_with_kernels<const TRSM_KERNEL: u8, const SYRK_KERNEL:
     n: usize,
     nb_block: usize,
 ) -> Option<Vec<f64>> {
+    // Production: hoisted scratch + (for n ≥ 1000) nested in-panel factorization —
+    // the 2026-07-23 bundle lever, DECIDED 1.046x at n=1000 vs null [0.941, 1.023]
+    // (artifact 2026-07-23-chol-bundle). Components were individually sub-floor;
+    // bundling was the recorded landing route on both retry predicates.
+    cholesky_lower_blocked_with_kernels_scratch::<TRSM_KERNEL, SYRK_KERNEL, true>(a_in, n, nb_block)
+}
+
+#[allow(clippy::needless_range_loop)]
+fn cholesky_lower_blocked_with_kernels_scratch<
+    const TRSM_KERNEL: u8,
+    const SYRK_KERNEL: u8,
+    const REUSE_SCRATCH: bool,
+>(
+    a_in: &[Vec<f64>],
+    n: usize,
+    nb_block: usize,
+) -> Option<Vec<f64>> {
     let mut lower = vec![0.0f64; n * n];
     for (i, row) in a_in.iter().enumerate() {
         lower[i * n..i * n + i + 1].copy_from_slice(&row[..i + 1]);
     }
 
+    // REUSE_SCRATCH hoists the per-panel scratch (l21 copy, packed l21ᵀ, packed L11ᵀ)
+    // out of the panel loop, sized for the first (largest) panel. Bit-identical:
+    // every consumed byte is written before it is read (see the `_into`/`_in` docs).
+    // Individually sub-floor (~+3%, TERMINAL REJECT 2026-07-22); landable only
+    // bundled — measured together with the nested in-panel factorization.
+    let mut l21_buf = Vec::new();
+    let mut l21t_buf = Vec::new();
+    let mut l11t_buf = Vec::new();
+    if REUSE_SCRATCH {
+        let nb_max = nb_block.min(n);
+        let m2_max = n - nb_max;
+        l21_buf = vec![0.0f64; m2_max * nb_max];
+        l21t_buf = vec![0.0f64; m2_max.div_ceil(8) * nb_max * 8];
+        l11t_buf = vec![0.0f64; (nb_max / 8) * nb_max * 8];
+    }
+
+    let panel_inner = chol_panel_inner_for(n);
     let mut k = 0;
     while k < n {
         let kb = (k + nb_block).min(n);
-        for j in k..kb {
-            // Diagonal: d = A[j][j] − Σ_{p<j} L[j][p]². The inner reductions here and in
-            // the two TRSM loops below were scalar over `p`; each is a `simd_dot` of two
-            // row slices `L[·][k..j]` (byte-close reassociation — the Cholesky factor is
-            // unique, validated to 1e-10). Immutable slice borrows end before each write.
-            let jrow = j * n;
-            let d =
-                lower[jrow + j] - simd_dot(&lower[jrow + k..jrow + j], &lower[jrow + k..jrow + j]);
-            if d <= 0.0 || !d.is_finite() {
-                return None;
-            }
-            let ljj = d.sqrt();
-            lower[jrow + j] = ljj;
-            for i in (j + 1)..kb {
-                let irow = i * n;
-                let dot = simd_dot(&lower[irow + k..irow + j], &lower[jrow + k..jrow + j]);
-                let val = (lower[irow + j] - dot) / ljj;
-                if !val.is_finite() {
+        if panel_inner == 0 {
+            // Unblocked in-panel factorization: per column, a diagonal dot + one
+            // dot per sub-panel row. `simd_dot` of two row slices `L[·][k..j]`
+            // (byte-close reassociation — the factor is unique, validated to 1e-10).
+            for j in k..kb {
+                let jrow = j * n;
+                let d = lower[jrow + j]
+                    - simd_dot(&lower[jrow + k..jrow + j], &lower[jrow + k..jrow + j]);
+                if d <= 0.0 || !d.is_finite() {
                     return None;
                 }
-                lower[irow + j] = val;
+                let ljj = d.sqrt();
+                lower[jrow + j] = ljj;
+                for i in (j + 1)..kb {
+                    let irow = i * n;
+                    let dot = simd_dot(&lower[irow + k..irow + j], &lower[jrow + k..jrow + j]);
+                    let val = (lower[irow + j] - dot) / ljj;
+                    if !val.is_finite() {
+                        return None;
+                    }
+                    lower[irow + j] = val;
+                }
             }
+        } else {
+            cholesky_factor_panel_blocked(&mut lower, n, k, kb, panel_inner)?;
         }
         if TRSM_KERNEL == TRSM_KERNEL_ROWS2 {
             let (panel, trailing) = lower.split_at_mut(kb * n);
             cholesky_panel_trsm_rows2(panel, trailing, n, k, kb)?;
         } else if TRSM_KERNEL == TRSM_KERNEL_BLOCKED_FMA {
             let (panel, trailing) = lower.split_at_mut(kb * n);
-            cholesky_panel_trsm_blocked_fma(panel, trailing, n, k, kb)?;
+            if REUSE_SCRATCH {
+                cholesky_panel_trsm_blocked_fma_in(panel, trailing, n, k, kb, &mut l11t_buf)?;
+            } else {
+                cholesky_panel_trsm_blocked_fma(panel, trailing, n, k, kb)?;
+            }
         } else {
             for i in kb..n {
                 let irow = i * n;
@@ -5196,9 +5237,26 @@ fn cholesky_lower_blocked_with_kernels<const TRSM_KERNEL: u8, const SYRK_KERNEL:
         if kb < n {
             let m2 = n - kb;
             let nb = kb - k;
-            let (l21, l21t) = copy_l21_and_pack_transpose(&lower, n, kb, k, m2, nb);
-            let l21_ref = &l21;
-            let l21t_ref = &l21t;
+            let (l21_own, l21t_own);
+            let (l21_ref, l21t_ref): (&[f64], &[f64]) = if REUSE_SCRATCH {
+                let npanels = m2.div_ceil(8);
+                copy_l21_and_pack_transpose_into(
+                    &lower,
+                    n,
+                    kb,
+                    k,
+                    m2,
+                    nb,
+                    &mut l21_buf[..m2 * nb],
+                    &mut l21t_buf[..npanels * nb * 8],
+                );
+                (&l21_buf[..m2 * nb], &l21t_buf[..npanels * nb * 8])
+            } else {
+                let (l21, l21t) = copy_l21_and_pack_transpose(&lower, n, kb, k, m2, nb);
+                l21_own = l21;
+                l21t_own = l21t;
+                (&l21_own, &l21t_own)
+            };
             let nthreads = matmul_thread_count(m2, nb, m2);
             let trailing = &mut lower[kb * n..];
             if nthreads <= 1 {
@@ -5294,8 +5352,10 @@ pub fn cholesky_wall_mr4_nr8_fma_candidate(a: &[Vec<f64>]) -> Option<Vec<f64>> {
     )
 }
 
-/// Candidate blocked-FMA panel-TRSM factor path for the one-binary Cholesky wall benchmark
-/// (production FMA SYRK on both arms; only the panel-TRSM kernel differs).
+/// Pre-bundle factor path (blocked-FMA TRSM + FMA SYRK, FRESH per-panel scratch)
+/// for the one-binary Cholesky wall benchmark — the fixed BASELINE arm. Note the
+/// in-panel strategy still follows `CHOL_PANEL_INNER_OVERRIDE`; baseline arms must
+/// pin it to 0 around each call.
 #[cfg(feature = "chol-wall-bench")]
 #[doc(hidden)]
 pub fn cholesky_wall_trsm_blocked_fma_candidate(a: &[Vec<f64>]) -> Option<Vec<f64>> {
@@ -5303,11 +5363,29 @@ pub fn cholesky_wall_trsm_blocked_fma_candidate(a: &[Vec<f64>]) -> Option<Vec<f6
     if a.iter().any(|row| row.len() != n) {
         return None;
     }
-    cholesky_lower_blocked_with_kernels::<TRSM_KERNEL_BLOCKED_FMA, SYRK_KERNEL_MR4_NR8_FMA>(
-        a,
-        n,
-        chol_nb_for(n),
-    )
+    cholesky_lower_blocked_with_kernels_scratch::<
+        TRSM_KERNEL_BLOCKED_FMA,
+        SYRK_KERNEL_MR4_NR8_FMA,
+        false,
+    >(a, n, chol_nb_for(n))
+}
+
+/// Candidate BUNDLE factor path for the one-binary Cholesky wall benchmark:
+/// hoisted scratch (REUSE_SCRATCH=true) with the in-panel strategy taken from the
+/// `CHOL_PANEL_INNER_OVERRIDE` static — the composite of the two individually
+/// sub-floor levers, measured together per their recorded retry predicates.
+#[cfg(feature = "chol-wall-bench")]
+#[doc(hidden)]
+pub fn cholesky_wall_bundle_candidate(a: &[Vec<f64>]) -> Option<Vec<f64>> {
+    let n = a.len();
+    if a.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    cholesky_lower_blocked_with_kernels_scratch::<
+        TRSM_KERNEL_BLOCKED_FMA,
+        SYRK_KERNEL_MR4_NR8_FMA,
+        true,
+    >(a, n, chol_nb_for(n))
 }
 
 /// `cholesky` blocked-factor gate — the parallel-SYRK blocked Cholesky beats the
@@ -5341,6 +5419,34 @@ pub static CHOL_PANEL_TRSM_PAR_PANELS: std::sync::atomic::AtomicUsize =
 /// 15.7M). 8M puts the crossover between them: n ≤ ~1100 stays fully serial,
 /// n = 2048 spawns only its 8 largest panels (`m2 ≥ ~977` at nb=128).
 const CHOL_PANEL_TRSM_PAR_MIN_MACS: u64 = 8 * 1024 * 1024;
+
+/// A/B override for the in-panel factorization's inner block width (0 ⇒ the
+/// per-size default from `chol_panel_inner_for`). Non-zero values switch the
+/// panel's own factorization from the unblocked dot loop to nested blocking that
+/// reuses the rows2 TRSM + FMA SYRK kernels with inner bounds. NOT bit-identical
+/// across values — 1e-10 factor-uniqueness contract.
+pub static CHOL_PANEL_INNER_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// In-panel factorization strategy: 0 = unblocked dot loop. Default stays 0 until
+/// the lever's A/B decides (frankenscipy-dcx11).
+#[inline]
+fn chol_panel_inner_for(n: usize) -> usize {
+    // Override semantics: 0 ⇒ size default below; 1 ⇒ FORCE the unblocked dot
+    // loop (A/B baseline sentinel; 1 is meaningless as a block width); else the
+    // given inner width.
+    match CHOL_PANEL_INNER_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => {
+            // Nested in-panel factorization pays where the staircase widens panels
+            // (measured at n=1000/2048 as part of the 2026-07-23 bundle); below the
+            // staircase's 192 threshold the dot loop stays (unmeasured there, and
+            // the in-panel share is small at nb=128).
+            if n >= 1000 { 32 } else { 0 }
+        }
+        1 => 0,
+        v => v,
+    }
+}
 
 /// A/B override for the blocked-Cholesky panel width `NB` (0 ⇒ default 128).
 /// One-binary sweep knob: NB shifts flops between the SERIAL phases (in-panel factor
@@ -19629,14 +19735,32 @@ fn cholesky_panel_trsm_blocked_fma(
     kb: usize,
 ) -> Option<()> {
     let nb = kb - k;
+    let full_jblocks = nb / 8;
+    let mut l11t = vec![0.0f64; full_jblocks * nb * 8];
+    cholesky_panel_trsm_blocked_fma_in(panel, trailing, n, k, kb, &mut l11t)
+}
+
+/// Scratch-reusing core of [`cholesky_panel_trsm_blocked_fma`]: `l11t_buf` needs at
+/// least `(nb/8)·nb·8` entries and does NOT need to be zeroed — the pack writes every
+/// strict-lower lane `(p, w)` with `p < j`, and the GEMM for block `j0` reads only
+/// `p < j0 ≤ j`, so entries at or above the diagonal are never read and a buffer
+/// reused across panels is read-for-read identical to a fresh zeroed one.
+#[allow(clippy::needless_range_loop)]
+fn cholesky_panel_trsm_blocked_fma_in(
+    panel: &[f64],
+    trailing: &mut [f64],
+    n: usize,
+    k: usize,
+    kb: usize,
+    l11t_buf: &mut [f64],
+) -> Option<()> {
+    let nb = kb - k;
     let m2 = trailing.len() / n;
     let full_jblocks = nb / 8;
 
     // Pack L11ᵀ (strict lower triangle only; the diagonal divides, never multiplies)
-    // into 8-wide micro-panels. Entries at or above the diagonal stay zero and the
-    // GEMM/dot phases below never read them. Packed ONCE, shared read-only by every
-    // row chunk.
-    let mut l11t = vec![0.0f64; full_jblocks * nb * 8];
+    // into 8-wide micro-panels. Packed ONCE, shared read-only by every row chunk.
+    let l11t = &mut l11t_buf[..full_jblocks * nb * 8];
     for jb in 0..full_jblocks {
         let out = &mut l11t[jb * nb * 8..(jb + 1) * nb * 8];
         for w in 0..8 {
@@ -19823,6 +19947,35 @@ fn copy_l21_and_pack_transpose(
     let npanels = m2.div_ceil(8);
     let mut l21 = vec![0.0f64; m2 * nb];
     let mut packed = vec![0.0f64; npanels * nb * 8];
+    copy_l21_and_pack_transpose_into(lower, n, kb, k, m2, nb, &mut l21, &mut packed);
+    (l21, packed)
+}
+
+/// Buffer-reusing core of [`copy_l21_and_pack_transpose`]: fills caller slices
+/// (`l21` exactly `m2·nb`, `packed` exactly `⌈m2/8⌉·nb·8`) instead of allocating.
+/// Every `l21` entry and every real packed lane is written, and the final partial
+/// micro-panel's padding lanes are explicitly re-zeroed, so a reused buffer ends up
+/// byte-identical to a freshly zero-allocated pack.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)] // keep a distinct frame so profiles attribute pack self-time
+fn copy_l21_and_pack_transpose_into(
+    lower: &[f64],
+    n: usize,
+    kb: usize,
+    k: usize,
+    m2: usize,
+    nb: usize,
+    l21: &mut [f64],
+    packed: &mut [f64],
+) {
+    if !m2.is_multiple_of(8) {
+        let base = (m2.div_ceil(8) - 1) * nb * 8;
+        for p in 0..nb {
+            for lane in &mut packed[base + p * 8 + m2 % 8..base + p * 8 + 8] {
+                *lane = 0.0;
+            }
+        }
+    }
     for ii in 0..m2 {
         let src = (kb + ii) * n + k;
         let dst = ii * nb;
@@ -19833,7 +19986,62 @@ fn copy_l21_and_pack_transpose(
             packed[packed_lane + p * 8] = value;
         }
     }
-    (l21, packed)
+}
+
+/// Nested-blocked in-panel factorization of the `nb×nb` diagonal block (rows/cols
+/// `[k, kb)`): the same right-looking structure as the outer factor, one level down,
+/// COMPOSED from the already-validated kernels — per inner panel of `inner` columns:
+/// (1) unblocked dot-factor of the inner panel (dots now span ≤ `inner` terms instead
+/// of up to `nb`), (2) [`cholesky_panel_trsm_rows2`] for the sub-panel rows, (3) the
+/// [`cholesky_syrk_flat_rows_mr4_nr8_fma`] tile update for the inner trailing block.
+/// Replaces the O(nb) latency-bound dot chains that grew ∝ `n·NB²` under the NB
+/// staircase. NOT bit-identical to the unblocked loop (inner SYRK reassociation) —
+/// 1e-10 factor-uniqueness contract, same as every landed tile lever.
+#[inline(never)] // keep a distinct frame so profiles attribute in-panel self-time
+fn cholesky_factor_panel_blocked(
+    lower: &mut [f64],
+    n: usize,
+    k: usize,
+    kb: usize,
+    inner: usize,
+) -> Option<()> {
+    let mut k2 = k;
+    while k2 < kb {
+        let kb2 = (k2 + inner).min(kb);
+        for j in k2..kb2 {
+            let jrow = j * n;
+            let d = lower[jrow + j]
+                - simd_dot(&lower[jrow + k2..jrow + j], &lower[jrow + k2..jrow + j]);
+            if d <= 0.0 || !d.is_finite() {
+                return None;
+            }
+            let ljj = d.sqrt();
+            lower[jrow + j] = ljj;
+            for i in (j + 1)..kb2 {
+                let irow = i * n;
+                let dot = simd_dot(&lower[irow + k2..irow + j], &lower[jrow + k2..jrow + j]);
+                let val = (lower[irow + j] - dot) / ljj;
+                if !val.is_finite() {
+                    return None;
+                }
+                lower[irow + j] = val;
+            }
+        }
+        if kb2 < kb {
+            {
+                let (panel, rest) = lower.split_at_mut(kb2 * n);
+                let trailing = &mut rest[..(kb - kb2) * n];
+                cholesky_panel_trsm_rows2(panel, trailing, n, k2, kb2)?;
+            }
+            let m2i = kb - kb2;
+            let nbi = kb2 - k2;
+            let (l21, l21t) = copy_l21_and_pack_transpose(lower, n, kb2, k2, m2i, nbi);
+            let trailing = &mut lower[kb2 * n..kb * n];
+            cholesky_syrk_flat_rows_mr4_nr8_fma(trailing, 0, n, &l21, &l21t, nbi, kb2);
+        }
+        k2 = kb2;
+    }
+    Some(())
 }
 
 /// `row[col..col+8] -= c` (8-wide).
@@ -21544,6 +21752,92 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn cholesky_scratch_reuse_is_bit_identical() {
+        // Hoisted scratch alone must not change a single bit vs fresh allocation:
+        // every consumed byte is written before it is read; `_into` re-zeroes the
+        // partial-panel padding lanes.
+        for &n in &[130usize, 131, 270, 271, 300, 420] {
+            let mut a = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..=i {
+                    let value = if i == j {
+                        (n as f64) * 3.0 + (i as f64) * 0.01
+                    } else {
+                        1.0 / ((i - j + 1) as f64)
+                    };
+                    a[i][j] = value;
+                    a[j][i] = value;
+                }
+            }
+            let original = cholesky_lower_blocked_with_kernels_scratch::<
+                TRSM_KERNEL_BLOCKED_FMA,
+                SYRK_KERNEL_MR4_NR8_FMA,
+                false,
+            >(&a, n, 128)
+            .expect("fresh-scratch factor");
+            let candidate = cholesky_lower_blocked_with_kernels_scratch::<
+                TRSM_KERNEL_BLOCKED_FMA,
+                SYRK_KERNEL_MR4_NR8_FMA,
+                true,
+            >(&a, n, 128)
+            .expect("reused-scratch factor");
+            for (index, (&expected, &actual)) in original.iter().zip(&candidate).enumerate() {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "scratch reuse changed factor bits at flat index {index}, n={n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cholesky_factor_panel_blocked_within_tolerance() {
+        // With `kb = n` the nested in-panel factorizer IS a whole-matrix blocked
+        // Cholesky; compare against the unblocked dot-path factor. Not bit-identical
+        // (inner SYRK reassociation) — 1e-10 uniqueness contract + execution proof.
+        // Called DIRECTLY (no override static) so concurrent tests cannot race.
+        let mut any_bits_differ = false;
+        for &n in &[96usize, 130, 192, 250] {
+            let mut a = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..=i {
+                    let value = if i == j {
+                        (n as f64) * 3.0 + (i as f64) * 0.01
+                    } else {
+                        1.0 / ((i - j + 1) as f64)
+                    };
+                    a[i][j] = value;
+                    a[j][i] = value;
+                }
+            }
+            let reference = cholesky_lower_simd(&a, n).expect("unblocked reference factor");
+            for &inner in &[16usize, 32] {
+                let mut lower = vec![0.0f64; n * n];
+                for (i, row) in a.iter().enumerate() {
+                    lower[i * n..i * n + i + 1].copy_from_slice(&row[..i + 1]);
+                }
+                cholesky_factor_panel_blocked(&mut lower, n, 0, n, inner)
+                    .expect("nested-blocked factor");
+                for (index, (&expected, &actual)) in reference.iter().zip(&lower).enumerate() {
+                    if actual.to_bits() != expected.to_bits() {
+                        any_bits_differ = true;
+                    }
+                    let rel = (actual - expected).abs() / expected.abs().max(1.0);
+                    assert!(
+                        rel <= 1e-10,
+                        "nested-blocked panel factor diverged past 1e-10 at flat index {index}, n={n}, inner={inner}"
+                    );
+                }
+            }
+        }
+        assert!(
+            any_bits_differ,
+            "execution proof failed: nested blocking bit-identical everywhere (dead path?)"
+        );
     }
 
     #[test]
