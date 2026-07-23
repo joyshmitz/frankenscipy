@@ -23444,3 +23444,26 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   eigh vs-scipy gap (bead `frankenscipy-ll0kk`): n=512 2.73x→~2.4x-equiv on the parallelized portion. The
   REMAINING gap is the tridiagonalization (blocked on the per-step spawn wall / pool substrate, OR a blocked
   WY dsytrd rewrite — see the REJECT entry). ll0kk stays open for that structural piece.
+
+## 2026-07-23 - CopperFalcon (cc) - MEASUREMENT (phantom corrected + no-clean-lever): dense factorizations svd/qr/schur are uniform ~2x walls, NOT a 10x SVD outlier
+
+- Gap-hunt on the queued svd/qr/schur candidates. FIRST pass reported a spectacular **svd 10.7x slower** +
+  "schur 1.45x FASTER" — BOTH ARTIFACTS of a pathological bench input: `make_matmul_matrix(i,j) =
+  (i·31+j·17+seed)%97·0.01` is STRUCTURED and RANK-DEFICIENT, so fsci's SVD fast path fails its acceptance
+  gate (clustered/tied singular values) and falls to the robust nalgebra/Jacobi fallback AFTER already paying
+  the bidiag reduction — double-work. scipy's LAPACK is uniformly robust so it showed no such cliff.
+- CORRECTED with a WELL-CONDITIONED random full-rank matrix (matching scipy's `standard_normal`): svd
+  **2.23x@256 / 2.22x@512**, qr **1.61x / 1.99x**, schur **2.17x@256** — all ~2x, NO outlier.
+- STRUCTURE (thin-svd stage probe, n=512): reduction 116 ms (59%, Householder, SERIAL) / bidiag-svd 49 ms /
+  back-transform U+V 30 ms (ALREADY parallel). The Householder REDUCTION dominates and is the SAME per-step
+  scoped-spawn wall as the eigh tridiagonalization (REJECTED d3c6f9679). qr/schur share that reduction
+  structure. So the ENTIRE dense-factorization surface (cholesky, eigh, svd, qr, schur) is uniformly ~2-2.7x
+  behind LAPACK, gated by the SAME blocker: per-step-spawn / pool substrate (`frankenscipy-vndri`) OR
+  blocked-algorithm rewrites (WY dsytrd, Cuppen D&C). No clean single-lever win in this surface.
+- LESSON (method, reinforces the eigh gap-hunt): match the input DISTRIBUTION to the reference's. A
+  rank-deficient microbench input silently routes through a DIFFERENT (robust-fallback) code path and
+  fabricates a phantom gap. Always use a well-conditioned full-rank random matrix vs scipy `standard_normal`.
+- DISPOSITION: no lever attempted (measurement corrected a false lead); throwaway gap-hunt bench STASHED,
+  measurement recorded to `tests/artifacts/perf/2026-07-23-dense-factorization-gaphunt/measurement.md`. The
+  dense-factorization lane is now comprehensively characterized as blocked (vndri / blocked-rewrite);
+  pivoting to domain veins. NOT counted as a REJECT (no lever was built + measured-slower).
