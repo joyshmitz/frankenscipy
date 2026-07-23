@@ -23303,3 +23303,35 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   (incl. `brunnermunzel_tied_samples_match_scipy_oracle`), ubs 0 critical.
 - Disposition: KEEP (production defaults to presort; DISABLE flag is A/B-only). Bead: closes the
   brunnermunzel arm of the presort-once AUDIT.
+
+## 2026-07-23 - CopperFalcon (cc) - KEEP (byte-identical): presort-once for the CROSS rank/sort matrices — mannwhitneyu_cross 5.02x, ks_2samp_cross 1.32x; + latent ±0.0 kernel bug fixed
+
+- Extends the `perf_stats_allpairs_presort_once` vein from the SQUARE `*_matrix` forms to the rectangular
+  CROSS `*_cross` forms. `ks_2samp_cross`/`mannwhitneyu_cross`/`wasserstein_distance_cross`/
+  `energy_distance_cross` each called the UN-sorted per-pair kernel, re-sorting every `a[i]` k times and
+  every `b[j]` m times. NEGATIVE-EVIDENCE: no cross-presort prior; the `_sorted` kernels already exist
+  (ks_2samp_sorted, mannwhitneyu_sorted, wasserstein_distance_sorted, energy_distance_sorted) from the
+  square landings.
+- ONE LEVER: `cross_presort(a, b)` sorts each sample of both groups ONCE (`m + k` sorts vs `m·k`), returns
+  `None` on NaN-anywhere or the `STATS_CROSS_PRESORT_DISABLE` A/B flag → per-pair fallback. The CROSS form
+  is CLEANER than the square (no per-sample within-rank precompute struct): the presorted `Vec<Vec<f64>>`
+  feed `all_pairs_cross_matrix`/`all_pairs_cross_two_matrices` directly with the `_sorted` kernel.
+- LATENT KERNEL BUG FOUND + FIXED (required for byte-identity): `mannwhitneyu_sorted` grouped ties by
+  `total_cmp` (keeps −0.0 < +0.0 DISTINCT), while the per-pair `mannwhitneyu` ranks via `rankdata_average`
+  which groups by value `==` (±0.0 TOGETHER, matching scipy). On a sample containing both −0.0 and +0.0 the
+  two diverged — a bug the SHIPPED square `mannwhitneyu_matrix` shared (its byte-identity test never covered
+  ±0.0). Fix: group by `== next_val` (inputs are finite ⇒ `==` is total). Now byte-identical to per-pair on
+  ALL finite data and strictly more scipy-correct; the 8 mannwhitneyu tests (incl. scipy oracle + square
+  matrix byte-identity) stay green, and fsci-stats went 2044/0 → **2045/0** (new `stats_cross_presort_is_byte_identical`).
+- BYTE-IDENTICAL: `stats_cross_presort_is_byte_identical` asserts stat AND pvalue `to_bits`-equal for all
+  four cross forms over a ragged fixture (heavy ties, negatives, ±0.0) + a NaN-fallback fixture; the bench
+  re-verifies mwu+ks over all 3600 pairs at m=k=60.
+- MEASUREMENT (thinkstation1, same-binary A/B, criterion 100 samples, m=k=60 n=3000): mannwhitneyu_cross
+  per-pair **61.716 ms** [61.32, 62.12] vs presort **12.300 ms** [12.17, 12.43] ⇒ **5.02x** (2 sorts/pair
+  eliminated, like the 4.34x square mwu); ks_2samp_cross **16.130 ms** [15.96, 16.31] vs **12.180 ms**
+  [12.06, 12.30] ⇒ **1.32x** (ks is merge-dominated so smaller). Both candidates converge to the ~12.2 ms
+  O(m·k·n) merge floor; CVs ~1% (< 5%), CIs non-overlapping (null control clean). Artifact
+  `tests/artifacts/perf/2026-07-23-stats-cross-presort/bench.txt`. wasserstein/energy cross byte-identical
+  (tested, not separately benched; same pattern as the ~2.6x square forms). ubs 0 critical.
+- Disposition: KEEP (production defaults to presort; DISABLE flag A/B-only). CROSS rank/sort family now
+  matches the square family — presort-once vein fully applied.

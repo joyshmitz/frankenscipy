@@ -1,0 +1,243 @@
+warning: constant `SYRK_KERNEL_MR4_NR8` is never used
+    --> crates/fsci-linalg/src/lib.rs:5125:7
+     |
+5125 | const SYRK_KERNEL_MR4_NR8: u8 = 0;
+     |       ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-linalg` (lib) generated 1 warning
+warning: `#[must_use]` attribute cannot be used on statics
+   --> crates/fsci-special/src/convenience.rs:833:1
+    |
+833 | #[must_use]
+    | ^^^^^^^^^^^
+    |
+    = help: `#[must_use]` can be applied to data types, functions, and traits
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `f_hi` is never read
+   --> crates/fsci-special/src/airy.rs:351:17
+    |
+351 |                 f_hi = f_mid;
+    |                 ^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/fsci-special/src/beta.rs:873:10
+    |
+873 |     let (mut lo, mut hi) = (LO, HI);
+    |          ----^^
+    |          |
+    |          help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/fsci-special/src/beta.rs:873:18
+    |
+873 |     let (mut lo, mut hi) = (LO, HI);
+    |                  ----^^
+    |                  |
+    |                  help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> crates/fsci-special/src/convenience.rs:6226:9
+     |
+6226 |     let mut lo = eps;
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> crates/fsci-special/src/convenience.rs:6227:9
+     |
+6227 |     let mut hi = 1.0 - eps;
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> crates/fsci-special/src/convenience.rs:6796:9
+     |
+6796 |     let mut x = x.abs(); // cos is even
+     |         ----^
+     |         |
+     |         help: remove this `mut`
+
+warning: value assigned to `su1` is never read
+    --> crates/fsci-special/src/orthopoly.rs:3993:19
+     |
+3993 |     let mut su1 = 0.0_f64;
+     |                   ^^^^^^^ this value is reassigned later and never used
+...
+3998 |     su1 = df[1] * r1;
+     |     ---------------- `su1` is overwritten here before the previous value is read
+
+warning: function `adaptive_simpson` is never used
+    --> crates/fsci-special/src/bessel.rs:1954:4
+     |
+1954 | fn adaptive_simpson(f: &impl Fn(f64) -> f64, a: f64, b: f64, tol: f64, depth: u32) -> f64 {
+     |    ^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `adaptive_simpson_inner` is never used
+    --> crates/fsci-special/src/bessel.rs:1963:4
+     |
+1963 | fn adaptive_simpson_inner(
+     |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `simpson_estimate` is never used
+    --> crates/fsci-special/src/bessel.rs:1990:4
+     |
+1990 | fn simpson_estimate(a: f64, b: f64, fa: f64, fb: f64, fm: f64) -> f64 {
+     |    ^^^^^^^^^^^^^^^^
+
+warning: constant `DILOG_SERIES_MAX_TERMS` is never used
+  --> crates/fsci-special/src/convenience.rs:68:7
+   |
+68 | const DILOG_SERIES_MAX_TERMS: usize = 128;
+   |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `dilog_real` is never used
+    --> crates/fsci-special/src/convenience.rs:4517:4
+     |
+4517 | fn dilog_real(z: f64) -> f64 {
+     |    ^^^^^^^^^^
+
+warning: function `dilog_series` is never used
+    --> crates/fsci-special/src/convenience.rs:4539:4
+     |
+4539 | fn dilog_series(z: f64) -> f64 {
+     |    ^^^^^^^^^^^^
+
+warning: function `carlson_rd` is never used
+   --> crates/fsci-special/src/elliptic.rs:527:4
+    |
+527 | fn carlson_rd(mut x: f64, mut y: f64, mut z: f64) -> f64 {
+    |    ^^^^^^^^^^
+
+warning: function `map_real_or_complex` is never used
+    --> crates/fsci-special/src/elliptic.rs:1215:4
+     |
+1215 | fn map_real_or_complex<F, G>(
+     |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `map_unary_input` is never used
+   --> crates/fsci-special/src/error.rs:276:4
+    |
+276 | fn map_unary_input<F, G>(
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `map_real_input` is never used
+   --> crates/fsci-special/src/gamma.rs:887:4
+    |
+887 | fn map_real_input<F>(
+    |    ^^^^^^^^^^^^^^
+
+warning: function `symmetric_tridiagonal_eigenvalues` is never used
+   --> crates/fsci-special/src/orthopoly.rs:782:4
+    |
+782 | fn symmetric_tridiagonal_eigenvalues(diagonal: &[f64], offdiagonal: &[f64]) -> Vec<f64> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `fsci-special` (lib) generated 19 warnings (run `cargo fix --lib -p fsci-special` to apply 6 suggestions)
+   Compiling fsci-stats v0.1.0 (/data/projects/frankenscipy/crates/fsci-stats)
+warning: methods `nct_cdf_integrate` and `nct_sf_integrate` are never used
+    --> crates/fsci-stats/src/lib.rs:1583:8
+     |
+1552 | impl NoncentralT {
+     | ---------------- methods in this implementation
+...
+1583 |     fn nct_cdf_integrate(&self, t: f64) -> f64 {
+     |        ^^^^^^^^^^^^^^^^^
+...
+1752 |     fn nct_sf_integrate(&self, t: f64) -> f64 {
+     |        ^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `cross_set_l1_pair_sum` is never used
+     --> crates/fsci-stats/src/lib.rs:28091:4
+      |
+28091 | fn cross_set_l1_pair_sum(u: &[f64], v: &[f64]) -> f64 {
+      |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `within_set_l1_pair_sum` is never used
+     --> crates/fsci-stats/src/lib.rs:28123:4
+      |
+28123 | fn within_set_l1_pair_sum(x: &[f64]) -> f64 {
+      |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `fsci-stats` (lib) generated 3 warnings
+warning: unnecessary parentheses around closure body
+  --> crates/fsci-stats/src/bin/probe_disc.rs:10:18
+   |
+10 |         .map(|i| ((i as f64 * 0.123 + 0.07).sin().abs()))
+   |                  ^                                     ^
+   |
+   = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+   |
+10 -         .map(|i| ((i as f64 * 0.123 + 0.07).sin().abs()))
+10 +         .map(|i| (i as f64 * 0.123 + 0.07).sin().abs())
+   |
+
+warning: unnecessary parentheses around block return value
+ --> crates/fsci-stats/src/bin/diff_wilcox.rs:9:9
+  |
+9 |         (s as f64 / u64::MAX as f64)
+  |         ^                          ^
+  |
+  = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+  |
+9 -         (s as f64 / u64::MAX as f64)
+9 +         s as f64 / u64::MAX as f64
+  |
+
+warning: `fsci-stats` (bin "probe_disc") generated 1 warning (run `cargo fix --bin "probe_disc" -p fsci-stats` to apply 1 suggestion)
+warning: `fsci-stats` (bin "diff_wilcox") generated 1 warning (run `cargo fix --bin "diff_wilcox" -p fsci-stats` to apply 1 suggestion)
+    Finished `bench` profile [optimized] target(s) in 28.69s
+     Running benches/stats_bench.rs (/data/tmp/cargo-target/release/deps/stats_bench-877865d5e93d0e43)
+Gnuplot not found, using plotters backend
+Benchmarking stats_cross_presort_ab/mwu_original_per_pair_60x60_n3000
+Benchmarking stats_cross_presort_ab/mwu_original_per_pair_60x60_n3000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.2s, or reduce sample count to 80.
+Benchmarking stats_cross_presort_ab/mwu_original_per_pair_60x60_n3000: Collecting 100 samples in estimated 6.2215 s (100 iterations)
+Benchmarking stats_cross_presort_ab/mwu_original_per_pair_60x60_n3000: Analyzing
+stats_cross_presort_ab/mwu_original_per_pair_60x60_n3000
+                        time:   [61.319 ms 61.716 ms 62.124 ms]
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking stats_cross_presort_ab/mwu_candidate_presort_60x60_n3000
+Benchmarking stats_cross_presort_ab/mwu_candidate_presort_60x60_n3000: Warming up for 3.0000 s
+Benchmarking stats_cross_presort_ab/mwu_candidate_presort_60x60_n3000: Collecting 100 samples in estimated 6.1632 s (500 iterations)
+Benchmarking stats_cross_presort_ab/mwu_candidate_presort_60x60_n3000: Analyzing
+stats_cross_presort_ab/mwu_candidate_presort_60x60_n3000
+                        time:   [12.173 ms 12.300 ms 12.426 ms]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking stats_cross_presort_ab/ks_original_per_pair_60x60_n3000
+Benchmarking stats_cross_presort_ab/ks_original_per_pair_60x60_n3000: Warming up for 3.0000 s
+Benchmarking stats_cross_presort_ab/ks_original_per_pair_60x60_n3000: Collecting 100 samples in estimated 6.2902 s (400 iterations)
+Benchmarking stats_cross_presort_ab/ks_original_per_pair_60x60_n3000: Analyzing
+stats_cross_presort_ab/ks_original_per_pair_60x60_n3000
+                        time:   [15.955 ms 16.130 ms 16.312 ms]
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+Benchmarking stats_cross_presort_ab/ks_candidate_presort_60x60_n3000
+Benchmarking stats_cross_presort_ab/ks_candidate_presort_60x60_n3000: Warming up for 3.0000 s
+Benchmarking stats_cross_presort_ab/ks_candidate_presort_60x60_n3000: Collecting 100 samples in estimated 6.0790 s (500 iterations)
+Benchmarking stats_cross_presort_ab/ks_candidate_presort_60x60_n3000: Analyzing
+stats_cross_presort_ab/ks_candidate_presort_60x60_n3000
+                        time:   [12.062 ms 12.180 ms 12.303 ms]
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+

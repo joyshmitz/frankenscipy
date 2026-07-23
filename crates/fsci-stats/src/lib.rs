@@ -30560,13 +30560,20 @@ fn mannwhitneyu_sorted(sa: &[f64], sb: &[f64]) -> TtestResult {
             (None, None) => break,
         };
         let start = ia + ib;
+        // Tie membership by value `==`, NOT `total_cmp`: `rankdata_average` (the
+        // per-pair `mannwhitneyu` rank engine) groups ±0.0 TOGETHER (they compare
+        // equal, matching scipy), whereas `total_cmp` keeps −0.0 < +0.0 distinct.
+        // Grouping by `==` here makes this kernel byte-identical to the per-pair
+        // path on ±0.0 data (previously it diverged — a latent bug the square-form
+        // `mannwhitneyu_matrix` shared). Inputs are finite (NaN → per-pair fallback),
+        // so `==` is total here.
         let mut na = 0usize;
-        while ia < n1 && sa[ia].total_cmp(&next_val) == std::cmp::Ordering::Equal {
+        while ia < n1 && sa[ia] == next_val {
             ia += 1;
             na += 1;
         }
         let mut nb = 0usize;
-        while ib < n2 && sb[ib].total_cmp(&next_val) == std::cmp::Ordering::Equal {
+        while ib < n2 && sb[ib] == next_val {
             ib += 1;
             nb += 1;
         }
@@ -44167,24 +44174,73 @@ where
 
 /// Cross all-pairs Wasserstein-1 distance: `m × k` with `out[i][j] = wasserstein_distance(a[i], b[j])`.
 /// SciPy makes you double-loop two groups in Python; this fans out across all pairs.
+/// Same-binary A/B switch: disable the presort-once fast path on the sort/rank-based
+/// CROSS matrices (`ks_2samp_cross`, `mannwhitneyu_cross`, `wasserstein_distance_cross`,
+/// `energy_distance_cross`) and fall back to the per-pair kernel. Byte-identical either way.
+pub static STATS_CROSS_PRESORT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Presort every sample of both groups ONCE (`total_cmp`), so a sort/rank CROSS kernel
+/// re-uses `m + k` sorts instead of `m·k`. Returns `None` when disabled or any sample
+/// holds a NaN (the `*_sorted` kernels require finite, ascending input; the per-pair
+/// path preserves each kernel's own NaN behaviour). BYTE-IDENTICAL: the pre-sorted
+/// arrays are exactly what the per-pair kernel would sort to.
+fn cross_presort(a: &[Vec<f64>], b: &[Vec<f64>]) -> Option<(Vec<Vec<f64>>, Vec<Vec<f64>>)> {
+    if STATS_CROSS_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    if a.iter()
+        .chain(b.iter())
+        .any(|s| s.iter().any(|v| v.is_nan()))
+    {
+        return None;
+    }
+    let sort_all = |g: &[Vec<f64>]| -> Vec<Vec<f64>> {
+        g.iter()
+            .map(|s| {
+                let mut v = s.clone();
+                sort_f64_total(&mut v);
+                v
+            })
+            .collect()
+    };
+    Some((sort_all(a), sort_all(b)))
+}
+
+/// Cross all-pairs 1-Wasserstein distance: `m × k` with `out[i][j] = wasserstein_distance(a[i], b[j])`.
+/// Presorts each sample once and feeds the O(N+M) `wasserstein_distance_sorted` merge (byte-identical).
 pub fn wasserstein_distance_cross(
     a: &[Vec<f64>],
     b: &[Vec<f64>],
 ) -> Result<Vec<Vec<f64>>, StatsError> {
+    if let Some((sa, sb)) = cross_presort(a, b) {
+        return all_pairs_cross_matrix(&sa, &sb, wasserstein_distance_sorted);
+    }
     all_pairs_cross_matrix(a, b, wasserstein_distance)
 }
 
 /// Cross all-pairs energy distance: `m × k` with `out[i][j] = energy_distance(a[i], b[j])`.
+/// Presorts each sample once and feeds the closed-form `energy_distance_sorted` (byte-identical).
 pub fn energy_distance_cross(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    if let Some((sa, sb)) = cross_presort(a, b) {
+        return all_pairs_cross_matrix(&sa, &sb, energy_distance_sorted);
+    }
     all_pairs_cross_matrix(a, b, energy_distance)
 }
 
 /// Cross all-pairs two-sample KS test: `(statistic, pvalue)` matrices, each `m × k`, with
 /// `out.0[i][j] == ks_2samp(a[i], b[j]).statistic` and `out.1[i][j] ==` its p-value.
+/// Presorts each sample once and feeds the merge-sweep `ks_2samp_sorted` (byte-identical).
 pub fn ks_2samp_cross(
     a: &[Vec<f64>],
     b: &[Vec<f64>],
 ) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+    if let Some((sa, sb)) = cross_presort(a, b) {
+        return all_pairs_cross_two_matrices(&sa, &sb, |x, y| {
+            let r = ks_2samp_sorted(x, y);
+            (r.statistic, r.pvalue)
+        });
+    }
     all_pairs_cross_two_matrices(a, b, |x, y| {
         let r = ks_2samp(x, y);
         (r.statistic, r.pvalue)
@@ -44192,10 +44248,17 @@ pub fn ks_2samp_cross(
 }
 
 /// Cross all-pairs Mann–Whitney U test: `(statistic, pvalue)` matrices, each `m × k`.
+/// Presorts each sample once and feeds the merge-rank `mannwhitneyu_sorted` (byte-identical).
 pub fn mannwhitneyu_cross(
     a: &[Vec<f64>],
     b: &[Vec<f64>],
 ) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
+    if let Some((sa, sb)) = cross_presort(a, b) {
+        return all_pairs_cross_two_matrices(&sa, &sb, |x, y| {
+            let r = mannwhitneyu_sorted(x, y);
+            (r.statistic, r.pvalue)
+        });
+    }
     all_pairs_cross_two_matrices(a, b, |x, y| {
         let r = mannwhitneyu(x, y);
         (r.statistic, r.pvalue)
@@ -71005,6 +71068,97 @@ mod tests {
         let result = ansari(&[], &[1.0, 2.0]);
         assert!(result.statistic.is_nan());
         assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
+    fn stats_cross_presort_is_byte_identical() {
+        // All four sort/rank CROSS matrices must reproduce the per-pair path bit for
+        // bit. Two ragged groups (different sample counts AND lengths), heavy ties,
+        // negatives, ±0.0. A separate NaN fixture exercises the per-pair fallback.
+        let a: Vec<Vec<f64>> = vec![
+            vec![1.0, 2.0, 2.0, 3.0, -1.5],
+            vec![0.5, 0.5, 2.5, -0.0, 4.0, 4.0, 1.0],
+            vec![-3.0, 2.0, 2.0, 2.0],
+        ];
+        let b: Vec<Vec<f64>> = vec![
+            vec![2.0, 2.0, 0.5, -1.5, 7.25, 2.0],
+            vec![0.0, -0.0, 1.0, 1.0, 9.0],
+            vec![4.0, 4.0, 4.0, 4.0],
+            vec![0.25, -8.0, 3.5, 2.0],
+        ];
+
+        macro_rules! check_two {
+            ($f:expr, $label:literal) => {{
+                STATS_CROSS_PRESORT_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+                let (fs, fp) = $f(&a, &b).expect($label);
+                STATS_CROSS_PRESORT_DISABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+                let (ss, sp) = $f(&a, &b).expect($label);
+                STATS_CROSS_PRESORT_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+                for i in 0..a.len() {
+                    for j in 0..b.len() {
+                        assert_eq!(
+                            fs[i][j].to_bits(),
+                            ss[i][j].to_bits(),
+                            "{} stat ({i},{j})",
+                            $label
+                        );
+                        assert_eq!(
+                            fp[i][j].to_bits(),
+                            sp[i][j].to_bits(),
+                            "{} pval ({i},{j})",
+                            $label
+                        );
+                    }
+                }
+            }};
+        }
+        macro_rules! check_one {
+            ($f:expr, $label:literal) => {{
+                STATS_CROSS_PRESORT_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+                let fv = $f(&a, &b).expect($label);
+                STATS_CROSS_PRESORT_DISABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+                let sv = $f(&a, &b).expect($label);
+                STATS_CROSS_PRESORT_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+                for i in 0..a.len() {
+                    for j in 0..b.len() {
+                        assert_eq!(
+                            fv[i][j].to_bits(),
+                            sv[i][j].to_bits(),
+                            "{} ({i},{j})",
+                            $label
+                        );
+                    }
+                }
+            }};
+        }
+        check_two!(ks_2samp_cross, "ks_2samp_cross");
+        check_two!(mannwhitneyu_cross, "mannwhitneyu_cross");
+        check_one!(wasserstein_distance_cross, "wasserstein_distance_cross");
+        check_one!(energy_distance_cross, "energy_distance_cross");
+
+        // NaN in one group routes every affected pair through the per-pair path,
+        // matching the disabled path bit-for-bit.
+        let an: Vec<Vec<f64>> = vec![vec![1.0, 2.0, f64::NAN, 3.0], vec![0.5, 1.5, 2.5, 3.5]];
+        let bn: Vec<Vec<f64>> = vec![vec![1.0, 2.0, 3.0, 4.0], vec![2.0, 2.0, 2.0, 2.0]];
+        STATS_CROSS_PRESORT_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+        let (fs, fp) = ks_2samp_cross(&an, &bn).expect("nan ks");
+        STATS_CROSS_PRESORT_DISABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (ss, sp) = ks_2samp_cross(&an, &bn).expect("nan ks");
+        STATS_CROSS_PRESORT_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+        for i in 0..an.len() {
+            for j in 0..bn.len() {
+                assert_eq!(
+                    fs[i][j].to_bits(),
+                    ss[i][j].to_bits(),
+                    "nan ks stat ({i},{j})"
+                );
+                assert_eq!(
+                    fp[i][j].to_bits(),
+                    sp[i][j].to_bits(),
+                    "nan ks pval ({i},{j})"
+                );
+            }
+        }
     }
 
     #[test]
