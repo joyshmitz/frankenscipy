@@ -23467,3 +23467,18 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   measurement recorded to `tests/artifacts/perf/2026-07-23-dense-factorization-gaphunt/measurement.md`. The
   dense-factorization lane is now comprehensively characterized as blocked (vndri / blocked-rewrite);
   pivoting to domain veins. NOT counted as a REJECT (no lever was built + measured-slower).
+
+## 2026-07-23 - CopperFalcon (cc) - MEASUREMENT (no gap): special-function ARRAY throughput — fsci WINS every one vs scipy
+
+- Domain gap-hunt (n=1e6 arrays, fsci default-threaded vs scipy.special 1-thread cephes): fsci is FASTER on
+  ALL — gamma 4.1x, erf 2.1x, digamma 3.7x, j0 3.6x, i0 1.8x, k0 3.5x, expi ~8x, zeta **13.7x**. fsci
+  parallelizes the array map (`par_continuous_map`) + no Python dispatch; scipy's cephes is single-threaded.
+  Even fsci's worst-variance case (expi ~71ms tail) beats scipy (220ms). NO vs-scipy gap to close here.
+- COMPETITIVE MAP (this session's gap-hunts, artifact `tests/artifacts/perf/2026-07-23-special-array-gaphunt/`):
+  fsci's vs-scipy perf gaps are CONCENTRATED in the dense LAPACK-backed factorizations (cholesky/eigh/svd/qr/
+  schur, ~2-2.7x, blocked on vndri / WY-rewrite `2o0vp`). The domain/scalar surfaces (stats, special) fsci is
+  competitive-to-winning (parallel + no-Python). So the remaining real wins are the heavy dense structural
+  work; further domain gap-hunts keep confirming fsci-competitive.
+- Minor (not a vs-scipy gap): expi/k0 show data-dependent variance (some inputs hit a slower branch) — an
+  internal-consistency question worth a future look (widen fast-path gate?), but fsci still beats scipy, so
+  low priority. DISPOSITION: no lever (fsci already wins); throwaway bench stashed, measurement recorded.
