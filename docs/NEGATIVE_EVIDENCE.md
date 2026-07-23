@@ -23482,3 +23482,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - Minor (not a vs-scipy gap): expi/k0 show data-dependent variance (some inputs hit a slower branch) — an
   internal-consistency question worth a future look (widen fast-path gate?), but fsci still beats scipy, so
   low priority. DISPOSITION: no lever (fsci already wins); throwaway bench stashed, measurement recorded.
+
+## 2026-07-23 - CopperFalcon (cc) - MEASUREMENT (completes the competitive map): sparse CG fsci-faster, SpMV ~1.3x; ALL vs-scipy gaps are dense-factorization
+
+- Sparse gap-hunt (2D 5-point Laplacian, side 80/120): fsci **CG 2.27x/1.59x FASTER** than
+  scipy.sparse.linalg.cg (pure Rust, no per-iteration Python matvec overhead); **SpMV ~1.19-1.37x slower**
+  (memory-bandwidth-bound kernel; scipy's C SpMV is cache-tuned; fsci ~19 GB/s, close, not a clean lever).
+  Artifact `tests/artifacts/perf/2026-07-23-sparse-gaphunt/measurement.md`.
+- **COMPLETE COMPETITIVE MAP (session's gap-hunts across dense linalg + special + sparse):**
+  | surface | fsci vs scipy | status |
+  |---|---|---|
+  | dense factorizations (cholesky/eigh/svd/qr/schur) | ~2-2.7x SLOWER | BLOCKED (vndri / WY `2o0vp` / D&C) |
+  | special functions (array) | 1.8-13.7x FASTER | fsci wins (parallel + no-Python) |
+  | sparse CG | 1.6-2.3x FASTER | fsci wins (no-Python) |
+  | sparse SpMV | ~1.3x slower | minor bandwidth kernel, not a clean lever |
+  | stats presort / matrix-fn adaptive / orthopoly recurrence | harvested this session (6 KEEPs) | done |
+- **CONCLUSION: fsci's vs-scipy perf gaps are CONCENTRATED ENTIRELY in the dense LAPACK-backed
+  factorizations** — all ~2x, ONE root cause (the serial per-step Householder reduction), gated by the pool
+  substrate (`vndri`) or the WY-blocked reduction rewrite (`2o0vp`, vndri-independent, closes eigh+svd+qr).
+  Every OTHER measurable surface fsci is competitive-to-winning. The measurement gap-hunt is now EXHAUSTED as
+  a lever-finder: it has mapped the whole landscape and the only remaining real wins need the heavy dense
+  structural work. DISPOSITION: no lever (sparse fsci-competitive); throwaway bench stashed.
