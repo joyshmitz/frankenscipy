@@ -23335,3 +23335,33 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   (tested, not separately benched; same pattern as the ~2.6x square forms). ubs 0 critical.
 - Disposition: KEEP (production defaults to presort; DISABLE flag A/B-only). CROSS rank/sort family now
   matches the square family — presort-once vein fully applied.
+
+## 2026-07-23 - CopperFalcon (cc) - KEEP (tolerance-parity, scipy-faithful): expm adaptive Padé order m∈{3,5,7,9,13} — 1.11-1.76x, largest at small ‖A‖₁
+
+- Matrix-function follow-on #3 from [[perf_linalg_matrix_function_pade]] — explicitly flagged un-done ("Higham
+  adaptive m∈{3,5,7,9,13} … scipy picks m by norm") and named in the README as future work. The public `expm`
+  always used degree-13 Padé (6 matmuls + scaling/squaring); SciPy's `_expm` (Higham Alg. 10.20) picks the
+  LOWEST degree whose θ-bound covers ‖A‖₁ — m=3 needs 2 matmuls, m=5:3, m=7:4, m=9:5, no scaling.
+- ONE LEVER: `expm_adaptive` front-end on the PUBLIC `expm` — computes ‖A‖₁, routes ≤θ₃→m3 / ≤θ₅→m5 / ≤θ₇→m7
+  / ≤θ₉→m9 via new `expm_pade_low_order` (odd/even split, even powers A²..A^(m-1)), else the existing
+  degree-13 kernel. The internal `expm_pade_scaling_squaring` is LEFT UNCHANGED (expm_pm/cosm/sinm/tanhm rely
+  on its exact even/odd factoring for their bit-identity relationships) — scoped blast radius to `expm()` only.
+- TOLERANCE-PARITY, not bit-exact (different Padé degree → different roundoff), but MORE scipy-faithful (scipy
+  uses the same order selection). New `expm_adaptive_order_matches_degree13_all_regimes` asserts adaptive vs
+  the degree-13-only kernel agree < 1e-12 across all θ bands (norms 0.01→20) + a differing-bits execution
+  proof at small norm. Conformance `diff_linalg_matrix_functions` green; fsci-linalg lib 519/0; the
+  `expm_matches_scipy_reference_values` golden stays green. `EXPM_ADAPTIVE_ORDER_DISABLE` for A/B.
+- MEASUREMENT (thinkstation1, criterion 10-sample, `EXPM_ADAPTIVE_ORDER_DISABLE` A/B, adaptive vs deg13):
+  | order (‖A‖₁ band) | n=128 | n=256 |
+  |---|---|---|
+  | m3 (≈0.01) | **1.63x** | **1.76x** |
+  | m5 (≈0.2)  | **1.46x** | **1.51x** |
+  | m7 (≈0.8)  | 1.19x | 1.12x |
+  | m9 (≈1.8)  | 1.12x | ~1.11x (n256 CI-overlap, in-floor) |
+  Win tracks matmuls-saved (m3: 2 vs 6 → 1.76x; m9: 5 vs 6 → 1.11x), MONOTONE (‖A‖₁>θ₉ is byte-identical to
+  deg13 — never slower), m3/m5 CIs cleanly separated. Artifact
+  `tests/artifacts/perf/2026-07-23-expm-adaptive-order/bench.txt`. ubs 0 critical.
+- Disposition: KEEP (production defaults to adaptive; DISABLE flag A/B-only). LEVER (reusable): a fixed-degree
+  Padé/series where the reference picks degree adaptively by norm → add the θ-table order selection; small-norm
+  inputs (near-identity, post-scaling generators) get 2-3× fewer matrix products. Matrix-fn vein: expm order
+  now adaptive; the internal ±expm kernel + cosm/sinm/logm/sqrtm remain degree-13 (their bit-identity contracts).

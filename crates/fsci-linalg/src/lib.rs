@@ -7935,7 +7935,7 @@ pub fn expm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Lin
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    let result = expm_pade_scaling_squaring(&matrix);
+    let result = expm_adaptive(&matrix);
 
     emit_trace(LinalgTrace {
         operation: "expm",
@@ -8242,6 +8242,105 @@ fn par_dmatmul(a: &DMatrix<f64>, b: &DMatrix<f64>) -> DMatrix<f64> {
         out.columns_mut(c0, w).copy_from(&blk);
     }
     out
+}
+
+/// Same-binary A/B switch: force the public `expm` onto the degree-13-only kernel
+/// (skip the adaptive low-order Padé selection). Tolerance-parity either way.
+pub static EXPM_ADAPTIVE_ORDER_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+// Higham's θ_m bounds (2005, "The Scaling and Squaring Method … Revisited", Table 2.3
+// / scipy's `_expm`): the largest `‖A‖₁` for which the degree-m Padé approximant has
+// backward error ≤ unit roundoff without scaling. Picking the LOWEST degree whose bound
+// covers `‖A‖₁` saves matrix products (m=3: 2 matmuls, m=13: 6 + squarings).
+#[allow(clippy::excessive_precision)]
+const EXPM_THETA3: f64 = 1.495_585_217_958_292e-2;
+#[allow(clippy::excessive_precision)]
+const EXPM_THETA5: f64 = 2.539_398_330_063_230e-1;
+#[allow(clippy::excessive_precision)]
+const EXPM_THETA7: f64 = 9.504_178_996_162_932e-1;
+#[allow(clippy::excessive_precision)]
+const EXPM_THETA9: f64 = 2.097_847_961_257_068;
+
+// Degree-m Padé numerator/denominator coefficients b₀..b_m (Higham 2005 / scipy).
+const EXPM_PADE3: [f64; 4] = [120.0, 60.0, 12.0, 1.0];
+const EXPM_PADE5: [f64; 6] = [30240.0, 15120.0, 3360.0, 420.0, 30.0, 1.0];
+const EXPM_PADE7: [f64; 8] = [
+    17_297_280.0,
+    8_648_640.0,
+    1_995_840.0,
+    277_200.0,
+    25_200.0,
+    1512.0,
+    56.0,
+    1.0,
+];
+const EXPM_PADE9: [f64; 10] = [
+    17_643_225_600.0,
+    8_821_612_800.0,
+    2_075_673_600.0,
+    302_702_400.0,
+    30_270_240.0,
+    2_162_160.0,
+    110_880.0,
+    3960.0,
+    90.0,
+    1.0,
+];
+
+/// Adaptive-order matrix exponential (Higham Alg. 10.20 / scipy `scipy.linalg.expm`):
+/// choose the lowest Padé degree `m ∈ {3,5,7,9}` whose θ-bound covers `‖A‖₁` (no
+/// scaling needed), else fall back to the degree-13 scaling-and-squaring kernel. This
+/// is the public `expm` entry point; the internal [`expm_pade_scaling_squaring`] stays
+/// fixed at degree 13 because `expm_pm`/cosm/sinm rely on its exact even/odd factoring
+/// for their bit-identity relationships. Tolerance-parity with degree-13 (~1e-15, both
+/// are true Padé approximants) and more SciPy-faithful (SciPy selects the same order).
+fn expm_adaptive(a: &DMatrix<f64>) -> DMatrix<f64> {
+    if EXPM_ADAPTIVE_ORDER_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return expm_pade_scaling_squaring(a);
+    }
+    let norm1 = matrix_one_norm(a);
+    if norm1 == 0.0 {
+        return DMatrix::<f64>::identity(a.nrows(), a.ncols());
+    }
+    if norm1 <= EXPM_THETA3 {
+        expm_pade_low_order(a, &EXPM_PADE3)
+    } else if norm1 <= EXPM_THETA5 {
+        expm_pade_low_order(a, &EXPM_PADE5)
+    } else if norm1 <= EXPM_THETA7 {
+        expm_pade_low_order(a, &EXPM_PADE7)
+    } else if norm1 <= EXPM_THETA9 {
+        expm_pade_low_order(a, &EXPM_PADE9)
+    } else {
+        expm_pade_scaling_squaring(a)
+    }
+}
+
+/// Degree-m∈{3,5,7,9} Padé exponential WITHOUT scaling (caller guarantees `‖A‖₁ ≤ θ_m`).
+/// Odd/even split: `U = A·Σⱼ b₂ⱼ₊₁·A²ʲ`, `V = Σⱼ b₂ⱼ·A²ʲ`, `expm = (V−U)⁻¹(V+U)`.
+/// Needs the even powers `A², A⁴, …, A^(m-1)` — `(m-1)/2 + 1` matmuls total, vs the
+/// degree-13 kernel's 6 matmuls + `s` squarings.
+#[allow(clippy::needless_range_loop)]
+fn expm_pade_low_order(a: &DMatrix<f64>, coeffs: &[f64]) -> DMatrix<f64> {
+    let n = a.nrows();
+    let identity = DMatrix::<f64>::identity(n, n);
+    let m = coeffs.len() - 1;
+    let half = m / 2;
+    let a2 = par_dmatmul(a, a);
+    let mut vpoly = &identity * coeffs[0] + &a2 * coeffs[2];
+    let mut upoly = &identity * coeffs[1] + &a2 * coeffs[3];
+    let mut cur = a2.clone(); // A^{2j}, starting at j=1
+    for j in 2..=half {
+        cur = par_dmatmul(&cur, &a2); // A^{2j}
+        vpoly += &cur * coeffs[2 * j];
+        upoly += &cur * coeffs[2 * j + 1];
+    }
+    let u = par_dmatmul(a, &upoly);
+    let num = &vpoly + &u;
+    let den = &vpoly - &u;
+    den.lu()
+        .solve(&num)
+        .unwrap_or_else(|| taylor_exp(a, &identity, 20))
 }
 
 fn expm_pade_scaling_squaring(a: &DMatrix<f64>) -> DMatrix<f64> {
@@ -35853,6 +35952,67 @@ mod proptest_tests {
             (result[0][0] - 51.968956198707545).abs() < 1e-8,
             "expm[0][0] got {}, expected 51.968956198707545",
             result[0][0]
+        );
+    }
+
+    #[test]
+    fn expm_adaptive_order_matches_degree13_all_regimes() {
+        use std::sync::atomic::Ordering;
+        // The adaptive-order expm (m∈{3,5,7,9,13} by ‖A‖₁, SciPy's algorithm) must
+        // agree with the degree-13-only kernel to Padé tolerance (~1e-13) across
+        // every θ regime. Base matrix scaled to land in each θ band: θ3≈0.015,
+        // θ5≈0.25, θ7≈0.95, θ9≈2.10, θ13≈5.37, plus a large-norm scaled case.
+        let base: Vec<Vec<f64>> = vec![
+            vec![0.3, -0.7, 0.2, 0.1],
+            vec![0.4, 0.1, -0.5, 0.6],
+            vec![-0.2, 0.3, 0.2, -0.4],
+            vec![0.1, -0.1, 0.5, 0.2],
+        ];
+        for &target_norm in &[0.01_f64, 0.2, 0.8, 1.8, 4.5, 20.0] {
+            // Scale base so ‖A‖₁ ≈ target_norm.
+            let cur_norm: f64 = (0..4)
+                .map(|j| (0..4).map(|i| base[i][j].abs()).sum::<f64>())
+                .fold(0.0, f64::max);
+            let s = target_norm / cur_norm;
+            let a: Vec<Vec<f64>> = base
+                .iter()
+                .map(|row| row.iter().map(|&v| v * s).collect())
+                .collect();
+
+            EXPM_ADAPTIVE_ORDER_DISABLE.store(true, Ordering::Relaxed);
+            let deg13 = expm(&a, DecompOptions::default()).expect("expm deg13");
+            EXPM_ADAPTIVE_ORDER_DISABLE.store(false, Ordering::Relaxed);
+            let adaptive = expm(&a, DecompOptions::default()).expect("expm adaptive");
+
+            let mut max_abs = 0.0_f64;
+            for i in 0..4 {
+                for j in 0..4 {
+                    max_abs = max_abs.max((deg13[i][j] - adaptive[i][j]).abs());
+                }
+            }
+            assert!(
+                max_abs < 1e-12,
+                "adaptive vs deg13 diverged {max_abs:e} at target_norm={target_norm}"
+            );
+        }
+        // Verify the low-order path actually fires (differs in bits from deg13) at
+        // small norm — an execution proof the adaptive branch is not dead.
+        EXPM_ADAPTIVE_ORDER_DISABLE.store(true, Ordering::Relaxed);
+        let deg13 = expm(
+            &[vec![0.001, 0.002], vec![0.003, 0.001]],
+            DecompOptions::default(),
+        )
+        .expect("expm");
+        EXPM_ADAPTIVE_ORDER_DISABLE.store(false, Ordering::Relaxed);
+        let m3 = expm(
+            &[vec![0.001, 0.002], vec![0.003, 0.001]],
+            DecompOptions::default(),
+        )
+        .expect("expm");
+        let any_diff = (0..2).any(|i| (0..2).any(|j| deg13[i][j].to_bits() != m3[i][j].to_bits()));
+        assert!(
+            any_diff,
+            "adaptive m=3 path bit-identical to deg13 (dead branch?)"
         );
     }
 

@@ -12,12 +12,12 @@ use fsci_linalg::{
     CHOL_PANEL_TRSM_PAR_PANELS,
 };
 use fsci_linalg::{
-    DecompOptions, HELMERT_FORCE_SERIAL, IS_DIAGONAL_FORCE_SERIAL, InvOptions,
-    KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL, PinvOptions,
-    SolveOptions, TANHM_SHARED_PADE_DISABLE, TriangularSolveOptions, cho_factor, cho_solve, det,
-    dft, eigh, frobenius_norm, inv, is_diagonal, lstsq, lu_factor, lu_solve, mat_flatten, matmul,
-    orthogonal_procrustes, pascal, pinv, randomized_eigh, solve, solve_banded, solve_triangular,
-    svd, tanhm, vdot,
+    DecompOptions, EXPM_ADAPTIVE_ORDER_DISABLE, HELMERT_FORCE_SERIAL, IS_DIAGONAL_FORCE_SERIAL,
+    InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL,
+    PinvOptions, SolveOptions, TANHM_SHARED_PADE_DISABLE, TriangularSolveOptions, cho_factor,
+    cho_solve, det, dft, eigh, expm, frobenius_norm, inv, is_diagonal, lstsq, lu_factor, lu_solve,
+    mat_flatten, matmul, orthogonal_procrustes, pascal, pinv, randomized_eigh, solve, solve_banded,
+    solve_triangular, svd, tanhm, vdot,
 };
 #[cfg(feature = "chol-wall-bench")]
 use fsci_linalg::{
@@ -2889,6 +2889,61 @@ fn bench_khatri_rao_parallel_ab(c: &mut Criterion) {
 /// independent `expm` runs (~12 matmuls). Matrices are scaled to 1-norm well
 /// under theta13 so the scaling-squaring exponent s=0 (no squarings dilute the
 /// shared-matmul win). Both arms asserted byte-identical before timing.
+/// Public `expm` adaptive Padé order (m∈{3,5,7,9,13} by ‖A‖₁, SciPy's algorithm)
+/// versus the degree-13-only kernel. Small-norm matrices only need m=3/5/7 (2-4
+/// matmuls) instead of m=13's 6 + squarings. Matrices scaled into each θ band; both
+/// arms asserted tolerance-parity before timing.
+fn bench_expm_adaptive_order_ab(c: &mut Criterion) {
+    // Scale a base matrix so ‖A‖₁ ≈ target (lands in a specific θ band → order m).
+    fn scaled_to_norm(n: usize, seed: usize, target: f64) -> Vec<Vec<f64>> {
+        let base = make_matmul_matrix(n, n, seed);
+        let cur = (0..n)
+            .map(|j| (0..n).map(|i| base[i][j].abs()).sum::<f64>())
+            .fold(0.0_f64, f64::max);
+        let s = target / cur;
+        base.iter()
+            .map(|r| r.iter().map(|&v| v * s).collect())
+            .collect()
+    }
+    let mut group = c.benchmark_group("expm_adaptive_order_ab");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    // (label, target ‖A‖₁, adaptive order): θ3≈.015 θ5≈.25 θ7≈.95 θ9≈2.10.
+    for &(label, target) in &[("m3", 0.01), ("m5", 0.2), ("m7", 0.8), ("m9", 1.8)] {
+        for &n in &[128usize, 256usize] {
+            let a = scaled_to_norm(n, 0x5b3d, target);
+            EXPM_ADAPTIVE_ORDER_DISABLE.store(false, Ordering::Relaxed);
+            let adaptive = expm(&a, DecompOptions::default()).unwrap();
+            EXPM_ADAPTIVE_ORDER_DISABLE.store(true, Ordering::Relaxed);
+            let deg13 = expm(&a, DecompOptions::default()).unwrap();
+            let max_abs = adaptive
+                .iter()
+                .zip(&deg13)
+                .flat_map(|(ra, rd)| ra.iter().zip(rd).map(|(x, y)| (x - y).abs()))
+                .fold(0.0_f64, f64::max);
+            assert!(
+                max_abs < 1e-12,
+                "{label} n{n}: adaptive vs deg13 diverged {max_abs:e}"
+            );
+            group.bench_function(format!("adaptive_{label}_n{n}"), |bencher| {
+                bencher.iter(|| {
+                    EXPM_ADAPTIVE_ORDER_DISABLE.store(false, Ordering::Relaxed);
+                    black_box(expm(black_box(&a), DecompOptions::default()).unwrap())
+                });
+            });
+            group.bench_function(format!("deg13_{label}_n{n}"), |bencher| {
+                bencher.iter(|| {
+                    EXPM_ADAPTIVE_ORDER_DISABLE.store(true, Ordering::Relaxed);
+                    black_box(expm(black_box(&a), DecompOptions::default()).unwrap())
+                });
+            });
+        }
+    }
+    EXPM_ADAPTIVE_ORDER_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_tanhm_shared_pade_ab(c: &mut Criterion) {
     fn small_norm_matrix(n: usize, seed: usize) -> Vec<Vec<f64>> {
         let base = make_matmul_matrix(n, n, seed);
@@ -3106,6 +3161,7 @@ criterion_group!(
     bench_det_gauntlet,
     bench_orthogonal_procrustes_gauntlet,
     bench_khatri_rao_parallel_ab,
+    bench_expm_adaptive_order_ab,
     bench_tanhm_shared_pade_ab,
     bench_helmert_parallel_ab,
     bench_pascal_symmetric_ab,
