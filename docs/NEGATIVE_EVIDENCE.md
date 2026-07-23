@@ -23365,3 +23365,23 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   Padé/series where the reference picks degree adaptively by norm → add the θ-table order selection; small-norm
   inputs (near-identity, post-scaling generators) get 2-3× fewer matrix products. Matrix-fn vein: expm order
   now adaptive; the internal ±expm kernel + cosm/sinm/logm/sqrtm remain degree-13 (their bit-identity contracts).
+
+## 2026-07-23 - CopperFalcon (cc) - KEEP (extension of the above, tolerance-parity): expm_pm adaptive order → coshm/sinhm/tanhm — m3 1.41x, dilutes to in-floor as the 2 LU solves dominate
+
+- Extends the adaptive-order lever to the internal shared ±expm kernel `expm_pm` (used by coshm/sinhm/tanhm).
+  Refactored `expm_pade_low_order` to expose `expm_pade_low_order_factors(a, coeffs) → (Pₑ, W)`; `expm_pm`
+  gets the same θ-band front-end and forms `e=(Pₑ−W)⁻¹(Pₑ+W)`, `e_neg=(Pₑ+W)⁻¹(Pₑ−W)` at the low order.
+- BIT-IDENTITY PRESERVED: the tanhm `TANHM_SHARED_PADE_DISABLE` two-run path was rerouted from the fixed
+  degree-13 kernel to `expm_adaptive`, so both arms select the SAME order and stay bit-identical (negation is
+  exact; e_neg from `expm_adaptive(−A)` equals the shared `e_neg`). fsci-linalg lib **519/0** (all tanhm/cosh/
+  sinh bit-identity + scipy-ref tests green — the tanhm A/B now isolates the shared-factor saving at adaptive
+  order rather than an order difference).
+- MEASUREMENT (thinkstation1, criterion, `EXPM_ADAPTIVE_ORDER_DISABLE` A/B on coshm): m3 (‖A‖₁≈0.01) **1.42x
+  @n128 / 1.41x @n256** (CIs separated); m5 (≈0.2) ~1.5x @n128 but **~1.00x @n256 IN-FLOOR** — at n=256 the
+  two LU solves + cosh/sinh assembly dominate, so the 3-vs-6 matmul saving no longer clears the floor.
+  MONOTONE (‖A‖₁>θ₉ byte-identical to before; the in-floor cases are ~1.0x, never a regression). Artifact
+  `tests/artifacts/perf/2026-07-23-expm-adaptive-order/bench_expm_pm.txt`.
+- Disposition: KEEP — modest but real (decided m3 win), monotone, tolerance-parity, more scipy-faithful.
+  Honest boundary: the hyperbolic functions carry 2 solves + assembly that dilute the matmul-count win faster
+  than plain `expm` (which had m5 1.5x decided at n=256). The high-value part of this lever was the public
+  `expm` (prior entry); this extension is the low-EV tail.

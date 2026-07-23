@@ -8316,31 +8316,39 @@ fn expm_adaptive(a: &DMatrix<f64>) -> DMatrix<f64> {
     }
 }
 
-/// Degree-m∈{3,5,7,9} Padé exponential WITHOUT scaling (caller guarantees `‖A‖₁ ≤ θ_m`).
-/// Odd/even split: `U = A·Σⱼ b₂ⱼ₊₁·A²ʲ`, `V = Σⱼ b₂ⱼ·A²ʲ`, `expm = (V−U)⁻¹(V+U)`.
-/// Needs the even powers `A², A⁴, …, A^(m-1)` — `(m-1)/2 + 1` matmuls total, vs the
-/// degree-13 kernel's 6 matmuls + `s` squarings.
+/// Even part `Pₑ = Σⱼ b₂ⱼ·A²ʲ` and odd factor `W = A·Σⱼ b₂ⱼ₊₁·A²ʲ` of the degree-m
+/// Padé (m∈{3,5,7,9}), sharing the even powers `A², A⁴, …, A^(m-1)`. `expm(A) =
+/// (Pₑ−W)⁻¹(Pₑ+W)`; since Pₑ depends only on A² and `W` flips sign for −A, this also
+/// yields `expm(−A) = (Pₑ+W)⁻¹(Pₑ−W)` from the SAME two matrices (see [`expm_pm`]).
+/// `(m-1)/2 + 1` matmuls.
 #[allow(clippy::needless_range_loop)]
-fn expm_pade_low_order(a: &DMatrix<f64>, coeffs: &[f64]) -> DMatrix<f64> {
+fn expm_pade_low_order_factors(a: &DMatrix<f64>, coeffs: &[f64]) -> (DMatrix<f64>, DMatrix<f64>) {
     let n = a.nrows();
     let identity = DMatrix::<f64>::identity(n, n);
     let m = coeffs.len() - 1;
     let half = m / 2;
     let a2 = par_dmatmul(a, a);
-    let mut vpoly = &identity * coeffs[0] + &a2 * coeffs[2];
-    let mut upoly = &identity * coeffs[1] + &a2 * coeffs[3];
+    let mut pe = &identity * coeffs[0] + &a2 * coeffs[2];
+    let mut po = &identity * coeffs[1] + &a2 * coeffs[3];
     let mut cur = a2.clone(); // A^{2j}, starting at j=1
     for j in 2..=half {
         cur = par_dmatmul(&cur, &a2); // A^{2j}
-        vpoly += &cur * coeffs[2 * j];
-        upoly += &cur * coeffs[2 * j + 1];
+        pe += &cur * coeffs[2 * j];
+        po += &cur * coeffs[2 * j + 1];
     }
-    let u = par_dmatmul(a, &upoly);
-    let num = &vpoly + &u;
-    let den = &vpoly - &u;
-    den.lu()
-        .solve(&num)
-        .unwrap_or_else(|| taylor_exp(a, &identity, 20))
+    let w = par_dmatmul(a, &po);
+    (pe, w)
+}
+
+/// Degree-m∈{3,5,7,9} Padé exponential WITHOUT scaling (caller guarantees `‖A‖₁ ≤ θ_m`).
+fn expm_pade_low_order(a: &DMatrix<f64>, coeffs: &[f64]) -> DMatrix<f64> {
+    let (pe, w) = expm_pade_low_order_factors(a, coeffs);
+    let num = &pe + &w;
+    let den = &pe - &w;
+    den.lu().solve(&num).unwrap_or_else(|| {
+        let identity = DMatrix::<f64>::identity(a.nrows(), a.ncols());
+        taylor_exp(a, &identity, 20)
+    })
 }
 
 fn expm_pade_scaling_squaring(a: &DMatrix<f64>) -> DMatrix<f64> {
@@ -8429,6 +8437,39 @@ fn expm_pm(a: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>) {
     let norm1 = matrix_one_norm(a);
     if norm1 == 0.0 {
         return (identity.clone(), identity);
+    }
+    // Adaptive Padé order (mirrors the public `expm`): for small ‖A‖₁ the shared
+    // (Pₑ, W) factoring at a lower degree needs fewer matmuls. e=(Pₑ−W)⁻¹(Pₑ+W),
+    // e_neg=(Pₑ+W)⁻¹(Pₑ−W) — bit-identical to two independent `expm_adaptive`(±A)
+    // (negation is exact; the tanhm `TANHM_SHARED_PADE_DISABLE` path uses those).
+    if !EXPM_ADAPTIVE_ORDER_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let coeffs: Option<&[f64]> = if norm1 <= EXPM_THETA3 {
+            Some(&EXPM_PADE3)
+        } else if norm1 <= EXPM_THETA5 {
+            Some(&EXPM_PADE5)
+        } else if norm1 <= EXPM_THETA7 {
+            Some(&EXPM_PADE7)
+        } else if norm1 <= EXPM_THETA9 {
+            Some(&EXPM_PADE9)
+        } else {
+            None
+        };
+        if let Some(coeffs) = coeffs {
+            let (pe, w) = expm_pade_low_order_factors(a, coeffs);
+            let num = &pe + &w; // Pₑ + W
+            let den = &pe - &w; // Pₑ − W
+            let e = den
+                .clone()
+                .lu()
+                .solve(&num)
+                .unwrap_or_else(|| taylor_exp(a, &identity, 20));
+            let e_neg = num
+                .clone()
+                .lu()
+                .solve(&den)
+                .unwrap_or_else(|| taylor_exp(&(-a), &identity, 20));
+            return (e, e_neg);
+        }
     }
     const THETA13: f64 = 5.371_920_351_148_152;
     const B: [f64; 14] = [
@@ -9221,18 +9262,16 @@ pub fn tanhm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
     if m.nrows() == 0 {
         return Ok(Vec::new());
     }
-    // `coshm = (expm(A)+expm(-A))/2`, `sinhm = (expm(A)-expm(-A))/2`. The [13/13]
-    // Padé even/odd polynomials depend only on A², so they are identical for A and
-    // −A; `expm_pm` forms them ONCE (6 matmuls) and adds a second LU solve, instead
-    // of two independent `expm` runs (~12 matmuls). Bit-identical: negation is exact
-    // in IEEE-754 and the matmul reduction order is unchanged, so `expm_pm`'s `e_neg`
-    // equals `expm_pade_scaling_squaring(&(-A))` bit-for-bit (same path sinhm/coshm
-    // already take). Same-binary A/B via `TANHM_SHARED_PADE_DISABLE`.
+    // `coshm = (expm(A)+expm(-A))/2`, `sinhm = (expm(A)-expm(-A))/2`. The Padé even/odd
+    // polynomials depend only on A², so they are identical for A and −A; `expm_pm`
+    // forms them ONCE (shared factors + a second LU solve) instead of two independent
+    // `expm` runs. Bit-identical: negation is exact in IEEE-754 and the matmul reduction
+    // order is unchanged, so `expm_pm`'s `e_neg` equals `expm_adaptive(−A)` bit-for-bit.
+    // The two-run reference uses `expm_adaptive` (not the fixed-degree-13 kernel) so the
+    // A/B compares at the SAME adaptive order — it isolates the shared-factor saving, not
+    // an order difference. Same-binary A/B via `TANHM_SHARED_PADE_DISABLE`.
     let (ep, en) = if TANHM_SHARED_PADE_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
-        (
-            expm_pade_scaling_squaring(&m),
-            expm_pade_scaling_squaring(&(-&m)),
-        )
+        (expm_adaptive(&m), expm_adaptive(&(-&m)))
     } else {
         expm_pm(&m)
     };

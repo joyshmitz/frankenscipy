@@ -15,9 +15,9 @@ use fsci_linalg::{
     DecompOptions, EXPM_ADAPTIVE_ORDER_DISABLE, HELMERT_FORCE_SERIAL, IS_DIAGONAL_FORCE_SERIAL,
     InvOptions, KHATRI_RAO_FORCE_SERIAL, LstsqOptions, MatrixAssumption, PASCAL_FORCE_SERIAL,
     PinvOptions, SolveOptions, TANHM_SHARED_PADE_DISABLE, TriangularSolveOptions, cho_factor,
-    cho_solve, det, dft, eigh, expm, frobenius_norm, inv, is_diagonal, lstsq, lu_factor, lu_solve,
-    mat_flatten, matmul, orthogonal_procrustes, pascal, pinv, randomized_eigh, solve, solve_banded,
-    solve_triangular, svd, tanhm, vdot,
+    cho_solve, coshm, det, dft, eigh, expm, frobenius_norm, inv, is_diagonal, lstsq, lu_factor,
+    lu_solve, mat_flatten, matmul, orthogonal_procrustes, pascal, pinv, randomized_eigh, solve,
+    solve_banded, solve_triangular, svd, tanhm, vdot,
 };
 #[cfg(feature = "chol-wall-bench")]
 use fsci_linalg::{
@@ -2944,6 +2944,58 @@ fn bench_expm_adaptive_order_ab(c: &mut Criterion) {
     group.finish();
 }
 
+/// `coshm`/`tanhm` (which build on `expm_pm`) with adaptive Padé order on vs off —
+/// the small-norm branch of the same θ-order lever as `expm`. Small-norm matrices
+/// use a lower degree (fewer shared matmuls). Tolerance-parity asserted before timing.
+fn bench_expm_pm_adaptive_ab(c: &mut Criterion) {
+    fn scaled_to_norm(n: usize, seed: usize, target: f64) -> Vec<Vec<f64>> {
+        let base = make_matmul_matrix(n, n, seed);
+        let cur = (0..n)
+            .map(|j| (0..n).map(|i| base[i][j].abs()).sum::<f64>())
+            .fold(0.0_f64, f64::max);
+        let s = target / cur;
+        base.iter()
+            .map(|r| r.iter().map(|&v| v * s).collect())
+            .collect()
+    }
+    let mut group = c.benchmark_group("expm_pm_adaptive_ab");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    for &(label, target) in &[("m3", 0.01), ("m5", 0.2)] {
+        for &n in &[128usize, 256usize] {
+            let a = scaled_to_norm(n, 0x71c4, target);
+            EXPM_ADAPTIVE_ORDER_DISABLE.store(false, Ordering::Relaxed);
+            let adaptive = coshm(&a, DecompOptions::default()).unwrap();
+            EXPM_ADAPTIVE_ORDER_DISABLE.store(true, Ordering::Relaxed);
+            let deg13 = coshm(&a, DecompOptions::default()).unwrap();
+            let max_abs = adaptive
+                .iter()
+                .zip(&deg13)
+                .flat_map(|(ra, rd)| ra.iter().zip(rd).map(|(x, y)| (x - y).abs()))
+                .fold(0.0_f64, f64::max);
+            assert!(
+                max_abs < 1e-11,
+                "{label} n{n}: coshm adaptive diverged {max_abs:e}"
+            );
+            group.bench_function(format!("adaptive_{label}_n{n}"), |bencher| {
+                bencher.iter(|| {
+                    EXPM_ADAPTIVE_ORDER_DISABLE.store(false, Ordering::Relaxed);
+                    black_box(coshm(black_box(&a), DecompOptions::default()).unwrap())
+                });
+            });
+            group.bench_function(format!("deg13_{label}_n{n}"), |bencher| {
+                bencher.iter(|| {
+                    EXPM_ADAPTIVE_ORDER_DISABLE.store(true, Ordering::Relaxed);
+                    black_box(coshm(black_box(&a), DecompOptions::default()).unwrap())
+                });
+            });
+        }
+    }
+    EXPM_ADAPTIVE_ORDER_DISABLE.store(false, Ordering::Relaxed);
+    group.finish();
+}
+
 fn bench_tanhm_shared_pade_ab(c: &mut Criterion) {
     fn small_norm_matrix(n: usize, seed: usize) -> Vec<Vec<f64>> {
         let base = make_matmul_matrix(n, n, seed);
@@ -3162,6 +3214,7 @@ criterion_group!(
     bench_orthogonal_procrustes_gauntlet,
     bench_khatri_rao_parallel_ab,
     bench_expm_adaptive_order_ab,
+    bench_expm_pm_adaptive_ab,
     bench_tanhm_shared_pade_ab,
     bench_helmert_parallel_ab,
     bench_pascal_symmetric_ab,

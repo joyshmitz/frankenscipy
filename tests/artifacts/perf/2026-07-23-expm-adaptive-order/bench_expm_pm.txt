@@ -1,0 +1,68 @@
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+warning: constant `SYRK_KERNEL_MR4_NR8` is never used
+    --> crates/fsci-linalg/src/lib.rs:5125:7
+     |
+5125 | const SYRK_KERNEL_MR4_NR8: u8 = 0;
+     |       ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-linalg` (lib) generated 1 warning
+    Finished `bench` profile [optimized] target(s) in 19.63s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-2f2a4a1818c7f0d1)
+Gnuplot not found, using plotters backend
+Benchmarking expm_pm_adaptive_ab/adaptive_m3_n128
+Benchmarking expm_pm_adaptive_ab/adaptive_m3_n128: Warming up for 1.0000 s
+Benchmarking expm_pm_adaptive_ab/adaptive_m3_n128: Collecting 10 samples in estimated 2.0674 s (1650 iterations)
+Benchmarking expm_pm_adaptive_ab/adaptive_m3_n128: Analyzing
+expm_pm_adaptive_ab/adaptive_m3_n128
+                        time:   [1.2227 ms 1.2703 ms 1.3078 ms]
+Benchmarking expm_pm_adaptive_ab/deg13_m3_n128
+Benchmarking expm_pm_adaptive_ab/deg13_m3_n128: Warming up for 1.0000 s
+Benchmarking expm_pm_adaptive_ab/deg13_m3_n128: Collecting 10 samples in estimated 2.0691 s (1155 iterations)
+Benchmarking expm_pm_adaptive_ab/deg13_m3_n128: Analyzing
+expm_pm_adaptive_ab/deg13_m3_n128
+                        time:   [1.7294 ms 1.8005 ms 1.8507 ms]
+Benchmarking expm_pm_adaptive_ab/adaptive_m3_n256
+Benchmarking expm_pm_adaptive_ab/adaptive_m3_n256: Warming up for 1.0000 s
+Benchmarking expm_pm_adaptive_ab/adaptive_m3_n256: Collecting 10 samples in estimated 2.0018 s (220 iterations)
+Benchmarking expm_pm_adaptive_ab/adaptive_m3_n256: Analyzing
+expm_pm_adaptive_ab/adaptive_m3_n256
+                        time:   [8.4254 ms 8.6109 ms 8.9191 ms]
+Benchmarking expm_pm_adaptive_ab/deg13_m3_n256
+Benchmarking expm_pm_adaptive_ab/deg13_m3_n256: Warming up for 1.0000 s
+Benchmarking expm_pm_adaptive_ab/deg13_m3_n256: Collecting 10 samples in estimated 2.1330 s (165 iterations)
+Benchmarking expm_pm_adaptive_ab/deg13_m3_n256: Analyzing
+expm_pm_adaptive_ab/deg13_m3_n256
+                        time:   [11.953 ms 12.149 ms 12.346 ms]
+Benchmarking expm_pm_adaptive_ab/adaptive_m5_n128
+Benchmarking expm_pm_adaptive_ab/adaptive_m5_n128: Warming up for 1.0000 s
+Benchmarking expm_pm_adaptive_ab/adaptive_m5_n128: Collecting 10 samples in estimated 2.0628 s (1540 iterations)
+Benchmarking expm_pm_adaptive_ab/adaptive_m5_n128: Analyzing
+expm_pm_adaptive_ab/adaptive_m5_n128
+                        time:   [1.3058 ms 1.3370 ms 1.3648 ms]
+Benchmarking expm_pm_adaptive_ab/deg13_m5_n128
+Benchmarking expm_pm_adaptive_ab/deg13_m5_n128: Warming up for 1.0000 s
+Benchmarking expm_pm_adaptive_ab/deg13_m5_n128: Collecting 10 samples in estimated 2.0909 s (1210 iterations)
+Benchmarking expm_pm_adaptive_ab/deg13_m5_n128: Analyzing
+expm_pm_adaptive_ab/deg13_m5_n128
+                        time:   [1.7897 ms 2.0218 ms 2.2495 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking expm_pm_adaptive_ab/adaptive_m5_n256
+Benchmarking expm_pm_adaptive_ab/adaptive_m5_n256: Warming up for 1.0000 s
+Benchmarking expm_pm_adaptive_ab/adaptive_m5_n256: Collecting 10 samples in estimated 2.3365 s (165 iterations)
+Benchmarking expm_pm_adaptive_ab/adaptive_m5_n256: Analyzing
+expm_pm_adaptive_ab/adaptive_m5_n256
+                        time:   [13.710 ms 14.175 ms 14.594 ms]
+Benchmarking expm_pm_adaptive_ab/deg13_m5_n256
+Benchmarking expm_pm_adaptive_ab/deg13_m5_n256: Warming up for 1.0000 s
+Benchmarking expm_pm_adaptive_ab/deg13_m5_n256: Collecting 10 samples in estimated 2.9763 s (165 iterations)
+Benchmarking expm_pm_adaptive_ab/deg13_m5_n256: Analyzing
+expm_pm_adaptive_ab/deg13_m5_n256
+                        time:   [13.585 ms 14.129 ms 14.648 ms]
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low severe
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+
