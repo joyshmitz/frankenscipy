@@ -1,0 +1,57 @@
+    Finished `bench` profile [optimized] target(s) in 0.16s
+     Running benches/linalg_bench.rs (/data/tmp/cargo-target/release/deps/linalg_bench-65eebc4797541807)
+Gnuplot not found, using plotters backend
+Gnuplot not found, using plotters backend
+FSCI_CHOL_TRSM_PAR_PROFILE factors=160 mean_ms=11.130298 digest=0xc4a4bbacea0e1325
+[ perf record: Woken up 2 times to write data ]
+[ perf record: Captured and wrote 1.690 MB /dev/shm/fsc-chol-trsm-par-2716570-1784768276948418977.perf (26939 samples) ]
+FSCI_CHOL_TRSM_PAR_REPORT_BEGIN
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 26K of event 'cycles:u'
+# Event count (approx.): 4288379435
+#
+# Overhead  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               IPC   [IPC Coverage]
+# ........  ...................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................  ....................
+#
+    27.39%  [.] fsci_linalg::cholesky_syrk_flat_rows_mr4_nr8_fma                                                                                                                                                                                                                                                                                                                                                                                                                                                 -      -            
+    26.74%  [.] __memset_avx2_unaligned_erms                                                                                                                                                                                                                                                                                                                                                                                                                                                                     -      -            
+    19.17%  [.] fsci_linalg::cholesky_panel_trsm_blocked_fma_rows                                                                                                                                                                                                                                                                                                                                                                                                                                                -      -            
+     8.38%  [.] fsci_linalg::copy_l21_and_pack_transpose_into                                                                                                                                                                                                                                                                                                                                                                                                                                                    -      -            
+     7.01%  [.] fsci_linalg::cholesky_panel_trsm_rows2                                                                                                                                                                                                                                                                                                                                                                                                                                                           -      -            
+     4.81%  [.] __memmove_avx_unaligned_erms                                                                                                                                                                                                                                                                                                                                                                                                                                                                     -      -            
+     2.50%  [.] fsci_linalg::cholesky_syrk_row_tail                                                                                                                                                                                                                                                                                                                                                                                                                                                              -      -            
+     0.84%  [.] fsci_linalg::cholesky_factor_panel_blocked                                                                                                                                                                                                                                                                                                                                                                                                                                                       -      -            
+     0.56%  [.] fsci_linalg::cholesky_panel_trsm_blocked_fma_in                                                                                                                                                                                                                                                                                                                                                                                                                                                  -      -            
+     0.17%  [.] pthread_create@GLIBC_2.2.5                                                                                                                                                                                                                                                                                                                                                                                                                                                                       -      -            
+     0.16%  [.] malloc_consolidate                                                                                                                                                                                                                                                                                                                                                                                                                                                                               -      -            
+     0.13%  [.] __libc_calloc2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   -      -            
+     0.12%  [k] 0xffffffffaf6001c4                                                                                                                                                                                                                                                                                                                                                                                                                                                                               -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#
+FSCI_CHOL_TRSM_PAR_REPORT_END
+FSCI_CHOL_TRSM_PAR_AB n=1000 bit_identical=true spawned_panels=2
+FSCI_CHOL_TRSM_PAR_AB n=1000 NULL median=1.003155 min=0.962637 max=1.069972 cv_pct=2.887
+FSCI_CHOL_TRSM_PAR_AB n=1000 PROD mean_ms=11.225649 cv_pct=2.076 p50_ms=11.227633 p95_ms=11.585155 p99_ms=11.585155 gflops_p50=29.69
+FSCI_CHOL_TRSM_PAR_AB n=1000 CAND mean_ms=10.486696 cv_pct=2.281 p50_ms=10.500253 p95_ms=10.927695 p99_ms=10.927695 gflops_p50=31.75
+FSCI_CHOL_TRSM_PAR_AB n=1000 paired_median=1.070896 paired_mean=1.070807 paired_cv_pct=2.327 null=[0.962637,1.069972] DECIDED=true samples=20 factors_per_sample=32
+FSCI_CHOL_TRSM_PAR_AB n=2048 bit_identical=true spawned_panels=7
+FSCI_CHOL_TRSM_PAR_AB n=2048 NULL median=1.002358 min=0.958316 max=1.071811 cv_pct=3.209
+FSCI_CHOL_TRSM_PAR_AB n=2048 PROD mean_ms=63.870488 cv_pct=2.636 p50_ms=63.837985 p95_ms=65.758596 p99_ms=65.758596 gflops_p50=44.85
+FSCI_CHOL_TRSM_PAR_AB n=2048 CAND mean_ms=51.675376 cv_pct=2.096 p50_ms=51.343309 p95_ms=52.940477 p99_ms=52.940477 gflops_p50=55.77
+FSCI_CHOL_TRSM_PAR_AB n=2048 paired_median=1.222434 paired_mean=1.236176 paired_cv_pct=2.370 null=[0.958316,1.071811] DECIDED=true samples=12 factors_per_sample=6
+Benchmarking cholesky_wall_trsm_par_ab/1000x1000_paired_alternating
+Benchmarking cholesky_wall_trsm_par_ab/1000x1000_paired_alternating: Warming up for 1.0000 s
+Benchmarking cholesky_wall_trsm_par_ab/1000x1000_paired_alternating: Collecting 10 samples in estimated 3.4739 s (165 iterations)
+Benchmarking cholesky_wall_trsm_par_ab/1000x1000_paired_alternating: Analyzing
+cholesky_wall_trsm_par_ab/1000x1000_paired_alternating
+                        time:   [21.433 ms 21.749 ms 21.965 ms]
+                        change: [−5.8553% −4.3059% −2.7805%] (p = 0.00 < 0.05)
+                        Performance has improved.
+

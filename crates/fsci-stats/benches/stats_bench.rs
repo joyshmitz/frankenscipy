@@ -1,9 +1,10 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_stats::{
-    BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, BIWEIGHT_MAD_HOIST_DISABLE, HaltonSampler,
-    MAD_FN_REUSE_DISABLE, MAD_REUSE_DISABLE, MAD_ZSCORE_HOIST_DISABLE, MOMENT_PAR_FORCE_SERIAL,
-    PAR_SUM_FORCE_SERIAL, SobolSampler, SomersDInput, acf, argsort, bayes_mvs, binned_statistic,
-    binned_statistic_2d, binned_statistic_dd, biweight_midcorrelation, brier_score,
+    BINNED_STATISTIC_DD_3D_PARALLEL_DISABLE, BIWEIGHT_MAD_HOIST_DISABLE,
+    BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE, HaltonSampler, MAD_FN_REUSE_DISABLE, MAD_REUSE_DISABLE,
+    MAD_ZSCORE_HOIST_DISABLE, MOMENT_PAR_FORCE_SERIAL, PAR_SUM_FORCE_SERIAL, SobolSampler,
+    SomersDInput, acf, argsort, bayes_mvs, binned_statistic, binned_statistic_2d,
+    binned_statistic_dd, biweight_midcorrelation, brier_score, brunnermunzel_matrix,
     centered_discrepancy, cohens_d, ecdf, energy_distance, excess_kurtosis, gstd, histogram,
     kendalltau, kruskal, ks_2samp, l2_star_discrepancy, mad, mad_zscore, mannkendall, mannwhitneyu,
     mean_absolute_error, mean_squared_error, median_abs_deviation, mixture_discrepancy, pacf,
@@ -11,6 +12,7 @@ use fsci_stats::{
     ttest_ind, ttest_rel, wasserstein_distance, weighted_mean, wraparound_discrepancy,
 };
 use std::hint::black_box;
+use std::sync::atomic::Ordering;
 
 fn deterministic_data(n: usize) -> Vec<f64> {
     (0..n)
@@ -29,6 +31,54 @@ fn weighted_mean_two_pass(values: &[f64], weights: &[f64]) -> f64 {
         .map(|(&value, &weight)| value * weight)
         .sum::<f64>()
         / total_w
+}
+
+fn bench_brunnermunzel_matrix_presort_ab(c: &mut Criterion) {
+    // m samples of length n, mild ties (integer-quantized) so the tie path exercises.
+    let (m, n) = (120usize, 3000usize);
+    let samples: Vec<Vec<f64>> = (0..m)
+        .map(|i| {
+            (0..n)
+                .map(|j| {
+                    let x = ((i * 131 + j * 977 + 17) % 4096) as f64 / 41.0;
+                    (x * 8.0).round() / 8.0
+                })
+                .collect()
+        })
+        .collect();
+
+    // Byte-identity gate over all m² ordered pairs (stat AND pvalue), both matrices.
+    BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(false, Ordering::Relaxed);
+    let (fast_s, fast_p) = brunnermunzel_matrix(&samples).expect("presort matrix");
+    BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(true, Ordering::Relaxed);
+    let (slow_s, slow_p) = brunnermunzel_matrix(&samples).expect("per-pair matrix");
+    BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(false, Ordering::Relaxed);
+    for i in 0..m {
+        for j in 0..m {
+            assert_eq!(
+                fast_s[i][j].to_bits(),
+                slow_s[i][j].to_bits(),
+                "stat ({i},{j})"
+            );
+            assert_eq!(
+                fast_p[i][j].to_bits(),
+                slow_p[i][j].to_bits(),
+                "pval ({i},{j})"
+            );
+        }
+    }
+
+    let mut group = c.benchmark_group("brunnermunzel_matrix_presort_ab");
+    group.bench_function("original_per_pair_m120_n3000", |b| {
+        BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(true, Ordering::Relaxed);
+        b.iter(|| black_box(brunnermunzel_matrix(black_box(&samples)).unwrap()));
+        BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(false, Ordering::Relaxed);
+    });
+    group.bench_function("candidate_presort_m120_n3000", |b| {
+        BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(false, Ordering::Relaxed);
+        b.iter(|| black_box(brunnermunzel_matrix(black_box(&samples)).unwrap()));
+    });
+    group.finish();
 }
 
 fn bench_weighted_mean_fused_ab(c: &mut Criterion) {
@@ -1337,6 +1387,7 @@ fn bench_mad_zscore_hoist_ab(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_brunnermunzel_matrix_presort_ab,
     bench_weighted_mean_fused_ab,
     bench_mean_absolute_error_simd_ab,
     bench_mean_squared_error_simd_ab,

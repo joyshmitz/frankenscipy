@@ -43698,6 +43698,23 @@ where
             "all variables must have the same length".to_string(),
         ));
     }
+    all_pairs_two_full_matrices_by_index(m, |i, j| pair_stat(&variables[i], &variables[j]))
+}
+
+/// Index-based core of [`all_pairs_two_full_matrices`], for kernels that carry
+/// per-sample precomputed side data (presorted copies, within-group ranks) that a
+/// slice-only closure cannot reach. Same pair enumeration, threading, and
+/// diagonal handling.
+fn all_pairs_two_full_matrices_by_index<F>(
+    m: usize,
+    pair_stat: F,
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError>
+where
+    F: Fn(usize, usize) -> (f64, f64) + Sync,
+{
+    if m == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
     let pairs: Vec<(usize, usize)> = (0..m)
         .flat_map(|i| (0..m).filter(move |&j| j != i).map(move |j| (i, j)))
         .collect();
@@ -43712,7 +43729,7 @@ where
     };
     let compute = |k: usize| -> (f64, f64) {
         let (i, j) = pairs[k];
-        pair_stat(&variables[i], &variables[j])
+        pair_stat(i, j)
     };
     let vals: Vec<(f64, f64)> = if nthreads <= 1 {
         (0..np).map(compute).collect()
@@ -43735,7 +43752,7 @@ where
     let mut stat = vec![vec![0.0f64; m]; m];
     let mut pval = vec![vec![0.0f64; m]; m];
     for d in 0..m {
-        let (s, p) = pair_stat(&variables[d], &variables[d]);
+        let (s, p) = pair_stat(d, d);
         stat[d][d] = s;
         pval[d][d] = p;
     }
@@ -43852,15 +43869,188 @@ pub fn ranksums_matrix(samples: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<Vec<f
     })
 }
 
+/// Same-binary A/B switch: disable the `brunnermunzel_matrix` presort-once fast path
+/// and fall back to per-pair [`brunnermunzel`]. Byte-identical either way.
+pub static BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Per-sample precompute for the presorted Brunner–Munzel kernel: the sample sorted
+/// ascending (`total_cmp`), the permutation `perm[sorted_pos] = original_idx`, the
+/// within-group average ranks in ORIGINAL order (query-independent — identical for
+/// every pair), and the NaN flag that routes to the same NaN result as [`brunnermunzel`].
+struct BmPresorted {
+    sorted: Vec<f64>,
+    perm: Vec<usize>,
+    within: Vec<f64>,
+    has_nan: bool,
+}
+
+fn bm_presort(sample: &[f64]) -> BmPresorted {
+    let has_nan = sample.iter().any(|v| v.is_nan());
+    let mut indexed: Vec<(f64, usize)> = sample
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(i, v)| (v, i))
+        .collect();
+    indexed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let sorted: Vec<f64> = indexed.iter().map(|&(v, _)| v).collect();
+    let perm: Vec<usize> = indexed.iter().map(|&(_, i)| i).collect();
+    // Within-group ranks exactly as `brunnermunzel`'s `rank_within` computes them
+    // (stable sort by value, tie groups by `total_cmp` equality, average ranks
+    // scattered to original positions).
+    let mut within = vec![0.0; sample.len()];
+    let mut k = 0;
+    while k < indexed.len() {
+        let mut l = k + 1;
+        while l < indexed.len() && indexed[l].0.total_cmp(&indexed[k].0).is_eq() {
+            l += 1;
+        }
+        let avg = (k + l + 1) as f64 / 2.0;
+        for item in &indexed[k..l] {
+            within[item.1] = avg;
+        }
+        k = l;
+    }
+    BmPresorted {
+        sorted,
+        perm,
+        within,
+        has_nan,
+    }
+}
+
+/// [`brunnermunzel`] on two presorted samples: pooled average ranks come from an
+/// O(nx+ny) two-pointer merge over the sorted arrays (tie groups keyed by `==`
+/// exactly as the concatenated-sort loop; group positions — and therefore the
+/// half-integer average ranks — are identical to sorting the concatenation), and the
+/// within-group ranks are reused from the precompute. Ranks are SCATTERED to original
+/// positions through `perm`, so every downstream array and every summation runs in
+/// the same original-index order as [`brunnermunzel`] — BYTE-IDENTICAL output.
+fn brunnermunzel_presorted(xs: &BmPresorted, ys: &BmPresorted) -> TtestResult {
+    let nx = xs.sorted.len();
+    let ny = ys.sorted.len();
+    if nx < 2 || ny < 2 || xs.has_nan || ys.has_nan {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+    let nxf = nx as f64;
+    let nyf = ny as f64;
+
+    let mut ranks = vec![0.0; nx + ny];
+    let (mut i, mut j, mut pos) = (0usize, 0usize, 0usize);
+    while i < nx || j < ny {
+        let head = if j >= ny || (i < nx && xs.sorted[i].total_cmp(&ys.sorted[j]).is_le()) {
+            xs.sorted[i]
+        } else {
+            ys.sorted[j]
+        };
+        let (gi0, gj0) = (i, j);
+        while i < nx && xs.sorted[i] == head {
+            i += 1;
+        }
+        while j < ny && ys.sorted[j] == head {
+            j += 1;
+        }
+        let gsize = (i - gi0) + (j - gj0);
+        debug_assert!(gsize > 0, "merge tie group must be non-empty");
+        let avg = (pos + (pos + gsize) + 1) as f64 / 2.0;
+        for t in gi0..i {
+            ranks[xs.perm[t]] = avg;
+        }
+        for t in gj0..j {
+            ranks[nx + ys.perm[t]] = avg;
+        }
+        pos += gsize;
+    }
+
+    let mean_rx: f64 = ranks[..nx].iter().sum::<f64>() / nxf;
+    let mean_ry: f64 = ranks[nx..].iter().sum::<f64>() / nyf;
+
+    let sx2: f64 = ranks[..nx]
+        .iter()
+        .zip(xs.within.iter())
+        .map(|(&ri, &rwi)| (ri - rwi - mean_rx + (nxf + 1.0) / 2.0).powi(2))
+        .sum::<f64>()
+        / (nxf - 1.0);
+    let sy2: f64 = ranks[nx..]
+        .iter()
+        .zip(ys.within.iter())
+        .map(|(&ri, &rwi)| (ri - rwi - mean_ry + (nyf + 1.0) / 2.0).powi(2))
+        .sum::<f64>()
+        / (nyf - 1.0);
+
+    let nf = nxf + nyf;
+    let rank_delta = mean_ry - mean_rx;
+    let denom = (nxf * sx2 + nyf * sy2).sqrt();
+    let (w, df, pvalue) = if denom > 0.0 {
+        let w = nxf * nyf * rank_delta / (nf * denom);
+        let df_num = (nxf * sx2 + nyf * sy2).powi(2);
+        let df_den = (nxf * sx2).powi(2) / (nxf - 1.0) + (nyf * sy2).powi(2) / (nyf - 1.0);
+        let df = if df_den > 0.0 {
+            df_num / df_den
+        } else {
+            f64::NAN
+        };
+        let pvalue = if df.is_finite() {
+            let t_dist = StudentT::new(df);
+            2.0 * (1.0 - t_dist.cdf(w.abs()))
+        } else {
+            f64::NAN
+        };
+        (w, df, pvalue)
+    } else {
+        let w = if rank_delta > 0.0 {
+            f64::INFINITY
+        } else if rank_delta < 0.0 {
+            f64::NEG_INFINITY
+        } else {
+            f64::NAN
+        };
+        (w, f64::NAN, f64::NAN)
+    };
+
+    TtestResult {
+        statistic: w,
+        pvalue: pvalue.clamp(0.0, 1.0),
+        df,
+    }
+}
+
 /// All-pairs Brunner–Munzel test over `samples`. Returns `(statistic, pvalue)` matrices, both `m × m`,
 /// with `out.0[i][j] == brunnermunzel(samples[i], samples[j]).statistic` (the signed W — ANTI-symmetric)
 /// and `out.1[i][j] ==` its p-value. SciPy has NO vectorized all-pairs form — users loop
 /// `scipy.stats.brunnermunzel` in Python; this runs every ordered pair in parallel.
+///
+/// Each per-pair [`brunnermunzel`] pays THREE sorts (concatenated pool + two within-group);
+/// all three are query-independent, so the matrix presorts and within-ranks each sample
+/// ONCE and merge-ranks each pair in O(nx+ny) via [`brunnermunzel_presorted`] —
+/// BYTE-IDENTICAL (ranks scattered to original positions; identical summation order).
 pub fn brunnermunzel_matrix(
     samples: &[Vec<f64>],
 ) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), StatsError> {
-    all_pairs_two_full_matrices(samples, |a, b| {
-        let r = brunnermunzel(a, b);
+    if BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return all_pairs_two_full_matrices(samples, |a, b| {
+            let r = brunnermunzel(a, b);
+            (r.statistic, r.pvalue)
+        });
+    }
+    let presorted: Vec<BmPresorted> = samples.iter().map(|s| bm_presort(s)).collect();
+    let m = samples.len();
+    if m == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let n = samples[0].len();
+    if samples.iter().any(|v| v.len() != n) {
+        return Err(StatsError::InvalidArgument(
+            "all variables must have the same length".to_string(),
+        ));
+    }
+    all_pairs_two_full_matrices_by_index(m, |i, j| {
+        let r = brunnermunzel_presorted(&presorted[i], &presorted[j]);
         (r.statistic, r.pvalue)
     })
 }
@@ -70815,6 +71005,57 @@ mod tests {
         let result = ansari(&[], &[1.0, 2.0]);
         assert!(result.statistic.is_nan());
         assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
+    fn brunnermunzel_matrix_presort_is_byte_identical() {
+        // The presort-once merge kernel must reproduce the per-pair path bit for
+        // bit: ranks scatter to original positions and every summation runs in
+        // original-index order. Fixtures cover heavy ties (within and across
+        // samples), negatives, ±0.0 (total_cmp-sorted, ==-tied pooled groups vs
+        // total_cmp-tied within groups), a too-short sample, and a NaN sample.
+        let samples = vec![
+            vec![1.0, 2.0, 2.0, 3.0, -1.5, 2.0],
+            vec![2.0, 2.0, 0.5, -1.5, 7.25, 2.0],
+            vec![-0.0, 0.0, 0.0, -0.0, 1.0, -3.0],
+            vec![4.0, 4.0, 4.0, 4.0, 4.0, 4.0],
+            vec![0.25, -8.0, 3.5, 2.0, 2.0, 9.0],
+        ];
+        let (fast_s, fast_p) = brunnermunzel_matrix(&samples).expect("presort matrix");
+        BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (slow_s, slow_p) = brunnermunzel_matrix(&samples).expect("per-pair matrix");
+        BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+        for i in 0..samples.len() {
+            for j in 0..samples.len() {
+                assert_eq!(
+                    fast_s[i][j].to_bits(),
+                    slow_s[i][j].to_bits(),
+                    "statistic bits differ at ({i},{j})"
+                );
+                assert_eq!(
+                    fast_p[i][j].to_bits(),
+                    slow_p[i][j].to_bits(),
+                    "pvalue bits differ at ({i},{j})"
+                );
+            }
+        }
+
+        // NaN sample routes to the same all-NaN row/column as the per-pair path.
+        let with_nan = vec![
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![f64::NAN, 1.0, 2.0, 3.0],
+            vec![0.5, 0.5, 2.5, 2.5],
+        ];
+        let (fs, fp) = brunnermunzel_matrix(&with_nan).expect("presort with NaN");
+        BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (ss, sp) = brunnermunzel_matrix(&with_nan).expect("per-pair with NaN");
+        BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+        for i in 0..with_nan.len() {
+            for j in 0..with_nan.len() {
+                assert_eq!(fs[i][j].to_bits(), ss[i][j].to_bits(), "NaN stat ({i},{j})");
+                assert_eq!(fp[i][j].to_bits(), sp[i][j].to_bits(), "NaN pval ({i},{j})");
+            }
+        }
     }
 
     #[test]

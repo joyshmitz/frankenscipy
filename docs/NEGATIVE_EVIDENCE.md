@@ -23274,3 +23274,32 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - NEXT: fresh profile at the new operating point before choosing; pool decision (vndri) still the n=1000
   ceiling-breaker; the sub-floor inventory (jc-block stash, gate sweeps) stays parked pending a cycles-gate
   harness (bead-worthy: port the perf-stat cycles gate from d97283534 into the wall benches).
+
+## 2026-07-23 - CopperFalcon (cc) - KEEP (byte-identical): brunnermunzel_matrix presort-once merge kernel — 6.96x @m=120,n=3000
+
+- Domain lever from the `perf_stats_allpairs_presort_once` AUDIT list (memory named brunnermunzel unaudited;
+  the sibling `ranksums_matrix` landed the identical pattern at 2.57x, bb151dcb7). NEGATIVE-EVIDENCE: no
+  brunnermunzel-presort prior in either ledger or git log; the `*_matrix` re-sort-per-pair antipattern is a
+  banked KEEP vein, not a rejected one.
+- PROFILE: each per-pair `brunnermunzel(a,b)` pays THREE sorts — the concatenated pool sort (for pooled
+  average ranks) plus two within-group sorts (`rank_within(x)`, `rank_within(y)`). All three are
+  query-INDEPENDENT of the other sample, so the all-pairs matrix re-sorted every sample ~m times. At m=120
+  that is ~360 redundant sorts per sample.
+- ONE LEVER: `bm_presort(sample)` computes the sorted copy + permutation + within-group average ranks ONCE
+  per sample; `brunnermunzel_presorted(xs, ys)` merges the two pre-sorted arrays in O(nx+ny) (two-pointer,
+  tie groups keyed by `==` exactly as the concatenated-sort loop) and REUSES the cached within-ranks. Ranks
+  scatter to ORIGINAL positions via the stored permutation, so every downstream array and every summation
+  runs in the same original-index order as the per-pair path. Added `all_pairs_two_full_matrices_by_index`
+  (index closure) so the kernel can reach per-sample precompute a slice-only closure cannot.
+- BYTE-IDENTICAL: `brunnermunzel_matrix_presort_is_byte_identical` asserts stat AND pvalue `to_bits`-equal
+  across a 5-sample fixture (heavy within/cross ties, negatives, ±0.0, too-short sample) AND a NaN-sample
+  fixture (routes to the same all-NaN row/col); the bench re-verifies over all 14,400 ordered pairs at
+  m=120. `BRUNNERMUNZEL_MATRIX_PRESORT_DISABLE` for same-binary A/B. Single `brunnermunzel()` untouched; NaN
+  anywhere in a sample → that sample's pairs all NaN, matching the per-pair guard.
+- MEASUREMENT (thinkstation1, same-binary A/B, criterion 100 samples): per-pair **199.72 ms**
+  [197.84, 201.58] vs presort **28.685 ms** [28.377, 29.006] ⇒ **6.96x**, CVs ~0.9%/1.1% (< 5%), CIs
+  non-overlapping by ~6x (null control decisive). Artifact
+  `tests/artifacts/perf/2026-07-23-brunnermunzel-presort/bench.txt`. Conformance: fsci-stats lib **2044/0**
+  (incl. `brunnermunzel_tied_samples_match_scipy_oracle`), ubs 0 critical.
+- Disposition: KEEP (production defaults to presort; DISABLE flag is A/B-only). Bead: closes the
+  brunnermunzel arm of the presort-once AUDIT.
