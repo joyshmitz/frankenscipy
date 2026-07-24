@@ -4,6 +4,26 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-23 - frankenscipy-8l8r1.166 - REJECT: segmented cubic cursor (CV gate failed)
+
+- Both performance ledgers and recent interpolate history were screened before source work. The sorted finite
+  cubic/Akima/Hermite cursor family was already closed, but repeated ascending sweeps still fell back to one binary
+  search per query. An untouched-current `perf record` on the 1024-knot, 100,000-query, eight-sweep fixture put
+  **92.69%** of cycles in `CubicSplineStandalone::eval` and only **3.01%** in output collection, admitting one
+  bounded-run cursor lever. Two prior KDE buffer/unroll rejects and every dense-linalg kernel remained untouched.
+- The candidate reset the existing exact interval cursor at no more than seven descending boundaries, capped the
+  batch at eight ascending runs, and retained binary search when a worst-case comparison bound favored it. Before
+  timing, the same binary reported **0 bit mismatches** against the original path for cubic, Akima, and Hermite results.
+  The scored strict-remote run reserved all six slots on `vmi1264463`, pinned the benchmark process to CPU 2, and
+  interleaved 13 `original/candidate/original` rounds with an A/A null control.
+- The signal was large but inadmissible: original p50 **2.690455 ms**, candidate p50 **0.676031 ms**, paired
+  speedup p05/p50/p95 **3.367662x / 3.819236x / 5.734685x**, and null p95 **1.993881x**. Mandatory variability
+  gates failed badly: original/candidate/null CV were **29.965% / 13.091% / 30.156%**, all above **5%**.
+- **Decision: REJECT / NO-SHIP.** Source, unit-test, and measurement-harness changes were restored exactly.
+  Retry only on an alias-valid, pressure-healthy worker with all slots reserved and an isolated CPU where the same
+  13-round full-result probe reports original, candidate, and null CV all below **5%**, with speedup p05 above
+  null p95 and the cubic/Akima/Hermite exact-bit proof still green.
+
 ## 2026-07-23 - frankenscipy-8l8r1.165 retry - BLOCKED: exclusive RCH timing admission
 
 - The existing retry predicate was checked before touching source: the fleet queue was initially empty, and the
