@@ -4,6 +4,30 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-23 - frankenscipy-8l8r1.169 - BLOCKER: exclusive BDF retry profile admission
+
+- Both negative ledgers and recent Git history were screened before selecting a lever. The eight scoped ready
+  perf beads were all false-open completed work and were closed against their landed commits: Brandes scratch
+  hoisting (`0bf4e7866`), borrowed clustering neighbors (`229231307`), `NdBSpline::evaluate_many`
+  (`427f1b72f`), in-place `sigmaclip` retention (`29537b138`), Erlang/HalfGenNorm/DoubleGamma batch normalizer
+  hoists (`6fc2a12b0`/`700801660`/`bc52cc023`), and the distribution batch benchmark/evidence
+  (`55565155b`/`504c5d156`). No completed family was reimplemented or retimed.
+- The next highest-EV unresolved frontier was the banked BDF exact-diagonal Newton solve. Its prior 17-19x signal
+  is not KEEP evidence: the explicit retry predicate requires an untouched-current profile and a 13-round
+  same-binary A/candidate/A run on a named, CPU-pinned worker holding all of its slots, with dense, candidate, and
+  null CV all below **5%**. No candidate reconstruction was permitted before that admission.
+- Three fully idle named workers failed closed before sync or execution:
+  `vmi1152480` reported **`alias_wrong_target:/data`**, while `hz2` and `vmi1293453` reported
+  **`alias_wrong_target:/data/tmp`**. The known alias-valid `vmi1149989` route requested all eight slots and
+  remained queue position 1 for about four minutes. When its incumbent two-slot clippy job finished, the scheduler
+  admitted a smaller two-slot pandas test instead; the all-slot request ended with
+  **`RCH-I001 ... selection error: queue_timeout`**.
+- **Decision: LEDGERED BLOCKER / NO-SHIP.** No current profile, timing result, candidate source, test, or benchmark
+  edit was produced, and no local/shared-worker fallback was substituted. Retry only after the `/data` and
+  `/data/tmp` worker aliases are repaired, or the named-worker scheduler can atomically reserve every slot for the
+  queued job. Then refresh the untouched profile before reconstructing the candidate and require the full CV,
+  null-floor, exact-`SolveIvpResult`, and focused SciPy-conformance gates.
+
 ## 2026-07-23 - frankenscipy-8l8r1.168 - REJECT: N-D KDE four-query tile (CV and null-floor gates failed)
 
 - Both negative ledgers and recent stats history were screened before source work. The shipped SIMD-exp and

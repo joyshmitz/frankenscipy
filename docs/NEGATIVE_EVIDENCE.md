@@ -6,6 +6,25 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-23 - cod / GentlePond - BLOCKER: BDF exact-diagonal retry cannot obtain exclusive profile worker
+
+- **LEDGER/LOG SCREEN:** all eight scoped ready perf beads were stale completed work and were closed against
+  landed commits: sparse Brandes scratch (`0bf4e7866`), sparse clustering-neighbor borrowing (`229231307`),
+  `NdBSpline::evaluate_many` (`427f1b72f`), `sigmaclip` retain (`29537b138`), three distribution batch hoists
+  (`6fc2a12b0`/`700801660`/`bc52cc023`), and their benchmark/evidence (`55565155b`/`504c5d156`). The run then
+  selected the unresolved BDF exact-diagonal retry without touching its source.
+- **FAIL-CLOSED ROUTING:** the existing retry predicate requires an untouched profile plus all-slot, CPU-pinned,
+  same-binary A/candidate/A/null proof. Three idle workers were inadmissible before execution:
+  `vmi1152480` failed **`alias_wrong_target:/data`**; `hz2` and `vmi1293453` failed
+  **`alias_wrong_target:/data/tmp`**. An all-eight-slot request on known-valid `vmi1149989` stayed first in the
+  queue, but a smaller pandas job was admitted after the incumbent clippy job ended and the request failed
+  **`RCH-I001 ... selection error: queue_timeout`**.
+- **DISPOSITION:** LEDGERED BLOCKER / NO-SHIP, bead `frankenscipy-8l8r1.169`. No profile, candidate, benchmark,
+  test, or timed result exists from this attempt; no local or partial-worker substitute was used. Retry only when
+  path aliases are repaired or named-worker scheduling reserves all slots atomically. The subsequent run must
+  reprofile untouched current code, then clear dense/candidate/null CV **<5%**, candidate p05 above null p95,
+  exact full `SolveIvpResult`, and focused SciPy BDF conformance before KEEP.
+
 ## 2026-07-23 - cod / GentlePond - REJECT: N-D KDE four-query tile (CV >5%, IN-FLOOR)
 
 - **SCREEN/PROFILE:** the shipped N-D KDE SIMD-exp and dimension-major layout families and the rejected
