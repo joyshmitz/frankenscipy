@@ -6,6 +6,26 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-23 - cod / GentlePond - REJECT: N-D KDE four-query tile (CV >5%, IN-FLOOR)
+
+- **SCREEN/PROFILE:** the shipped N-D KDE SIMD-exp and dimension-major layout families and the rejected
+  query-buffer/dimension-3 families were screened first. An untouched strict-remote profile on `vmi1264463`
+  captured **39,231 cycle samples, zero lost** and put **99.27%** self cycles in
+  `GaussianKdeNd::evaluate`, admitting one different sample-load-reuse lever.
+- **ONE LEVER / EXACTNESS:** evaluate four queries together, loading each dimension-major eight-sample block once
+  while preserving every query's whitening, dimension/sample traversal, SIMD exponential, lane reduction, scalar
+  tail, and normalization order. The same binary compared the public `evaluate_many` outputs with `to_bits()`
+  before both probes: **exact bits passed**.
+- **STRICT A/B/NULL:** all six worker slots reserved, runner pinned to CPU 2, 13 original/candidate/original
+  rounds. With batch 16, original/candidate/null CV were **11.703%/10.789%/24.508%**, speedup p05/p50/p95
+  **0.977800/1.213459/1.571397x**, and null p95 **1.274739x**. A single batch-64 retry on the same route yielded
+  CV **11.134%/7.854%/9.321%**, speedup **0.966652/1.196366/1.502669x**, and null p95 **1.068207x**. Both runs
+  failed the mandatory CV ceiling; candidate p05 also remained inside the A/A floor.
+- **DISPOSITION:** REJECT / NO-SHIP, bead `frankenscipy-8l8r1.168`. Candidate source, proof, toggle, and harness
+  were restored exactly. Retry only on frequency-stable isolation where all three CVs are below **5%**, candidate
+  p05 clears null p95, exact bits still pass, and focused SciPy KDE conformance passes. This is the third
+  consecutive frontier REJECT after `.166` and `.167`; stop predicate reached.
+
 ## 2026-07-23 - cod / GentlePond - REJECT: trust-exact SPD Cholesky solve (CV >5%)
 
 - **SCREEN/PROFILE:** the earlier folded-shift and flat-augmented keeps were closed before this attempt. An untouched

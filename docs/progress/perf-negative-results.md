@@ -4,6 +4,36 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-23 - frankenscipy-8l8r1.168 - REJECT: N-D KDE four-query tile (CV and null-floor gates failed)
+
+- Both negative ledgers and recent stats history were screened before source work. The shipped SIMD-exp and
+  dimension-major layout families were closed, while prior query-whitening-buffer reuse and dimension-3
+  specialization attempts were already measured regressions. An untouched strict-remote profile of the current
+  dimension-3, 2,000-sample, 5,000-query path on named worker `vmi1264463` captured **39,231 cycle samples, zero
+  lost**, and attributed **99.27%** self cycles to `GaussianKdeNd::evaluate`. That admitted one distinct
+  data-reuse lever.
+- The candidate evaluated four queries together so every dimension-major eight-sample SIMD block was loaded once
+  for four independent distance streams. Each query retained the original whitening, dimension order, sample-block
+  order, SIMD exponential, lane reduction, scalar tail, and final normalization. The same-binary probe asserted
+  every public `evaluate_many` output with `to_bits()` before timing: **exact bits passed**.
+- The first all-six-slot, CPU-2-pinned, 13-round original/candidate/original probe used 16 complete
+  `evaluate_many` calls per arm. Original p50/p95/p99 were
+  **277.220390/330.310720/337.519466 ms**, CV **11.703%**; candidate
+  **215.697156/271.099339/280.464684 ms**, CV **10.789%**. Speedup p05/p50/p95 was
+  **0.977800/1.213459/1.571397x** versus null p95 **1.274739x** and null CV **24.508%**. Both stability and
+  floor separation failed.
+- A single measurement-only retry quadrupled batching to 64 calls on the same named worker, runner CPU, binary
+  route, fixture, and 13-round ordering. Original p50/p95/p99 were
+  **1122.165260/1293.345082/1379.534641 ms**, CV **11.134%**; candidate
+  **930.001512/1007.177107/1167.268942 ms**, CV **7.854%**. Speedup p05/p50/p95 was
+  **0.966652/1.196366/1.502669x** versus null p95 **1.068207x** and null CV **9.321%**. Every CV still exceeded
+  the mandatory **5%** ceiling and candidate p05 remained inside the null floor.
+- **Decision: REJECT / NO-SHIP.** Candidate source, exact-bit proof, toggle, and benchmark harness were restored
+  exactly; no `fsci-stats` source remains changed. Retry only on a frequency-stable isolated worker/topology where
+  the same interleaved public-path probe reports original, candidate, and null CV all below **5%**, candidate
+  speedup p05 above null p95, exact-bit identity, and focused SciPy KDE conformance. This is the third consecutive
+  frontier REJECT after `.166` and `.167`, satisfying the campaign stop predicate.
+
 ## 2026-07-23 - frankenscipy-8l8r1.167 - REJECT: trust-exact SPD Cholesky solve (CV gate failed)
 
 - Both negative ledgers and recent opt history were screened before source work. The folded diagonal-copy and flat
