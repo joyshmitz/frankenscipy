@@ -23608,3 +23608,33 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   vndri-gated (owner). NOTE: agent-mail coordination DB is corrupt this session (needs supervised
   `am service restart` + `am doctor reconstruct`); this landing is in fsci-linalg (my exclusive lane, cod owns
   domain), committed with explicit paths.
+
+## 2026-07-23 - CopperFalcon (cc) - REJECT (feasibility, code-backed): cholesky pack-fusion (eliminate the L21 A-copy) is INEXPRESSIBLE in safe Rust
+
+- **The lever (first gate-ready dense candidate).** The per-panel SYRK packs L21 twice via
+  `copy_l21_and_pack_transpose_into`: (1) a contiguous row-major `l21` (the A operand) and (2) an 8-wide
+  transposed `l21t` (the B operand). Profile puts this pack at ~3-4% of the blocked path. "Pack-fusion" =
+  drop the `l21` A-copy and read A straight from the trailing buffer / from `l21t`.
+- **Why it's BLOCKED (two independent walls):**
+  1. **Borrow-checker / forbid(unsafe).** The kernel gets `trailing = &mut lower[kb*n..]`, which is rows
+     `[kb..n]` of ALL columns — and L21 lives at cols `[k..kb]` of those SAME rows. So L21 ⊂ the `&mut trailing`
+     memory; reading A directly from it while updating A22 (cols `[kb..n]`) aliases a `&mut`, needing `unsafe`
+     (workspace `#![forbid(unsafe_code)]`). L21 and A22 are column-INTERLEAVED per row, so no `split_at_mut`
+     separates them. The `l21` copy IS the aliasing-avoidance mechanism, not removable overhead.
+  2. **Tail needs the contiguous layout.** Even reading A from the separate `l21t` (which DOES contain A, at
+     `l21t[(ii/8)*nb*8 + (ii%8) + p*8]`, strided-by-8) fails because the near-diagonal `cholesky_syrk_row_tail`
+     reads whole L21 rows as CONTIGUOUS slices into `simd_dot`/`simd_dot4` (`Simd::from_slice`). `l21t` is
+     strided; feeding the tail from it needs a gather-dot that regresses the O(ii)-per-row diagonal triangle.
+- **VERDICT.** The `l21` copy is irreducible in safe Rust (main-kernel aliasing + tail contiguous SIMD dot).
+  Same class as the `vndri` "safe-Rust pool inexpressible" blocker. This is REJECT #1 of the dense-lane cycle;
+  it did not need the gate (feasibility, not measurement) — but it retires the "pack fusion" line the profile
+  suggested. Reopens only if `forbid(unsafe)` is relaxed for the kernel (owner call) or the trailing layout is
+  restructured so L21 is a separate allocation (a bigger data-layout change, likely net-negative for the SYRK's
+  A22 locality).
+- **DENSE n=1000 KERNEL LANE — COMPREHENSIVE BLOCKER (3 fresh confirmations this session).** (a) fresh
+  Threadripper profile: BALANCED near-optimal kernels, no fat frame; (b) cycles-gate BUILT+validated (1518b0162)
+  — makes any future EXPRESSIBLE sub-floor lever measurable; (c) pack-fusion feasibility-REJECT (this entry).
+  Remaining levers are ALL blocked: threading residual → `vndri` pool (owner); pack-fusion → forbid(unsafe)
+  (owner); scratch-hoist → page-fault-attribution wash; jc/NC cache-block → 128 MiB-L3 absorbs the B-stream.
+  The kernel arithmetic is done (n=1000 ~1.21x vs 1-thread scipy; fsci BEATS scipy-default at n≥2048). No
+  expressible safe-Rust kernel lever remains above the (now cycles-measurable) floor without an owner decision.
