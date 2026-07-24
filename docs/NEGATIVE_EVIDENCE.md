@@ -23503,3 +23503,45 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   Every OTHER measurable surface fsci is competitive-to-winning. The measurement gap-hunt is now EXHAUSTED as
   a lever-finder: it has mapped the whole landscape and the only remaining real wins need the heavy dense
   structural work. DISPOSITION: no lever (sparse fsci-competitive); throwaway bench stashed.
+
+## 2026-07-23 - CopperFalcon (cc) - REJECT (measured 0.5-0.81x, mechanism-explained): WY/dsytrd BLOCKED symmetric tridiagonalization is SLOWER than the fused unblocked reduction — REFUTES the "WY-blocked reduction closes the dense gap" prior
+
+- **Built and validated a full blocked dsytrd/dlatrd symmetric tridiagonalization** (`tridiagonalize_symmetric_blocked`,
+  pure safe Rust): per-panel `nb` Householder reflectors computed via a maintained `W` matrix (dlatrd: symmetric
+  matvec against the trailing block + rank-2 corrections for the deferred panel reflectors), then ONE batched
+  rank-2k `A -= V·Wᵀ + W·Vᵀ` BLAS-3 sweep over the trailing block per panel. Column-major-in-k panel layout for
+  the per-column loops + a per-panel transpose to row-major-in-k for the rank-2k inner reduction (both hot loops
+  unit-stride). **CORRECT**: eigenvalues match the unblocked reduction to **1e-11** across n∈{3..257}×nb∈{1..32}
+  (`blocked_tridiag_matches_unblocked_eigenvalues`, kept green).
+- **MEASURED SLOWER at every size/panel** (same-box release, best-of-3, `compact_wy_symmetric_matrix`):
+  | n | nb=8 | nb=16 | nb=32 | nb=64 |
+  |---|---|---|---|---|
+  | 512  | — | — | 0.91x | 0.79x |
+  | 1024 | 0.81x | 0.80x | 0.70x | 0.76x |
+  | 1500 | 0.51x | 0.55x | 0.51x | 0.63x |
+  Never ≥1.0x; **degrades with n** (cache signature).
+- **MECHANISM (why blocking does NOT help this reduction):** (1) the per-column symmetric matvec — ~HALF the
+  reduction flops — is **irreducibly BLAS-2**: reflector k+1 depends on the trailing matrix updated by reflector
+  k, so the matvec CANNOT be aggregated into a BLAS-3 op (unlike QR/LU, and unlike a *replay* of known
+  reflectors). (2) The only BLAS-3 part is the deferred trailing rank-2k, but its saving is offset by: the panel
+  block NOT shrinking within a panel → each of `nb` column-matvecs re-reads a large non-reduced block
+  (cache-thrash, worse as n outgrows L2); panel bookkeeping (bring-up-to-date + matvec correction, O(nb·n²));
+  and losing the unblocked kernel's matvec+update **cache fusion** (`apply_symmetric_householder_trailing_rank2_lower_storage`
+  reads the trailing block once and updates it while hot).
+- **CORRECTS THE PRIOR:** the `compact_wy_full_to_band_replay` probe's **1.9x** (which seeded
+  "WY-blocked reduction is THE unifying dense lever, vndri-independent, closes eigh+svd+qr" — see the entry
+  above and `perf_linalg_eigh_divide_conquer_wall`) measured the WRONG baseline: blocked-**apply** vs un-fused
+  scalar **RE-application** of pre-computed reflectors, NOT vs the fused reduction. Against the real fused
+  reduction the blocking LOSES. So the WY-blocking rewrite (`2o0vp`) is **NOT** the fix for eigh/svd/qr and is
+  **NOT vndri-independent**.
+- **REDIRECT — the actual dense-eigh levers** (the matvec half dominates and can't be blocked away): a
+  **SIMD-vectorized symmetric matvec (dsymv)** micro-kernel (speeds the BLAS-2 half — the real bottleneck), and
+  the **divide-and-conquer (Cuppen) tridiagonal eigensolver** for the eigenvector stage. ONLY retry condition
+  for the blocked reduction itself: parallelize the batched rank-2k sweep (d) on a **persistent pool (vndri)** —
+  (d) is the sole large parallelizable BLAS-3 op, whereas the unblocked per-step rank-2 updates hit the
+  per-step spawn wall; a parallel (d) on top of blocking could beat serial unblocked. Until vndri, do NOT
+  re-chase serial WY-blocked reduction.
+- **DISPOSITION:** validated-correct `tridiagonalize_symmetric_blocked` kept as `#[allow(dead_code)]`
+  infrastructure (doc-comment carries this verdict) + correctness test green; NOT wired into production; perf
+  reproducer stripped (numbers here). `2o0vp` re-scoped: serial WY-blocking is dead; the bead's real content is
+  SIMD-dsymv + D&C (or vndri-parallel-(d)).

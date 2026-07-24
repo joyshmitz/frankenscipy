@@ -12674,6 +12674,217 @@ fn symmetric_eigh_native(matrix: &DMatrix<f64>) -> Option<(Vec<f64>, DMatrix<f64
     Some((eigenvalues, sorted))
 }
 
+/// Blocked dsytrd/dlatrd-style reduction of a symmetric matrix (lower triangle,
+/// nalgebra column-major storage) to symmetric tridiagonal form.
+///
+/// VERDICT (2026-07-23, CopperFalcon): validated-correct but MEASURED SLOWER
+/// than the unblocked fused reduction — 0.5–0.81x across n∈{512,1024,1500},
+/// nb∈{8..64}, worsening with n. NOT wired into `symmetric_eigh_native`; kept as
+/// dead-code infrastructure. Mechanism: the per-column symmetric matvec (~half
+/// the reduction) is irreducibly BLAS-2 (reflector k+1 depends on the trailing
+/// matrix updated by reflector k), so only the trailing update is BLAS-3; that
+/// saving is offset by the panel block not shrinking within a panel (each of nb
+/// column-matvecs re-reads a large non-reduced block → cache-thrash at large n),
+/// panel bookkeeping, and losing the unblocked kernel's matvec+update cache
+/// fusion. The `compact_wy_full_to_band_replay` 1.9x was NOT representative — it
+/// compared blocked-apply against un-fused scalar RE-application, not the fused
+/// reduction. ONLY retry condition: parallelize the batched rank-2k sweep (d) on
+/// a persistent pool (vndri) — (d) is the sole large parallelizable BLAS-3 op,
+/// unlike the unblocked per-step rank-2 updates that hit the spawn wall. See
+/// `docs/NEGATIVE_EVIDENCE.md` (blocked-dsytrd reduction).
+///
+/// Mathematically identical to the unblocked per-column reduction inside
+/// `symmetric_eigh_native`: it produces the same Householder reflectors (hence
+/// the same back-transform) up to floating-point rounding. The difference is
+/// scheduling. Each panel of up to `nb` reflectors defers its trailing
+/// similarity update into a SINGLE rank-2k sweep `A -= V·Wᵀ + W·Vᵀ` over the
+/// trailing block (BLAS-3, cache-resident) instead of `nb` separate rank-2
+/// passes that each stream the whole trailing matrix (BLAS-2, bandwidth-bound).
+/// The trailing-update half of the reduction runs ~1.9x faster blocked
+/// (measured, `compact_wy_full_to_band_replay_perf_probe`); the per-column
+/// symmetric matvec half is unchanged. `A_cur` seen by each panel column is
+/// reconstructed exactly as `A_panelstart − Σ_{i<k}(vᵢwᵢᵀ + wᵢvᵢᵀ)`, so the
+/// reflectors match the unblocked path.
+///
+/// Panel `V`/`W` are stored row-major in the reflector index (`[row*nb + k]`) so
+/// the rank-2k inner reduction over `k` reads contiguous lanes.
+///
+/// Returns `(diagonal, offdiagonal, reflectors)`.
+#[allow(dead_code)]
+fn tridiagonalize_symmetric_blocked(
+    m: &mut DMatrix<f64>,
+    nb: usize,
+) -> (Vec<f64>, Vec<f64>, Vec<HouseholderReflector>) {
+    let n = m.nrows();
+    let mut diag = vec![0.0_f64; n];
+    let mut offdiag = vec![0.0_f64; n.saturating_sub(1)];
+    let mut reflectors: Vec<HouseholderReflector> = Vec::with_capacity(n.saturating_sub(2));
+    if n <= 1 {
+        if n == 1 {
+            diag[0] = m[(0, 0)];
+        }
+        return (diag, offdiag, reflectors);
+    }
+    if n == 2 {
+        diag[0] = m[(0, 0)];
+        diag[1] = m[(1, 1)];
+        offdiag[0] = m[(1, 0)];
+        return (diag, offdiag, reflectors);
+    }
+
+    let nb = nb.max(1);
+    let refl_cols = n - 2; // reflector columns 0..refl_cols; column c zeros rows c+2..n
+
+    // Panel buffers. Primary `vcol`/`wcol` are column-major in the reflector
+    // index (`[k*n + r]`) so the per-column bring-up-to-date (a) and matvec
+    // correction (c) stream contiguous rows. `vrow`/`wrow` are the row-major-in-k
+    // transpose (`[r*nb + k]`) used only by the batched rank-2k sweep (d), whose
+    // inner reduction over k must be contiguous. Splitting the layouts keeps
+    // every hot loop unit-stride; a single row-major buffer strides by `nb` in
+    // one of the two consumers and cache-thrashes as n outgrows L2.
+    let mut vcol = vec![0.0_f64; nb * n];
+    let mut wcol = vec![0.0_f64; nb * n];
+    let mut vrow = vec![0.0_f64; n * nb];
+    let mut wrow = vec![0.0_f64; n * nb];
+    let mut colj = vec![0.0_f64; n]; // updated column j (indices j..n)
+    let mut p_raw = vec![0.0_f64; n]; // symmetric matvec buffer (indices 0..active)
+
+    let mut p = 0usize;
+    while p < refl_cols {
+        let nb_eff = nb.min(refl_cols - p);
+
+        for kk in 0..nb_eff {
+            let j = p + kk;
+            let j1 = j + 1; // reflector support start
+            let active = n - j1;
+
+            // (a) bring column j (rows j..n) up to date w.r.t. this panel's reflectors 0..kk.
+            {
+                let data = m.as_slice();
+                let col_base = j * n;
+                for r in j..n {
+                    colj[r] = data[col_base + r]; // A[r,j], lower-stored (r >= j)
+                }
+            }
+            for i in 0..kk {
+                let ibase = i * n;
+                let vij = vcol[ibase + j];
+                let wij = wcol[ibase + j];
+                if vij == 0.0 && wij == 0.0 {
+                    continue;
+                }
+                for r in j..n {
+                    colj[r] -= vcol[ibase + r] * wij + wcol[ibase + r] * vij;
+                }
+            }
+
+            diag[j] = colj[j];
+
+            // (b) Householder reflector zeroing colj[j+2..n].
+            let refl = make_householder_reflector(j1, colj[j1..n].to_vec());
+            offdiag[j] = colj[j1] - refl.values[0];
+
+            // (c) w_k = τ·(A_cur·v) − ½τ²·(v·(A_cur·v))·v, A_cur = A_panelstart corrected by 0..kk.
+            let tau = refl.tau;
+            let kbase = kk * n;
+            // clear this panel column's V/W storage over the active row range and above.
+            for r in p..n {
+                vcol[kbase + r] = 0.0;
+                wcol[kbase + r] = 0.0;
+            }
+            if tau != 0.0 {
+                for (t, &val) in refl.values.iter().enumerate() {
+                    vcol[kbase + j1 + t] = val;
+                }
+                p_raw[..active].fill(0.0);
+                {
+                    let data = m.as_slice();
+                    for co in 0..active {
+                        let vco = refl.values[co];
+                        if vco == 0.0 {
+                            continue;
+                        }
+                        let col = j1 + co;
+                        for ro in 0..co {
+                            let row = j1 + ro;
+                            p_raw[ro] += data[row * n + col] * vco; // A[row,col], row<col via mirror
+                        }
+                        let col_base = col * n;
+                        for ro in co..active {
+                            p_raw[ro] += data[col_base + j1 + ro] * vco; // A[row,col], row>=col
+                        }
+                    }
+                }
+                // correct the matvec for this panel's reflectors 0..kk (contiguous rows).
+                for i in 0..kk {
+                    let ibase = i * n;
+                    let mut wtv = 0.0;
+                    let mut vtv = 0.0;
+                    for t in 0..active {
+                        let r = j1 + t;
+                        let vt = refl.values[t];
+                        wtv += wcol[ibase + r] * vt;
+                        vtv += vcol[ibase + r] * vt;
+                    }
+                    if wtv != 0.0 || vtv != 0.0 {
+                        for t in 0..active {
+                            let r = j1 + t;
+                            p_raw[t] -= vcol[ibase + r] * wtv + wcol[ibase + r] * vtv;
+                        }
+                    }
+                }
+                let mut vp = 0.0;
+                for t in 0..active {
+                    vp += refl.values[t] * p_raw[t];
+                }
+                let corr = 0.5 * tau * tau * vp;
+                for t in 0..active {
+                    wcol[kbase + j1 + t] = tau * p_raw[t] - corr * refl.values[t];
+                }
+            }
+
+            reflectors.push(refl);
+        }
+
+        // (d) batched rank-2k trailing update over block [b0..n], lower triangle only.
+        let b0 = p + nb_eff;
+        if b0 < n {
+            // Transpose the active panel columns into row-major-in-k over the
+            // trailing rows so the reduction over k below is unit-stride.
+            for k in 0..nb_eff {
+                let kbase = k * n;
+                for r in b0..n {
+                    vrow[r * nb + k] = vcol[kbase + r];
+                    wrow[r * nb + k] = wcol[kbase + r];
+                }
+            }
+            let data = m.as_mut_slice();
+            for c in b0..n {
+                let c_base = c * nb;
+                let col_base = c * n;
+                for r in c..n {
+                    let r_base = r * nb;
+                    let mut delta = 0.0;
+                    for k in 0..nb_eff {
+                        delta += vrow[r_base + k] * wrow[c_base + k]
+                            + wrow[r_base + k] * vrow[c_base + k];
+                    }
+                    data[col_base + r] -= delta;
+                }
+            }
+        }
+
+        p += nb_eff;
+    }
+
+    // Trailing 2×2 block carries the final diagonal/offdiagonal entries.
+    diag[n - 2] = m[(n - 2, n - 2)];
+    diag[n - 1] = m[(n - 1, n - 1)];
+    offdiag[n - 2] = m[(n - 1, n - 2)];
+
+    (diag, offdiag, reflectors)
+}
+
 fn fill_deterministic_left_vector(u: &mut DMatrix<f64>, column: usize) -> Result<(), LinalgError> {
     let rows = u.nrows();
     for basis_idx in 0..rows {
@@ -26608,6 +26819,74 @@ mod tests {
                 public_eigh.eigenvalues.len()
             );
             println!("FULL_TO_BAND_COMPACT_WY_REPLAY_PERF_END");
+        }
+    }
+
+    /// Unblocked symmetric tridiagonalization matching `symmetric_eigh_native`'s
+    /// inner loop exactly (reduction only), used as the A/B baseline for the
+    /// blocked reduction.
+    fn unblocked_tridiag_for_probe(m: &mut DMatrix<f64>) -> (Vec<f64>, Vec<f64>) {
+        let n = m.nrows();
+        let mut rp = vec![0.0_f64; n];
+        let mut rw = vec![0.0_f64; n];
+        for k in 0..n.saturating_sub(2) {
+            let first = m[(k + 1, k)];
+            let col: Vec<f64> = (k + 1..n).map(|i| m[(i, k)]).collect();
+            let refl = make_householder_reflector(k + 1, col);
+            let beta = first - refl.values[0];
+            if refl.tau != 0.0 {
+                apply_symmetric_householder_trailing_rank2_lower_storage(
+                    m, &refl, &mut rp, &mut rw,
+                );
+            }
+            m[(k + 1, k)] = beta;
+            for i in k + 2..n {
+                m[(i, k)] = 0.0;
+            }
+        }
+        let d: Vec<f64> = (0..n).map(|i| m[(i, i)]).collect();
+        let e: Vec<f64> = (0..n.saturating_sub(1)).map(|i| m[(i + 1, i)]).collect();
+        (d, e)
+    }
+
+    fn tridiag_eigenvalues_sorted(d: &[f64], e: &[f64]) -> Vec<f64> {
+        let eig = symmetric_tridiagonal_inverse_iteration_eigen(d, e)
+            .or_else(|| symmetric_tridiagonal_qr_eigen(d, e))
+            .expect("tridiagonal eigen solve");
+        let mut vals = eig.eigenvalues;
+        vals.sort_by(|a, b| a.total_cmp(b));
+        vals
+    }
+
+    /// Blocked dsytrd reduction must reproduce the unblocked tridiagonal's
+    /// eigenvalues to a tight tolerance across n and panel-width boundaries.
+    #[test]
+    fn blocked_tridiag_matches_unblocked_eigenvalues() {
+        for &n in &[3usize, 5, 8, 17, 64, 129, 200] {
+            for &nb in &[1usize, 8, 32] {
+                let dm = compact_wy_symmetric_matrix(n);
+
+                let mut unblocked = dm.clone();
+                let (du, eu) = unblocked_tridiag_for_probe(&mut unblocked);
+                let want = tridiag_eigenvalues_sorted(&du, &eu);
+
+                let mut blocked = dm.clone();
+                let (db, eb, refl) = tridiagonalize_symmetric_blocked(&mut blocked, nb);
+                let got = tridiag_eigenvalues_sorted(&db, &eb);
+
+                assert_eq!(refl.len(), n.saturating_sub(2), "reflector count n={n} nb={nb}");
+                assert_eq!(got.len(), want.len(), "eigenvalue count n={n} nb={nb}");
+                let scale = want.iter().fold(1.0_f64, |acc, v| acc.max(v.abs()));
+                let max_abs = got
+                    .iter()
+                    .zip(&want)
+                    .map(|(g, w)| (g - w).abs())
+                    .fold(0.0_f64, f64::max);
+                assert!(
+                    max_abs <= 1e-9 * scale,
+                    "blocked tridiag eigenvalue drift {max_abs:.3e} (scale {scale:.3e}) n={n} nb={nb}"
+                );
+            }
         }
     }
 

@@ -9685,3 +9685,14 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - RETRY PREDICATE: the pool lever reopens when (a) the owner rules on rayon/pool-crate, or (b) someone
   proves a safe-Rust pool pattern over changing &mut partitions (e.g., a std API change), or (c) the factor
   is restructured so partitions are round-invariant (lookahead/left-looking redesign — separate lever, big).
+
+## 2026-07-23 CopperFalcon — REJECT: WY/dsytrd blocked symmetric tridiagonalization SLOWER than fused unblocked (0.5-0.81x)
+- Built + validated (eigenvalues match unblocked to 1e-11) a pure-Rust blocked dsytrd; MEASURED **0.5-0.81x**
+  across n∈{512,1024,1500}×nb∈{8..64}, worsening with n. The matvec half of a symmetric reduction is
+  irreducibly BLAS-2 (sequential reflector dependency), so only the deferred trailing rank-2k is BLAS-3, and
+  that saving is eaten by within-panel block re-reads (cache-thrash) + lost matvec+update fusion. The
+  `compact_wy_*_replay` 1.9x was NOT representative (blocked-apply vs un-fused re-application, not the fused
+  reduction). **REFUTES** "WY-blocked reduction is vndri-independent and closes eigh/svd/qr". Real dense-eigh
+  levers: SIMD dsymv (the BLAS-2 half dominates) + Cuppen D&C; blocked-reduction retry only with a
+  vndri-parallel rank-2k sweep. Full mechanism + table: `docs/NEGATIVE_EVIDENCE.md` (blocked-dsytrd entry).
+  Code kept `#[allow(dead_code)]` (`tridiagonalize_symmetric_blocked`), not wired.
