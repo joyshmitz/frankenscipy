@@ -4,6 +4,24 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-23 - frankenscipy-8l8r1.165 retry - BLOCKED: exclusive RCH timing admission
+
+- The existing retry predicate was checked before touching source: the fleet queue was initially empty, and the
+  same exact-diagonal candidate and full-result A/B harness were reconstructed only after both ledgers and recent
+  history were screened again. The focused strict-remote BDF suite passed **16/16** on `hz1`, including the
+  SciPy-reference stiff solve and the conservation/stiffness cases. No dense-linalg kernel was touched.
+- No admissible timed result was produced. An all-eight-slot request on named worker `vmi1227854` was displaced
+  before admission by another eight-slot job. `vmi1167313` then failed closed on the hard
+  `alias_wrong_target:/data` preflight. A final all-six-slot `hz1` request used a native Cargo runner pinned to
+  CPU 2 and remained first in the queue, but the scheduler repeatedly admitted smaller jobs into the free slots;
+  it ultimately failed with **`RCH-I001 ... selection error: queue_timeout`**. No local Cargo fallback, shared-worker
+  timing, cross-worker comparison, or stale 17-19x signal was substituted.
+- **Decision: LEDGERED BLOCKER / NO-SHIP.** The candidate source and benchmark were restored exactly. Retry only
+  during a coordinated fleet quiet window where one alias-valid, pressure-healthy named worker grants all of its
+  slots before the probe starts, the benchmark process is pinned to one CPU, and the 13-round A/candidate/A run
+  reports dense, candidate, and null CV all below **5%**. The full `SolveIvpResult` exact assertion and focused
+  conformance gate must then pass again before KEEP.
+
 ## 2026-07-23 - frankenscipy-8l8r1.165 - SURFACED REJECT: BDF exact-diagonal structured Newton solve (CV gate failed)
 
 - Both ledgers and recent history were screened before source work. The BDF Newton allocation and streamed-norm
