@@ -4,6 +4,35 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-23 - frankenscipy-8l8r1.167 - REJECT: trust-exact SPD Cholesky solve (CV gate failed)
+
+- Both negative ledgers and recent opt history were screened before source work. The folded diagonal-copy and flat
+  augmented-storage families were already closed. An untouched strict-remote profile of 160 dimension-20
+  Rosenbrock solves on named worker `vmi1264463` captured **7,145 cycle samples, zero lost**, and attributed
+  **89.09%** self cycles to `solve_augmented_flat`; `solve_shifted_system` and
+  `trust_region_exact_step` were only **1.37%** and **0.76%**. That admitted a different algorithmic primitive.
+- The candidate used an O(n^3/3) lower Cholesky factor plus triangular solves for the curvature-safe BFGS Hessian
+  and `H + lambda I`, with the original pivoted Gauss-Jordan solver as both the same-binary control and a fallback
+  for non-positive or non-finite pivots. The direct SPD/fallback proof and all trust-prefixed `fsci-opt` tests passed
+  strict remote (**9/9**). The A/B harness also required identical success/status, minimizers within `1e-5`, and
+  objective values within `1e-10`; those checks passed.
+- The first all-six-slot, CPU-2-pinned, 13-round pivoted/Cholesky/pivoted probe used four complete solves per arm.
+  Pivoted p50/p95/p99 were **164.408766/196.613580/196.613580 ms**, CV **7.332%**; Cholesky
+  **108.706097/141.344222/141.344222 ms**, CV **8.431%**. Speedup p05/p50/p95 was
+  **1.279033/1.605095/1.856599x** versus null p95 **1.290508x** and null CV **19.846%**: both the CV gate and
+  floor separation failed, so this run was invalidated.
+- A predeclared measurement-only retry raised batching to 16 solves per arm on the same exclusive worker and
+  topology. Pivoted p50/p95/p99 were **745.070895/900.671102/900.671102 ms**, CV **6.764%**; Cholesky
+  **525.574996/651.896297/651.896297 ms**, CV **9.735%**. Speedup p05/p50/p95 was
+  **1.323646/1.467481/1.671032x**, now above null p95 **1.159658x**, but pivoted, candidate, and null CV
+  (**8.909%**) all remained above the mandatory **5%** ceiling. Criterion corroborated a large apparent signal,
+  but cannot override the strict gate.
+- **Decision: REJECT / NO-SHIP.** Candidate solver, unit proof, export, and benchmark harness were restored exactly;
+  no `fsci-opt` source remains changed. Retry only on a frequency-stable isolated worker/topology where the same
+  interleaved full-solve probe reports pivoted, Cholesky, and null CV all below **5%** and speedup p05 above null
+  p95, followed by strict SciPy trust-exact differential conformance. Do not cite the 1.47-1.61x median as a KEEP
+  before that predicate holds.
+
 ## 2026-07-23 - frankenscipy-8l8r1.166 - REJECT: segmented cubic cursor (CV gate failed)
 
 - Both performance ledgers and recent interpolate history were screened before source work. The sorted finite

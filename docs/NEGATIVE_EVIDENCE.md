@@ -6,6 +6,26 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-23 - cod / GentlePond - REJECT: trust-exact SPD Cholesky solve (CV >5%)
+
+- **SCREEN/PROFILE:** the earlier folded-shift and flat-augmented keeps were closed before this attempt. An untouched
+  strict-remote dimension-20 profile on `vmi1264463` captured **7,145 samples, zero lost**; the now-contiguous
+  pivoted Gauss-Jordan `solve_augmented_flat` held **89.09%** self cycles. This admitted one algorithmic factorization
+  lever rather than another storage edit.
+- **ONE LEVER:** use a safe-Rust lower Cholesky factor and forward/back substitution for the curvature-safe BFGS
+  systems, falling back to the current pivoted solver on a non-positive or non-finite factor pivot. A same-binary
+  toggle preserved the pivoted control. Direct SPD/fallback proof plus all trust-prefixed opt tests passed
+  strict remote (**9/9**), and the harness' success/status, `x <= 1e-5`, and objective `<= 1e-10` checks passed.
+- **STRICT A/B/NULL:** all six worker slots reserved, native runner pinned to CPU 2, 13
+  pivoted/Cholesky/pivoted rounds. Four-solve arms produced pivoted/Cholesky/null CV
+  **7.332%/8.431%/19.846%**, speedup p05/p50/p95 **1.279033/1.605095/1.856599x**, and null p95
+  **1.290508x**. A 16-solve-arm retry produced CV **6.764%/9.735%/8.909%** and speedup
+  **1.323646/1.467481/1.671032x** versus null p95 **1.159658x**. The second run clears the null floor but still
+  violates the mandatory CV ceiling; neither run is admissible KEEP evidence.
+- **DISPOSITION:** REJECT / NO-SHIP, bead `frankenscipy-8l8r1.167`. All candidate source, proof, export, and harness
+  edits were restored exactly. Retry only with frequency-stable isolation where both arms and null have CV below
+  **5%**, candidate p05 clears null p95, and strict trust-exact SciPy differential conformance passes.
+
 ## 2026-07-22 - cod / BlackThrush - KEEP (bit-identical): contiguous trust-exact augmented solve - 1.10-1.18x
 
 - **LEDGER/LOG SCREEN:** the 2026-07-16 trust-exact folded-shift keep closed the redundant
