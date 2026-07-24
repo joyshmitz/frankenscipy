@@ -4,6 +4,29 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-24 - frankenscipy-8l8r1.170 - BLOCKER: atomic full-slot BDF admission still unavailable
+
+- Both negative ledgers and recent domain history were screened again before source work. No ready non-dense
+  frontier bead remained under the epic, and no `fsci-integrate` BDF source had changed since the `.165` candidate
+  was restored. The banked exact-diagonal Newton solve therefore remained the highest-EV unresolved lever, subject
+  to its existing predicate: profile untouched current code only after a named, pressure-healthy, alias-valid
+  worker grants every slot; reconstruct no candidate before that admission.
+- Current fleet state still left only `vmi1149989` as a usable eight-slot route. The other idle eight-slot routes
+  were either already proven alias-invalid (`vmi1152480`, `hz2`) or reported critical pressure (`ovh-a`), while
+  `vmi1153651` and `vmi1227854` were shared. A clean-`HEAD` remote-required request targeted `vmi1149989`, requested
+  all eight slots, disabled local fallback, and configured the Cargo runner to pin execution to CPU 2. The first
+  diagnostic shell-wrapper form was refused before admission because RCH accepts compilation commands only; the
+  corrected native `cargo run` request entered the queue.
+- The corrected request stayed queue position 1 for about five minutes while a two-slot peer build occupied
+  `vmi1149989`, despite 57-61 slots being free elsewhere in the fleet. It ended before sync, compilation, or
+  execution with **`RCH-I001 ... requested worker set [vmi1149989] refused (selection error: queue_timeout)`**.
+- **Decision: LEDGERED BLOCKER / NO-SHIP.** No current profile, candidate source, test, benchmark edit, timing
+  sample, or local/shared-worker fallback was produced. Retry only when the scheduler can atomically reserve every
+  slot on a named alias-valid worker, or when `vmi1149989` is verified completely idle immediately before
+  admission. Then refresh the untouched-current profile and require the full 13-round A/candidate/A proof:
+  dense/candidate/null CV each below **5%**, candidate speedup p05 above null p95, exact full
+  `SolveIvpResult`, and focused SciPy BDF conformance.
+
 ## 2026-07-23 - frankenscipy-8l8r1.169 - BLOCKER: exclusive BDF retry profile admission
 
 - Both negative ledgers and recent Git history were screened before selecting a lever. The eight scoped ready

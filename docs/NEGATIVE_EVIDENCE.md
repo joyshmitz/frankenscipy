@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-07-24 - cod / GentlePond - BLOCKER: BDF full-slot retry admission remains unavailable
+
+- **SCREEN/PREDICATE:** both ledgers and recent non-dense domain history were refreshed before source work. No
+  ready opt/integrate/stats/sparse/interpolate perf bead remained, and current BDF source is unchanged since the
+  `.165` candidate restore. The unresolved exact-diagonal Newton solve was eligible only after an untouched-current
+  profile on a named, alias-valid, pressure-healthy worker holding all of its slots.
+- **FAIL-CLOSED ROUTING:** a clean-`HEAD`, remote-required/no-local request targeted the only usable eight-slot
+  route, `vmi1149989`, requested all eight slots, and configured a CPU-2-pinned Cargo runner. Other idle eight-slot
+  routes were already alias-invalid or reported critical pressure; other alias-valid workers were shared. The
+  native `cargo run` request remained queue position 1 for about five minutes while a two-slot peer build retained
+  the worker, then failed before sync or execution with **`RCH-I001 ... selection error: queue_timeout`**.
+- **DISPOSITION:** LEDGERED BLOCKER / NO-SHIP, bead `frankenscipy-8l8r1.170`. No fresh profile, candidate, proof,
+  benchmark, timing result, or fallback exists. Retry only after atomic named-worker full-slot reservation is
+  available, or after `vmi1149989` is verifiably idle at admission; then require all three CVs below **5%**,
+  candidate p05 above null p95, exact full-result parity, and focused SciPy BDF conformance before KEEP.
+
 ## 2026-07-23 - cod / GentlePond - BLOCKER: BDF exact-diagonal retry cannot obtain exclusive profile worker
 
 - **LEDGER/LOG SCREEN:** all eight scoped ready perf beads were stale completed work and were closed against
