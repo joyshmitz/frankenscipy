@@ -23545,3 +23545,24 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   infrastructure (doc-comment carries this verdict) + correctness test green; NOT wired into production; perf
   reproducer stripped (numbers here). `2o0vp` re-scoped: serial WY-blocking is dead; the bead's real content is
   SIMD-dsymv + D&C (or vndri-parallel-(d)).
+
+## 2026-07-23 - CopperFalcon (cc) - KEEP (byte-identical, 13.1x): convolve_axes → tap_delta / nd_filter_apply — the last axes-mapped filter straggler
+
+- `ndimage::convolve_axes` was the lone axes-mapped N-D filter still on the pre-`nd_filter_apply` scalar path:
+  per output pixel × per kernel tap it allocated `weights.unravel(flat_k)` + a fresh `in_idx` `Vec<i64>` and
+  called `get_boundary` per tap. Its siblings (`convolve_with_origins`, `correlate_with_origins`) already route
+  through `nd_filter_apply` (precompute each tap's full-ndim input-index delta ONCE; gather interior pixels
+  straight from the flat buffer; `get_boundary` only on the border). Converted `convolve_axes` to the same path,
+  folding the kernel flip + center offset + origin into `tap_delta`. Sibling-straggler / PUBLIC-STRADDLER vein.
+- **Byte-identical:** new path vs retained `convolve_axes_scalar_reference` compared with `to_bits()` equality
+  over 10 shape/kernel/axes cases × 5 boundary modes (interior-heavy, all-border kernel≥input, kernel==input) —
+  0 differing bits (`convolve_axes_nd_filter_matches_scalar_reference_bitwise`). 11 existing scipy-parity
+  `convolve*` tests stay green.
+- **Delta (A/B, `bench_convolve_axes_ab`, 256×256 img, 5×5 kernel over axes (-2,-1), Reflect, release):**
+  scalar_reference **18.665 ms** → tap_delta **1.4247 ms** = **13.1×**. Both arms parallel
+  (`fill_pixels_parallel`/`nd_filter_apply`), so the win is algorithmic (per-pixel×tap heap alloc + per-tap
+  boundary arithmetic removed for interior pixels), not threading. Artifact
+  `tests/artifacts/perf/2026-07-23-convolve-axes-tap-delta/measurement.md`.
+- **RESIDUAL in this vein:** `correlate_axes` (bead dn3i6) has the tap_delta precompute but still per-pixel
+  `unravel`/`in_idx` + all-`get_boundary` (no interior flat-gather) — routing it through `nd_filter_apply` is a
+  smaller follow-on. `dn3i6`/`e3r7e` beads are open but partially landed.

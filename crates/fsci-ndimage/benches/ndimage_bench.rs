@@ -228,6 +228,44 @@ fn bench_diff_array_ownership(c: &mut Criterion) {
     group.finish();
 }
 
+/// A/B for the `convolve_axes` tap-delta / `nd_filter_apply` conversion
+/// (frankenscipy-dn3i6 family): the old scalar path allocated `weights.unravel`
+/// + a fresh `in_idx` Vec per pixel per tap; the new path precomputes each tap's
+/// full-ndim delta once and gathers interior pixels straight from the flat
+/// buffer. Both arms produce byte-identical output (see the bitwise test).
+fn bench_convolve_axes_ab(c: &mut Criterion) {
+    use fsci_ndimage::{convolve_axes, convolve_axes_scalar_reference};
+    let img = image(256);
+    let weights = NdArray::new(vec![1.0; 25], vec![5, 5]).expect("weights");
+    let axes = [-2isize, -1];
+    let mut group = c.benchmark_group("convolve_axes_ab");
+    group.bench_function("tap_delta_5x5/256", |b| {
+        b.iter(|| {
+            convolve_axes(
+                black_box(&img),
+                black_box(&weights),
+                black_box(&axes),
+                BoundaryMode::Reflect,
+                0.0,
+            )
+            .expect("convolve_axes")
+        })
+    });
+    group.bench_function("scalar_reference_5x5/256", |b| {
+        b.iter(|| {
+            convolve_axes_scalar_reference(
+                black_box(&img),
+                black_box(&weights),
+                black_box(&axes),
+                BoundaryMode::Reflect,
+                0.0,
+            )
+            .expect("convolve_axes_scalar_reference")
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_minmax_filter,
@@ -238,6 +276,7 @@ criterion_group!(
     bench_label_mean,
     bench_watershed_ift,
     bench_diff_array_ownership,
+    bench_convolve_axes_ab,
     bench_zoom,
     bench_rotate
 );

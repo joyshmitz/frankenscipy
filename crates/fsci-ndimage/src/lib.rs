@@ -1985,9 +1985,50 @@ pub fn convolve_axes(
     }
     let (axes, origins) = normalize_axes_for_weights(input, weights, axes)?;
     let offsets: Vec<i64> = weights.shape.iter().map(|&s| (s as i64 - 1) / 2).collect();
+
+    // Precompute each tap's full-ndim input-index delta ONCE (pixel-independent),
+    // folding in the kernel flip, center offset, and origin — 0 on the input axes
+    // the kernel doesn't touch. Then route through `nd_filter_apply`, which gathers
+    // interior pixels straight from the flat buffer (no per-pixel/per-tap `unravel`
+    // or `in_idx` heap alloc, no per-tap boundary arithmetic) and falls back to
+    // `get_boundary` on the border, summing in k=0..len order — BYTE-IDENTICAL to
+    // `convolve_axes_scalar_reference`. Was allocating `weights.unravel` + a fresh
+    // `in_idx` Vec per pixel per tap. Sibling of `convolve_with_origins` /
+    // `correlate_axes` (frankenscipy-dn3i6 family).
+    let ndim = input.ndim();
+    let tap_delta: Vec<Vec<i64>> = (0..weights.size())
+        .map(|flat_k| {
+            let k_idx = weights.unravel(flat_k);
+            let mut delta = vec![0i64; ndim];
+            for (kernel_axis, &input_axis) in axes.iter().enumerate() {
+                let k_flipped = weights.shape[kernel_axis] as i64 - 1 - k_idx[kernel_axis] as i64;
+                delta[input_axis] = k_flipped - offsets[kernel_axis] + origins[kernel_axis];
+            }
+            delta
+        })
+        .collect();
+    Ok(nd_filter_apply(input, &weights.data, &tap_delta, mode, cval))
+}
+
+/// Scalar per-pixel/per-tap reference path for [`convolve_axes`] (the pre-tap-delta
+/// implementation): allocates `weights.unravel` + a fresh `in_idx` per pixel per
+/// tap. Retained ONLY for the byte-identity test and the A/B bench that quantify
+/// the `nd_filter_apply` conversion; not for production use.
+#[doc(hidden)]
+pub fn convolve_axes_scalar_reference(
+    input: &NdArray,
+    weights: &NdArray,
+    axes: &[isize],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    let (axes, origins) = normalize_axes_for_weights(input, weights, axes)?;
+    let offsets: Vec<i64> = weights.shape.iter().map(|&s| (s as i64 - 1) / 2).collect();
     let mut output = NdArray::zeros(input.shape.clone());
 
-    // Independent per-output weighted sum over the axes-mapped flipped kernel.
     let kernel_work = weights.size().max(1);
     fill_pixels_parallel(&mut output, kernel_work, |flat_out, _scratch| {
         let out_idx = input.unravel(flat_out);
@@ -14609,6 +14650,68 @@ mod tests {
         assert!(convolve_axes(&input, &weights_2d, &[-1], BoundaryMode::Reflect, 0.0).is_err());
         assert!(convolve_axes(&input, &weights_1d, &[-2, -1], BoundaryMode::Reflect, 0.0).is_err());
         assert!(convolve_axes(&input, &weights_1d, &[], BoundaryMode::Reflect, 0.0).is_err());
+    }
+
+    #[test]
+    fn convolve_axes_nd_filter_matches_scalar_reference_bitwise() {
+        // The tap_delta/`nd_filter_apply` conversion of `convolve_axes` must be
+        // BYTE-IDENTICAL to the pre-conversion per-pixel/per-tap scalar path across
+        // ndim, kernel shapes, axes mappings, and boundary modes — the interior
+        // flat-gather + border `get_boundary` split must reproduce the all-boundary
+        // reference exactly (execution proof for the alloc-elimination lever).
+        let modes = [
+            BoundaryMode::Reflect,
+            BoundaryMode::Constant,
+            BoundaryMode::Nearest,
+            BoundaryMode::Wrap,
+            BoundaryMode::Mirror,
+        ];
+        let cases: &[(Vec<usize>, Vec<usize>, Vec<isize>)] = &[
+            (vec![7], vec![3], vec![-1]),
+            (vec![8, 9], vec![3], vec![-1]),
+            (vec![8, 9], vec![4], vec![-2]),
+            (vec![8, 9], vec![3, 3], vec![-2, -1]),
+            (vec![8, 9], vec![2, 4], vec![0, 1]),
+            (vec![6, 7, 5], vec![3], vec![1]),
+            (vec![6, 7, 5], vec![3, 3], vec![0, 2]),
+            (vec![6, 7, 5], vec![2, 3, 4], vec![-3, -2, -1]),
+            (vec![4, 4], vec![5, 5], vec![-2, -1]), // kernel >= input: all-border
+            (vec![5], vec![5], vec![-1]),           // kernel == input
+        ];
+        for (in_shape, w_shape, axes) in cases {
+            let n_in: usize = in_shape.iter().product();
+            let input = NdArray::new(
+                (0..n_in).map(|i| ((i * 37 + 11) % 97) as f64 - 40.0).collect(),
+                in_shape.clone(),
+            )
+            .unwrap();
+            let n_w: usize = w_shape.iter().product();
+            let weights = NdArray::new(
+                (0..n_w).map(|i| ((i * 13 + 5) % 17) as f64 - 6.0).collect(),
+                w_shape.clone(),
+            )
+            .unwrap();
+            for &mode in &modes {
+                let cval = -3.5;
+                let fast = convolve_axes(&input, &weights, axes, mode, cval).unwrap();
+                let refr =
+                    convolve_axes_scalar_reference(&input, &weights, axes, mode, cval).unwrap();
+                assert_eq!(
+                    fast.shape, refr.shape,
+                    "shape mismatch in={in_shape:?} w={w_shape:?} axes={axes:?} mode={mode:?}"
+                );
+                let differ = fast
+                    .data
+                    .iter()
+                    .zip(&refr.data)
+                    .filter(|(a, b)| a.to_bits() != b.to_bits())
+                    .count();
+                assert_eq!(
+                    differ, 0,
+                    "convolve_axes not byte-identical: {differ} diffs in={in_shape:?} w={w_shape:?} axes={axes:?} mode={mode:?}"
+                );
+            }
+        }
     }
 
     #[test]
