@@ -23581,3 +23581,30 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
 - **VEIN CLOSED:** all axes-mapped + origin-shifted N-D filters (`convolve_axes`, `correlate_axes`,
   `convolve_with_origins`, `correlate_with_origins`) now route through `nd_filter_apply`. Beads dn3i6 + e3r7e
   closed.
+
+## 2026-07-23 - CopperFalcon (cc) - INFRA LANDED (frankenscipy-64wo0): cholesky-wall CYCLES self-time gate — unlocks the sub-floor SYRK/data-movement inventory
+
+- **CONTEXT (fresh Threadripper profile).** `perf record` of the blocked n=1000 Cholesky factor on the fleet
+  (AMD Ryzen Threadripper PRO 5975WX, 32c/64t, 128 MiB L3) shows BALANCED kernels — SYRK ~7% ≈ TRSM ~6%, data
+  movement ~7.7% (`__memmove` 3.7% + `__memset` 2.5% + `copy_l21_and_pack_transpose_into` 1.6%) — NO fat
+  single-kernel frame. The mandate's "n=1000 ~8x" is STALE (closed over the arc to ~2.36x vs scipy-default /
+  ~1.21x vs 1-thread; fsci beats scipy-default at n≥2048). Every remaining kernel-side lever (pack fusion,
+  scratch reuse) is a few % of the blocked path — BELOW the ±5% wall-clock A/B floor at n=1000 → un-measurable,
+  un-landable on wall-clock.
+- **LEVER (the unlock).** Built the perf-stat CYCLES self-time gate (prior art d97283534): `perf stat -e cycles`
+  counts retired work across all threads, immune to OS scheduling → ~±2-4% null floor. `crates/fsci-linalg/
+  src/bin/perf_chol_cycles_gate.rs` (single-arm runner, cheap O(n²) SPD setup, full/light digest) +
+  `crates/fsci-linalg/benches/chol_cycles_gate.sh` (interleaved base/cand/null, median cycle-ratios). Run:
+  `rch exec -- bash crates/fsci-linalg/benches/chol_cycles_gate.sh`.
+- **VALIDATED against the known FMA-SYRK lever** (arms isolate the trailing SYRK: `cholesky_wall_mr4_nr8_orig`
+  vs `..._fma_candidate`, both TRSM_ROWS2 + chol_nb). N=1000 REPS=16 K=21: **LEVER base/cand = 1.0563x**
+  (5.63% fewer cycles) **DECIDED** vs **NULL median 1.0000 range [0.9634, 1.0237]**; cvs 0.98%/1.45%; full-array
+  exec-proof digests differ (0xe1f9…bfa3 ≠ 0x1684…dde5). Repeat run 1.0525x / null [0.9613, 1.0167] — consistent.
+  Wall-clock at n=1000 has a ±5% floor; the gate's ±2-4% floor DECIDES the FMA lever wall-clock could not.
+  Artifact `tests/artifacts/perf/2026-07-23-chol-cycles-gate/measurement.md`.
+- **UNLOCKS.** Sub-floor SYRK/data-movement levers are now measurable+landable; point the two arms at a new
+  baseline/candidate to gate the next. **NEXT: pack fusion** (fold `copy_l21_and_pack_transpose_into` into the
+  SYRK first pass, ~5% of the blocked path — previously sub-floor). The n=1000 THREADING residual stays
+  vndri-gated (owner). NOTE: agent-mail coordination DB is corrupt this session (needs supervised
+  `am service restart` + `am doctor reconstruct`); this landing is in fsci-linalg (my exclusive lane, cod owns
+  domain), committed with explicit paths.
