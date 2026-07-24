@@ -4,6 +4,39 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-07-23 - frankenscipy-8l8r1.165 - SURFACED REJECT: BDF exact-diagonal structured Newton solve (CV gate failed)
+
+- Both ledgers and recent history were screened before source work. The BDF Newton allocation and streamed-norm
+  families were closed, while no prior result covered replacing a provably diagonal dense Newton system with
+  component-wise solves. An untouched n=128 diagonal stiff fixture was profiled first on named worker
+  `vmi1264463`: dense nalgebra LU factorization held **80.09%** self cycles, dense solve another **5.16%**, and the
+  surrounding BDF step **7.76%**. This admitted one exact-structure lever with a score well above the 2.0 floor.
+- The candidate certified an exactly diagonal finite-difference Jacobian and used scalar denominators for
+  `(I - cJ) dy = rhs`; non-diagonal, zero, or non-finite systems retained the original dense LU path. The benchmark
+  compared the complete `SolveIvpResult` exactly before every timed probe: all trajectory values, time points,
+  status/message, **119 steps**, `nfev=484`, `njev=1`, and `nlu=102` matched. The focused strict-remote BDF suite
+  passed **16/16**, including the stiff exponential SciPy-reference and conservation/stiffness cases.
+- The speed signal was large but **no completed interleaved run satisfied the mandatory CV <5% KEEP gate**.
+  Thirteen-round same-binary A/candidate/A probes reported:
+  - shared `vmi1264463`, 16 solves/window: dense p50 **409.892 ms**, CV **15.752%**; candidate p50 **23.290 ms**,
+    CV **39.688%**; speedup p50 **17.384x**; A/A null p50 **1.020**, CV **19.808%**;
+  - shared `vmi1149989`, 64 solves/window: dense p50 **1,193.415 ms**, CV **8.300%**; candidate p50
+    **73.427 ms**, CV **20.188%**; speedup p50 **17.069x**; null p50 **1.010**, CV **6.431%**;
+  - all eight RCH slots reserved on `vmi1149989`, 64 solves/window: dense p50 **734.010 ms**, CV **3.394%**;
+    candidate p50 **38.294 ms**, CV **9.876%**; speedup p50 **19.283x**; null p50 **1.016**, CV **3.212%**;
+  - all eight slots reserved, 512 solves/window: dense p50 **6,029.390 ms**, CV **11.724%**; candidate p50
+    **329.031 ms**, CV **15.972%**; speedup p50 **18.964x**; null p50 **1.002**, CV **9.442%**.
+- The apparent speedup is far outside the centered null, so this is not an IN-FLOOR result; it is nevertheless
+  **inadmissible evidence** under the campaign contract. A final all-slot retry on previously established worker
+  `vmi1227854` never reached execution because three heartbeat-live jobs held six slots and smaller jobs continued
+  to win admission. Other routes failed closed on alias preflight or critical disk pressure. No local Cargo
+  fallback and no cross-worker comparison entered the verdict.
+- **Decision: SURFACED REJECT / NO-SHIP.** The solver and benchmark candidate were restored; only this routing
+  evidence lands. Retry only when one named worker can be made genuinely quiescent and CPU-isolated long enough for
+  the same-binary 13-round A/candidate/A probe to produce dense, candidate, and null CV all below **5%**, followed
+  by the exact-result assertion and focused SciPy-reference conformance. Do not cite the 17-19x signal as a KEEP
+  before that predicate holds.
+
 ## 2026-07-22 - catch-up sync through current measured-frontier ancestry
 
 - This routing ledger had stopped at 2026-07-12 while the code and the detailed
