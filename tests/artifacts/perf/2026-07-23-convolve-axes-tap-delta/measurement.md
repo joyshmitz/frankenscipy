@@ -35,3 +35,25 @@ Both arms are parallel (`fill_pixels_parallel` / `nd_filter_apply`), so the win 
 algorithmic (per-pixel×tap heap alloc + per-tap boundary arithmetic eliminated for
 interior pixels), not a threading artifact. Harness: `bench_convolve_axes_ab` in
 `crates/fsci-ndimage/benches/ndimage_bench.rs`.
+
+## Follow-on: correlate_axes (bead frankenscipy-dn3i6)
+
+`correlate_axes` already precomputed `tap_delta` (per-tap allocs gone) but still did
+a per-pixel `input.unravel` + `in_idx` alloc and routed every tap through
+`get_boundary`. Routing it through `nd_filter_apply` (interior flat-gather) is the
+remaining win. Byte-identical:
+`correlate_axes_nd_filter_matches_scalar_reference_bitwise` (same 10 cases × 5 modes,
+0 differing bits).
+
+| arm | time (criterion median) |
+|---|---|
+| `scalar_reference_5x5/256` (tap-delta + `get_boundary`) | 4.1066 ms |
+| `nd_filter_5x5/256` (`nd_filter_apply`) | 2.8265 ms |
+| **speedup** | **1.45×** |
+
+Smaller than convolve_axes because the per-tap allocs were already eliminated; only
+the per-pixel unravel/alloc + interior boundary branch remain to remove. (Absolute
+times are from a separate `rch` invocation than the convolve run and may be on a
+different worker; only the within-invocation A/B ratio is comparable.) Harness:
+`bench_correlate_axes_ab`. This closes the dn3i6 family — `correlate_with_origins`
+(bead e3r7e) was already on `nd_filter_apply`.

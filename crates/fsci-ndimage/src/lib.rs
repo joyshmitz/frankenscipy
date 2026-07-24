@@ -2382,14 +2382,50 @@ pub fn correlate_axes(
     }
     let (axes, origins) = normalize_axes_for_weights(input, weights, axes)?;
     let offsets: Vec<i64> = weights.shape.iter().map(|&s| s as i64 / 2).collect();
+
+    // Precompute each tap's full-ndim delta ONCE (pixel-independent): 0 on axes the
+    // kernel doesn't touch, the centered+origin-shifted offset on mapped axes. Then
+    // route through `nd_filter_apply`, which gathers interior pixels straight from
+    // the flat buffer (no per-pixel `unravel`/`in_idx` alloc, no per-tap boundary
+    // arithmetic) and falls back to `get_boundary` on the border, summing in
+    // k=0..len order — BYTE-IDENTICAL to `correlate_axes_scalar_reference`.
+    // frankenscipy-dn3i6.
+    let ndim = input.ndim();
+    let tap_delta: Vec<Vec<i64>> = (0..weights.size())
+        .map(|flat_k| {
+            let k_idx = weights.unravel(flat_k);
+            let mut delta = vec![0i64; ndim];
+            for (kernel_axis, &input_axis) in axes.iter().enumerate() {
+                delta[input_axis] =
+                    k_idx[kernel_axis] as i64 - offsets[kernel_axis] - origins[kernel_axis];
+            }
+            delta
+        })
+        .collect();
+    Ok(nd_filter_apply(input, &weights.data, &tap_delta, mode, cval))
+}
+
+/// Scalar per-pixel reference path for [`correlate_axes`] (tap-delta precomputed
+/// but every tap routed through `get_boundary`, no interior flat-gather). Retained
+/// ONLY for the byte-identity test and A/B bench of the `nd_filter_apply`
+/// conversion; not for production use.
+#[doc(hidden)]
+pub fn correlate_axes_scalar_reference(
+    input: &NdArray,
+    weights: &NdArray,
+    axes: &[isize],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    let (axes, origins) = normalize_axes_for_weights(input, weights, axes)?;
+    let offsets: Vec<i64> = weights.shape.iter().map(|&s| s as i64 / 2).collect();
     let mut output = NdArray::zeros(input.shape.clone());
 
-    // Independent per-output weighted sum over the axes-mapped kernel footprint.
     let kernel_work = weights.size().max(1);
     let ndim = input.ndim();
-    // Precompute each tap's full-ndim delta ONCE (pixel-independent): 0 on axes the
-    // kernel doesn't touch, the centered+origin-shifted offset on mapped axes. Was
-    // unravelling k_idx and rebuilding in_idx for every pixel×tap. frankenscipy-dn3i6.
     let tap_delta: Vec<Vec<i64>> = (0..weights.size())
         .map(|flat_k| {
             let k_idx = weights.unravel(flat_k);
@@ -14709,6 +14745,65 @@ mod tests {
                 assert_eq!(
                     differ, 0,
                     "convolve_axes not byte-identical: {differ} diffs in={in_shape:?} w={w_shape:?} axes={axes:?} mode={mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn correlate_axes_nd_filter_matches_scalar_reference_bitwise() {
+        // The `nd_filter_apply` routing of `correlate_axes` (interior flat-gather)
+        // must be BYTE-IDENTICAL to the tap-delta `get_boundary` scalar reference.
+        let modes = [
+            BoundaryMode::Reflect,
+            BoundaryMode::Constant,
+            BoundaryMode::Nearest,
+            BoundaryMode::Wrap,
+            BoundaryMode::Mirror,
+        ];
+        let cases: &[(Vec<usize>, Vec<usize>, Vec<isize>)] = &[
+            (vec![7], vec![3], vec![-1]),
+            (vec![8, 9], vec![3], vec![-1]),
+            (vec![8, 9], vec![4], vec![-2]),
+            (vec![8, 9], vec![3, 3], vec![-2, -1]),
+            (vec![8, 9], vec![2, 4], vec![0, 1]),
+            (vec![6, 7, 5], vec![3], vec![1]),
+            (vec![6, 7, 5], vec![3, 3], vec![0, 2]),
+            (vec![6, 7, 5], vec![2, 3, 4], vec![-3, -2, -1]),
+            (vec![4, 4], vec![5, 5], vec![-2, -1]),
+            (vec![5], vec![5], vec![-1]),
+        ];
+        for (in_shape, w_shape, axes) in cases {
+            let n_in: usize = in_shape.iter().product();
+            let input = NdArray::new(
+                (0..n_in).map(|i| ((i * 37 + 11) % 97) as f64 - 40.0).collect(),
+                in_shape.clone(),
+            )
+            .unwrap();
+            let n_w: usize = w_shape.iter().product();
+            let weights = NdArray::new(
+                (0..n_w).map(|i| ((i * 13 + 5) % 17) as f64 - 6.0).collect(),
+                w_shape.clone(),
+            )
+            .unwrap();
+            for &mode in &modes {
+                let cval = -3.5;
+                let fast = correlate_axes(&input, &weights, axes, mode, cval).unwrap();
+                let refr =
+                    correlate_axes_scalar_reference(&input, &weights, axes, mode, cval).unwrap();
+                assert_eq!(
+                    fast.shape, refr.shape,
+                    "shape mismatch in={in_shape:?} w={w_shape:?} axes={axes:?} mode={mode:?}"
+                );
+                let differ = fast
+                    .data
+                    .iter()
+                    .zip(&refr.data)
+                    .filter(|(a, b)| a.to_bits() != b.to_bits())
+                    .count();
+                assert_eq!(
+                    differ, 0,
+                    "correlate_axes not byte-identical: {differ} diffs in={in_shape:?} w={w_shape:?} axes={axes:?} mode={mode:?}"
                 );
             }
         }

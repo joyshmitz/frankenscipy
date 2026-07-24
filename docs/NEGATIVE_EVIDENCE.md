@@ -23563,6 +23563,21 @@ IN-FLOOR. Prefer fns where ALL passes are comparably light (snr/xcorr/spectral) 
   (`fill_pixels_parallel`/`nd_filter_apply`), so the win is algorithmic (per-pixel×tap heap alloc + per-tap
   boundary arithmetic removed for interior pixels), not threading. Artifact
   `tests/artifacts/perf/2026-07-23-convolve-axes-tap-delta/measurement.md`.
-- **RESIDUAL in this vein:** `correlate_axes` (bead dn3i6) has the tap_delta precompute but still per-pixel
-  `unravel`/`in_idx` + all-`get_boundary` (no interior flat-gather) — routing it through `nd_filter_apply` is a
-  smaller follow-on. `dn3i6`/`e3r7e` beads are open but partially landed.
+- **RESIDUAL in this vein:** `correlate_axes` (bead dn3i6) — done in the follow-on below.
+
+## 2026-07-23 - CopperFalcon (cc) - KEEP (byte-identical, 1.45x): correlate_axes → nd_filter_apply — closes the dn3i6 family
+
+- `correlate_axes` (bead dn3i6) already precomputed `tap_delta` (per-tap allocs gone) but still did a per-pixel
+  `input.unravel` + `in_idx` alloc and routed EVERY tap through `get_boundary`. Routed it through
+  `nd_filter_apply` (interior pixels gather straight from the flat buffer; border falls back to `get_boundary`),
+  the same path its sibling `correlate_with_origins` (bead e3r7e, already done) uses.
+- **Byte-identical:** `correlate_axes_nd_filter_matches_scalar_reference_bitwise` vs the retained
+  `correlate_axes_scalar_reference` — 10 cases × 5 modes, 0 differing bits; 10 existing scipy-parity
+  `correlate*` tests green.
+- **Delta (`bench_correlate_axes_ab`, 256×256, 5×5 over axes (-2,-1), Reflect):** scalar_reference **4.1066 ms**
+  → nd_filter **2.8265 ms** = **1.45×** (smaller than convolve_axes' 13.1× because the per-tap allocs were
+  already eliminated here — only the per-pixel unravel/alloc + interior boundary branch remained). Artifact
+  appended to `tests/artifacts/perf/2026-07-23-convolve-axes-tap-delta/measurement.md`.
+- **VEIN CLOSED:** all axes-mapped + origin-shifted N-D filters (`convolve_axes`, `correlate_axes`,
+  `convolve_with_origins`, `correlate_with_origins`) now route through `nd_filter_apply`. Beads dn3i6 + e3r7e
+  closed.

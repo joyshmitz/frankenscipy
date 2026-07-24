@@ -266,6 +266,43 @@ fn bench_convolve_axes_ab(c: &mut Criterion) {
     group.finish();
 }
 
+/// A/B for the `correlate_axes` `nd_filter_apply` conversion (frankenscipy-dn3i6):
+/// the scalar reference already precomputes `tap_delta` but still does a per-pixel
+/// `unravel` + `in_idx` and routes every tap through `get_boundary`; the new path
+/// gathers interior pixels straight from the flat buffer. Byte-identical output.
+fn bench_correlate_axes_ab(c: &mut Criterion) {
+    use fsci_ndimage::{correlate_axes, correlate_axes_scalar_reference};
+    let img = image(256);
+    let weights = NdArray::new(vec![1.0; 25], vec![5, 5]).expect("weights");
+    let axes = [-2isize, -1];
+    let mut group = c.benchmark_group("correlate_axes_ab");
+    group.bench_function("nd_filter_5x5/256", |b| {
+        b.iter(|| {
+            correlate_axes(
+                black_box(&img),
+                black_box(&weights),
+                black_box(&axes),
+                BoundaryMode::Reflect,
+                0.0,
+            )
+            .expect("correlate_axes")
+        })
+    });
+    group.bench_function("scalar_reference_5x5/256", |b| {
+        b.iter(|| {
+            correlate_axes_scalar_reference(
+                black_box(&img),
+                black_box(&weights),
+                black_box(&axes),
+                BoundaryMode::Reflect,
+                0.0,
+            )
+            .expect("correlate_axes_scalar_reference")
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_minmax_filter,
@@ -277,6 +314,7 @@ criterion_group!(
     bench_watershed_ift,
     bench_diff_array_ownership,
     bench_convolve_axes_ab,
+    bench_correlate_axes_ab,
     bench_zoom,
     bench_rotate
 );
